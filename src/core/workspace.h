@@ -413,8 +413,10 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * fix its permissions.
  *
  * The fault is that partition, read off the root error's code at the one moment
- * an analysis holds it — crypto/keymgr.h's "The codes" is the producer's half
- * of the contract, and sys/filesystem's errno the other:
+ * a look holds it — lstat's errno at the join's look (core/workspace.c
+ * workspace_look), a read's or a probe's error where an analysis made it;
+ * crypto/keymgr.h's "The codes" is the producer's half of the contract, and
+ * sys/filesystem's errno the other:
  *
  *   LOCKED       ERR_LOCKED: the run holds no usable master — none in reach,
  *                none read, none that opens this repository — or the feature is
@@ -442,13 +444,14 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  *
  * Only DEPLOYED (both kinds), ORPHANED, OVERRIDDEN and OBSTRUCTING items can
  * carry one, and UNSCANNED always does — RELEASED is born of answers, never of
- * a failed look (the record's ownership, Git's, a look that found another kind,
- * the entry's compare, which a look that failed leaves unasked, and which writes
- * its release whole over a node the join measured, and what a directory holds,
- * read only where its measure found it readable), and UNDEPLOYED, DELETED and
- * UNTRACKED of looks that answered. And only a file row can be LOCKED: a directory
- * seals no content, so every fault it can carry comes from an errno, and the
- * scan reads no content at all.
+ * a failed look (the record's ownership and Git's, each of which may release a
+ * copy its look failed at and so clears the fault that look wrote, a look that
+ * found another kind, the entry's compare, which a look that failed leaves unasked,
+ * and which writes its release whole over a node the join measured, and what a
+ * directory holds, read only where its measure found it readable), and UNDEPLOYED,
+ * DELETED and UNTRACKED of looks that answered. And only a file row can be LOCKED:
+ * a directory seals no content, so every fault it can carry comes from an errno,
+ * and the scan reads no content at all.
  *
  * Readers — the engines, which ask it against NONE: workspace_item_route (the
  * UNVERIFIABLE arm), workspace_untouched, the orphan analysis's directory pass
@@ -505,7 +508,10 @@ typedef enum {
  *                               — and a node's measure, dotta's file or link
  *                               above a row, the join's (workspace.c
  *                               workspace_look_orphan), its state the orphan
- *                               analysis's
+ *                               analysis's — save the fault where the look's
+ *                               own lstat failed, which the look classes
+ *                               (workspace.c workspace_look) and no analysis
+ *                               classes again
  *   the confirmation            its kind's analysis, beside the verdict; the
  *                               flush clears it once the store holds it
  *
@@ -531,17 +537,17 @@ typedef enum {
  * failed outright, whose remedy that is: the fault (workspace_fault_t), NONE on
  * every item the analysis could verify.
  *
- * `st` is the look's stat, meaningful for a present occupant alone, and
- * `lstat_errno` lstat's errno on an UNKNOWN from a look that failed. The whole
- * struct stat, because state_stat_matches, content_compare_blob_to_disk and
- * workspace_compare_ownership, which the analyses hand it to, each take one,
- * the entries index and the scan's roots read its identity, deploy reads its
- * owner where it would converge a directory in place (core/deploy.c
- * deploy_preflight's fix arm, through holdable), apply's FOREIGN sentence says
- * whose it is (cmds/apply.c apply_print_deploy_skips), and diff's kind line what
- * stands, off its type bits (cmds/diff.c show_file_diff_from_workspace) — where
- * a narrowed look would have to synthesize one back for each. A scan item's is
- * the scan's own lstat, where it answered.
+ * `st` is the look's stat, meaningful for a present occupant alone; where the
+ * lstat failed, its errno is classed into the fault at the look and kept nowhere
+ * (workspace.c workspace_look). The whole struct stat, because state_stat_matches,
+ * content_compare_blob_to_disk and workspace_compare_ownership, which the analyses
+ * hand it to, each take one, the entries index and the scan's roots read its
+ * identity, deploy reads its owner where it would converge a directory in place
+ * (core/deploy.c deploy_preflight's fix arm, through holdable), apply's FOREIGN
+ * sentence says whose it is (cmds/apply.c apply_print_deploy_skips), and diff's
+ * kind line what stands, off its type bits (cmds/diff.c
+ * show_file_diff_from_workspace) — where a narrowed look would have to synthesize
+ * one back for each. A scan item's is the scan's own lstat, where it answered.
  *
  * The identity is the source's strings, lent read-only: the row's for an active
  * item, the record's for an orphan, a scan item's own copies (profile: the view's
@@ -595,7 +601,6 @@ typedef struct {
     /* The look, taken once (workspace_look) */
     fs_occupant_t occupant;              /* What the lstat found; UNKNOWN where none was taken or it failed */
     workspace_displaced_t displaced;     /* Whose squatter withheld the look, or NONE */
-    int lstat_errno;                     /* lstat's, on an UNKNOWN from a look that failed */
     struct stat st;                      /* The look's stat, meaningful for a present occupant alone */
 
     /* The verdict — its kind's analysis's */

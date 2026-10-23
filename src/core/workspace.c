@@ -30,12 +30,12 @@
  * — and measured where it is dotta's own node above a row, for the class every
  * path beneath it carries. Every phase after a look reads the item rather than
  * looking again. The entries index holds the items whose look found their claim's
- * kind, the orphan analysis measures the copy off the item's own stat and errno,
- * the scan's roots take their kind and identity off the directory item's look.
- * So no two phases can disagree about what stands somewhere, and the load's cost
- * is one look per active path and per orphan record. The one look taken after
- * the join is the untracked walk's, at a child no claim settles — the one path
- * the load holds no fact about at all.
+ * kind, the orphan analysis measures the copy off the item's own stat, or reads
+ * the fault the look wrote where it failed, the scan's roots take their kind
+ * and identity off the directory item's look. So no two phases can disagree about
+ * what stands somewhere, and the load's cost is one look per active path and
+ * per orphan record. The one look taken after the join is the untracked walk's,
+ * at a child no claim settles — the one path the load holds no fact about at all.
  */
 
 #include "core/workspace.h"
@@ -393,10 +393,10 @@ static workspace_fault_t workspace_code_fault(error_code_t code) {
  *
  * Called at the four folds that hold an error of the look they just made —
  * workspace_analyze_file's look at the content, workspace_measure's compare,
- * workspace_scan's listing and its ignore verdict. The five that hold an errno
- * instead reach workspace_code_fault directly: workspace_analyze_file and
- * workspace_analyze_directory at their lstat, workspace_measure at its own and
- * at a directory's access check, workspace_scan at an entry's lstat.
+ * workspace_scan's listing and its ignore verdict. The three that hold an errno
+ * instead reach workspace_code_fault directly: workspace_look at its lstat,
+ * workspace_measure at a directory's access check, workspace_scan at an entry's
+ * lstat.
  */
 static workspace_fault_t workspace_error_fault(error_t err) {
     if (!err) return WORKSPACE_FAULT_NONE;
@@ -662,7 +662,10 @@ static bool workspace_obstructs(const workspace_t *ws, const workspace_item_t *i
  * workspace_displaced_t) live here: no look is taken beneath a squatter, and
  * every squatter is noted by the look that found it. The note is the squatted
  * fact's one producer, as the look is the occupant's (core/cleanup.h), and it
- * cannot fail: the partition made room for every note.
+ * cannot fail: the partition made room for every note. A look that fails is classed
+ * here too, at the one moment its errno is in hand: the item's fault
+ * (core/workspace.h workspace_fault_t), which every phase after it reads and
+ * none classes again.
  *
  * Readers of the notes: workspace_squatter_above, asked here before each look;
  * and core/deploy.c check_ancestry and deploy_plan_build and cmds/update.c
@@ -691,10 +694,13 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
         return NULL;
     }
 
-    /* One lstat into the item, errno read at once: it is lstat's until anything
-     * else runs (fs_lstat_occupant's contract). */
+    /* One lstat into the item, and a look that failed classed off its errno at
+     * once: it is lstat's until anything else runs (fs_lstat_occupant's
+     * contract). */
     item->occupant = fs_lstat_occupant(item->filesystem_path, &item->st);
-    item->lstat_errno = errno;
+    if (item->occupant == FS_OCCUPANT_UNKNOWN) {
+        item->fault = workspace_code_fault(error_errno_code(errno));
+    }
 
     /* A directory squats nothing, whatever claim it stands in the place of: a
      * look beneath it is the path's own. Absence squats nothing, and a look that
@@ -1071,25 +1077,22 @@ static void workspace_analyze_file(
         return;
     }
 
-    if (item->occupant == FS_OCCUPANT_UNKNOWN) {
-        /* Inaccessible, not absent (EACCES, ELOOP, EIO; ENOTDIR is absence —
-         * fs_lstat_occupant reads it so). Same policy as the orphan path below:
-         * assume the path is there and record the uncertainty, rather than failing
-         * the load and taking every other managed path down with one unreadable
-         * one. The content phase honours the same policy for the look it makes:
-         * a blob it cannot load, decrypt, or compare is the item's fault at the
-         * call, never out of the load.
-         *
-         * DEPLOYED is the load-bearing half — absence must never be inferred
-         * from a failure to look, or update commits a deletion that never happened.
-         * The fault keeps consumers conservative: apply plans the row and skips
-         * it rather than write on a guess — the exit code says so — and cleanup's
-         * skip (CLEANUP_SKIP_UNVERIFIED) blocks removal.
-         *
-         * Returns here because every phase below needs a valid stat. */
-        item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
-        return;
-    }
+    /* A look that failed, its fault the look's (workspace_look): inaccessible,
+     * not absent (EACCES, ELOOP, EIO; ENOTDIR is absence — fs_lstat_occupant
+     * reads it so). Same policy as the orphan path below: assume the path is
+     * there and keep the uncertainty, rather than failing the load and taking
+     * every other managed path down with one unreadable one. The content phase
+     * honours the same policy for the look it makes: a blob it cannot load,
+     * decrypt, or compare is the item's fault at the call, never out of the load.
+     *
+     * DEPLOYED is the load-bearing half — absence must never be inferred from a
+     * failure to look, or update commits a deletion that never happened. The
+     * fault keeps consumers conservative: apply plans the row and skips it rather
+     * than write on a guess — the exit code says so — and cleanup's skip
+     * (CLEANUP_SKIP_UNVERIFIED) blocks removal.
+     *
+     * Returns here because every phase below needs a valid stat. */
+    if (item->occupant == FS_OCCUPANT_UNKNOWN) return;
 
     /* The path stands — the arms above returned for a look withheld, absence
      * and a failed look — and the verdict over what stands there follows. Where
@@ -2040,9 +2043,9 @@ static void workspace_index_entries(workspace_t *ws) {
  * the item's fault, the whole of what a copy dotta could not measure carries,
  * whoever refused. The compare's error is classed at the call, the producer still
  * handing it back for the caller to decide what a failure to look means
- * (workspace_compare_orphan). The fault is NONE on every item handed in: the
- * one arm of the orphan analysis that writes one leaves the copy unmeasured and
- * never prunable.
+ * (workspace_compare_orphan). An item handed in carries no fault but its look's
+ * (workspace_look): the one arm of the orphan analysis that writes another, Git's,
+ * leaves the copy unmeasured and never prunable.
  *
  * A sealed file is read where its stat moved and its length did not, or where
  * no stat was ever recorded — no learning reaches an orphan, so the read recurs
@@ -2062,15 +2065,15 @@ static void workspace_index_entries(workspace_t *ws) {
  *
  * @param ws Workspace (provides the run's content reader)
  * @param item The orphan's item, beneath no squatter and not absent: an occupant
- *             of its record's kind, or one that could not be stat'd (must not
- *             be NULL)
+ *             of its record's kind, or one whose look failed, its fault the look's
+ *             (must not be NULL)
  */
 static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
-    if (item->occupant == FS_OCCUPANT_UNKNOWN) {
-        /* Present but unstattable, either kind: nothing to measure the copy with,
-         * and the errno says whose refusal it was. */
-        item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
-    } else if (item->item_kind == PATH_KIND_DIRECTORY) {
+    /* Present but unstattable, either kind: nothing to measure the copy with,
+     * and the look said whose refusal it was */
+    if (item->occupant == FS_OCCUPANT_UNKNOWN) return;
+
+    if (item->item_kind == PATH_KIND_DIRECTORY) {
         /* A directory: read for the release's readdir, search for the walk's
          * look at an entry named like OS metadata (fs_directory_emptiness). Any
          * failure leaves it unmeasured, and the errno, faccessat's, says whose. */
@@ -2306,13 +2309,13 @@ static void workspace_analyze_orphans(workspace_t *ws) {
 
         /* The join's look at this record, on its item (workspace_look): never
          * UNKNOWN for "not looked at" here — that record returned above — so
-         * UNKNOWN below is a look that failed, with lstat's errno behind it.
-         * One rule for every orphan, whatever its kind: FS_OCCUPANT_NONE is the
-         * orphan already removed by hand (or a component above it no longer a
-         * directory) — a reclaim; FS_OCCUPANT_UNKNOWN (EACCES, EIO, ELOOP, …)
-         * is assumed present but leaves no usable stat, so nothing of it can be
-         * measured, and the measure says whose refusal that was, the item's fault
-         * (workspace_measure):
+         * UNKNOWN below is a look that failed, its fault the look's. One rule
+         * for every orphan, whatever its kind: FS_OCCUPANT_NONE is the orphan
+         * already removed by hand (or a component above it no longer a directory)
+         * — a reclaim; FS_OCCUPANT_UNKNOWN (EACCES, EIO, ELOOP, …) is assumed
+         * present but leaves no usable stat, so nothing of it can be measured,
+         * and the look said whose refusal that was, the item's fault
+         * (workspace_look):
          * - Status shows [orphaned] beside the fault's word (user visibility)
          * - Apply skips removal (can't verify what we can't stat)
          *
@@ -2404,9 +2407,11 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         }
 
         /* The ownership gate: dotta never put this here. Released — the copy is
-         * left alone and the record retires. */
+         * left alone and the record retires — and a look that failed here leaves
+         * no fault on it: a release is born of answers (workspace_fault_t). */
         if (record->deployed_at == 0) {
             item->state = WORKSPACE_STATE_RELEASED;
+            item->fault = WORKSPACE_FAULT_NONE;
             continue;
         }
 
@@ -2426,14 +2431,19 @@ static void workspace_analyze_orphans(workspace_t *ws) {
                      * a bit beside a fault, so a compare would only give the
                      * item a second reason for the fate it already has. Its class
                      * is UNVERIFIED whatever went wrong: the probe meets Git
-                     * alone, never a key or a permission. */
+                     * alone, never a key or a permission — over the look's own
+                     * where the look failed too, since no key or privilege settles
+                     * what Git could not answer. */
                     item->fault = WORKSPACE_FAULT_UNVERIFIED;
                     continue;
 
                 case ORPHAN_AUTHORITY_LOST:
                     /* Git cannot back the path. Left on disk, record retires —
-                     * so there is nothing a content comparison would decide. */
+                     * so there is nothing a content comparison would decide —
+                     * and a look that failed here leaves no fault on it, as at
+                     * the gate. */
                     item->state = WORKSPACE_STATE_RELEASED;
+                    item->fault = WORKSPACE_FAULT_NONE;
                     continue;
 
                 case ORPHAN_AUTHORITY_BACKED:
@@ -3084,7 +3094,8 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * is as unlooked-at as a tracked one. Read as fs_lstat_occupant names it:
      * - NONE: Directory truly deleted, or a component above it is not a directory
      *   — nothing can be at the path either
-     * - UNKNOWN: Inaccessible — state undeterminable, not absent
+     * - UNKNOWN: Inaccessible — state undeterminable, not absent, the look's
+     *   fault saying whose remedy it is
      * - Anything but DIRECTORY: Type changed (file, symlink - including broken
      *   ones) — a squatter, which the look notes and hands back
      * - DIRECTORY: Actual directory, check metadata */
@@ -3108,13 +3119,11 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
         return;
     }
 
-    if (item->occupant == FS_OCCUPANT_UNKNOWN) {
-        /* Inaccessible, not absent: record the uncertainty rather than dropping
-         * the row, which left status reporting a clean workspace for a path it
-         * had just failed to read. Same three-way policy as the file rows. */
-        item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
-        return;
-    }
+    /* A look that failed, its fault the look's (workspace_look): inaccessible,
+     * not absent — the uncertainty kept rather than the row dropped, which left
+     * status reporting a clean workspace for a path it had just failed to read.
+     * Same three-way policy as the file rows. */
+    if (item->occupant == FS_OCCUPANT_UNKNOWN) return;
 
     /* Another kind where the row claims a directory (dir -> file, dir -> symlink:
      * the occupant is the link itself, never its target) — the squatter, noted
@@ -3489,19 +3498,19 @@ error_t workspace_load(
      * before every path beneath it, whichever kind and whichever source — each
      * looked at once, into its item (workspace_look): a row by the analysis its
      * kind asks, a record for the phases after, the entries index reading its
-     * identity and the orphan analysis its stat and errno — and, where the record
-     * is dotta's own node above a row, its class, which every look beneath reads
-     * (workspace_look_orphan). Path order, because a squatter is noted by the
-     * look that finds it and asked by every look beneath it
-     * (workspace_squatter_above), and strcmp puts a prefix before every path it
-     * opens: all those asks need, each scanning the notes and none reading their
-     * order. Each half of the active items is in that order (workspace_kind_order),
-     * and so are the orphans, the snapshot's (core/state.h state_records), so
-     * the walk merges three heads, no two at one path: the view holds one row
-     * per path, and a record is an orphan exactly where no row stands
-     * (workspace_partition). Every load takes every look, a record's as a row's:
-     * the look is the join's, and an analysis a caller declines saves its own
-     * work, never a look — why the join is no caller's to decline is
+     * identity and the orphan analysis its stat, or the fault where the look
+     * failed — and, where the record is dotta's own node above a row, its class,
+     * which every look beneath reads (workspace_look_orphan). Path order, because
+     * a squatter is noted by the look that finds it and asked by every look beneath
+     * it (workspace_squatter_above), and strcmp puts a prefix before every path
+     * it opens: all those asks need, each scanning the notes and none reading
+     * their order. Each half of the active items is in that order
+     * (workspace_kind_order), and so are the orphans, the snapshot's (core/state.h
+     * state_records), so the walk merges three heads, no two at one path: the
+     * view holds one row per path, and a record is an orphan exactly where no
+     * row stands (workspace_partition). Every load takes every look, a record's
+     * as a row's: the look is the join's, and an analysis a caller declines saves
+     * its own work, never a look — why the join is no caller's to decline is
      * workspace_load's own contract. The walk cannot fail: an analysis writes
      * its verdict, and the confirmation the record is owed, onto the item, and
      * a look that fails is a verdict too. */

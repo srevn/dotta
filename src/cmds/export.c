@@ -1374,14 +1374,16 @@ cleanup:
 
 /**
  * Interpret the 1-3 raw positionals into `profile`, `file_path`, and `commit`.
- * The profile is always explicit — shapes:
+ * The profile is always explicit, and the first word is read by the refspec
+ * whatever follows it (base/refspec.h): what it holds, and the words after it,
+ * name the shape:
  *
- *   <profile>                          whole profile at HEAD
- *   <profile>@<commit>                 whole profile, historical
- *   <profile>:<path>[@commit]          refspec
- *   <profile> <path>[@commit]          two positionals
+ *   <profile>:<path>[@commit]          a path, its destination next or by -o
+ *   <profile> <path> <commit>          a path, historical
+ *   <profile>@<commit> [<path>]        whole profile or a path, historical
+ *   <profile> <path>[@commit]          a path
  *   <profile> <commit>                 whole profile, historical
- *   <profile> <path> <commit>          three positionals
+ *   <profile>                          whole profile at HEAD
  *
  * Allocation model mirrors show: refspec strings live in `arena`, pure positionals
  * borrow argv. The destination is settled last: every shape must have named one,
@@ -1398,7 +1400,7 @@ static error_t export_post_parse(
      * the usage the engine prints beneath naming the form, instead of as a
      * branch-lookup error. Alone, a name in the grammar — beneath a label or
      * the label's word itself — is content and never a profile; with a second
-     * positional the first word is the profile, whatever it looks like. */
+     * positional the first word names the profile, whatever it looks like. */
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
         (o->positional_count == 1 && label_prefixes(first))) {
@@ -1409,43 +1411,20 @@ static error_t export_post_parse(
         );
     }
 
-    if (o->positional_count == 1) {
-        refspec_t rs = { 0 };
-        error_t err = refspec_parse(arena, first, &rs);
-        if (err != NULL) {
-            return error_wrap(err, "Failed to parse target specification");
-        }
-        if (rs.profile != NULL) {
-            /* <profile>:<path>[@commit] */
-            o->profile = rs.profile;
-            o->file_path = rs.file;
-            o->commit = rs.commit;
-        } else if (rs.commit != NULL) {
-            /* <profile>@<commit> — whole profile, historical */
-            o->profile = rs.file;
-            o->commit = rs.commit;
-        } else {
-            /* <profile> — whole profile at HEAD */
-            o->profile = first;
-        }
-    } else if (strchr(args[0], ':') != NULL) {
-        /* Colon-packed refspec first: ':' is never legal in a branch name, so
-         * the token is self-contained and the next positional is the destination
-         * (cp-style; '-o' stays valid as the explicit form). Only the colon form
-         * earns this — every other shape would need a heuristic on the destination
-         * token to distinguish it from a path or commit, and heuristics on user
-         * paths are how silent misroutes happen. */
-        refspec_t rs = { 0 };
-        error_t err = refspec_parse(arena, args[0], &rs);
-        if (err != NULL) {
-            return error_wrap(err, "Failed to parse target specification");
-        }
-        if (rs.profile == NULL) {
-            return error_create(
-                ERR_INVALID_ARG, "Failed to parse target specification '%s'",
-                args[0]
-            );
-        }
+    refspec_t rs = { 0 };
+    error_t err = refspec_parse(arena, first, &rs);
+    if (err != NULL) {
+        return error_wrap(err, "Failed to parse target specification");
+    }
+
+    if (rs.profile != NULL) {
+        /* <profile>:<path>[@commit]: ':' is never legal in a branch name, so
+         * the word is self-contained and a second positional is the destination
+         * (cp-style; '-o' stays valid as the explicit form). Only this form earns
+         * it — every other shape would need a heuristic on the destination token
+         * to distinguish it from a path or commit, and heuristics on user paths
+         * are how silent misroutes happen. The parse names the form, never a
+         * ':' anywhere in the word: one a commit carries is the commit's. */
         o->profile = rs.profile;
         o->file_path = rs.file;
         o->commit = rs.commit;
@@ -1453,19 +1432,39 @@ static error_t export_post_parse(
         if (o->positional_count > 2) {
             return error_create(
                 ERR_INVALID_ARG,
-                "Too many arguments for the refspec form"
+                "Too many arguments for the <profile>:<path> form"
             );
         }
-        if (o->output != NULL) {
+        if (o->positional_count == 2) {
+            if (o->output != NULL) {
+                return error_create(
+                    ERR_INVALID_ARG,
+                    "Destination given twice: '-o %s' and positional '%s'",
+                    o->output, args[1]
+                );
+            }
+            o->output = args[1];
+        }
+    } else if (o->positional_count == 3) {
+        /* <profile> <path> <commit>, as many words as the engine takes: the commit
+         * is the third's, so one the first word carries is a commit given twice */
+        if (rs.commit != NULL) {
             return error_create(
-                ERR_INVALID_ARG,
-                "Destination given twice: '-o %s' and positional '%s'",
-                o->output, args[1]
+                ERR_INVALID_ARG, "Commit given twice: '%s' and '%s'", rs.commit,
+                args[2]
             );
         }
-        o->output = args[1];
+        o->profile = first;
+        o->file_path = args[1];
+        o->commit = args[2];
+    } else if (rs.commit != NULL) {
+        /* <profile>@<commit> [<path>]: the usage's own [@commit], so a word after
+         * it is the path, never the destination */
+        o->profile = rs.file;
+        o->commit = rs.commit;
+        if (o->positional_count == 2) o->file_path = args[1];
     } else if (o->positional_count == 2) {
-        o->profile = args[0];
+        o->profile = first;
 
         /* A commit selects a whole-profile historical export, by its shape alone
          * — a search's '/' and '.' are the revision's, and a file named like
@@ -1473,20 +1472,18 @@ static error_t export_post_parse(
         if (refspec_looks_like_commit(args[1])) {
             o->commit = args[1];
         } else {
-            refspec_t rs = { 0 };
-            error_t err = refspec_parse(arena, args[1], &rs);
+            refspec_t second = { 0 };
+            err = refspec_parse(arena, args[1], &second);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }
-            if (rs.profile != NULL) o->profile = rs.profile;
-            o->file_path = rs.file;
-            o->commit = rs.commit;
+            if (second.profile != NULL) o->profile = second.profile;
+            o->file_path = second.file;
+            o->commit = second.commit;
         }
     } else {
-        /* count == 3 (engine-enforced max): <profile> <path> <commit> */
-        o->profile = args[0];
-        o->file_path = args[1];
-        o->commit = args[2];
+        /* <profile> — whole profile at HEAD */
+        o->profile = first;
     }
 
     if (o->output == NULL || o->output[0] == '\0') {
@@ -1510,8 +1507,9 @@ static error_t export_post_parse(
  * What can stand at the cursor, by the shapes export_post_parse reads: a local
  * profile or a refspec first. After `profile:path` the destination, a filesystem
  * path; after a bare profile a file or directory claim of that profile, or a
- * commit; then the commit. An `@` in the token being typed completes its commit
- * part from the profile's history; -o takes a path.
+ * commit; after `profile@commit` a claim of that profile alone, its commit given;
+ * then the commit. An `@` in the token being typed completes its commit part
+ * from the profile's history; -o takes a path.
  */
 static args_want_t export_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1531,18 +1529,24 @@ static args_want_t export_complete(
         completion_refspecs(ctx, out, NULL);
         return ARGS_WANT_NONE;
     }
-    if (strchr(o->positional_args[0], ':') != NULL) {
-        /* Colon-packed: the destination follows, nothing after it. */
+
+    /* The first word read as the command reads it, by the refspec: one it refuses
+     * leads nowhere, and after `profile:path` the destination follows, nothing
+     * after it */
+    refspec_t rs = { 0 };
+    if (refspec_parse(ctx->arena, o->positional_args[0], &rs) != NULL) {
+        return ARGS_WANT_NONE;
+    }
+    if (rs.profile != NULL) {
         return o->positional_count == 1 ? ARGS_WANT_FILES : ARGS_WANT_NONE;
     }
 
-    const char *profile = completion_profile_of(ctx, o->positional_args[0]);
     if (o->positional_count == 1) {
-        completion_refspecs(ctx, out, profile);
-        completion_directories(ctx, out, profile);
-        completion_history(ctx, out, profile);
-    } else if (o->positional_count == 2) {
-        completion_history(ctx, out, profile);
+        completion_refspecs(ctx, out, rs.file);
+        completion_directories(ctx, out, rs.file);
+        if (rs.commit == NULL) completion_history(ctx, out, rs.file);
+    } else if (o->positional_count == 2 && rs.commit == NULL) {
+        completion_history(ctx, out, rs.file);
     }
     return ARGS_WANT_NONE;
 }
@@ -1616,20 +1620,21 @@ const args_command_t spec_export = {
         "  'dotta git show <profile>:<file>' reads them.\n"
         "\n"
         "Destination:\n"
-        "  The refspec form takes its destination as the next argument\n"
-        "  ('export darwin:home/.bashrc .' reads like cp); every other\n"
-        "  shape names it explicitly with -o. An existing directory (or\n"
-        "  trailing '/') receives the target under its original name —\n"
-        "  '.' exports here. Otherwise <dest> itself is the target file\n"
-        "  or directory root. Existing files are overwritten (cp\n"
-        "  semantics); type collisions and pre-existing symlinks in\n"
-        "  content paths refuse the whole export before anything is\n"
-        "  written.\n",
+        "  The <profile>:<path> form takes its destination as the next\n"
+        "  argument ('export darwin:home/.bashrc .' reads like cp);\n"
+        "  every other shape names it explicitly with -o. An existing\n"
+        "  directory (or trailing '/') receives the target under its\n"
+        "  original name — '.' exports here. Otherwise <dest> itself is\n"
+        "  the target file or directory root. Existing files are\n"
+        "  overwritten (cp semantics); type collisions and pre-existing\n"
+        "  symlinks in content paths refuse the whole export before\n"
+        "  anything is written.\n",
     .examples    =
         "  %s export darwin:home/.bashrc .                  # cp-style, original name\n"
         "  %s export hosts/mbp:home/.config/nvim ./nvim     # Directory\n"
         "  %s export darwin:home/.bashrc@a4f2c8e old        # Historical file\n"
         "  %s export darwin ~/.bashrc -o .                  # Explicit -o form\n"
+        "  %s export darwin@a4f2c8e ~/.bashrc -o old        # Explicit -o form, historical\n"
         "  %s export web ~/.config -o cfg                   # All web places under ~/.config\n"
         "  %s export hosts/mbp -o mbp-files                 # Whole profile\n"
         "  %s export hosts/mbp@a4f2c8e -o mbp-old           # Whole profile, historical\n"

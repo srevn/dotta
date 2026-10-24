@@ -93,8 +93,9 @@ typedef struct {
  * (refspec_looks_like_commit), so an '@' that no commit follows is the name's
  * own, and a commit that carries an '@' of its own — `@` alone, `HEAD@{1}` — is
  * split before it. The profile is then what precedes the first ':' before the
- * commit, and is optional (NULL where no ':' stands there): a ':' the commit
- * carries — `HEAD^{/fix: typo}` — is the commit's, and no profile holds one
+ * commit, and is optional — NULL where no ':' stands there, and where nothing
+ * precedes it, `:home/.bashrc` naming a file alone. A ':' the commit carries —
+ * `HEAD^{/fix: typo}` — is the commit's, and no profile holds one
  * (git-check-ref-format). The names this order reads otherwise are a profile's
  * holding an '@' with a commit's shape after it — `x@HEAD@y:home/f`, or one ending
  * in `@HEAD` or `@@` — each read as a file at a commit the resolver then refuses.
@@ -110,6 +111,7 @@ typedef struct {
  * Examples:
  *   "home/.bashrc"                  -> {NULL,         "home/.bashrc", NULL}
  *   "global:home/.bashrc"           -> {"global",     "home/.bashrc", NULL}
+ *   ":home/.bashrc"                 -> {NULL,         "home/.bashrc", NULL}
  *   "home/.bashrc@a4f2c8e"          -> {NULL,         "home/.bashrc", "a4f2c8e"}
  *   "home/.bashrc@HEAD~1"           -> {NULL,         "home/.bashrc", "HEAD~1"}
  *   "home/.bashrc@@"                -> {NULL,         "home/.bashrc", "@"}

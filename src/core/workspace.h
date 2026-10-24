@@ -597,9 +597,10 @@ typedef enum {
  * workspace_ask_departures) and borrowed, as `row` and `record` are. NULL on
  * every other item, and on an owned file orphan whose profile's head would not
  * read: no history answered it. Readers: the orphan analysis's second loop, which
- * decides the verdict by it (workspace.c workspace_analyze_orphans), and the
- * line that says it (workspace_item_tags' metadata). A reader not on this list
- * is a bug.
+ * decides the verdict by it (workspace.c workspace_analyze_orphans), the line
+ * that says it (workspace_item_tags' metadata), and apply's prune split, which
+ * counts the deletions (cmds/apply.c apply_print_cleanup_preview). A reader not
+ * on this list is a bug.
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */

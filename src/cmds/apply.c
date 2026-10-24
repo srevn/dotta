@@ -20,6 +20,7 @@
 #include "core/cleanup.h"
 #include "core/deploy.h"
 #include "core/manifest.h"
+#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -1568,28 +1569,65 @@ static void apply_print_cleanup_preview(
     if (present_files + verdicts->absent_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Orphaned files");
 
-        /* The prunable summary splits by whether the item carries a relocation
-         * at all (core/workspace.h workspace_relocation_t against NONE, the one
-         * presence question every screen asks) — a naming, not a verdict: both
-         * halves are cleanup's one prunable bucket, named together in the list
-         * below, and the split only names the move. A relocated copy's claim
-         * moved with its target or home, standing at its new path or not, which
-         * "(no longer active)" would hide. Both classes reach here: a BOUND one
-         * by its own verdict, a SHARED one under --force. */
+        /* The prunable summary splits by what took each claim — a naming, not a
+         * verdict: every line is cleanup's one prunable bucket, named together
+         * in the list below, and the split only names the cause, asked in this
+         * order. A relocated copy's claim moved with its target or home
+         * (core/workspace.h workspace_relocation_t against NONE, the one presence
+         * question every screen asks), standing at its new path or not, which
+         * "(no longer active)" would hide: a BOUND one by its own verdict, a
+         * SHARED one under --force. A deleted one's profile's history says update
+         * deleted it (workspace_item_t's departure), as status's line says it
+         * (core/workspace.c workspace_item_tags) — never a relocation, none being
+         * read of a name its profile lacks. The rest are no longer active: a
+         * profile disabled, and under --force a copy whose history would not
+         * read. */
         size_t moved = 0;
+        size_t deleted = 0;
         for (size_t i = 0; i < verdicts->prunable_files.count; i++) {
-            if (verdicts->prunable_files.entries[i]->relocation != WORKSPACE_RELOCATION_NONE) {
+            const workspace_item_t *item = verdicts->prunable_files.entries[i];
+
+            if (item->relocation != WORKSPACE_RELOCATION_NONE) {
                 moved++;
+            } else if (item->departure && item->departure->kind == PROFILE_DEPARTURE_DELETED) {
+                deleted++;
             }
         }
 
-        if (verdicts->prunable_files.count - moved > 0) {
+        if (verdicts->prunable_files.count - moved - deleted > 0) {
             output_print(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be pruned (no longer active)\n",
-                verdicts->prunable_files.count - moved,
-                verdicts->prunable_files.count - moved == 1 ? "" : "s"
+                verdicts->prunable_files.count - moved - deleted,
+                verdicts->prunable_files.count - moved - deleted == 1 ? "" : "s"
             );
+        }
+
+        /* The deletions, a line a profile, in the order the bucket first names
+         * each: said at a profile's first file, counting them all, where a later
+         * file's count stops at that first one, at none */
+        for (size_t i = 0; i < verdicts->prunable_files.count; i++) {
+            const workspace_item_t *item = verdicts->prunable_files.entries[i];
+            if (!item->departure || item->departure->kind != PROFILE_DEPARTURE_DELETED) continue;
+
+            size_t count = 0;
+            for (size_t j = 0; j < verdicts->prunable_files.count; j++) {
+                const workspace_item_t *other = verdicts->prunable_files.entries[j];
+
+                if (other->departure && other->departure->kind == PROFILE_DEPARTURE_DELETED &&
+                    strcmp(other->profile, item->profile) == 0) {
+                    if (j < i) break;
+                    count++;
+                }
+            }
+
+            if (count > 0) {
+                output_print(
+                    out, OUTPUT_NORMAL,
+                    "  {yellow}%zu{reset} file%s will be pruned (deleted from %s)\n",
+                    count, count == 1 ? "" : "s", item->profile
+                );
+            }
         }
 
         if (moved > 0) {
@@ -1602,11 +1640,10 @@ static void apply_print_cleanup_preview(
         }
 
         /* Every list follows the count that promises it, so a name is never read
-         * against the wrong fate. One list here, under the two prune lines it
-         * spans: the released and skipped files are named in blocks of their
-         * own below — the released ones closing this preview, the skipped ones
-         * with their reasons in the block after it — so their counts stand
-         * alone. */
+         * against the wrong fate. One list here, under the prune lines it spans:
+         * the released and skipped files are named in blocks of their own below
+         * — the released ones closing this preview, the skipped ones with their
+         * reasons in the block after it — so their counts stand alone. */
         apply_print_paths(out, verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
 
         if (verdicts->released_files.count > 0) {
@@ -1706,13 +1743,14 @@ static void apply_print_cleanup_preview(
      * never deployed it, another kind of path stands there, or the record is a
      * stale key of a path a row stands on under another spelling; and a squatter
      * above the path, whose orphan the load never looked at (core/cleanup.c
-     * cleanup_verdict's displaced arm) — and cleanup has no per-row reason for
-     * it the way cleanup_skip_reason answers for a skip, so the only honest form
-     * would be a disjunction naming all five at every row. Hence the one thing
-     * true of all five: nothing on disk was touched. A second half saying what
-     * dotta stops doing ("no longer managed by dotta") was false of the fourth,
-     * which is about a file this same run may adopt eleven lines above, and the
-     * header says the rest. */
+     * cleanup_verdict's displaced arm) — and they are status's to say: its line
+     * names the first two, the item's own (core/workspace.c workspace_item_tags),
+     * and its keys the rest, where cleanup has no per-row reason for a release
+     * the way cleanup_skip_reason answers for a skip. Hence the one thing true
+     * of all five: nothing on disk was touched. A second half saying what dotta
+     * stops doing ("no longer managed by dotta") was false of the fourth, which
+     * is about a file this same run may adopt eleven lines above, and the header
+     * says the rest. */
     if (verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
 
@@ -3528,8 +3566,9 @@ const args_command_t spec_apply = {
     .usage        = "%s apply [options] [profile|path]...",
     .description  =
         "Converge the filesystem with enabled profiles: deploy new and\n"
-        "updated files, prune files orphaned by disabled profiles, and\n"
-        "update the deployment state.\n",
+        "updated files, prune files orphaned by disabled profiles or\n"
+        "deleted from their profiles, where unchanged, and update the\n"
+        "deployment state.\n",
     .notes        =
         "Path Arguments:\n"
         "  A path narrows the run to what lies at or beneath it, in both\n"

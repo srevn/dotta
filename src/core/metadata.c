@@ -713,9 +713,10 @@ buffer_t metadata_to_json(const metadata_t *metadata) {
 
     /* Serialize in key order, then kind — a write-side norm only (the parser
      * accepts any order, so a hand-edit cannot brick on placement), buying
-     * byte-determinism across machines: sync's merge then conflicts only on genuine
-     * same-path edits, never on capture-order divergence, and two sheets holding
-     * the same claims write one spelling. Each kind stands in key order already
+     * byte-determinism across machines: two sheets holding the same claims write
+     * one spelling, so no difference sync's merge meets is the serializer's —
+     * though its text merge still meets two machines' items that adjoin as a
+     * conflict (stated). Each kind stands in key order already
      * (metadata_write_item), so the document's order is one merge of the two:
      * no copy, no sort. Each claim's object goes to the items array, which owns
      * it from then on. */

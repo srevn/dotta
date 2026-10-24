@@ -1039,29 +1039,22 @@ static error_t remove_paths(
         );
     }
 
-    /* What the commit changes of the profile's claims, read off the draft once
-     * every removal is in (core/profiles.h profile_changes): the message names
-     * that, never the claims taken — a blob and the directory claim at its own
-     * name are two claims to the receipt and one name to the message */
-    profile_changes_t changes;
-    err = profile_changes(draft, ctx->arena, &changes);
-    if (err) goto cleanup;
-
     /* One atomic commit: the file claims leave the tree, and the sheet follows
      * in the same tree write where its claims moved — pruned first of the derived
      * claims the removals left nothing tracked beneath, counted in `pruned`
-     * (core/profiles.h profile_commit). All-or-nothing: any failure up to here
-     * leaves every ref where it was. */
-    const commit_message_context_t msg_ctx = {
+     * (core/profiles.h profile_commit). Its message names what the commit changes
+     * of the profile's claims, never the claims taken: a blob and the directory
+     * claim at its own name are two claims to the receipt and one name to the
+     * message. All-or-nothing: any failure up to here leaves every ref where it
+     * was. */
+    const commit_words_t words = {
         .action     = COMMIT_ACTION_REMOVE,
-        .profile    = opts->profile,
-        .added      = changes.added,
-        .updated    = changes.updated,
-        .removed    = changes.removed,
+        .title      = config->commit_title,
+        .body       = config->commit_body,
         .custom_msg = opts->message,
     };
     size_t pruned = 0;
-    err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned);
+    err = profile_commit(draft, &words, NULL, &pruned);
     if (err) goto cleanup;
     if (pruned > 0) {
         output_info(

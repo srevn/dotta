@@ -31,7 +31,8 @@
  * against the one the draft opened, and the changes merge what each says moved
  * into the explicit claims the commit adds, updates and removes; and the commit,
  * where an edit moved either, prunes the copy, saves it where its claims are no
- * longer the base's and commits.
+ * longer the base's, renders its message from the writer's words over those changes
+ * and commits.
  */
 
 #include "core/profiles.h"
@@ -49,6 +50,7 @@
 #include "base/heap.h"
 #include "base/string.h"
 #include "core/metadata.h"
+#include "infra/commit.h"
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -939,7 +941,7 @@ error_t profile_find(
 }
 
 struct profile_draft {
-    arena_t *arena;                 /* Its own: the struct, the copy, the climb's and the prune's names */
+    arena_t *arena;                 /* Its own: the struct, the copy, the names it spells, its message */
     stage_t *stage;                 /* The next tree, on the profile's branch */
     profile_t *base;                /* The profile at the tree it opened: never edited */
     metadata_t *sheet;              /* The base's sheet, copied into the arena: what the commit carries */
@@ -1614,7 +1616,7 @@ error_t profile_changed(const profile_draft_t *draft, bool *out) {
 }
 
 error_t profile_changes(
-    const profile_draft_t *draft, arena_t *arena, profile_changes_t *out
+    const profile_draft_t *draft, arena_t *arena, commit_changes_t *out
 ) {
     CHECK_NULL(draft);
     CHECK_NULL(arena);
@@ -1633,7 +1635,7 @@ error_t profile_changes(
         arena, draft->base->sheet, draft->sheet, PATH_KIND_DIRECTORY
     );
 
-    profile_changes_t changes;
+    commit_changes_t changes;
     string_array_init(&changes.added, arena, 0);
     string_array_init(&changes.updated, arena, 0);
     string_array_init(&changes.removed, arena, 0);
@@ -1850,18 +1852,19 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_prune
 }
 
 error_t profile_commit(
-    profile_draft_t *draft, const char *message, bool *out_committed, size_t *out_pruned
+    profile_draft_t *draft, const commit_words_t *words, bool *out_committed, size_t *out_pruned
 ) {
     CHECK_NULL(draft);
-    CHECK_NULL(message);
+    CHECK_NULL(words);
 
     /* Nothing committed until the tree write answers one, and nothing pruned
      * until the prune counts it: a return before either says so */
     if (out_committed) *out_committed = false;
     if (out_pruned) *out_pruned = 0;
 
-    /* Nothing an edit moved: nothing prunes, nothing is saved, nothing commits
-     * — imported redundancy rides a commit and never drives one */
+    /* Nothing an edit moved: nothing prunes, nothing is saved, no message is
+     * rendered and nothing commits — imported redundancy rides a commit and never
+     * drives one */
     bool changed = false;
     error_t err = profile_changed(draft, &changed);
     if (err || !changed) return err;
@@ -1885,11 +1888,21 @@ error_t profile_commit(
         ? NULL : metadata_save_to_stage(draft->stage, draft->sheet);
     if (err) return err;
 
+    /* What the commit changes of the profile's explicit claims, asked with every
+     * edit, the prune and the save in — neither of which moves one — and named
+     * in the message the writer's words render, never in the writer's own lists */
+    commit_changes_t changes;
+    err = profile_changes(draft, draft->arena, &changes);
+    if (err) return err;
+
     /* One commit, the tree and the sheet in one tree write, whether it landed
      * the write's own answer: none where the tree is the one the stage opened,
      * and a head another writer moved or deleted since the open is refused
      * (sys/stage.h stage_commit) */
-    return stage_commit(draft->stage, message, out_committed);
+    return stage_commit(
+        draft->stage, commit_message(draft->arena, words, draft->base->name, &changes),
+        out_committed
+    );
 }
 
 void profile_draft_free(profile_draft_t *draft) {

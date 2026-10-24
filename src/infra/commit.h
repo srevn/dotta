@@ -2,9 +2,16 @@
  * commit.h - A commit's words: the action that made it, and the message its
  * templates render
  *
- * Layer: infra/. It reads base/, sys/identity for the invoker's name and the
- * configuration's type for its two templates (include/config.h), so every layer
- * that writes a commit's words may read it.
+ * A message is two facts from two owners, which meet here and nowhere else. The
+ * writer says what it did and how its message reads (commit_words_t): the command
+ * that made the commit, the configuration's two templates, the message the user
+ * wrote where -m gave one, a revert's target. The draft says what the commit
+ * changes of its profile's explicit claims (commit_changes_t), and renders the
+ * message from both under its profile's name (core/profiles.h profile_commit).
+ *
+ * Layer: infra/. It reads base/ and sys/identity, for the invoker's name, and
+ * no configuration — the templates are the writer's to hand by name — so core,
+ * where a profile's draft commits, may read it.
  */
 
 #ifndef DOTTA_COMMIT_H
@@ -26,36 +33,45 @@ typedef enum {
 } commit_action_t;
 
 /**
- * What a message names
+ * What a writer says of its commit
  *
- * The commit, never its command's arguments: each name whose explicit claim the
- * commit adds, updates or removes — the blob at the name with the item that rides
- * it, the directory the profile tracks there — under its change's heading, as
- * the draft answers it (core/profiles.h profile_changes, whose three lists these
- * are). A derived claim is the way to the claims and never one, so no message
- * names it, and a commit that moved only the way says so in one line where the
- * headings would stand. A name is the profile's spelling of it — the storage
- * path, the key the tree and the sheet hold and `remove` takes back — but for a
- * byte no terminal may be handed, which the message spells (commit_message).
- * {count} is the three lists' summed length, the one number {paths} cannot disagree
- * with. The lists are borrowed for the call, and a zeroed one names nothing.
+ * Its action; the two templates its message renders, the configuration's [commit]
+ * title and body; the message the user wrote, where -m gave one and it is not
+ * empty, which is then the whole message; and a revert's target. Filled once,
+ * at the writer's commit, every string borrowed for the call.
  */
-typedef struct {
-    commit_action_t action;     /* Action being performed */
-    const char *profile;        /* Profile name (required) */
-    string_array_t added;       /* Names whose claim the commit adds */
-    string_array_t updated;     /* Names whose claim it updates */
-    string_array_t removed;     /* Names whose claim it removes */
-    const char *custom_msg;     /* Custom message from -m flag (NULL or empty = use template) */
+typedef struct commit_words {
+    commit_action_t action;     /* The command that made the commit */
+    const char *title;          /* The title template (must not be NULL) */
+    const char *body;           /* The body template (must not be NULL) */
+    const char *custom_msg;     /* -m: the whole message; NULL or empty, the templates' */
     const char *target_commit;  /* The commit a revert restores from; NULL otherwise */
-} commit_message_context_t;
+} commit_words_t;
 
 /**
- * Build a commit message from context
+ * What a commit changes of its profile's explicit claims: each name in one list
+ * at most, each list in byte order
+ *
+ * The commit, never its writer's arguments: each name whose explicit claim the
+ * commit adds, updates or removes — the blob at the name with the item that rides
+ * it, the directory the profile tracks there — as the draft answers it
+ * (core/profiles.h profile_changes). A derived claim is the way to the claims
+ * and never one, so no list names it. A name is the profile's spelling of it:
+ * the storage path, the key the tree and the sheet hold and `remove` takes back.
+ * The lists are borrowed for the call, and a zeroed one names nothing.
+ */
+typedef struct commit_changes {
+    string_array_t added;     /* Names the profile claimed nothing at, and the commit does */
+    string_array_t updated;   /* Names claimed on both sides, saying another thing */
+    string_array_t removed;   /* Names the profile claimed, and the commit nothing at */
+} commit_changes_t;
+
+/**
+ * The message a commit carries: its writer's words, over what it changes
  *
  * A custom message the user wrote is the whole message. Otherwise — none given,
- * or an empty one, which Git itself never commits — builds the message from the
- * config templates with variable substitution.
+ * or an empty one, which Git itself never commits — the writer's two templates,
+ * with variable substitution.
  *
  * Available template variables:
  *   {host}          - System hostname
@@ -70,6 +86,10 @@ typedef struct {
  *                     at most five names a heading; one line where none
  *   {target_commit} - The commit a revert restores from; empty otherwise, so a
  *                     body line whose only variable it is shows on a revert alone
+ *
+ * {paths} names the changes, and a commit that moved only the way to the claims
+ * says so in one line where the headings would stand. {count} is the three lists'
+ * summed length, the one number {paths} cannot disagree with.
  *
  * A brace closes at the next `}` on its line: one its line leaves open is a
  * character like any other. A variable the table has no row for is left as the
@@ -87,12 +107,18 @@ typedef struct {
  * are their writers', inserted as written.
  *
  * @param arena Arena the message lives in (must not be NULL)
- * @param config Configuration holding the two templates (must not be NULL)
- * @param ctx The action, the profile and what the commit changes (must not be NULL)
+ * @param words What the writer says of the commit, its two templates among them
+ *              (must not be NULL)
+ * @param profile The profile's name (must not be NULL)
+ * @param changes What the commit changes of the profile's explicit claims (must
+ *                not be NULL)
  * @return The message, the arena's; never NULL
  */
 const char *commit_message(
-    arena_t *arena, const config_t *config, const commit_message_context_t *ctx
+    arena_t *arena,
+    const commit_words_t *words,
+    const char *profile,
+    const commit_changes_t *changes
 );
 
 #endif /* DOTTA_COMMIT_H */

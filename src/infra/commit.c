@@ -5,7 +5,6 @@
 
 #include "infra/commit.h"
 
-#include <config.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -129,32 +128,30 @@ static const char *commit_spelled(arena_t *arena, const char *name) {
  * the newlines between them are the rendering's own.
  *
  * @param arena The arena a spelled name lives in (must not be NULL)
- * @param ctx The commit's changes (must not be NULL)
+ * @param changes The commit's changes (must not be NULL)
  * @param out The rendering (must not be NULL; cleared, then written, its bytes
  *            the caller's to free)
  */
-static void commit_paths(
-    arena_t *arena, const commit_message_context_t *ctx, buffer_t *out
-) {
+static void commit_paths(arena_t *arena, const commit_changes_t *changes, buffer_t *out) {
     const struct {
         const char *heading;
         const string_array_t *names;
-    } changes[] = {
-        { "Added:",   &ctx->added   },
-        { "Updated:", &ctx->updated },
-        { "Removed:", &ctx->removed },
+    } lists[] = {
+        { "Added:",   &changes->added   },
+        { "Updated:", &changes->updated },
+        { "Removed:", &changes->removed },
     };
 
     *out = (buffer_t){ 0 };
 
-    for (size_t c = 0; c < sizeof(changes) / sizeof(changes[0]); c++) {
-        const string_array_t *names = changes[c].names;
+    for (size_t c = 0; c < sizeof(lists) / sizeof(lists[0]); c++) {
+        const string_array_t *names = lists[c].names;
         if (names->count == 0) continue;
 
         /* One commit's changes are one block: a heading stands beneath the list
          * before it, no blank line between */
         if (out->size > 0) buffer_append_string(out, "\n");
-        buffer_append_string(out, changes[c].heading);
+        buffer_append_string(out, lists[c].heading);
 
         /* Five names a heading, and a tail counting the rest beneath them: a
          * long change hides no other */
@@ -254,23 +251,25 @@ static bool commit_substitute(
     return !held || rendered;
 }
 
-/**
- * Build commit message from context
- */
 const char *commit_message(
-    arena_t *arena, const config_t *config, const commit_message_context_t *ctx
+    arena_t *arena,
+    const commit_words_t *words,
+    const char *profile,
+    const commit_changes_t *changes
 ) {
     CHECK_NULL(arena);
-    CHECK_NULL(config);
-    CHECK_NULL(ctx);
-    CHECK_NULL(ctx->profile);
+    CHECK_NULL(words);
+    CHECK_NULL(words->title);
+    CHECK_NULL(words->body);
+    CHECK_NULL(profile);
+    CHECK_NULL(changes);
 
     /* A message the user wrote is the whole message, and an empty one is none:
      * Git itself refuses to commit an empty message (lib/git/builtin/commit.c
      * cmd_commit, "Aborting commit due to empty commit message"), so the template
      * speaks where `-m ""` — a script's unset variable — said nothing */
-    if (ctx->custom_msg && ctx->custom_msg[0]) {
-        return arena_strdup(arena, ctx->custom_msg);
+    if (words->custom_msg && words->custom_msg[0]) {
+        return arena_strdup(arena, words->custom_msg);
     }
 
     /* The values this message is made of, resolved once for both templates: the
@@ -284,11 +283,11 @@ const char *commit_message(
     commit_time(now, "%Y-%m-%d %H:%M:%S %z", datetime, sizeof(datetime));
     snprintf(
         count, sizeof(count), "%zu",
-        ctx->added.count + ctx->updated.count + ctx->removed.count
+        changes->added.count + changes->updated.count + changes->removed.count
     );
 
     buffer_t paths = BUFFER_INIT;
-    commit_paths(arena, ctx, &paths);
+    commit_paths(arena, changes, &paths);
 
     /* {user} is the invoker's (sys/identity): under sudo the user who typed the
      * command, not the root that $USER names there — "unknown" for a uid with
@@ -300,14 +299,14 @@ const char *commit_message(
     const template_t vars[] = {
         { "host",          commit_spelled(arena, hostname)                },
         { "user",          commit_spelled(arena, user ? user : "unknown") },
-        { "profile",       commit_spelled(arena, ctx->profile)            },
-        { "action",        commit_action_name(ctx->action) },
-        { "action_past",   commit_action_name_past(ctx->action) },
+        { "profile",       commit_spelled(arena, profile)                 },
+        { "action",        commit_action_name(words->action) },
+        { "action_past",   commit_action_name_past(words->action) },
         { "count",         count },
         { "date",          date },
         { "datetime",      datetime },
         { "paths",         paths.data },
-        { "target_commit", ctx->target_commit ? ctx->target_commit : "" },
+        { "target_commit", words->target_commit ? words->target_commit : "" },
     };
     const size_t var_count = sizeof(vars) / sizeof(vars[0]);
 
@@ -315,9 +314,7 @@ const char *commit_message(
      * body its template did not substitute to nothing. The title is substituted
      * whole, and stands whatever its variables rendered. */
     buffer_t text = BUFFER_INIT;
-    (void) commit_substitute(
-        &text, config->commit_title, strlen(config->commit_title), vars, var_count
-    );
+    (void) commit_substitute(&text, words->title, strlen(words->title), vars, var_count);
     size_t title_end = text.size;
     buffer_append_string(&text, "\n\n");
     size_t body_start = text.size;
@@ -327,7 +324,7 @@ const char *commit_message(
      * newline that parts it from the rest — its own, or, for a last line that
      * has none, the one before it — so the lines that stand are joined as the
      * template joins them. */
-    const char *line = config->commit_body;
+    const char *line = words->body;
     while (*line) {
         size_t len = strcspn(line, "\n");
         size_t step = len + (line[len] == '\n');

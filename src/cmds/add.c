@@ -1510,53 +1510,6 @@ static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
 }
 
 /**
- * Commit the profile's draft
- *
- * The message names what the commit changes of the profile's claims, read off
- * the draft once every edit is in (core/profiles.h profile_changes) — never the
- * walk's lists, which hold every path this add captured, a re-capture of what
- * the profile already holds among them.
- *
- * @param walk The selection: the profile's draft, every edit in, and the context
- *             the message is built in (must not be NULL)
- * @param opts Command options
- * @param out_committed Whether a commit was made: false where no edit moved either
- *                      document, so a re-add of what the profile already holds
- *                      moves nothing (must not be NULL)
- * @param out_pruned How many derivations the commit's prune took (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t add_commit(
-    const add_walk_t *walk,
-    const cmd_add_options_t *opts,
-    bool *out_committed,
-    size_t *out_pruned
-) {
-    CHECK_NULL(walk);
-    CHECK_NULL(opts);
-    CHECK_NULL(out_committed);
-    CHECK_NULL(out_pruned);
-
-    profile_changes_t changes;
-    error_t err = profile_changes(walk->draft, walk->ctx->arena, &changes);
-    if (err) return err;
-
-    const commit_message_context_t msg_ctx = {
-        .action     = COMMIT_ACTION_ADD,
-        .profile    = opts->profile,
-        .added      = changes.added,
-        .updated    = changes.updated,
-        .removed    = changes.removed,
-        .custom_msg = opts->message,
-    };
-
-    return profile_commit(
-        walk->draft, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
-        out_committed, out_pruned
-    );
-}
-
-/**
  * Write the record after a successful add operation
  *
  * Called after Git commit succeeds, for a new profile and an existing one alike.
@@ -2634,15 +2587,24 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The commit, where an edit moved either document — a capture, a directory
      * claimed, a climb that authored or retired, the claim the remedy above gave
      * up — its prune taking what nothing stands on any longer, and the sheet
-     * saved only where its claims moved, a hand's spelling kept otherwise. A
-     * commit whose edits moved nothing — a --force re-capture of what the profile
-     * already had, byte for byte — makes none, and the summary says so
-     * (core/profiles.h profile_commit). Its two outs: whether it landed, which
-     * the receipt reads, and how many derivations its prune took, which the line
-     * below says; the record of each is the next apply's to decide. */
+     * saved only where its claims moved, a hand's spelling kept otherwise. Its
+     * message names what the commit changes of the profile's claims, never the
+     * walk's lists, which hold every path this add captured, a re-capture of
+     * what the profile already holds among them. A commit whose edits moved nothing
+     * — a --force re-capture of what the profile already had, byte for byte —
+     * makes none, and the summary says so (core/profiles.h profile_commit). Its
+     * two outs: whether it landed, which the receipt reads, and how many
+     * derivations its prune took, which the line below says; the record of each
+     * is the next apply's to decide. */
+    const commit_words_t words = {
+        .action     = COMMIT_ACTION_ADD,
+        .title      = config->commit_title,
+        .body       = config->commit_body,
+        .custom_msg = opts->message,
+    };
     bool committed = false;
     size_t pruned = 0;
-    err = add_commit(&walk, opts, &committed, &pruned);
+    err = profile_commit(draft, &words, &committed, &pruned);
     if (err) goto cleanup;
     if (pruned > 0) {
         output_info(

@@ -103,9 +103,12 @@
 #include <sys/stat.h>
 #include <types.h>
 
-/* A profile's draft takes a capture of a file (infra/content.h) and climbs through
- * a mount table (infra/mount.h), each by pointer; each is named here and defined
- * there. */
+/* A profile's draft renders its commit's message from a writer's words over what
+ * the commit changes (infra/commit.h), takes a capture of a file (infra/content.h)
+ * and climbs through a mount table (infra/mount.h), each by pointer; each is
+ * named here and defined there. */
+typedef struct commit_changes commit_changes_t;
+typedef struct commit_words commit_words_t;
 typedef struct content_capture content_capture_t;
 typedef struct mount_table mount_table_t;
 
@@ -811,11 +814,12 @@ error_t profile_find(
  *     tree equal to the one opened is no commit (sys/stage.h stage_commit).
  *
  * Memory: a handle's own — an arena made at the open, holding the struct, the
- * copy of the base's sheet with every claim an edit writes into it, and the names
- * the climb, the way and the prune spell — released by profile_draft_free with
- * the admission, the base and the stage; the base borrows the stage's tree, and
- * goes before it. What a capture answers is the caller's (profile_claim_t), so
- * the claim outlives the draft that wrote it.
+ * copy of the base's sheet with every claim an edit writes into it, the names
+ * the climb, the way and the prune spell, and the commit's message with the changes
+ * it names — released by profile_draft_free with the admission, the base and
+ * the stage; the base borrows the stage's tree, and goes before it. What a capture
+ * answers is the caller's (profile_claim_t), so the claim outlives the draft
+ * that wrote it.
  */
 typedef struct profile_draft profile_draft_t;
 
@@ -1202,16 +1206,6 @@ error_t profile_put_machinery(
 error_t profile_changed(const profile_draft_t *draft, bool *out);
 
 /**
- * What a commit changes of its profile's explicit claims: each name in one list
- * at most, each list in byte order
- */
-typedef struct {
-    string_array_t added;     /* Names the base claims nothing at, and the commit does */
-    string_array_t updated;   /* Names both claim, saying another thing */
-    string_array_t removed;   /* Names the base claims, and the commit nothing at */
-} profile_changes_t;
-
-/**
  * What the commit changes of the profile's explicit claims, name by name
  *
  * A name's explicit claim is what the two documents say of it, compared whole:
@@ -1224,20 +1218,21 @@ typedef struct {
  * it is the decode's. dotta's own files claim nothing (infra/label.h
  * label_prefixes).
  *
- * Asked once every edit is in, before the commit, and exact there: the commit's
- * prune takes derived claims alone and its save writes dotta's own file, so neither
- * moves an explicit claim (profile_commit). Nothing is written, so a dry run
- * may ask it. A commit whose explicit claims all stand moved only the way: every
- * writer's edit moves an explicit claim or the way to one, dotta's own file riding
- * a capture (profile_put_machinery).
+ * Asked once every edit is in, and the commit's answer whenever it is asked:
+ * the commit asks it past its prune and its save (profile_commit), and neither
+ * moves an explicit claim — the prune takes derived claims alone, the save writes
+ * dotta's own file. Nothing is written, so a dry run may ask it. A commit whose
+ * explicit claims all stand moved only the way: every writer's edit moves an
+ * explicit claim or the way to one, dotta's own file riding a capture
+ * (profile_put_machinery).
  *
- * Readers: cmds/add.c add_commit, cmds/update.c update_profile, cmds/remove.c
- * remove_paths and cmds/revert.c cmd_revert, each composing its message
- * (infra/commit.h commit_message). A reader not on this list is a bug.
+ * Reader: profile_commit, the names its message gives (infra/commit.h
+ * commit_message). A reader not on this list is a bug.
  *
  * @param draft The draft, every edit in (must not be NULL)
  * @param arena The arena the lists and their names live in (must not be NULL)
- * @param out The changes (must not be NULL; written on success alone)
+ * @param out The changes, each list in byte order (must not be NULL; written on
+ *            success alone)
  * @return Error or NULL on success: the tree's comparison's, which needs a store
  *         that changed beneath the draft; or the base's, under "Cannot read '%s'
  *         in profile '%s'"
@@ -1245,34 +1240,39 @@ typedef struct {
 error_t profile_changes(
     const profile_draft_t *draft,
     arena_t *arena,
-    profile_changes_t *out
+    commit_changes_t *out
 );
 
 /**
  * The commit
  *
  * Where no edit moved the tree or the sheet (profile_changed), nothing: no prune,
- * no save, no commit. Otherwise the prune, against the index the commit will
- * record, counted where a count is asked — every derivation it takes but a claim
- * the base tracked, whose removal the writer names; the sheet saved where its
- * claims are no longer the base's; then one commit (sys/stage.h stage_commit: a
- * tree equal to the opened one is none, a head another writer moved since the
- * open is refused ERR_CONFLICT, and one deleted since in Git's words). One commit
- * a draft. Whether it landed is answered as sys/stage answers it: false where
- * the gate stops it, and past the gate the tree write's own answer — true where
- * an edit the gate saw stands past the prune, since it moved a content entry or
- * a claim and a sheet whose claims moved spells other bytes, and false where
- * the prune took back the only edits the gate saw: a climb's rungs nothing tracked
- * stands beneath, authored and pruned in one draft.
+ * no save, no message, no commit. Otherwise the prune, against the index the
+ * commit will record, counted where a count is asked — every derivation it takes
+ * but a claim the base tracked, whose removal the writer names; the sheet saved
+ * where its claims are no longer the base's; the message, the writer's words
+ * over what the commit changes of the profile's explicit claims (profile_changes,
+ * infra/commit.h commit_message) — never the writer's own lists, which hold what
+ * it touched, a re-capture of what the profile holds among them; then one commit
+ * (sys/stage.h stage_commit: a tree equal to the opened one is none, a head another
+ * writer moved since the open is refused ERR_CONFLICT, and one deleted since in
+ * Git's words). One commit a draft. Whether it landed is answered as sys/stage
+ * answers it: false where the gate stops it, and past the gate the tree write's
+ * own answer — true where an edit the gate saw stands past the prune, since it
+ * moved a content entry or a claim and a sheet whose claims moved spells other
+ * bytes, and false where the prune took back the only edits the gate saw: a climb's
+ * rungs nothing tracked stands beneath, authored and pruned in one draft, whose
+ * message no commit carries.
  *
- * Readers: cmds/add.c add_commit and cmds/update.c update_profile, which count
- * the prune and read whether the commit landed, so a capture that put back what
- * the profile holds commits nothing — add says so, and update neither reports
- * nor records it; cmds/remove.c remove_paths, which counts the prune; and
- * cmds/revert.c cmd_revert, which asks neither.
+ * Readers: cmds/add.c cmd_add and cmds/update.c update_profile, which count the
+ * prune and read whether the commit landed, so a capture that put back what the
+ * profile holds commits nothing — add says so, and update neither reports nor
+ * records it; cmds/remove.c remove_paths, which counts the prune; and cmds/revert.c
+ * cmd_revert, which asks neither.
  *
  * @param draft The draft (must not be NULL)
- * @param message Commit message (must not be NULL)
+ * @param words What the writer says of the commit: its action, the templates,
+ *              its -m, a revert's target (must not be NULL; borrowed for the call)
  * @param out_committed Whether a commit was made (optional, can be NULL; false
  *                      where nothing moved, or on a failure)
  * @param out_pruned How many derivations the prune took but a claim the base
@@ -1281,7 +1281,7 @@ error_t profile_changes(
  */
 error_t profile_commit(
     profile_draft_t *draft,
-    const char *message,
+    const commit_words_t *words,
     bool *out_committed,
     size_t *out_pruned
 );

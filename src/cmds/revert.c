@@ -1197,31 +1197,25 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* The commit, its message built as every writer's is (infra/commit.h): the
-     * user's own where one was given, else the template's over what the restore
-     * changes of the profile's claims (core/profiles.h profile_changes) — the
-     * file at the name it wrote, never the way it stood on — and the commit
-     * restored from, whole. It prunes a derived claim nothing stands beneath
-     * any longer — imported redundancy alone, since a restore makes no claim
-     * redundant, so the revert counts none — and the record of a rung it pruned
-     * is the next load's to decide, as of every claim a commit lets go
-     * (core/profiles.h profile_draft_t). */
-    profile_changes_t changes;
-    err = profile_changes(draft, ctx->arena, &changes);
-    if (err) goto cleanup;
-
+    /* The commit, its message the draft's as every writer's is (core/profiles.h
+     * profile_commit): the user's own where one was given, else the template's
+     * over what the restore changes of the profile's claims — the file at the
+     * name it wrote, never the way it stood on — and the commit restored from,
+     * whole. It prunes a derived claim nothing stands beneath any longer — imported
+     * redundancy alone, since a restore makes no claim redundant, so the revert
+     * counts none — and the record of a rung it pruned is the next load's to
+     * decide, as of every claim a commit lets go (core/profiles.h
+     * profile_draft_t). */
     char target_hex[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(target_hex, sizeof(target_hex), git_commit_id(target_commit));
-    const commit_message_context_t msg_ctx = {
+    const commit_words_t words = {
         .action        = COMMIT_ACTION_REVERT,
-        .profile       = profile,
-        .added         = changes.added,
-        .updated       = changes.updated,
-        .removed       = changes.removed,
+        .title         = config->commit_title,
+        .body          = config->commit_body,
         .custom_msg    = opts->message,
         .target_commit = target_hex,
     };
-    err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, NULL);
+    err = profile_commit(draft, &words, NULL, NULL);
     if (err) goto cleanup;
 
     /* Step 23: the receipt, once the commit lands and before the record phase,

@@ -138,11 +138,11 @@ static error_t update_capture(
  * for a deletion — and read back by the run's line and the record phase
  * (update_write_record), so each follows the commit and nothing else: an item
  * the walk skipped (a path the race guard refused) lands in no list and gets no
- * record write. The message is the draft's, never these lists (update_profile).
- * Whether the commit landed at all is the commit's own answer (core/profiles.h
- * profile_commit) — a walk whose edits leave both documents as the draft opened
- * them lands none, whatever its lists hold — and the executor hands on only the
- * bookkeeping of a commit that landed (update_execute).
+ * record write. The message is the draft's, never these lists, and whether the
+ * commit landed at all is the commit's own answer (core/profiles.h profile_commit)
+ * — a walk whose edits leave both documents as the draft opened them lands none,
+ * whatever its lists hold — and the executor hands on only the bookkeeping of a
+ * commit that landed (update_execute).
  *
  * A capture is kept as the record of what it committed — the node the capture
  * held to, the blob the commit holds at the name, the triple its bytes were read
@@ -661,37 +661,26 @@ static error_t update_profile(
         );
     }
 
-    /* What the commit changes of the profile's claims, read off the draft as
-     * the walk and both climbs left it (core/profiles.h profile_changes): the
-     * message names that, never the bookkeeping, which is the record's and the
-     * run line's */
-    profile_changes_t changes;
-    error_t err = profile_changes(draft, ctx->arena, &changes);
-    if (err) return err;
-
-    const commit_message_context_t msg_ctx = {
-        .action     = COMMIT_ACTION_UPDATE,
-        .profile    = profile,
-        .added      = changes.added,
-        .updated    = changes.updated,
-        .removed    = changes.removed,
-        .custom_msg = opts->message,
-    };
-
     /* The commit, where an edit moved either document: a capture, a deletion,
      * or a chain re-derived — which is not redundancy but the user's own word
      * about the disk, and drives the commit it needs, how the remedy for a rung
      * the world moved under works at all — while imported redundancy rides a
-     * commit and never drives one. Its prune takes what nothing stands on any
-     * longer, counted for the line below: the claim leaves the view by this commit,
-     * and its record is the next apply's to decide. And whether it landed, the
-     * commit's own answer, false for captures that put back what the profile
-     * holds, which a hook rewriting a file between the decision and the capture
-     * makes */
+     * commit and never drives one. Its message names what the commit changes of
+     * the profile's claims, as the walk and both climbs left the draft, never
+     * the bookkeeping, which is the record's and the run line's. Its prune takes
+     * what nothing stands on any longer, counted for the line below: the claim
+     * leaves the view by this commit, and its record is the next apply's to decide.
+     * And whether it landed, the commit's own answer, false for captures that
+     * put back what the profile holds, which a hook rewriting a file between
+     * the decision and the capture makes */
+    const commit_words_t words = {
+        .action     = COMMIT_ACTION_UPDATE,
+        .title      = ctx->config->commit_title,
+        .body       = ctx->config->commit_body,
+        .custom_msg = opts->message,
+    };
     size_t pruned = 0;
-    err = profile_commit(
-        draft, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed, &pruned
-    );
+    error_t err = profile_commit(draft, &words, &commit->committed, &pruned);
     if (err) return err;
 
     if (pruned > 0) {

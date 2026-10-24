@@ -749,11 +749,11 @@ static void remove_print_overlaps(
         if (overlaps->entries[i].provided) {
             output_warning(
                 out, OUTPUT_NORMAL,
-                "Another enabled profile claims some of them"
+                "Another enabled profile also tracks some of them"
             );
             output_info(
                 out, OUTPUT_NORMAL,
-                "Those paths stay managed, under that profile's claim"
+                "Those paths stay tracked, from that profile"
             );
             break;
         }
@@ -819,7 +819,7 @@ static output_answer_t remove_ask_paths(
      * copy left on disk, its record retired */
     return output_ask(
         out, false, "Remove %s from profile '%s'?\n"
-        "(Every machine keeps its copy, unmanaged)", counts, opts->profile
+        "(Nothing is deleted from disk, on any machine)", counts, opts->profile
     );
 }
 
@@ -845,13 +845,13 @@ static void remove_print_deletion(
             out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
             opts->profile, counts
         );
-        output_print(out, OUTPUT_NORMAL, "(Every machine would keep its copies)\n");
+        output_print(out, OUTPUT_NORMAL, "(Nothing would be deleted from disk, on any machine)\n");
     } else {
         output_warning(
             out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
             opts->profile, counts
         );
-        output_info(out, OUTPUT_NORMAL, "         Every machine keeps its copies");
+        output_info(out, OUTPUT_NORMAL, "         Nothing is deleted from disk, on any machine");
     }
 }
 
@@ -971,7 +971,7 @@ static error_t remove_paths(
             "Total: %s would be removed from profile\n",
             counts
         );
-        output_print(out, OUTPUT_NORMAL, "(Every machine would keep its copy, unmanaged)\n");
+        output_print(out, OUTPUT_NORMAL, "(Nothing would be deleted from disk, on any machine)\n");
     }
 
     /* The pre-remove hook, over the decided removal — a dry run's too, told so
@@ -1623,31 +1623,29 @@ static const args_opt_t remove_opts[] = {
 
 const args_command_t spec_remove = {
     .name        = "remove",
-    .summary     = "Remove paths from a profile, every copy kept, or delete a profile",
+    .summary     = "Remove paths from a profile or delete a profile",
     .usage       =
         "%s remove [options] <profile> <path>...\n"
         "   or: %s remove [options] <profile> --delete-profile\n"
         "   or: %s remove [options] --profile <name> <path>...",
     .description =
-        "Take paths — files and tracked directories — out of a profile:\n"
-        "every machine's next apply stops managing them and leaves each\n"
-        "copy on disk, unless another enabled profile claims the path.\n"
-        "To delete a file from every machine instead, delete it and run\n"
-        "'dotta update'. Or delete the profile branch outright.\n",
+        "Stop tracking files and directories: they leave the profile and\n"
+        "stay on disk, on every machine. To delete a file everywhere,\n"
+        "delete it and run 'dotta update'.\n",
     .notes       =
         "Operation Modes:\n"
-        "  (default)           Take the paths out of the profile; every\n"
-        "                      machine keeps its copy, unmanaged.\n"
+        "  (default)           Remove the paths from the profile. Nothing\n"
+        "                      is deleted from disk.\n"
         "  --delete-profile    Delete the entire profile branch. No paths\n"
         "                      may be given.\n",
     .examples    =
-        "  %s remove global ~/.bashrc                  # Stop managing, every copy kept\n"
+        "  %s remove global ~/.bashrc                  # Stop tracking, keep the file\n"
         "  %s remove darwin ~/.config/nvim -n          # Preview removal\n"
         "  %s remove staging --delete-profile          # Delete whole profile\n",
     .epilogue    =
         "See also:\n"
         "  %s profile disable <name>  # Stop deploying without deleting\n"
-        "  %s update                  # Commit a deletion: every machine prunes its copy\n",
+        "  %s update                  # Delete a file everywhere, once deleted here\n",
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,

@@ -289,8 +289,7 @@ static void status_print_profiles(
             output_hintline(
                 out, OUTPUT_NORMAL,
                 "  custom/ paths - 'dotta profile enable <profile> --target /path' "
-                "sets the target; 'dotta remove <profile> <path>' stops managing one, "
-                "every copy kept"
+                "sets the target; 'dotta remove <profile> <path>' stops tracking one"
             );
         }
         if (unused_shown) {
@@ -775,7 +774,7 @@ static void status_print_workspace(
      * machines' deletions left among them. `add --force` keeps disk's bytes and
      * not its kind: a kind change is a re-shaping of the tree and add refuses
      * it by the claim standing at the path, naming `dotta remove` (cmds/add.c),
-     * which is named with its reach: every machine keeps its copy. */
+     * which stops tracking the path and keeps the file. */
     if (conflicts.count > 0) {
         output_list_t *list = output_list_create(
             out, "Conflicts",
@@ -783,7 +782,7 @@ static void status_print_workspace(
             "\"dotta diff\" to compare, \"dotta apply --force <path>\" to "
             "keep Git's (a directory only if all dotta's), \"dotta add --force\" "
             "to keep disk's bytes when the kind matches, \"dotta remove\" to stop "
-            "managing it, every copy kept"
+            "tracking it"
         );
 
         for (size_t i = 0; i < conflicts.count; i++) {
@@ -974,13 +973,13 @@ static void status_print_workspace(
     /* Section 5: Uncommitted changes — the user's moves, every line update's to
      * commit, as the header says. A key beneath names what update reaches and
      * the verb that settles a line the other way, by the tags each line shows,
-     * the Issues key's shape: a deletion, which reaches every machine — another
-     * enabled profile's claim taking the place where one claims the path, which
-     * update's preview names per path (cmds/update.c update_print_preview) —
-     * and which apply puts back; and a claim alone, which apply restores, a claim
-     * being no edit (core/deploy.h deploy_content_conflicts). An edit, a kind
-     * the copy can commit, and the blob's policy are keyed by no line: apply
-     * skips the first two, and the third is update's alone. */
+     * the Issues key's shape: a deletion, which reaches every machine and which
+     * apply puts back — another enabled profile's claim taking the place where
+     * one claims the path, said per path by update's preview (cmds/update.c
+     * update_print_preview), never by the key; and a claim alone, which apply
+     * restores, a claim being no edit (core/deploy.h deploy_content_conflicts).
+     * An edit, a kind the copy can commit, and the blob's policy are keyed by
+     * no line: apply skips the first two, and the third is update's alone. */
     if (uncommitted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Uncommitted changes",
@@ -1021,17 +1020,13 @@ static void status_print_workspace(
                      * beside them or not */
                     if ((item->divergence & ~(DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ==
                         DIVERGENCE_NONE) {
-                        hint = "changed here; 'dotta update' commits it for every machine, "
-                            "'dotta apply' restores the claim here";
+                        hint = "changed here; 'dotta update' commits it everywhere, "
+                            "'dotta apply' restores it";
                     }
                     break;
 
                 case WORKSPACE_STATE_DELETED:
-                    /* The act update's, the outcome each machine's apply's, as
-                     * every screen names the two (cmds/update.c spec_update) */
-                    hint = "gone here; 'dotta update' deletes it for every machine — each "
-                        "one's apply pruning its unchanged copy, or landing another "
-                        "enabled profile's where one claims the path — and 'dotta apply' "
+                    hint = "gone here; 'dotta update' deletes it everywhere, 'dotta apply' "
                         "puts it back";
                     break;
 

@@ -1097,8 +1097,8 @@ static void update_print_preview(
     if (partition->deleted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Deleted paths",
-            "will be deleted from their profiles; every machine's next apply "
-            "prunes the copy it deployed, where unchanged"
+            "will be deleted from their profiles, and from every machine at its "
+            "next apply"
         );
 
         /* The view's profiles, lowest precedence first, each asked below for
@@ -1152,7 +1152,7 @@ static void update_print_preview(
             if (other) {
                 size_t used = strlen(metadata);
                 snprintf(
-                    metadata + used, sizeof(metadata) - used, ", %s's lands in its place",
+                    metadata + used, sizeof(metadata) - used, ", %s's takes its place",
                     other->profile
                 );
             }
@@ -1483,14 +1483,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * them: a directory row's too, and add keeps disk's only where the kind
          * matches, refusing a change across file and directory; apply --force
          * replaces a directory only with all it holds, which no load reads
-         * (core/deploy.c check_clearance), and is named with its path, remove
-         * with its reach, for the reasons that header gives */
+         * (core/deploy.c check_clearance), and is named with its path, for the
+         * reasons that header gives */
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
             "'dotta apply --force <path>' keeps Git's (a directory only if all dotta's), "
             "'dotta add --force' keeps disk's when the kind matches, 'dotta remove' "
-            "stops managing %s, every copy kept",
+            "stops tracking %s",
             refused[WORKSPACE_ROUTE_CONFLICT],
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "it" : "them"
@@ -1509,7 +1509,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: a different kind stands on disk — "
             "'dotta apply --force <path>' replaces %s (a directory only if all "
-            "dotta's), 'dotta remove' stops managing %s, every copy kept",
+            "dotta's), 'dotta remove' stops tracking %s",
             refused[WORKSPACE_ROUTE_KIND],
             refused[WORKSPACE_ROUTE_KIND] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_KIND] == 1 ? "it" : "them",
@@ -2014,11 +2014,10 @@ const args_command_t spec_update = {
     .description  =
         "Commit filesystem modifications to the matching profile branches\n"
         "(the reverse direction of 'apply'). Mode is captured alongside\n"
-        "content, and ownership for paths that are not yours. A file\n"
-        "deleted from disk is deleted from its profile: every machine's\n"
-        "next apply prunes the copy it deployed where unchanged, unless\n"
-        "another enabled profile claims the path. To stop managing a file\n"
-        "and keep every copy, use 'dotta remove'.\n",
+        "content, and ownership for paths that are not yours. A file you\n"
+        "deleted is deleted from its profile, and from every machine at\n"
+        "its next apply. To stop tracking a file but keep it, use 'dotta\n"
+        "remove'.\n",
     .notes        =
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"
@@ -2037,7 +2036,7 @@ const args_command_t spec_update = {
     .epilogue     =
         "See also:\n"
         "  %s status          # See what will be committed\n"
-        "  %s remove          # Stop managing a path, every copy kept\n"
+        "  %s remove          # Stop tracking a path, keep it on disk\n"
         "  %s sync            # Publish committed changes to remote\n",
     .opts_size    = sizeof(cmd_update_options_t),
     .opts         = update_opts,

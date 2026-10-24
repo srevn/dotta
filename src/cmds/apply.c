@@ -3550,9 +3550,8 @@ const args_command_t spec_apply = {
     .usage        = "%s apply [options] [profile|path]...",
     .description  =
         "Converge the filesystem with enabled profiles: deploy new and\n"
-        "updated files, prune files orphaned by disabled profiles or\n"
-        "deleted from their profiles, where unchanged, and update the\n"
-        "deployment state.\n",
+        "updated files, prune files deleted from their profiles or whose\n"
+        "profile was disabled, and update the deployment state.\n",
     .notes        =
         "Path Arguments:\n"
         "  A path narrows the run to what lies at or beneath it, in both\n"

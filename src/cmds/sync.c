@@ -504,7 +504,7 @@ static error_t sync_rollback(
      * oid_to_hex), where an abbreviation could name two commits. The branch is
      * its cause's to name (sys/gitops.h gitops_write_reference). */
     char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
-    git_oid_tostr(oid_str, sizeof(oid_str), &resolve->saved_oid);
+    git_oid_tostr(oid_str, sizeof(oid_str), &resolve->local_oid);
     return error_wrap(
         err, "Cannot roll back to %s, the branch's head before the %s, "
         "after the %s failed", oid_str, sync_verdict_name(row->verdict), step
@@ -532,9 +532,9 @@ static error_t sync_resolve(
     sync_row_t *row,
     transfer_context_t *xfer
 ) {
-    /* The context keeps the head the branch stands at — every write's expectation,
-     * the rollback's target — the head the resolution leaves, and the action a
-     * merge's commit names */
+    /* The context keeps the two heads the resolution integrates — the branch's,
+     * every write's expectation and the rollback's target, and the remote's —
+     * the head it leaves, and the action a merge's commit names */
     resolve_context_t resolve;
     error_t err = resolve_init(
         &resolve, repo, remote_name, row->profile,

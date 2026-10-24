@@ -42,7 +42,12 @@ error_t resolve_init(
     error_t err = gitops_branch_refname(ctx->refname, sizeof(ctx->refname), branch_name);
     if (err) return err;
 
-    return gitops_resolve_reference_oid(repo, ctx->refname, &ctx->saved_oid);
+    err = gitops_resolve_reference_oid(repo, ctx->refname, &ctx->local_oid);
+    if (err) return err;
+
+    /* The remote-tracking head, an absence refused: what the resolution integrates,
+     * read once, here, since a push writes the ref past it (resolve.h) */
+    return gitops_resolve_remote_branch_oid(repo, remote_name, branch_name, &ctx->remote_oid);
 }
 
 /**
@@ -51,17 +56,10 @@ error_t resolve_init(
 static error_t resolve_rebase_inmemory(resolve_context_t *ctx) {
     CHECK_NULL(ctx);
 
-    /* Get remote commit OID (local OID already captured in ctx->saved_oid) */
-    git_oid remote_oid;
-    error_t err = gitops_resolve_remote_branch_oid(
-        ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
-    );
-    if (err) return err;
-
     /* Perform in-memory rebase (never touches HEAD) */
     git_oid rebased_oid;
-    err = gitops_rebase_inmemory_safe(
-        ctx->repo, &ctx->saved_oid, &remote_oid, &rebased_oid
+    error_t err = gitops_rebase_inmemory_safe(
+        ctx->repo, &ctx->local_oid, &ctx->remote_oid, &rebased_oid
     );
     if (err) {
         return error_wrap(
@@ -79,7 +77,7 @@ static error_t resolve_rebase_inmemory(resolve_context_t *ctx) {
     );
 
     err = gitops_write_reference(
-        ctx->repo, ctx->refname, &rebased_oid, &ctx->saved_oid, reflog_msg
+        ctx->repo, ctx->refname, &rebased_oid, &ctx->local_oid, reflog_msg
     );
     if (err) return err;
 
@@ -93,17 +91,10 @@ static error_t resolve_rebase_inmemory(resolve_context_t *ctx) {
 static error_t resolve_merge_trees(resolve_context_t *ctx) {
     CHECK_NULL(ctx);
 
-    /* Get remote commit OID (local OID already captured in ctx->saved_oid) */
-    git_oid remote_oid;
-    error_t err = gitops_resolve_remote_branch_oid(
-        ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
-    );
-    if (err) return err;
-
     /* Find merge base */
     git_oid merge_base_oid;
-    err = gitops_find_merge_base(
-        ctx->repo, &ctx->saved_oid, &remote_oid, &merge_base_oid
+    error_t err = gitops_find_merge_base(
+        ctx->repo, &ctx->local_oid, &ctx->remote_oid, &merge_base_oid
     );
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
@@ -124,7 +115,7 @@ static error_t resolve_merge_trees(resolve_context_t *ctx) {
     /* Perform tree merge (never touches HEAD) */
     git_index *merged_index = NULL;
     err = gitops_merge_trees_safe(
-        ctx->repo, &merge_base_oid, &ctx->saved_oid, &remote_oid, &merged_index
+        ctx->repo, &merge_base_oid, &ctx->local_oid, &ctx->remote_oid, &merged_index
     );
     if (err) {
         return error_wrap(err, "Merge failed for branch '%s'", ctx->branch_name);
@@ -144,13 +135,13 @@ static error_t resolve_merge_trees(resolve_context_t *ctx) {
     git_commit *remote_commit = NULL;
     git_oid merge_commit_oid;
 
-    int rc = git_commit_lookup(&local_commit, ctx->repo, &ctx->saved_oid);
+    int rc = git_commit_lookup(&local_commit, ctx->repo, &ctx->local_oid);
     if (rc < 0) {
         git_index_free(merged_index);
         return error_git(rc, "Cannot read the head of branch '%s'", ctx->branch_name);
     }
 
-    rc = git_commit_lookup(&remote_commit, ctx->repo, &remote_oid);
+    rc = git_commit_lookup(&remote_commit, ctx->repo, &ctx->remote_oid);
     if (rc < 0) {
         git_commit_free(local_commit);
         git_index_free(merged_index);
@@ -189,7 +180,7 @@ static error_t resolve_merge_trees(resolve_context_t *ctx) {
     );
 
     err = gitops_write_reference(
-        ctx->repo, ctx->refname, &merge_commit_oid, &ctx->saved_oid, reflog_msg
+        ctx->repo, ctx->refname, &merge_commit_oid, &ctx->local_oid, reflog_msg
     );
     if (err) return err;
 
@@ -200,14 +191,14 @@ static error_t resolve_merge_trees(resolve_context_t *ctx) {
 /**
  * Resolve with "ours" strategy (keep local, handled by caller)
  *
- * This strategy doesn't modify the local branch - it stays at saved_oid. The
+ * This strategy doesn't modify the local branch - it stays at local_oid. The
  * actual force push to remote is handled by the caller.
  */
 static error_t resolve_ours(resolve_context_t *ctx) {
     CHECK_NULL(ctx);
 
     /* Local branch remains unchanged at its current position */
-    git_oid_cpy(&ctx->resolved_oid, &ctx->saved_oid);
+    git_oid_cpy(&ctx->resolved_oid, &ctx->local_oid);
 
     /* Always succeeds - this is a no-op strategy */
     return NULL;
@@ -219,13 +210,6 @@ static error_t resolve_ours(resolve_context_t *ctx) {
 static error_t resolve_theirs(resolve_context_t *ctx) {
     CHECK_NULL(ctx);
 
-    /* Get remote commit OID */
-    git_oid remote_oid;
-    error_t err = gitops_resolve_remote_branch_oid(
-        ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
-    );
-    if (err) return err;
-
     /* Update local branch to point to remote commit */
     char reflog_msg[DOTTA_MESSAGE_MAX];
     snprintf(
@@ -234,12 +218,12 @@ static error_t resolve_theirs(resolve_context_t *ctx) {
         ctx->remote_name, ctx->branch_name
     );
 
-    err = gitops_write_reference(
-        ctx->repo, ctx->refname, &remote_oid, &ctx->saved_oid, reflog_msg
+    error_t err = gitops_write_reference(
+        ctx->repo, ctx->refname, &ctx->remote_oid, &ctx->local_oid, reflog_msg
     );
     if (err) return err;
 
-    git_oid_cpy(&ctx->resolved_oid, &remote_oid);
+    git_oid_cpy(&ctx->resolved_oid, &ctx->remote_oid);
     return NULL;
 }
 
@@ -271,17 +255,17 @@ error_t resolve_execute(resolve_context_t *ctx) {
 }
 
 /**
- * Rollback divergence resolution to saved state
+ * Rollback divergence resolution to the head the branch stood at
  */
 error_t resolve_rollback(resolve_context_t *ctx) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(ctx->branch_name);
 
-    /* Back to the head resolve_init read, only from the one the resolution left:
-     * before any, Git's null id, which a branch that stands refuses */
+    /* Back to the branch's head resolve_init read, only from the one the resolution
+     * left: before any, Git's null id, which a branch that stands refuses */
     return gitops_write_reference(
-        ctx->repo, ctx->refname, &ctx->saved_oid, &ctx->resolved_oid,
+        ctx->repo, ctx->refname, &ctx->local_oid, &ctx->resolved_oid,
         "sync: Rollback after failure"
     );
 }

@@ -17,6 +17,7 @@
 #include "base/output.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
+#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -123,6 +124,16 @@ typedef struct {
     size_t blocking;   /* Update's work and the conflicts: what the consent is asked over */
     size_t conflicts;  /* Status's Conflicts, no default verb: the cancel's remedies turn on it */
 } sync_guard_t;
+
+/**
+ * A profile's departed files, by their departures at the head the pull left
+ * (sync_departure_counts): the Manifest line's three words for what left
+ */
+typedef struct {
+    size_t removed;     /* REMOVED, NEVER_HELD, GONE: no deletion committed */
+    size_t deleted;     /* DELETED: update's removals took it */
+    size_t unverified;  /* UNVERIFIED, or a head that would not read */
+} sync_departure_counts_t;
 
 /**
  * A verdict's word: the act a row says was withheld (sync_print_withheld), and
@@ -1682,6 +1693,79 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
 }
 
 /**
+ * Count a profile's departed files by their departures
+ *
+ * The rows the diff handed back as departed (core/manifest.h
+ * manifest_diff_stats_t), their files asked of the profile's history in one walk
+ * (core/profiles.h profile_departures), at the branch's head as the pull left
+ * it, read by name — NULL where the branch is gone, which answers every name
+ * GONE. Every departure that keeps counts removed: a removal under any action
+ * but update, or under none; no commit that held the name; the branch gone. A
+ * directory is asked nothing: a tracked one is a sheet item, never a blob, so
+ * no history says what took it, and what is left in it decides its copy (v2sc).
+ * A head that will not read answers no name, each unverified, its error dropped
+ * — one a profile, a sync's bound (base/error.h "Lifetime"). A name the head
+ * holds counts nowhere: it left the view and not the profile, another process
+ * having disabled it or moved its target mid-sync (stated).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param stats One profile's slot of the diff (must not be NULL)
+ * @return The counts, zero where nothing departed
+ */
+static sync_departure_counts_t sync_departure_counts(
+    git_repository *repo, const manifest_diff_stats_t *stats
+) {
+    sync_departure_counts_t counts = { 0 };
+    if (stats->departed.count == 0) return counts;
+
+    /* The departed files' names, beside their answers, in a frame of the count's
+     * own */
+    arena_t *frame = arena_create(0);
+    const char **paths = arena_calloc(frame, stats->departed.count, sizeof(*paths));
+    size_t count = 0;
+    for (size_t i = 0; i < stats->departed.count; i++) {
+        const manifest_row_t *row = stats->departed.entries[i];
+        if (path_type_kind(row->type) == PATH_KIND_FILE) {
+            paths[count++] = row->storage_path;
+        }
+    }
+    profile_departure_t *departures = arena_calloc(frame, count, sizeof(*departures));
+
+    git_commit *head = NULL;
+    error_t err = gitops_branch_commit(repo, stats->profile, &head);
+    if (err) {
+        counts.unverified = count;
+    } else {
+        profile_departures(head, paths, count, departures);
+
+        for (size_t i = 0; i < count; i++) {
+            switch (departures[i].kind) {
+                case PROFILE_DEPARTURE_DELETED:
+                    counts.deleted++;
+                    break;
+
+                case PROFILE_DEPARTURE_REMOVED:
+                case PROFILE_DEPARTURE_NEVER_HELD:
+                case PROFILE_DEPARTURE_GONE:
+                    counts.removed++;
+                    break;
+
+                case PROFILE_DEPARTURE_UNVERIFIED:
+                    counts.unverified++;
+                    break;
+
+                case PROFILE_DEPARTURE_HELD:
+                    break;
+            }
+        }
+    }
+    git_commit_free(head);
+
+    arena_free(frame);
+    return counts;
+}
+
+/**
  * Sync command implementation
  */
 error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
@@ -1918,9 +2002,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * contributes nothing to either, said by status's and apply's health off
      * the view, core/manifest.h manifest_missing). A path p lost to q is p's
      * reassignment and q's claim; a path that moved between two pulled profiles
-     * is one reassignment, never a transient release; and a claim of p's that a
-     * blob the pull brought now stands above is p's overridden, never a release
-     * either: its copy is that blob's landing's, which clears it.
+     * is one reassignment, never a claim departed beside one added; and a claim
+     * of p's that a blob the pull brought now stands above is p's overridden,
+     * never departed either: its copy is that blob's landing's, which clears it.
      *
      * Sync does not deploy, nor settle what a pull let go: apply's divergence
      * analysis does both, which is what the hint closing the report points at.
@@ -1946,60 +2030,61 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             ctx->arena, enabled->count, sizeof(*stats)
         );
 
-        manifest_diff(before, after, records, record_count, enabled, stats);
+        manifest_diff(before, after, records, record_count, enabled, ctx->arena, stats);
 
         bool manifest_changed = false;  /* The block's header, said at its first line */
         for (size_t i = 0; i < enabled->count; i++) {
             const manifest_diff_stats_t *s = &stats[i];
-            if (s->added + s->updated + s->reassigned + s->overridden + s->orphaned == 0) {
-                continue;
+            const sync_departure_counts_t departed = sync_departure_counts(repo, s);
+
+            /* One line per profile, its non-zero counts in the diff's order:
+             * what the pull added and updated, what passed to another profile,
+             * what another's blob stands over, and what left, each file by its
+             * departure at the head the pull left. A departure says what took
+             * the file, never what becomes of its copy, which is the orphan
+             * analysis's (core/workspace.c workspace_analyze_orphans), and the
+             * two part (stated): an observed copy counts deleted, and the gate
+             * releases it; a reassigned record's copy goes by its own profile's
+             * history, the line by the row's; a copy already gone is reclaimed;
+             * and dotta's node above a row the view after stands, or a copy beneath
+             * a blob it stands, is that row's or that blob's landing's. A claim
+             * that left with no record asks nothing of apply and is not counted.
+             * The line says what its table holds, so one whose every count is
+             * zero — a directory that left, a name its profile holds still — is
+             * no line. */
+            const struct {
+                size_t count;
+                const char *word;
+            } parts[] = {
+                { s->added,            "added"      },
+                { s->updated,          "updated"    },
+                { s->reassigned,       "reassigned" },
+                { s->overridden,       "overridden" },
+                { departed.removed,    "removed"    },
+                { departed.deleted,    "deleted"    },
+                { departed.unverified, "unverified" },
+            };
+
+            size_t total = 0;
+            for (size_t k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) {
+                total += parts[k].count;
             }
+            if (total == 0) continue;
 
             if (!manifest_changed) {
                 output_section(out, OUTPUT_NORMAL, "Manifest");
                 manifest_changed = true;
             }
 
-            /* One line per profile, its non-zero counts in the diff's order:
-             * what the pull added and updated, what passed to another profile,
-             * what another's blob stands over, what left. A departure here is a
-             * Git-side removal, so an orphan it leaves is one apply releases
-             * (the record retires, the copy stays) — a file its history keeps,
-             * a directory holding what no apply removes — save where the orphan
-             * analysis decides otherwise (core/workspace.c
-             * workspace_analyze_orphans), each counted released all the same
-             * (stated): a file its history says the user deleted, which apply
-             * prunes where untouched; a copy already gone, reclaimed; dotta's
-             * node above a row the view after stands, which the landing beneath
-             * it replaces; a copy beneath a blob it stands, which that blob's
-             * landing clears; and a directory dotta created that the run empties,
-             * which apply prunes, no history asked of a directory. A departure
-             * with no record has no filesystem effect and asks nothing of the
-             * user, so it is not counted. */
             output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}:", s->profile);
             const char *sep = " ";
-            if (s->added > 0) {
-                output_print(out, OUTPUT_NORMAL, "%s%zu added", sep, s->added);
-                sep = ", ";
-            }
-            if (s->updated > 0) {
-                output_print(out, OUTPUT_NORMAL, "%s%zu updated", sep, s->updated);
-                sep = ", ";
-            }
-            if (s->reassigned > 0) {
+            for (size_t k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) {
+                if (parts[k].count == 0) continue;
+
                 output_print(
-                    out, OUTPUT_NORMAL, "%s%zu reassigned", sep, s->reassigned
+                    out, OUTPUT_NORMAL, "%s%zu %s", sep, parts[k].count, parts[k].word
                 );
                 sep = ", ";
-            }
-            if (s->overridden > 0) {
-                output_print(
-                    out, OUTPUT_NORMAL, "%s%zu overridden", sep, s->overridden
-                );
-                sep = ", ";
-            }
-            if (s->orphaned > 0) {
-                output_print(out, OUTPUT_NORMAL, "%s%zu released", sep, s->orphaned);
             }
             output_endline(out, OUTPUT_NORMAL);
         }

@@ -1986,12 +1986,14 @@ error_t manifest_holder(
  * Two passes — every claim of `after` for the gain side, every claim of `before`
  * for the loss side — over an index of profile → stats slot, the profile's own
  * claim at a path `after` stands nothing at (manifest_lookup_claim), and a search
- * of the record by path for a departure (state_find_record). Nothing is written;
- * the rule for what a claim `after` lacks means for apply is the one the workspace
- * reads when it meets the record there — a claim its profile still holds is
- * overridden, the landing's of the blob above it, and anything else a departure,
- * which leaves apply an orphan where a record stands. Nothing here can fail:
- * the one thing a caller can get wrong, a profile named twice, is its bug.
+ * of the record by path for a claim that departed (state_find_record); then each
+ * profile's departed rows, gathered into the slice that lends them. Nothing is
+ * written; the rule for what a claim `after` lacks means for apply is the one
+ * the workspace reads when it meets the record there — a claim its profile still
+ * holds is overridden, the landing's of the blob above it, and any other has
+ * departed, which leaves apply an orphan where a record stands. Nothing here
+ * can fail: the one thing a caller can get wrong, a profile named twice, is its
+ * bug.
  */
 void manifest_diff(
     const manifest_t *before,
@@ -1999,10 +2001,12 @@ void manifest_diff(
     const state_record_t *records,
     size_t record_count,
     const string_array_t *profiles,
+    arena_t *arena,
     manifest_diff_stats_t *out_stats
 ) {
     CHECK_NULL(after);
     CHECK_NULL(profiles);
+    CHECK_NULL(arena);
     CHECK_NULL(out_stats);
 
     /* Stats attribution index. Maps profile name → its out_stats slot (the caller's
@@ -2060,9 +2064,11 @@ void manifest_diff(
     /* Loss side: every claim of `before`, attributed to its former owner, a derived
      * row counting nowhere here either. A path still in `after` under another
      * profile is a reassignment (for user-facing "A → B" messaging); a path `after`
-     * lacks is overridden where its profile claims it still, else an orphan if
-     * a record stands at it. */
+     * lacks is overridden where its profile claims it still, else departed if a
+     * record stands at it — the slot it departed from noted beside the row, one
+     * note a row of `before`, in the frame */
     rows = manifest_rows(before);
+    manifest_diff_stats_t **departed = arena_calloc(frame, rows.count, sizeof(*departed));
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *old = rows.entries[i];
         if (manifest_is_derived(old)) continue;
@@ -2078,7 +2084,7 @@ void manifest_diff(
 
         /* The profile claims the path still, and it stands nowhere: with no row
          * at its path, a blob stands above it (manifest_layer), and its copy is
-         * that blob's landing's. No departure, so no record is asked. */
+         * that blob's landing's. It has not departed, so no record is asked. */
         if (manifest_lookup_claim(after, old->profile, old->filesystem_path)) {
             slot->overridden++;
             continue;
@@ -2088,8 +2094,24 @@ void manifest_diff(
          * with one leaves an orphan, whose fate is the orphan analysis's at apply;
          * one without leaves nothing for apply to do. */
         if (state_find_record(records, record_count, old->filesystem_path)) {
-            slot->orphaned++;
+            departed[i] = slot;
+            slot->departed.count++;
         }
+    }
+
+    /* Each profile's departed rows, `before`'s in its order: a slice of `arena`
+     * made at the count the pass reached and filled from the notes, by a scan
+     * that ends at the profile's last — a decision made once, and no slice grown */
+    for (size_t p = 0; p < profiles->count; p++) {
+        manifest_diff_stats_t *slot = &out_stats[p];
+        const manifest_row_t **entries = arena_calloc(
+            arena, slot->departed.count, sizeof(*entries)
+        );
+
+        for (size_t i = 0, n = 0; n < slot->departed.count; i++) {
+            if (departed[i] == slot) entries[n++] = rows.entries[i];
+        }
+        slot->departed.entries = entries;
     }
 
     arena_free(frame);

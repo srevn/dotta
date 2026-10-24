@@ -308,10 +308,12 @@ static inline bool manifest_is_derived(const manifest_row_t *row) {
  * Structural type — parallels libgit2's git_strarray and base/array's
  * string_array_t. The producer's signature dictates lifetime via the arena (or
  * other allocator) that backs the rows: manifest_rows(view) lends the view's,
- * backed by the view's arena (the command's); cmds/update.c lends two of its
- * own — cmd_update's named-run leaves, in the command's arena, and update_execute's
- * per-profile share of them, in an array the next profile refills (valid for
- * one update_profile call). The rows are the view's however long a slice lives.
+ * backed by the view's arena (the command's); manifest_diff lends each profile's
+ * departed rows, `before`'s, in the arena its caller hands it; cmds/update.c
+ * lends two of its own — cmd_update's named-run leaves, in the command's arena,
+ * and update_execute's per-profile share of them, in an array the next profile
+ * refills (valid for one update_profile call). The rows are the view's however
+ * long a slice lives.
  */
 typedef struct {
     const manifest_row_t *const *entries;
@@ -1382,8 +1384,9 @@ const manifest_row_t *manifest_moved_place(
  *   Loss-side  — the claims `before` stood under the profile that `after` does
  *                not.
  *
- * Counters describe the two views and the record; they do NOT verify disk matches
- * anything. Verification is workspace divergence analysis (status/diff/apply).
+ * The counts and the departed rows describe the two views and the record; they
+ * do NOT verify disk matches anything. Verification is workspace divergence
+ * analysis (status/diff/apply).
  *
  * `reassigned` here is this transition's own delta — a claim `before` held under
  * one profile whose path `after` gives another — and not the standing fact the
@@ -1393,19 +1396,24 @@ const manifest_row_t *manifest_moved_place(
  * same way — a claim `before` stood under a profile that still holds it in `after`,
  * where it stands nowhere — and not the copy the record keeps there, overridden
  * (core/workspace.h WORKSPACE_STATE_OVERRIDDEN) from whenever a blob came to
- * stand above it until that blob goes or its landing clears the copy.
+ * stand above it until that blob goes or its landing clears the copy. `departed`
+ * is every other claim `after` stands nowhere, with a record at its path, which
+ * is then an orphan (core/workspace.h). What its profile's history says of its
+ * leaving is its departure (core/profiles.h profile_departure_t), which no view
+ * holds, so the departed claims are handed back whole, as their rows, for the
+ * reader that asks it: sync's Manifest (cmds/sync.c sync_departure_counts).
  */
 typedef struct {
-    const char *profile;   /* Profile name (borrowed from the profiles filter) */
+    const char *profile;        /* Profile name (borrowed from the profiles filter) */
 
     /* Gain-side */
-    size_t added;          /* Claims at a path `before` stood no claim at */
-    size_t updated;        /* Claims at a path `before` stood one at, its type, blob, mode, owner or group moved */
+    size_t added;               /* Claims at a path `before` stood no claim at */
+    size_t updated;             /* Claims at a path `before` stood one at, its type, blob, mode, owner or group moved */
 
     /* Loss-side */
-    size_t reassigned;     /* Claims whose path `after` gives another profile */
-    size_t overridden;     /* Claims the profile holds still, standing nowhere in `after` */
-    size_t orphaned;       /* Claims gone, with a record at the path: orphans the next apply settles */
+    size_t reassigned;          /* Claims whose path `after` gives another profile */
+    size_t overridden;          /* Claims the profile holds still, standing nowhere in `after` */
+    manifest_rows_t departed;   /* Claims gone, with a record at the path: `before`'s rows, in its order */
 } manifest_diff_stats_t;
 
 /**
@@ -1414,9 +1422,10 @@ typedef struct {
  * The delta sync's Manifest block prints (cmds/sync.c cmd_sync): what each profile
  * in `profiles` claims in `after` that it did not in `before`, what it lost to
  * another profile's row or to a blob standing above it, and what left the view
- * under it — the last counted only where a record stands, because only a path
- * dotta has observed has anything for apply to do at its departure; a departure
- * with no record asks nothing of apply and is not counted.
+ * under it — the last handed back as its rows, and only where a record stands,
+ * because only a path dotta has observed has anything for apply to do once its
+ * claim has departed; a claim that left with no record asks nothing of apply
+ * and is not handed back.
  *
  * Attribution (for a profile P in `profiles`, over its claims; a derived row of
  * either view counts nowhere):
@@ -1433,11 +1442,12 @@ typedef struct {
  *     its copy is that blob's landing's, which clears it (core/workspace.c
  *     workspace_analyze_orphans), so no record is asked
  *   - every other claim of `before` under P whose path `after` lacks, with a
- *     record at the path: orphaned. What apply does there is the orphan analysis's
+ *     record at the path: departed, handed back as its row for a reader that
+ *     asks what took it. What apply does there is the orphan analysis's
  *     (core/workspace.c workspace_analyze_orphans): a copy beneath a blob `after`
  *     stands is that blob's landing's, and otherwise the record's ownership and
- *     — a file's Git, a directory's what is left in it — say whether apply prunes
- *     the copy or releases it
+ *     — a file's history, a directory's what is left in it — say whether apply
+ *     prunes the copy or releases it
  *   Overlap semantics, by where the claim standing over A's at path X is
  *   (core/manifest.c manifest_layer): at X, B gets added or updated for X and A
  *   reassigned; beneath X, A's blob there having lost its place to the claims
@@ -1457,10 +1467,14 @@ typedef struct {
  *     here with each profile's name set, so a caller reads the counts without
  *     asking whether anything changed
  *
+ * Memory: each profile's departed rows are `before`'s, borrowed for its life;
+ * the slice that lends them is `arena`'s.
+ *
  * Performance: O(A + B (P + log R)) — one pass over each view, and per claim
  * `after` stands nothing at, the profile's claim there (P the profiles `after`
- * holds) and, where it claims none, a search of the record; no Git, no disk, no
- * database.
+ * holds) and, where it claims none, a search of the record; then each profile's
+ * departed rows, gathered in one scan of `before` that ends at its last; no Git,
+ * no disk, no database.
  *
  * @param before View before the transition (may be NULL = empty)
  * @param after View after the transition (must not be NULL)
@@ -1468,6 +1482,7 @@ typedef struct {
  *                the search rests on (may be NULL when record_count is 0)
  * @param record_count Number of records
  * @param profiles Profiles to attribute to (must not be NULL)
+ * @param arena Arena the departed rows' slices live in (must not be NULL)
  * @param out_stats Parallel array (length profiles->count; must not be NULL)
  */
 void manifest_diff(
@@ -1476,6 +1491,7 @@ void manifest_diff(
     const state_record_t *records,
     size_t record_count,
     const string_array_t *profiles,
+    arena_t *arena,
     manifest_diff_stats_t *out_stats
 );
 

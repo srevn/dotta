@@ -412,7 +412,8 @@ error_t gitops_reference_tree(
  * (gitops_branch_refname) on the way: gitops_branch_tree's twin, for a reader
  * that asks the history behind the head. Readers: core/workspace.c
  * workspace_ask_departures (each owned file orphan's profile, whose branch gone
- * answers every name GONE).
+ * answers every name GONE) and cmds/sync.c sync_departure_counts (each profile
+ * whose files a pull's view lost).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)

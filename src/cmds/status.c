@@ -1316,9 +1316,10 @@ static void status_print_workspace(
     /* Section 11: Released paths — the scope exit's orphans apply settles in
      * the record alone (core/cleanup.h cleanup_verdict: ABSENT, RELEASED): it
      * retires each record and touches nothing on disk, which is what the header
-     * says of every line; the key says why, by the tags each line shows, the
-     * Issues key's shape. Last, since nothing here asks the user anything, and
-     * the line leaves it as it finds it. */
+     * says of every line; a line says why where the item can, and the key the
+     * rest, by the tags each line shows, the Issues key's shape. Last, since
+     * nothing here asks the user anything, and the line leaves it as it finds
+     * it. */
     if (released.count > 0) {
         output_list_t *list = output_list_create(
             out, "Released paths",
@@ -1364,20 +1365,23 @@ static void status_print_workspace(
                     break;
 
                 case WORKSPACE_STATE_RELEASED:
-                    /* The bare [released] key, a file's and a directory's, written
-                     * true of both: a disjunction, each line it stands over true
-                     * by one of its causes. Its claim "no longer stands": Git
-                     * dropped it, or Git still carries it where a blob of its
-                     * profile leaves it no room. And what no apply removes, in
-                     * a directory: an active path beneath it, an orphan the load
-                     * released, a node no record names. */
+                    /* A line names what let it go wherever the item can say —
+                     * what its profile's history kept it for, or that dotta never
+                     * deployed it (core/workspace.c workspace_item_tags) — so
+                     * the bare [released] key, a file's and a directory's, points
+                     * at the line, and names the two causes of a line that names
+                     * none: a row standing on the record's entry under another
+                     * spelling, and what no apply removes, in a directory — an
+                     * active path beneath it, an orphan the load released, a
+                     * node no record names. [type] names its own cause: the node
+                     * the record describes, one dotta deployed or only saw,
+                     * gone. */
                     hint = (item->divergence & DIVERGENCE_TYPE)
-                        ? "what dotta put there is gone, another kind of path stands "
-                        "in its place; apply releases it, the path stays"
-                        : "its claim no longer stands in Git, dotta never deployed it, "
-                        "it is another spelling of a path dotta manages, or it is a "
-                        "directory holding what no apply removes; apply releases it, "
-                        "the path stays";
+                        ? "what dotta last saw there is gone, another kind of path "
+                        "stands in its place; apply releases it, the path stays"
+                        : "its line names why, else it is another spelling of a path "
+                        "dotta manages, or a directory holding what no apply removes; "
+                        "apply releases it, the path stays";
                     break;
 
                 case WORKSPACE_STATE_DEPLOYED:

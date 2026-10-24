@@ -1817,7 +1817,7 @@ static bool workspace_item_stands(
  * node a type stands as (core/workspace.h workspace_type_occupant), and on purpose:
  * a link at a file key names the entry it stands on. The finer kind is read where
  * the question is another — the orphan analysis's retyped arm, whether what dotta
- * put there is gone (workspace_analyze_orphans), workspace_obstructs, whether
+ * last saw there is gone (workspace_analyze_orphans), workspace_obstructs, whether
  * dotta's own node stands above a row, and core/deploy.c occupant_conflicts,
  * because deploy must replace a link with a file and back — each a different
  * question that happens to look alike.
@@ -2107,8 +2107,8 @@ static void workspace_ask_departures(
  *   - the occupant's kind: a node of another kind than the one the record describes
  *     — a link, a directory or a device where dotta's file was, a file, a directory
  *     or a device where its link was, anything but a directory where its directory
- *     was — is a path dotta's copy has left: what dotta put there is gone, and
- *     the node in its place is one dotta has no record of (core/workspace.h
+ *     was — is a path dotta's copy has left: what dotta last saw there is gone,
+ *     and the node in its place is one dotta has no record of (core/workspace.h
  *     workspace_type_occupant: a record of another kind describes another node),
  *     never dotta's to remove, --force included. Released, tagged [type]. Decided
  *     ahead of the entry, position and the gate, because no entry stands for a
@@ -2278,9 +2278,9 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * place of here is the squatter workspace_look noted when it took this
          * very look.
          *
-         * What dotta put there is gone, and what stands there is a node dotta
-         * has no record of, never dotta's to remove, --force included. Released,
-         * [type]: the record retires, the path stays. */
+         * What dotta last saw there is gone, and what stands there is a node
+         * dotta has no record of, never dotta's to remove, --force included.
+         * Released, [type]: the record retires, the path stays. */
         if (item->occupant != FS_OCCUPANT_UNKNOWN && item->occupant != record->kind) {
             item->state = WORKSPACE_STATE_RELEASED;
             item->divergence = DIVERGENCE_TYPE;
@@ -4203,10 +4203,19 @@ bool workspace_item_tags(
                 }
             }
 
-            /* Whose copy it is. What stands over an overridden one is the view's
-             * to name, and this reads the item alone: the caller adds it
+            /* Whose copy it is, and where its profile's history says update deleted
+             * it, that act (workspace_item_t's departure). The history's other
+             * answers here add nothing to the line: a name its profile holds
+             * still is that profile's, and a history that would not read is the
+             * tags' [unverified]; an overridden copy and a node are decided before
+             * any history is asked. What stands over an overridden one is the
+             * view's to name, and this reads the item alone: the caller adds it
              * (cmds/status.c status_print_workspace). */
-            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            if (item->departure && item->departure->kind == PROFILE_DEPARTURE_DELETED) {
+                snprintf(metadata_buf, metadata_size, "deleted from %s", item->profile);
+            } else {
+                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            }
             break;
         }
 
@@ -4264,7 +4273,37 @@ bool workspace_item_tags(
                 }
             }
 
-            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            /* Whose it is, and what let it go wherever the item can say: a file's
+             * history, whose answer here is one of the three that keep its copies
+             * (workspace_item_t's departure); else the ownership gate, off the
+             * record's own column — true wherever it holds, the arms that decide
+             * ahead of it included, since it would have released the copy all
+             * the same. The entry's release and a directory's, by what it holds,
+             * leave the item nothing to tell them apart by: whose alone, and
+             * the key names both (cmds/status.c status_print_workspace). */
+            if (item->departure) {
+                switch (item->departure->kind) {
+                    case PROFILE_DEPARTURE_REMOVED:
+                        snprintf(metadata_buf, metadata_size, "removed from %s", item->profile);
+                        break;
+                    case PROFILE_DEPARTURE_NEVER_HELD:
+                        snprintf(metadata_buf, metadata_size, "not in %s's history", item->profile);
+                        break;
+                    case PROFILE_DEPARTURE_GONE:
+                        snprintf(metadata_buf, metadata_size, "%s has no branch", item->profile);
+                        break;
+                    case PROFILE_DEPARTURE_HELD:
+                    case PROFILE_DEPARTURE_DELETED:
+                    case PROFILE_DEPARTURE_UNVERIFIED:
+                        /* The orphan analysis's second loop measures the first
+                         * two and skips the third: none releases a copy */
+                        CHECK_ARG(false, "a released file's history keeps its copies");
+                }
+            } else if (item->record->deployed_at == 0) {
+                snprintf(metadata_buf, metadata_size, "from %s, never deployed", item->profile);
+            } else {
+                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            }
             break;
     }
 

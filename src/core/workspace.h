@@ -596,7 +596,10 @@ typedef enum {
  * asked once a profile between the orphan analysis's two loops (workspace.c
  * workspace_ask_departures) and borrowed, as `row` and `record` are. NULL on
  * every other item, and on an owned file orphan whose profile's head would not
- * read: no history answered it.
+ * read: no history answered it. Readers: the orphan analysis's second loop, which
+ * decides the verdict by it (workspace.c workspace_analyze_orphans), and the
+ * line that says it (workspace_item_tags' metadata). A reader not on this list
+ * is a bug.
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -1779,6 +1782,14 @@ workspace_items_t workspace_displaced_orphans(
  *   - "in {profile}" - For the scan's items: a new file, and a place the scan
  *     could not look, whose one tag is the fault's word (MAGENTA), beside the
  *     join's "from" line where both stand at one path
+ *   - "deleted from {profile}" - An orphan its profile's history says update
+ *     deleted (workspace_item_t's departure), whose prune is the one coming
+ *   - On a released item, what let it go wherever the item can say: "removed
+ *     from {profile}", "not in {profile}'s history" or "{profile} has no branch"
+ *     — the history's three answers that keep a file's copies — else "from
+ *     {profile}, never deployed", the ownership gate's; "from {profile}" on the
+ *     entry's release and a directory's, by what it holds, which the item cannot
+ *     tell apart and the key names (cmds/status.c status_print_workspace)
  *
  * Thread Safety: Uses only stack variables and string literals. Safe for concurrent
  * calls with different items.

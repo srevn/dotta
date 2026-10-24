@@ -24,6 +24,7 @@
 #include "crypto/keymgr.h"
 #include "infra/commit.h"
 #include "infra/epoch.h"
+#include "infra/label.h"
 #include "sys/gitops.h"
 #include "sys/resolve.h"
 #include "sys/transfer.h"
@@ -85,28 +86,46 @@ typedef enum {
 } sync_outcome_t;
 
 /**
+ * A name both sides of a resolution took since their merge base, one deleting
+ * it and the other removing it (sync_disagreements)
+ */
+typedef struct {
+    const char *storage_path;            /* The name, as the profile's tree holds it */
+    profile_departure_t remote;          /* The remote's, DELETED or REMOVED: the local side's the other */
+    profile_departure_kind_t resolved;   /* At the head the resolution left: what the next apply reads */
+} sync_disagreement_t;
+
+/** The disagreements one resolution met — a value of the command arena */
+typedef struct {
+    const sync_disagreement_t *entries;
+    size_t count;
+} sync_disagreements_t;
+
+/**
  * A profile in the run: what the analysis read of it, what the run decided, what
  * the act did
  *
  * Each column is written once, by its phase: the analysis the upstream, the
- * decision the verdict and what the user's word withholds, the act the outcome
- * and what it sent. A withheld act leaves its row as it stands, its verdict none
- * — but a rebase or a merge under --no-push, which resolves all the same and
- * withholds its push alone. The row's error is the failure the run met for it,
- * whichever phase met it — said on the row's line, counted and named by
- * sync_failure. A row whose analysis failed has no verdict, and every reader
- * asks its error before its state: a failed analysis's zeroed state reads as up
- * to date otherwise.
+ * decision the verdict and what the user's word withholds, the act the outcome,
+ * what it sent and, of a resolution that landed, the names its two sides took
+ * one deleting and one removing. A withheld act leaves its row as it stands,
+ * its verdict none — but a rebase or a merge under --no-push, which resolves
+ * all the same and withholds its push alone. The row's error is the failure the
+ * run met for it, whichever phase met it — said on the row's line, counted and
+ * named by sync_failure. A row whose analysis failed has no verdict, and every
+ * reader asks its error before its state: a failed analysis's zeroed state reads
+ * as up to date otherwise.
  */
 typedef struct {
-    const char *profile;        /* The scope's own name, borrowed */
-    upstream_info_t upstream;   /* The analysis's: the state, each side's commits */
-    sync_verdict_t verdict;     /* The act the run carries out */
-    sync_verdict_t withheld;    /* The act the user's word keeps from the row; NONE where none */
-    sync_reason_t reason;       /* Whose word, read beside an act withheld */
-    sync_outcome_t outcome;     /* What carrying the verdict out came to */
-    transfer_wire_t sent;       /* What the act sent: its push's, none where no push landed */
-    error_t error;              /* The failure's cause, borrowed; NULL where the run met none */
+    const char *profile;                 /* The scope's own name, borrowed */
+    upstream_info_t upstream;            /* The analysis's: the state, each side's commits */
+    sync_verdict_t verdict;              /* The act the run carries out */
+    sync_verdict_t withheld;             /* The act the user's word keeps from the row; NONE where none */
+    sync_reason_t reason;                /* Whose word, read beside an act withheld */
+    sync_outcome_t outcome;              /* What carrying the verdict out came to */
+    transfer_wire_t sent;                /* What the act sent: its push's, none where no push landed */
+    sync_disagreements_t disagreements;  /* A resolution's that landed; none elsewhere */
+    error_t error;                       /* The failure's cause, borrowed; NULL where the run met none */
 } sync_row_t;
 
 /** The rows: one per profile in the sync scope, in its order — a value of the command arena */
@@ -523,6 +542,124 @@ static error_t sync_rollback(
 }
 
 /**
+ * The names both sides of a resolution took since their merge base, one deleting
+ * each and the other removing it, and what the head the resolution left says of
+ * each
+ *
+ * The local side's deletions first: every name the tree diff from the merge base
+ * to the local head deletes, under a label — a blob retyped is a deletion there
+ * beside an addition — and the departures read each for what it is. Then the
+ * remote's history is asked of them (core/profiles.h profile_departures): a name
+ * it holds the local side took alone, the common case, which costs that one walk,
+ * mostly the remote head's own descent. Only the names it says the remote took,
+ * DELETED or REMOVED, are asked of the local side's history and of the head the
+ * resolution left, and each the local side took under the other word is a
+ * disagreement. The three heads are the resolution's own reads (sys/resolve.h
+ * resolve_context_t): a push moves the remote-tracking ref past the remote's.
+ *
+ * A history that will not say is no line (stated): no merge base, a tree or a
+ * commit that will not load, a side whose walk went unread. Its error is dropped,
+ * one a resolution at most (base/error.h "Lifetime"), and so is a name outside
+ * the grammar's shape, one a name.
+ *
+ * @param arena The command arena, the answer's (must not be NULL)
+ * @param repo Repository (must not be NULL)
+ * @param resolve The resolution that landed (must not be NULL)
+ * @return The disagreements, none where the history says none
+ */
+static sync_disagreements_t sync_disagreements(
+    arena_t *arena, git_repository *repo, const resolve_context_t *resolve
+) {
+    sync_disagreements_t found = { 0 };
+    arena_t *frame = arena_create(0);
+    git_tree *base_tree = NULL;
+    git_tree *local_tree = NULL;
+    git_diff *diff = NULL;
+    git_commit *local_head = NULL;
+    git_commit *remote_head = NULL;
+    git_commit *resolved_head = NULL;
+
+    /* The local side's deletions since the merge base, by one tree diff: the
+     * names point into it, which lives until the end */
+    git_oid base;
+    error_t err = gitops_find_merge_base(repo, &resolve->local_oid, &resolve->remote_oid, &base);
+    if (!err) err = gitops_get_tree_from_commit(repo, &base, &base_tree);
+    if (!err) err = gitops_get_tree_from_commit(repo, &resolve->local_oid, &local_tree);
+    if (!err) err = gitops_diff_trees(repo, base_tree, local_tree, NULL, &diff);
+    if (err) goto done;
+
+    /* A diff's names are Git's, so each is checked where it is read, as the
+     * profile's walk checks every name it meets (core/profiles.c profile_step):
+     * one outside the grammar's shape is no profile's name, and no line */
+    const size_t delta_count = git_diff_num_deltas(diff);
+    const char **names = arena_calloc(frame, delta_count, sizeof(*names));
+    size_t count = 0;
+    for (size_t i = 0; i < delta_count; i++) {
+        const git_diff_delta *delta = git_diff_get_delta(diff, i);
+
+        if (delta->status == GIT_DELTA_DELETED && !label_validate_storage(delta->old_file.path)) {
+            names[count++] = delta->old_file.path;
+        }
+    }
+
+    /* The remote's history first, and the names it says the remote took kept,
+     * in place, each beside its departure */
+    if (git_commit_lookup(&remote_head, repo, &resolve->remote_oid) < 0) goto done;
+
+    profile_departure_t *remote = arena_calloc(frame, count, sizeof(*remote));
+    profile_departures(remote_head, names, count, remote);
+
+    size_t taken = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (remote[i].kind == PROFILE_DEPARTURE_DELETED ||
+            remote[i].kind == PROFILE_DEPARTURE_REMOVED) {
+            names[taken] = names[i];
+            remote[taken] = remote[i];
+            taken++;
+        }
+    }
+    if (taken == 0) goto done;
+
+    /* The local side's history and the resolved head's, of those alone */
+    if (git_commit_lookup(&local_head, repo, &resolve->local_oid) < 0 ||
+        git_commit_lookup(&resolved_head, repo, &resolve->resolved_oid) < 0) {
+        goto done;
+    }
+
+    profile_departure_t *local = arena_calloc(frame, taken, sizeof(*local));
+    profile_departure_t *resolved = arena_calloc(frame, taken, sizeof(*resolved));
+    profile_departures(local_head, names, taken, local);
+    profile_departures(resolved_head, names, taken, resolved);
+
+    /* A name the local side took under the other word of the two: the remote's
+     * is one of them, so the local's is the other where it is either and differs */
+    sync_disagreement_t *entries = arena_calloc(arena, taken, sizeof(*entries));
+    size_t entry_count = 0;
+    for (size_t i = 0; i < taken; i++) {
+        if ((local[i].kind == PROFILE_DEPARTURE_DELETED ||
+            local[i].kind == PROFILE_DEPARTURE_REMOVED) && local[i].kind != remote[i].kind) {
+            entries[entry_count++] = (sync_disagreement_t){
+                .storage_path = arena_strdup(arena, names[i]),
+                .remote = remote[i],
+                .resolved = resolved[i].kind,
+            };
+        }
+    }
+    found = (sync_disagreements_t){ .entries = entries, .count = entry_count };
+
+done:
+    git_commit_free(resolved_head);
+    git_commit_free(local_head);
+    git_commit_free(remote_head);
+    git_diff_free(diff);
+    git_tree_free(local_tree);
+    git_tree_free(base_tree);
+    arena_free(frame);
+
+    return found;
+}
+
+/**
  * Carry a rebase or a merge out: the resolution, its verification, then its push
  * unless --no-push withheld it
  *
@@ -532,12 +669,14 @@ static error_t sync_rollback(
  * where it stood — a commit another writer landed meanwhile refuses it; a
  * verification or a push that fails after it rolls the branch back, from the
  * head the resolution left, and a branch another writer moved since refuses the
- * rollback, which stops the run naming the head.
+ * rollback, which stops the run naming the head. One that lands reads its history
+ * once more, for the names its two sides took one deleting and one removing.
  *
  * @return The run's error where that rollback fails; NULL otherwise, every other
  *         failure the row's
  */
 static error_t sync_resolve(
+    arena_t *arena,
     git_repository *repo,
     const char *remote_name,
     sync_row_t *row,
@@ -574,6 +713,7 @@ static error_t sync_resolve(
     }
 
     row->outcome = SYNC_OUTCOME_DONE;
+    row->disagreements = sync_disagreements(arena, repo, &resolve);
     return NULL;
 }
 
@@ -609,20 +749,24 @@ static void sync_reset(git_repository *repo, const char *remote_name, sync_row_t
  * receipt
  *
  * Git only: every pull, rebase, merge and reset moves a branch head and nothing
- * else, and what the acts did to the view is read off once, for every enabled
- * profile, in cmd_sync's Manifest block. Each verdict is one mechanism, called
- * as the decision named it: nothing here decides again.
+ * else — a resolution that lands reads its history once more, for its row's
+ * disagreements, in `arena` (sync_disagreements) — and what the acts did to the
+ * view is read off once, for every enabled profile, in cmd_sync's Manifest block.
+ * Each verdict is one mechanism, called as the decision named it: nothing here
+ * decides again.
  *
  * @return The run's error where a resolution's rollback failed — the rows after
  *         it left as decided, their outcome none — or NULL: every other failure
  *         is its row's
  */
 static error_t sync_execute(
+    arena_t *arena,
     git_repository *repo,
     const char *remote_name,
     sync_rows_t *rows,
     transfer_context_t *xfer
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(rows);
@@ -663,7 +807,7 @@ static error_t sync_execute(
             case SYNC_VERDICT_MERGE: {
                 /* A rollback that fails stops the run, and the row sent nothing:
                  * its push failed, or none ran */
-                error_t err = sync_resolve(repo, remote_name, row, xfer);
+                error_t err = sync_resolve(arena, repo, remote_name, row, xfer);
                 if (err) return err;
                 break;
             }
@@ -924,6 +1068,39 @@ static void sync_print_done(output_t *out, const sync_row_t *row) {
 }
 
 /**
+ * Print, beneath a resolution's row, each name its two sides took one deleting
+ * and one removing: what this side and the remote did, the remote's removal,
+ * and what the head the resolution left says — the deletion every machine's next
+ * apply carries out, or the copies it keeps — LIST_LIMIT lines, and a count of
+ * the rest
+ */
+static void sync_print_disagreements(output_t *out, const sync_row_t *row) {
+    const sync_disagreements_t *disagreements = &row->disagreements;
+
+    for (size_t i = 0; i < disagreements->count && i < LIST_LIMIT; i++) {
+        const sync_disagreement_t *disagreement = &disagreements->entries[i];
+
+        /* The removal abbreviated, as every screen spells a commit */
+        char oid_str[8];
+        git_oid_tostr(oid_str, sizeof(oid_str), &disagreement->remote.removal);
+
+        output_print(
+            out, OUTPUT_NORMAL, "    %s: %s in %s — %s\n", disagreement->storage_path,
+            disagreement->remote.kind == PROFILE_DEPARTURE_DELETED
+                ? "removed here, deleted" : "deleted here, removed",
+            oid_str,
+            disagreement->resolved == PROFILE_DEPARTURE_DELETED
+                ? "the deletion stands" : "kept"
+        );
+    }
+    if (disagreements->count > LIST_LIMIT) {
+        output_print(
+            out, OUTPUT_NORMAL, "    ... and %zu more\n", disagreements->count - LIST_LIMIT
+        );
+    }
+}
+
+/**
  * Print the receipt: what each act came to, profile by profile in the scope's
  * order, titled by the remote, once every act is done
  *
@@ -933,8 +1110,9 @@ static void sync_print_done(output_t *out, const sync_row_t *row) {
  * is said in the preview's words (sync_print_done); a row no act moved where it
  * stands, as the preview says it (sync_print_state) — a row the run stopped before
  * among them, the run's error beneath saying why; and a failure by its cause,
- * beside where it left the branch. The remedies its rows call for close it
- * (sync_print_remedies).
+ * beside where it left the branch. Beneath a resolution that landed, the names
+ * its two sides took one deleting and one removing (sync_print_disagreements).
+ * The remedies its rows call for close it (sync_print_remedies).
  */
 static void sync_print_receipt(
     output_t *out,
@@ -982,6 +1160,7 @@ static void sync_print_receipt(
         sync_print_withheld(out, row);
         sync_print_wire(out, row->sent);
         output_endline(out, OUTPUT_NORMAL);
+        sync_print_disagreements(out, row);
     }
 
     sync_print_remedies(out, rows);
@@ -1977,7 +2156,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * is written, so the write lock is never held across network IO. Nothing
      * catches up afterwards either: the view is computed, and the block that
      * follows only reports what the act did to it. */
-    err = sync_execute(repo, remote_name, &rows, xfer);
+    err = sync_execute(ctx->arena, repo, remote_name, &rows, xfer);
 
     /* The receipt, once every act is done, a row for every profile — a run a
      * failed rollback stopped among them, which then ends in that error */

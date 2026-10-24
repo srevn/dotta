@@ -792,8 +792,10 @@ typedef struct profile_departure {
  * to say.
  *
  * Readers: core/workspace.c workspace_ask_departures (each owned file orphan,
- * at its profile's head), and cmds/sync.c sync_departure_counts (each file a
- * pull's view lost, at its profile's head as the pull left it).
+ * at its profile's head); cmds/sync.c sync_departure_counts (each file a pull's
+ * view lost, at its profile's head as the pull left it) and sync_disagreements
+ * (each name a resolution's local side took since its merge base, at the remote's
+ * head, the local one and the one the resolution left).
  *
  * @param head The head, or NULL where the branch is gone (borrowed)
  * @param storage_paths The names, validated (must not be NULL where count > 0)

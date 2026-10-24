@@ -38,7 +38,9 @@ typedef struct {
  * its state, the divergence strategy and the user's word (--no-push, --no-pull,
  * auto_pull), and one question where a force push or a reset discards commits
  * and the configuration asks one — beneath the preview, before any profile acts;
- * then the acts, their receipt, the Manifest block, and post-sync.
+ * then the acts and their receipt — beneath a resolution that landed, each name
+ * its two sides took, one deleting it and the other removing it — the Manifest
+ * block, and post-sync.
  *
  * A dry run speaks for the Git phase alone: what each verdict would do, and its
  * end. The view a pull would leave is unknown without the pull, so the standing

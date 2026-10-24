@@ -255,12 +255,14 @@ const char *label_tail(const char *storage_path);
  *
  * Pure rule check — no filesystem access, no arena, no state.
  *
- * Readers: the two boundaries a name arrives across — a profile's tree at its
- * walk (core/profiles.c profile_step) and the sheet's keys (core/metadata.c
- * metadata_from_json) — and the resolver's storage arm, where the name is one
- * the user typed (infra/path.c path_input_resolve). The store holds a record's
- * name to the same checks in its own language (core/state.c STORAGE_SPELLING),
- * and tests/test-state.c drives one list of shapes through both.
+ * Readers: the three boundaries a name arrives across from Git — a profile's
+ * tree at its walk (core/profiles.c profile_step), the sheet's keys
+ * (core/metadata.c metadata_from_json) and a tree diff's deletions, where sync
+ * asks what a resolution's two sides took (cmds/sync.c sync_disagreements) —
+ * and the resolver's storage arm, where the name is one the user typed
+ * (infra/path.c path_input_resolve). The store holds a record's name to the same
+ * checks in its own language (core/state.c STORAGE_SPELLING), and
+ * tests/test-state.c drives one list of shapes through both.
  *
  * @param storage_path Path to validate (must not be NULL)
  * @return Error or NULL when valid

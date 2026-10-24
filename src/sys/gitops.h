@@ -1117,7 +1117,9 @@ error_t gitops_diff_get_stats(
  * no history are ERR_NOT_FOUND — libgit2's GIT_ENOTFOUND, which it answers for
  * that alone, a commit it could not load being -1 (lib/libgit2/src/libgit2/merge.c
  * merge_bases) — read by sys/resolve.c resolve_merge_trees, which names the two
- * strategies that need no common commit.
+ * strategies that need no common commit; and by cmds/sync.c sync_disagreements,
+ * the floor of the names a landed resolution's two sides took, where no base is
+ * no line.
  *
  * @param repo Repository (must not be NULL)
  * @param one First commit OID (must not be NULL)

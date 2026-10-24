@@ -8,6 +8,7 @@
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "base/arena.h"
@@ -546,21 +547,23 @@ static error_t sync_rollback(
  * each and the other removing it, and what the head the resolution left says of
  * each
  *
- * The local side's deletions first: every name the tree diff from the merge base
- * to the local head deletes, under a label — a blob retyped is a deletion there
- * beside an addition — and the departures read each for what it is. Then the
- * remote's history is asked of them (core/profiles.h profile_departures): a name
- * it holds the local side took alone, the common case, which costs that one walk,
- * mostly the remote head's own descent. Only the names it says the remote took,
- * DELETED or REMOVED, are asked of the local side's history and of the head the
- * resolution left, and each the local side took under the other word is a
- * disagreement. The three heads are the resolution's own reads (sys/resolve.h
- * resolve_context_t): a push moves the remote-tracking ref past the remote's.
+ * The local side's deletions first: every name the profile claimed at the merge
+ * base that the tree diff from it to the local head deletes — a blob retyped is
+ * a deletion there beside an addition — and the departures read each for what
+ * it is: the base holds each name, so the local side's history answers it from
+ * the local side's own commits. Then the remote's history is asked of them
+ * (core/profiles.h profile_departures): a name it holds the local side took alone,
+ * the common case, which costs that one walk, mostly the remote head's own descent.
+ * Only the names it says the remote took, DELETED or REMOVED, are asked of the
+ * local side's history and of the head the resolution left, and each the local
+ * side took under the other word is a disagreement. The three heads are the
+ * resolution's own reads (sys/resolve.h resolve_context_t): a push moves the
+ * remote-tracking ref past the remote's.
  *
  * A history that will not say is no line (stated): no merge base, a tree or a
  * commit that will not load, a side whose walk went unread. Its error is dropped,
- * one a resolution at most (base/error.h "Lifetime"), and so is a name outside
- * the grammar's shape, one a name.
+ * one a resolution at most (base/error.h "Lifetime"), and so is the shape's refusal
+ * of a malformed name under a label, one a name.
  *
  * @param arena The command arena, the answer's (must not be NULL)
  * @param repo Repository (must not be NULL)
@@ -588,29 +591,43 @@ static sync_disagreements_t sync_disagreements(
     if (!err) err = gitops_diff_trees(repo, base_tree, local_tree, NULL, &diff);
     if (err) goto done;
 
-    /* A diff's names are Git's, so each is checked where it is read, as the
-     * profile's walk checks every name it meets (core/profiles.c profile_step):
-     * one outside the grammar's shape is no profile's name, and no line */
+    /* A diff's names are Git's, so each deletion is read as the profile's walk
+     * reads an entry (core/profiles.c profile_step), its gates in the walk's
+     * order: what passes is a name the profile claimed at the base */
     const size_t delta_count = git_diff_num_deltas(diff);
     const char **names = arena_calloc(frame, delta_count, sizeof(*names));
-    size_t count = 0;
+    size_t name_count = 0;
     for (size_t i = 0; i < delta_count; i++) {
         const git_diff_delta *delta = git_diff_get_delta(diff, i);
+        if (delta->status != GIT_DELTA_DELETED) continue;
 
-        if (delta->status == GIT_DELTA_DELETED && !label_validate_storage(delta->old_file.path)) {
-            names[count++] = delta->old_file.path;
-        }
+        /* Machinery stands under no label: passed in silence, and before the
+         * shape rule, so it is never read as corruption */
+        const char *name = delta->old_file.path;
+        if (!label_prefixes(name)) continue;
+
+        /* A gitlink claims nothing, so the base never held its name, and the
+         * local side's history would answer from below the base. The mode is
+         * the tree's spelling, read as libgit2 reads an entry's
+         * (lib/libgit2/src/libgit2/tree.c git_tree_entry_type: S_ISGITLINK) */
+        if ((delta->old_file.mode & S_IFMT) == GIT_FILEMODE_COMMIT) continue;
+
+        /* A name a hand's tree spells under a label outside the shape is
+         * corruption, no profile's name: its error dropped, one a name */
+        if (label_validate_storage(name)) continue;
+
+        names[name_count++] = name;
     }
 
     /* The remote's history first, and the names it says the remote took kept,
      * in place, each beside its departure */
     if (git_commit_lookup(&remote_head, repo, &resolve->remote_oid) < 0) goto done;
 
-    profile_departure_t *remote = arena_calloc(frame, count, sizeof(*remote));
-    profile_departures(remote_head, names, count, remote);
+    profile_departure_t *remote = arena_calloc(frame, name_count, sizeof(*remote));
+    profile_departures(remote_head, names, name_count, remote);
 
     size_t taken = 0;
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < name_count; i++) {
         if (remote[i].kind == PROFILE_DEPARTURE_DELETED ||
             remote[i].kind == PROFILE_DEPARTURE_REMOVED) {
             names[taken] = names[i];

@@ -15,7 +15,7 @@
  * A name that arrives from outside this process — a blob a tree holds, a key a
  * sheet writes, an argument a user types — becomes a name here and nowhere else.
  * label_validate_storage is that boundary: traversal is refused at it and trusted
- * below (infra/mount.h), and its four tree-and-sheet readers are the whole reason
+ * below (infra/mount.h), and its tree-and-sheet readers are the whole reason
  * every verb beneath may join a tail onto a root's spelling without looking. A
  * name dotta wrote returns from outside too — a record's, read back from the
  * store — and the store refuses to keep one the rule refuses, the rule spelled
@@ -166,12 +166,13 @@ label_split_t label_split(const char *s);
  * (core/profiles.c profile_put_machinery), and the changes a draft's commit names,
  * which pass dotta's own files by (profile_changes); the refspec completion
  * (cmds/completion.c refspec_emit), diff's delta selection (cmds/diff.c
- * select_delta), the rule compiler (infra/pathspec.c compile_rule), the resolver's
- * storage arm and the question its neighbour asks of a positional whose slot is
- * undecided (infra/path.c path_input_resolve, path_input_announces_path), the
- * two input heads that dispatch on shape before reading it (cmds/add.c cmd_add,
- * cmds/ignore.c ignore_test) and export's profile slot's own grammar (cmds/export.c
- * export_post_parse).
+ * select_delta) and sync's of a tree diff's deletions (cmds/sync.c
+ * sync_disagreements), the rule compiler (infra/pathspec.c compile_rule), the
+ * resolver's storage arm and the question its neighbour asks of a positional
+ * whose slot is undecided (infra/path.c path_input_resolve,
+ * path_input_announces_path), the two input heads that dispatch on shape before
+ * reading it (cmds/add.c cmd_add, cmds/ignore.c ignore_test) and export's profile
+ * slot's own grammar (cmds/export.c export_post_parse).
  */
 bool label_prefixes(const char *s);
 

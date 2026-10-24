@@ -44,14 +44,14 @@ dotta apply -p darwin
 # Deploy specific files
 dotta apply ~/.bashrc ~/.zshrc
 
-# Force overwrite modified files
+# Lift the consent skips: overwrite local changes, prune modified orphans
 dotta apply --force
 
-# Keep orphaned files (don't remove files from disabled profiles)
+# Leave orphaned files in place: prune nothing
 dotta apply --keep-orphans
 ```
 
-`apply` performs full synchronization: it deploys new and updated files, and removes orphaned files from disabled profiles.
+`apply` performs full synchronization: it deploys new and updated files, and prunes files orphaned by disabled profiles or deleted from their profiles, where unchanged.
 
 ### Updating (Filesystem to Repo)
 
@@ -73,6 +73,8 @@ dotta update --include-new
 # Custom commit message
 dotta update -m "Update shell config"
 ```
+
+A file deleted from disk is a deletion `update` commits for every machine: each one's next apply prunes its copy, where unchanged. To stop managing a file and keep every copy instead, see [Removing Files](#removing-files).
 
 ## Checking Status
 
@@ -218,16 +220,20 @@ dotta sync      # Push/pull with remote
 
 `sync` requires a clean workspace (no uncommitted changes). Use `dotta update` first, or `--force` to override.
 
-After a pull, `sync` lists what it did to each profile's files — added, updated, reassigned to another profile, overridden by another profile's file, or released (left on disk, no longer managed) — and names `dotta apply` for as long as it has work to do.
+After a pull, `sync` lists what it did to each profile's files — added, updated, reassigned to another profile, overridden by another profile's file, removed (every copy kept) or deleted (every machine's apply prunes its unchanged copy) — and names `dotta apply` for as long as it has work to do.
 
 ## Removing Files
 
 ```bash
-# Remove a file from a profile
+# Stop managing a file; every machine keeps its copy
 dotta remove global ~/.bashrc
 
-# Remove a directory
+# The same for a directory
 dotta remove global ~/.config/nvim
+
+# Delete a file from every machine: delete it, then commit the deletion
+rm ~/.bashrc
+dotta update
 
 # Delete an entire profile
 dotta remove test --delete-profile
@@ -236,4 +242,9 @@ dotta remove test --delete-profile
 dotta remove global ~/.bashrc --dry-run
 ```
 
-Removing changes only the profile in Git; nothing on disk changes until the next `dotta apply`. That apply leaves the deployed paths where they are and stops managing them. A path another enabled profile still provides stays, deployed from that profile.
+A path leaves a profile one of two ways, each a commit that reaches every machine at its next `dotta apply`:
+
+- **Stop managing it** with `dotta remove`. Every machine's next apply stops managing the path and leaves its copy on disk, unless another enabled profile claims the path, which stays managed under that claim. A file removed from inside a directory the profile still tracks comes back as a new file wherever that directory is scanned for them (`dotta update --include-new`); a pattern in the profile's `.dottaignore` keeps it out: `dotta ignore <profile> --add <pattern>`.
+- **Delete it everywhere** by deleting the file and running `dotta update`. Every machine's next apply prunes the copy dotta deployed, where unchanged, unless another enabled profile claims the path, whose copy lands in its place. An edited copy is skipped until `dotta apply --force <path>` prunes it, or `dotta add` puts the claim back on every machine; a copy dotta only found there is left alone.
+
+Deleting a profile leaves its files on disk, on every machine.

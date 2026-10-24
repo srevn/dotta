@@ -17,7 +17,7 @@ Commands:
   init           Initialize a new dotta repository
   clone          Clone an existing dotta repository
   add            Add files or directories to a profile
-  remove         Remove paths from a profile, every copy kept, or delete a profile
+  remove         Remove paths from a profile or delete a profile
   update         Commit filesystem changes back to profiles
   apply          Deploy enabled profiles to the filesystem
   revert         Revert a file to a previous version

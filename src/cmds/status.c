@@ -1027,9 +1027,12 @@ static void status_print_workspace(
                     break;
 
                 case WORKSPACE_STATE_DELETED:
-                    hint = "gone here; 'dotta update' deletes every machine's unchanged "
-                        "copy — or lands another enabled profile's, where one claims the "
-                        "path — and 'dotta apply' puts it back";
+                    /* The act update's, the outcome each machine's apply's, as
+                     * every screen names the two (cmds/update.c spec_update) */
+                    hint = "gone here; 'dotta update' deletes it for every machine — each "
+                        "one's apply pruning its unchanged copy, or landing another "
+                        "enabled profile's where one claims the path — and 'dotta apply' "
+                        "puts it back";
                     break;
 
                 case WORKSPACE_STATE_UNDEPLOYED:

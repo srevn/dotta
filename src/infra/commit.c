@@ -151,26 +151,33 @@ static const char *commit_spelled(arena_t *arena, const char *name) {
 }
 
 /**
- * {paths}: each change under its heading — Added, Updated, Removed, in that order
- * — or, where the commit changes no explicit claim, the one line that says so
+ * {paths}: each change under its heading — Added, Updated, then the removals,
+ * Deleted under update and Removed under every other action, in that order —
+ * or, where the commit changes no explicit claim, the one line that says so
  *
- * A heading stands over a list that names something, and nowhere else. Each name
- * is spelled where it enters (commit_spelled); the headings, the bullets and
- * the newlines between them are the rendering's own.
+ * A heading stands over a list that names something, and nowhere else. A removal
+ * is the one change the action words: the lists are the draft's, one edit to a
+ * claim whatever becomes of its files (core/profiles.h profile_changes), and
+ * what becomes of them is the action's, the commit's one fact (commit_action_t).
+ * Each name is spelled where it enters (commit_spelled); the headings, the bullets
+ * and the newlines between them are the rendering's own.
  *
  * @param arena The arena a spelled name lives in (must not be NULL)
+ * @param action The action that made the commit, its removals' heading
  * @param changes The commit's changes (must not be NULL)
  * @param out The rendering (must not be NULL; cleared, then written, its bytes
  *            the caller's to free)
  */
-static void commit_paths(arena_t *arena, const commit_changes_t *changes, buffer_t *out) {
+static void commit_paths(
+    arena_t *arena, commit_action_t action, const commit_changes_t *changes, buffer_t *out
+) {
     const struct {
         const char *heading;
         const string_array_t *names;
     } lists[] = {
-        { "Added:",   &changes->added   },
-        { "Updated:", &changes->updated },
-        { "Removed:", &changes->removed },
+        { "Added:",                                                 &changes->added   },
+        { "Updated:",                                               &changes->updated },
+        { action == COMMIT_ACTION_UPDATE ? "Deleted:" : "Removed:", &changes->removed },
     };
 
     *out = (buffer_t){ 0 };
@@ -318,7 +325,7 @@ const char *commit_message(
     );
 
     buffer_t paths = BUFFER_INIT;
-    commit_paths(arena, changes, &paths);
+    commit_paths(arena, words->action, changes, &paths);
 
     /* {user} is the invoker's (sys/identity): under sudo the user who typed the
      * command, not the root that $USER names there — "unknown" for a uid with

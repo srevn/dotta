@@ -99,9 +99,10 @@ Target: {target_commit}
 
 A commit names what it changed: each file, and each directory the profile
 tracks, whose claim it adds, updates or removes, under its change's heading
-(`Added:`, `Updated:`, `Removed:`), as storage paths (`home/.bashrc`,
-`root/etc/hosts`) — and `{count}` counts them. A commit that changed only the
-directories dotta derives above them says so in one line.
+(`Added:`, `Updated:`, `Removed:`, or `Deleted:` for an update's removals), as
+storage paths (`home/.bashrc`, `root/etc/hosts`) — and `{count}` counts them. A
+commit that changed only the directories dotta derives above them says so in
+one line.
 
 A body line holding variables, every one of which renders empty, is left out
 with its newline, so `Target: {target_commit}` shows on a revert alone.

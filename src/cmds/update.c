@@ -480,7 +480,7 @@ static error_t update_profile(
             if (err) return err;
 
             output_info(
-                out, OUTPUT_VERBOSE, "  Removed: %s%s", item->filesystem_path,
+                out, OUTPUT_VERBOSE, "  Deleted: %s%s", item->filesystem_path,
                 path_kind_suffix(item->item_kind)
             );
             commit->deleted[commit->deleted_count++] = item;

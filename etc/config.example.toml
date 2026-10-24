@@ -247,8 +247,9 @@ diverged_strategy = "warn"
 #   {count}         - Number of claims the commit adds, updates or removes
 #   {date}          - Local date (YYYY-MM-DD)
 #   {datetime}      - Local timestamp with timezone (ISO 8601 format)
-#   {paths}         - Each change under its heading (Added, Updated, Removed),
-#                     at most five names a heading; one line where none
+#   {paths}         - Each change under its heading (Added, Updated, Removed;
+#                     an update's removals Deleted), at most five names a
+#                     heading; one line where none
 #   {target_commit} - The commit a revert restores from; empty otherwise, so a
 #                     body line whose only variable it is shows on a revert alone
 #

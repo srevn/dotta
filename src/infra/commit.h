@@ -28,11 +28,12 @@
  * commit through the template, whose {action} renders their name; the other five
  * word their own messages, and the template never renders theirs.
  *
- * What an action means for the copies a removal leaves is one rule, read where
- * a profile's history is (core/profiles.c profile_departures): update's removals
- * delete the files they take, and every other action's keep them. An action with
- * another effect is another word: a remove that deleted files would write its
- * own, never "remove".
+ * What an action means for the copies a removal leaves is one rule: update's
+ * removals delete the files they take, and every other action's keep them. Two
+ * read it, the copies' fate from a profile's history (core/profiles.c
+ * profile_departures) and the heading a message stands its removals under, Deleted
+ * or Removed (commit_message's {paths}). An action with another effect is another
+ * word: a remove that deleted files would write its own, never "remove".
  */
 typedef enum {
     COMMIT_ACTION_ADD,         /* cmds/add.c */
@@ -116,8 +117,9 @@ typedef struct commit_changes {
  *   {count}         - Number of claims the commit adds, updates or removes
  *   {date}          - Local date (YYYY-MM-DD)
  *   {datetime}      - Local timestamp with timezone (ISO 8601)
- *   {paths}         - Each change under its heading (Added, Updated, Removed),
- *                     at most five names a heading; one line where none
+ *   {paths}         - Each change under its heading (Added, Updated, Removed;
+ *                     an update's removals Deleted), at most five names a heading;
+ *                     one line where none
  *   {target_commit} - The commit a revert restores from; empty otherwise, so a
  *                     body line whose only variable it is shows on a revert alone
  *

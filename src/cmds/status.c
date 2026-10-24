@@ -1120,11 +1120,19 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 8: New Files */
+    /* Section 8: New files — what the scan found beneath a directory a profile
+     * tracks. The header names both verbs that settle every line: update tracks
+     * it, or a pattern in the profile's .dottaignore, which travels with it,
+     * keeps it out on every machine — the one way out for a file a removal took
+     * from inside a directory its profile still tracks, which every scan offers
+     * back otherwise. A form, never a command: a path holding a space or a glob
+     * character is the user's to quote and escape, and ignore's help says what
+     * a pattern is matched against. */
     if (new_files.count > 0) {
         output_list_t *list = output_list_create(
             out, "New files",
-            "use \"dotta update --include-new\" to track these files"
+            "use \"dotta update --include-new\" to track these files, "
+            "\"dotta ignore <profile> --add <pattern>\" to keep one out"
         );
 
         for (size_t i = 0; i < new_files.count; i++) {

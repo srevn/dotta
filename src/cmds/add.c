@@ -994,8 +994,8 @@ static error_t add_refuse_ancestry(
             output_format_path(filesystem_path, identity()->home, beneath, sizeof(beneath));
             return error_create(
                 ERR_INVALID_ARG, "'%s' would be read through dotta's link at '%s', "
-                "where the paths beneath it need a directory; dotta apply%s replaces "
-                "the link first", beneath, shown, base ? "" : " --force"
+                "where the paths beneath it need a directory; dotta apply%s %s replaces "
+                "the link first", beneath, shown, base ? "" : " --force", shown
             );
         }
 
@@ -1050,8 +1050,9 @@ static error_t add_refuse_ancestry(
         if (record) {
             return error_create(
                 ERR_INVALID_ARG, "'%s' would be read through dotta's link at '%s', "
-                "where profile '%s' now claims a directory; dotta apply%s replaces the "
-                "link first", beneath, shown, row->profile, base ? "" : " --force"
+                "where profile '%s' now claims a directory; dotta apply%s %s replaces "
+                "the link first", beneath, shown, row->profile, base ? "" : " --force",
+                shown
             );
         }
 
@@ -1059,8 +1060,8 @@ static error_t add_refuse_ancestry(
         if (row->tracked) {
             return error_create(
                 ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
-                "profile '%s' tracks a directory; dotta apply --force replaces the "
-                "link, or move it aside", beneath, shown, row->profile
+                "profile '%s' tracks a directory; dotta apply --force %s replaces the "
+                "link, or move it aside", beneath, shown, row->profile, shown
             );
         }
 

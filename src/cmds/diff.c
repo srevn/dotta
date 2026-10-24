@@ -138,7 +138,7 @@ static const char *get_status_message_from_item(
     switch (item->displaced) {
         case WORKSPACE_DISPLACED_TRACKED:
             return "not looked at, beneath a squatted directory "
-                   "(apply --force replaces it, then writes this fresh)";
+                   "(apply --force <dir> replaces it, then writes this fresh)";
         case WORKSPACE_DISPLACED_DERIVED:
             return "not looked at, beneath a squatted directory "
                    "('dotta update <dir>' re-derives the way there)";
@@ -147,7 +147,7 @@ static const char *get_status_message_from_item(
                    "(apply replaces it, then writes this fresh)";
         case WORKSPACE_DISPLACED_CONFLICT:
             return "not looked at, beneath a squatted directory changed in Git and "
-                   "on disk (apply --force replaces it, then writes this fresh)";
+                   "on disk (apply --force <dir> replaces it, then writes this fresh)";
         case WORKSPACE_DISPLACED_RECORD:
         case WORKSPACE_DISPLACED_NONE:
             /* A record's memory displaces no view row (the reach rule), and the
@@ -199,7 +199,7 @@ static const char *get_status_message_from_item(
      * KIND arm has it, and a directory only with all it holds */
     if (item->divergence & DIVERGENCE_TYPE) {
         return direction == DIFF_UPSTREAM
-                ? "type would change on apply --force (a directory only if all dotta's)"
+                ? "type would change on apply --force <path> (a directory only if all dotta's)"
                 : "type changed locally";
     }
 

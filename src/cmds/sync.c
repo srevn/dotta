@@ -1777,7 +1777,8 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
             if (conflict_count > 0) {
                 output_hintline(
                     out, OUTPUT_NORMAL,
-                    "  Conflicts:      dotta diff, apply --force, add --force, or remove"
+                    "  Conflicts:      dotta diff, apply --force <path>, add --force, or "
+                    "remove (every copy kept)"
                 );
             }
             if (uncommitted_count + deleted_count > 0) {
@@ -2070,14 +2071,15 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 /* The status Conflicts header's remedies, a kind both sides moved
                  * among the conflicts: add keeps disk's only where the kind
                  * matches, and apply --force replaces a directory only with all
-                 * it holds. Update refuses every one of them, so its clause rides
-                 * only where it has work beside them */
+                 * it holds — named with its path, remove with its reach, for
+                 * the reasons that header gives. Update refuses every one of
+                 * them, so its clause rides only where it has work beside them */
                 output_hint(
                     out, OUTPUT_NORMAL,
                     "Resolve conflicts first: 'dotta diff' compares; 'dotta apply "
-                    "--force' keeps Git's (a directory only if all dotta's), 'dotta add "
-                    "--force' keeps disk's when the kind matches, 'dotta remove' "
-                    "untracks%s",
+                    "--force <path>' keeps Git's (a directory only if all dotta's), "
+                    "'dotta add --force' keeps disk's when the kind matches, 'dotta "
+                    "remove' stops managing it, every copy kept%s",
                     guard.blocking > guard.conflicts
                         ? "; 'dotta update' commits the rest" : ""
                 );

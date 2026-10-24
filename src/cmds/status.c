@@ -289,7 +289,8 @@ static void status_print_profiles(
             output_hintline(
                 out, OUTPUT_NORMAL,
                 "  custom/ paths - 'dotta profile enable <profile> --target /path' "
-                "sets the target; 'dotta remove <profile> <path>' untracks"
+                "sets the target; 'dotta remove <profile> <path>' stops managing one, "
+                "every copy kept"
             );
         }
         if (unused_shown) {
@@ -769,16 +770,20 @@ static void status_print_workspace(
      * --force` replaces a directory in a blob row's way only with all it holds,
      * and its walk stops at what no landing removes, --force included
      * (core/deploy.c check_clearance) — which status, reading no clearance, cannot
-     * tell apart; `add --force` keeps disk's bytes and not its kind: a kind change
-     * is a re-shaping of the tree and add refuses it by the claim standing at
-     * the path, naming `dotta remove` (cmds/add.c) */
+     * tell apart; and it is named with the path it lifts the skip at, since a
+     * bare one lifts every consent skip of the run, the edited copies other
+     * machines' deletions left among them. `add --force` keeps disk's bytes and
+     * not its kind: a kind change is a re-shaping of the tree and add refuses
+     * it by the claim standing at the path, naming `dotta remove` (cmds/add.c),
+     * which is named with its reach: every machine keeps its copy. */
     if (conflicts.count > 0) {
         output_list_t *list = output_list_create(
             out, "Conflicts",
             "changed on both sides or a different kind on disk; "
-            "\"dotta diff\" to compare, \"dotta apply --force\" to "
+            "\"dotta diff\" to compare, \"dotta apply --force <path>\" to "
             "keep Git's (a directory only if all dotta's), \"dotta add --force\" "
-            "to keep disk's bytes when the kind matches, \"dotta remove\" to untrack"
+            "to keep disk's bytes when the kind matches, \"dotta remove\" to stop "
+            "managing it, every copy kept"
         );
 
         for (size_t i = 0; i < conflicts.count; i++) {
@@ -1265,16 +1270,19 @@ static void status_print_workspace(
                          * directory shares [unreadable] and [unverified], and
                          * no flag lifts its skip, so neither names --force;
                          * [locked] is a file's alone. Read before the relocation,
-                         * as the tags rank them. */
+                         * as the tags rank them. --force is named with the path
+                         * it lifts the skip at, here as on every screen naming
+                         * it (the Conflicts header above says why). */
                         switch (item->fault) {
                             case WORKSPACE_FAULT_LOCKED:
                                 hint = config->encryption_enabled
                                     ? "encrypted, and no key opened it "
                                     "('dotta key set'); apply skips it, "
-                                    "--force prunes it"
+                                    "'dotta apply --force <path>' prunes it"
                                     : "encrypted, and encryption is disabled "
                                     "(encryption.enabled = true, then 'dotta key "
-                                    "set'); apply skips it, --force prunes it";
+                                    "set'); apply skips it, 'dotta apply --force <path>' "
+                                    "prunes it";
                                 break;
                             case WORKSPACE_FAULT_UNREADABLE:
                                 hint = "cannot be read; apply skips it";
@@ -1290,7 +1298,8 @@ static void status_print_workspace(
                          * [ownership], a file's alone — so the hint says only
                          * that it did: --force lifts the skip whatever [relocated]
                          * beside them says */
-                        hint = "changed since deployment; apply skips it, --force prunes it";
+                        hint = "changed since deployment; apply skips it, "
+                            "'dotta apply --force <path>' prunes it";
                     } else if (item->relocation != WORKSPACE_RELOCATION_NONE) {
                         /* One sentence for every [relocated] key: a re-target
                          * apply prunes and a moved home it skips share the tag
@@ -1298,7 +1307,8 @@ static void status_print_workspace(
                          * or nowhere, so it says the claim moved, never where
                          * it stands */
                         hint = "the claim moved with its target or home; apply prunes "
-                            "the old copy, but under a moved home only --force does";
+                            "the old copy, but under a moved home only 'dotta apply "
+                            "--force <path>' does";
                     }
                     break;
 
@@ -1315,30 +1325,32 @@ static void status_print_workspace(
                                 hint = config->encryption_enabled
                                     ? "encrypted, and no key opened it "
                                     "('dotta key set'); apply skips it, "
-                                    "--force replaces it"
+                                    "'dotta apply --force <path>' replaces it"
                                     : "encrypted, and encryption is disabled "
                                     "(encryption.enabled = true, then 'dotta key "
-                                    "set'); apply skips it, --force replaces it";
+                                    "set'); apply skips it, 'dotta apply --force <path>' "
+                                    "replaces it";
                                 break;
                             case WORKSPACE_FAULT_UNREADABLE:
                                 hint = "cannot be read; "
-                                    "apply skips it, --force replaces it";
+                                    "apply skips it, 'dotta apply --force <path>' replaces it";
                                 break;
                             case WORKSPACE_FAULT_NONE:
                             case WORKSPACE_FAULT_UNVERIFIED:
                                 hint = "could not be verified; "
-                                    "apply skips it, --force replaces it";
+                                    "apply skips it, 'dotta apply --force <path>' replaces it";
                                 break;
                         }
                     } else if (item->divergence & DIVERGENCE_CONTENT) {
                         hint = "changed since deployment; "
-                            "apply skips it, --force replaces it";
+                            "apply skips it, 'dotta apply --force <path>' replaces it";
                     } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                         hint = "changed since deployment, its bytes dotta's; "
                             "apply replaces it";
                     } else {
                         hint = "the paths beneath it need a directory here; "
-                            "apply replaces it, --force where dotta never confirmed it";
+                            "apply replaces it, 'dotta apply --force <path>' where dotta "
+                            "never confirmed it";
                     }
                     break;
 

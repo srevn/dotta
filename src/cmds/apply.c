@@ -134,16 +134,17 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
  * reads. Neither line spells the command that would: the user typed one, the
  * verb the other names says the rest when it is run, and what sudo does to their
  * environment on the way is sudo's to document, not dotta's. The consent remedy
- * teaches both directions and names its cost the way cleanup's does: --force
- * keeps Git's and discards what stands there, and a CONTENT skip adds the disk-wins
- * verb, 'dotta update' — gated on CONTENT and not on the class, because update
- * refuses a retyped row (cmds/update.c update_partition's kind refusal). It stops
- * there: the 'dotta add --force' a Git-moved row needs is what update's own refusal
- * says at the moment the user meets it, and '-e' is how to ignore a skip, not
- * how to remedy one. The block sits between the deploy preview and cleanup's,
- * so each engine tells its story the same way — what it will do, then what it
- * will not and why. No total-count line: the exit error's message is the count's
- * one home.
+ * teaches both directions, each at a path — a bare --force lifts every consent
+ * skip of the run, the edited copies other machines' deletions left among them
+ * — and names its cost the way cleanup's does: --force keeps Git's and discards
+ * what stands there, and a CONTENT skip adds the disk-wins verb, 'dotta update'
+ * — gated on CONTENT and not on the class, because update refuses a retyped row
+ * (cmds/update.c update_partition's kind refusal). It stops there: the 'dotta
+ * add --force' a Git-moved row needs is what update's own refusal says at the
+ * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
+ * one. The block sits between the deploy preview and cleanup's, so each engine
+ * tells its story the same way — what it will do, then what it will not and why.
+ * No total-count line: the exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -380,7 +381,8 @@ static void apply_print_deploy_skips(
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Use --force to overwrite or replace them (discards what stands there)"
+                "  Use 'dotta apply --force <path>' to overwrite or replace one "
+                "(discards what stands there)"
             );
             break;
         }
@@ -1831,7 +1833,8 @@ static void apply_print_cleanup_skips(
 
     output_info(
         out, OUTPUT_NORMAL,
-        "  Use --force to prune them anyway (discards what stands there)"
+        "  Use 'dotta apply --force <path>' to prune one anyway (discards what "
+        "stands there)"
     );
 
     /* A row's fault is the read its label names: a fault ranks first

@@ -23,6 +23,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/scope.h"
+#include "infra/commit.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -303,7 +304,11 @@ static error_t ignore_edit(
     commit_msg = heap_str_format("Update %s .dottaignore", dottaignore->layer);
     bool committed = false;
     err = ignore_blob_write(stage, file.data, file.size);
-    if (!err) err = stage_commit(stage, commit_msg, &committed);
+    if (!err) {
+        err = stage_commit(
+            stage, commit_msg, commit_action_word(COMMIT_ACTION_IGNORE), &committed
+        );
+    }
 
     /* An edit the stage refused is kept where the editor left it, and the refusal
      * says where — a clause of the fact, which -q keeps; one the stage took lets
@@ -430,7 +435,9 @@ static error_t ignore_modify(
     }
 
     err = ignore_blob_write(stage, text.data, text.size);
-    if (!err) err = stage_commit(stage, commit_msg, NULL);
+    if (!err) err = stage_commit(
+        stage, commit_msg, commit_action_word(COMMIT_ACTION_IGNORE), NULL
+    );
     if (err) {
         err = error_wrap(err, "Failed to update %s .dottaignore", dottaignore->layer);
         goto cleanup;

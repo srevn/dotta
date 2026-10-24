@@ -21,6 +21,7 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "crypto/keymgr.h"
+#include "infra/commit.h"
 #include "infra/epoch.h"
 #include "sys/gitops.h"
 #include "sys/resolve.h"
@@ -532,11 +533,13 @@ static error_t sync_resolve(
     transfer_context_t *xfer
 ) {
     /* The context keeps the head the branch stands at — every write's expectation,
-     * the rollback's target — and the head the resolution leaves */
+     * the rollback's target — the head the resolution leaves, and the action a
+     * merge's commit names */
     resolve_context_t resolve;
     error_t err = resolve_init(
         &resolve, repo, remote_name, row->profile,
-        row->verdict == SYNC_VERDICT_REBASE ? RESOLVE_STRATEGY_REBASE : RESOLVE_STRATEGY_MERGE
+        row->verdict == SYNC_VERDICT_REBASE ? RESOLVE_STRATEGY_REBASE : RESOLVE_STRATEGY_MERGE,
+        commit_action_word(COMMIT_ACTION_SYNC)
     );
     if (!err) err = resolve_execute(&resolve);
     if (err) {
@@ -575,7 +578,8 @@ static error_t sync_resolve(
 static void sync_reset(git_repository *repo, const char *remote_name, sync_row_t *row) {
     resolve_context_t resolve;
     error_t err = resolve_init(
-        &resolve, repo, remote_name, row->profile, RESOLVE_STRATEGY_THEIRS
+        &resolve, repo, remote_name, row->profile, RESOLVE_STRATEGY_THEIRS,
+        commit_action_word(COMMIT_ACTION_SYNC)
     );
     if (!err) err = resolve_execute(&resolve);
     if (err) {

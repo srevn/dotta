@@ -538,9 +538,12 @@ error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out) {
     return NULL;
 }
 
-error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
+error_t stage_commit(
+    stage_t *st, const char *message, const char *action, bool *out_committed
+) {
     CHECK_NULL(st);
     CHECK_NULL(message);
+    CHECK_NULL(action);
 
     if (out_committed) {
         *out_committed = false;
@@ -570,12 +573,13 @@ error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
         return err;
     }
 
-    /* The object: the tree, and the head the open read as its one parent — none
-     * for an orphan's stage — written apart from the ref, which is written below */
+    /* The object: the tree, the head the open read as its one parent — none for
+     * an orphan's stage — and the writer's action in its header, written apart
+     * from the ref, which is written below */
     const git_commit *parents[] = { st->parent };
     git_oid commit_oid;
     err = gitops_create_commit(
-        st->repo, sig, sig, NULL, message, tree, st->parent ? 1 : 0, parents, NULL,
+        st->repo, sig, sig, NULL, message, tree, st->parent ? 1 : 0, parents, action,
         &commit_oid
     );
     git_signature_free(sig);

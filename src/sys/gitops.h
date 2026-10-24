@@ -1146,9 +1146,9 @@ error_t gitops_merge_trees_safe(
  * byte for byte.
  *
  * The reference is its writer's to write, from the state it read
- * (gitops_write_reference). Readers: sys/stage.c stage_commit;
- * gitops_create_merge_commit; and each replay of gitops_rebase_inmemory_safe,
- * with its pick's action.
+ * (gitops_write_reference). Readers: sys/stage.c stage_commit and
+ * gitops_create_merge_commit, each with its writer's action; and each replay of
+ * gitops_rebase_inmemory_safe, with its pick's.
  *
  * @param repo Repository (must not be NULL)
  * @param author The author (must not be NULL)
@@ -1204,11 +1204,12 @@ error_t gitops_commit_action(
  *
  * The index's tree, written into the repository by name — an index git_merge_trees
  * made is backed by no repository — then one commit with our side and theirs as
- * its parents, in that order, signed as every commit dotta writes is
- * (gitops_get_signature), through the one object writer (gitops_create_commit).
- * An index that holds a conflict is refused at the tree's write, in Git's words
- * (lib/libgit2/src/libgit2/tree.c git_tree__write_index). The reference is its
- * writer's to write (gitops_write_reference).
+ * its parents, in that order, and its writer's action in its header, signed as
+ * every commit dotta writes is (gitops_get_signature), through the one object
+ * writer (gitops_create_commit). An index that holds a conflict is refused at
+ * the tree's write, in Git's words (lib/libgit2/src/libgit2/tree.c
+ * git_tree__write_index). The reference is its writer's to write
+ * (gitops_write_reference).
  *
  * Reader: sys/resolve.c resolve_merge_trees.
  *
@@ -1217,6 +1218,8 @@ error_t gitops_commit_action(
  * @param our_commit Our commit (local) (must not be NULL)
  * @param their_commit Their commit (remote) (must not be NULL)
  * @param message Commit message (must not be NULL)
+ * @param action The word its writer names the merge's action by (must not be
+ *               NULL: every commit dotta writes names one)
  * @param out_oid Created commit OID (must not be NULL)
  * @return Error or NULL on success
  */
@@ -1226,6 +1229,7 @@ error_t gitops_create_merge_commit(
     git_commit *our_commit,
     git_commit *their_commit,
     const char *message,
+    const char *action,
     git_oid *out_oid
 );
 

@@ -40,13 +40,16 @@ typedef enum {
  *
  * The branch's two heads: the one resolve_init read, every resolution's expectation
  * and the rollback's target, and the one the resolution left, the rollback's
- * expectation — Git's null id until a resolution lands.
+ * expectation — Git's null id until a resolution lands. The action is the word
+ * the commit a resolution writes names: the merge's — a rebase's replays carry
+ * their picks' own, and a reset writes none.
  */
 typedef struct {
     git_repository *repo;             /* Repository handle (must not be NULL) */
     const char *remote_name;          /* Remote name (e.g., "origin") */
     const char *branch_name;          /* Branch name to resolve */
     resolve_strategy_t strategy;      /* Resolution strategy */
+    const char *action;               /* The word the merge commit names its action by */
     char refname[DOTTA_REFNAME_MAX];  /* The branch's reference, every write's */
     git_oid saved_oid;                /* The head resolve_init read */
     git_oid resolved_oid;             /* The head the resolution left; the null id before one */
@@ -65,6 +68,8 @@ typedef struct {
  * @param remote_name Remote name (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
  * @param strategy Resolution strategy
+ * @param action The word its caller names the action of a commit the resolution
+ *               writes by (must not be NULL; borrowed for the context's life)
  * @return Error or NULL on success
  */
 error_t resolve_init(
@@ -72,7 +77,8 @@ error_t resolve_init(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    resolve_strategy_t strategy
+    resolve_strategy_t strategy,
+    const char *action
 );
 
 /**

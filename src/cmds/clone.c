@@ -29,6 +29,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "infra/commit.h"
 #include "infra/epoch.h"
 #include "sys/bootstrap.h"
 #include "sys/filesystem.h"
@@ -519,7 +520,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * via the baseline path rather than only through the compiled fallback.
      *
      * Seeded once: a ref that already stands is left alone. */
-    err = ignore_seed_baseline(repo);
+    err = ignore_seed_baseline(repo, COMMIT_ACTION_CLONE);
     if (err) goto cleanup;
 
     /* Bootstrap detection and execution.

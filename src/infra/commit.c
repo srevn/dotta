@@ -69,14 +69,33 @@ static void commit_time(time_t now, const char *format, char *buf, size_t size) 
     if (!local || strftime(buf, size, format, local) == 0) snprintf(buf, size, "unknown");
 }
 
+const char *commit_action_word(commit_action_t action) {
+    /* Every action, and no default arm: -Wswitch names this function the day an
+     * action lands, where a default would have named every commit the new one
+     * makes by a word not its own */
+    switch (action) {
+        case COMMIT_ACTION_ADD:       return "add";
+        case COMMIT_ACTION_UPDATE:    return "update";
+        case COMMIT_ACTION_REMOVE:    return "remove";
+        case COMMIT_ACTION_REVERT:    return "revert";
+        case COMMIT_ACTION_IGNORE:    return "ignore";
+        case COMMIT_ACTION_BOOTSTRAP: return "bootstrap";
+        case COMMIT_ACTION_SYNC:      return "sync";
+        case COMMIT_ACTION_INIT:      return "init";
+        case COMMIT_ACTION_CLONE:     return "clone";
+    }
+    CHECK_ARG(false, "a commit action no enumerator names");
+}
+
 /**
  * The action's name, as {action} renders it
  *
  * Every action, and no default arm: -Wswitch names this function and its past
- * tense the day a fifth action lands, where a default would have rendered the
- * new one "Unknown" into a commit nobody re-reads. What falls past the switch
- * is a value no enumerator names, which only a cast can produce, and it dies
- * rather than name itself "Unknown" there (base/error.h CHECK_ARG).
+ * tense the day an action lands, where a default would have rendered the new
+ * one "Unknown" into a commit nobody re-reads. An action that words its own message
+ * never reaches the template, and dies here as a caller's bug; what falls past
+ * the switch is a value no enumerator names, which only a cast can produce, and
+ * it dies rather than name itself "Unknown" there (base/error.h CHECK_ARG).
  */
 static const char *commit_action_name(commit_action_t action) {
     switch (action) {
@@ -84,6 +103,12 @@ static const char *commit_action_name(commit_action_t action) {
         case COMMIT_ACTION_UPDATE: return "Update";
         case COMMIT_ACTION_REMOVE: return "Remove";
         case COMMIT_ACTION_REVERT: return "Revert";
+        case COMMIT_ACTION_IGNORE:
+        case COMMIT_ACTION_BOOTSTRAP:
+        case COMMIT_ACTION_SYNC:
+        case COMMIT_ACTION_INIT:
+        case COMMIT_ACTION_CLONE:
+            CHECK_ARG(false, "an action the template never renders");
     }
     CHECK_ARG(false, "a commit action no enumerator names");
 }
@@ -97,6 +122,12 @@ static const char *commit_action_name_past(commit_action_t action) {
         case COMMIT_ACTION_UPDATE: return "Updated";
         case COMMIT_ACTION_REMOVE: return "Removed";
         case COMMIT_ACTION_REVERT: return "Reverted";
+        case COMMIT_ACTION_IGNORE:
+        case COMMIT_ACTION_BOOTSTRAP:
+        case COMMIT_ACTION_SYNC:
+        case COMMIT_ACTION_INIT:
+        case COMMIT_ACTION_CLONE:
+            CHECK_ARG(false, "an action the template never renders");
     }
     CHECK_ARG(false, "a commit action no enumerator names");
 }

@@ -20,17 +20,20 @@ error_t resolve_init(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    resolve_strategy_t strategy
+    resolve_strategy_t strategy,
+    const char *action
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_NULL(action);
 
     ctx->repo = repo;
     ctx->remote_name = remote_name;
     ctx->branch_name = branch_name;
     ctx->strategy = strategy;
+    ctx->action = action;
     ctx->resolved_oid = (git_oid) GIT_OID_SHA1_ZERO;
 
     /* The branch's reference, every write's, and the head it names: the one every
@@ -163,8 +166,8 @@ static error_t resolve_merge_trees(resolve_context_t *ctx) {
     );
 
     err = gitops_create_merge_commit(
-        ctx->repo, merged_index, local_commit, remote_commit,
-        message, &merge_commit_oid
+        ctx->repo, merged_index, local_commit, remote_commit, message, ctx->action,
+        &merge_commit_oid
     );
     git_commit_free(remote_commit);
     git_commit_free(local_commit);

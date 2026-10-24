@@ -35,6 +35,7 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/heap.h"
+#include "infra/commit.h"
 #include "infra/label.h"
 #include "sys/gitops.h"
 #include "sys/source.h"
@@ -691,7 +692,7 @@ const char *ignore_profile_template(void) {
     return PROFILE_DOTTAIGNORE;
 }
 
-error_t ignore_seed_baseline(git_repository *repo) {
+error_t ignore_seed_baseline(git_repository *repo, commit_action_t action) {
     CHECK_NULL(repo);
 
     /* The ref's presence is the seed. It is made here and nowhere else, and once
@@ -703,8 +704,9 @@ error_t ignore_seed_baseline(git_repository *repo) {
     if (err) return err;
     if (seeded) return NULL;
 
-    /* A root commit on an orphan's stage. A ref that appeared since the look —
-     * two inits racing — is refused at the open or at the commit. */
+    /* A root commit on an orphan's stage, naming its caller's action. A ref that
+     * appeared since the look — two inits racing — is refused at the open or at
+     * the commit. */
     stage_t *stage = NULL;
     err = stage_orphan(repo, BASELINE_REF, &stage);
     if (!err) {
@@ -715,7 +717,8 @@ error_t ignore_seed_baseline(git_repository *repo) {
     }
     if (!err) {
         err = stage_commit(
-            stage, "Initialize .dottaignore with default patterns", NULL
+            stage, "Initialize .dottaignore with default patterns",
+            commit_action_word(action), NULL
         );
     }
     stage_free(stage);

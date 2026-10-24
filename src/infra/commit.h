@@ -2,12 +2,14 @@
  * commit.h - A commit's words: the action that made it, and the message its
  * templates render
  *
- * A message is two facts from two owners, which meet here and nowhere else. The
- * writer says what it did and how its message reads (commit_words_t): the command
- * that made the commit, the configuration's two templates, the message the user
- * wrote where -m gave one, a revert's target. The draft says what the commit
- * changes of its profile's explicit claims (commit_changes_t), and renders the
- * message from both under its profile's name (core/profiles.h profile_commit).
+ * Every commit dotta writes names the action that made it, in one header after
+ * its committer's lines (commit_action_word; sys/gitops.h gitops_create_commit
+ * writes it). A message is two facts from two owners, which meet here and nowhere
+ * else. The writer says what it did and how its message reads (commit_words_t):
+ * the command that made the commit, the configuration's two templates, the message
+ * the user wrote where -m gave one, a revert's target. The draft says what the
+ * commit changes of its profile's explicit claims (commit_changes_t), and renders
+ * the message from both under its profile's name (core/profiles.h profile_commit).
  *
  * Layer: infra/. It reads base/ and sys/identity, for the invoker's name, and
  * no configuration — the templates are the writer's to hand by name — so core,
@@ -20,17 +22,41 @@
 #include <types.h>
 
 /**
- * The action a commit's title names: its writer's
+ * The action that made a commit: the command whose writer wrote it
  *
- * One for each command that commits through the template; every other commit
- * dotta makes — ignore's, bootstrap's, the epoch's — words its own message.
+ * Every commit dotta writes names one in its header (commit_action_word). Four
+ * commit through the template, whose {action} renders their name; the other five
+ * word their own messages, and the template never renders theirs.
  */
 typedef enum {
-    COMMIT_ACTION_ADD,      /* cmds/add.c */
-    COMMIT_ACTION_UPDATE,   /* cmds/update.c */
-    COMMIT_ACTION_REMOVE,   /* cmds/remove.c */
-    COMMIT_ACTION_REVERT    /* cmds/revert.c */
+    COMMIT_ACTION_ADD,         /* cmds/add.c */
+    COMMIT_ACTION_UPDATE,      /* cmds/update.c */
+    COMMIT_ACTION_REMOVE,      /* cmds/remove.c */
+    COMMIT_ACTION_REVERT,      /* cmds/revert.c */
+    COMMIT_ACTION_IGNORE,      /* cmds/ignore.c: a .dottaignore's edit */
+    COMMIT_ACTION_BOOTSTRAP,   /* cmds/bootstrap.c: a script's edit */
+    COMMIT_ACTION_SYNC,        /* cmds/sync.c: a merge with the remote */
+    COMMIT_ACTION_INIT,        /* cmds/init.c: the epoch's mint, the baseline's seed */
+    COMMIT_ACTION_CLONE        /* cmds/clone.c: the baseline's seed */
 } commit_action_t;
+
+/**
+ * The word a commit's header names an action by: its command's own name
+ *
+ * The value of the header every commit dotta writes carries (sys/gitops.h
+ * gitops_create_commit), which sys/ carries as an opaque word: "add", "update",
+ * "remove", "revert", "ignore", "bootstrap", "sync", "init", "clone". A value
+ * no enumerator names is only a cast's, and dies (base/error.h CHECK_ARG).
+ *
+ * Readers: core/profiles.c profile_commit; cmds/ignore.c ignore_edit and
+ * ignore_modify; cmds/bootstrap.c bootstrap_edit; infra/epoch.c epoch_init;
+ * core/ignore.c ignore_seed_baseline; cmds/sync.c sync_resolve and sync_reset,
+ * for the commit a resolution writes (sys/resolve.h resolve_init).
+ *
+ * @param action The action
+ * @return Its word, static
+ */
+const char *commit_action_word(commit_action_t action);
 
 /**
  * What a writer says of its commit
@@ -77,7 +103,8 @@ typedef struct commit_changes {
  *   {host}          - System hostname
  *   {user}          - The invoker's username (the human behind sudo)
  *   {profile}       - Profile name
- *   {action}        - Action (Add, Update, Remove, Revert)
+ *   {action}        - Action (Add, Update, Remove, Revert): the four that commit
+ *                     through the template, and no other
  *   {action_past}   - Past tense (Added, Updated, Removed, Reverted)
  *   {count}         - Number of claims the commit adds, updates or removes
  *   {date}          - Local date (YYYY-MM-DD)
@@ -108,7 +135,8 @@ typedef struct commit_changes {
  *
  * @param arena Arena the message lives in (must not be NULL)
  * @param words What the writer says of the commit, its two templates among them
- *              (must not be NULL)
+ *              (must not be NULL; its action one of the four the template renders
+ *              — any other is a caller's bug, and dies)
  * @param profile The profile's name (must not be NULL)
  * @param changes What the commit changes of the profile's explicit claims (must
  *                not be NULL)

@@ -15,6 +15,7 @@
 #include "core/ignore.h"
 #include "core/state.h"
 #include "crypto/kdf.h"
+#include "infra/commit.h"
 #include "infra/epoch.h"
 #include "sys/gitops.h"
 #include "utils/repo.h"
@@ -178,7 +179,8 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     kdf_epoch_t epoch;
     bool epoch_repaired = false;
     err = epoch_init(
-        repo, opts->preset->memory_mib, opts->preset->passes, &epoch, &epoch_repaired
+        repo, opts->preset->memory_mib, opts->preset->passes, COMMIT_ACTION_INIT, &epoch,
+        &epoch_repaired
     );
     if (err) goto cleanup;
     if (epoch_repaired) {
@@ -206,7 +208,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     /* Baseline .dottaignore at its own ref. Seeded once: a ref that already stands
      * keeps whatever the user made of it. */
-    err = ignore_seed_baseline(repo);
+    err = ignore_seed_baseline(repo, COMMIT_ACTION_INIT);
     if (err) goto cleanup;
 
     /* Success, a block of its own beneath the epoch's repair */

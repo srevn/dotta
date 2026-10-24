@@ -5,14 +5,15 @@
  * the parent the commit will have, and its tree seeds a private index. Put and
  * remove entries. Commit: the index is written as a tree; a tree equal to the
  * opened one is not committed (no writer wants an empty commit, so none can make
- * one); otherwise one commit with the opened head as its parent, written apart
- * from its ref, and the ref written only from that head — under the ref's own
- * lock, which refuses the write where another writer got there first. Four
- * spellings of this answer lived in the tree before (a temp worktree, an index
- * primitive, a recursive treebuilder, the epoch's own mint), and every one looked
- * the parent up at commit time, so a tree built from one head could be committed
- * on top of another and discard its change; only one of the four declined an
- * empty commit. Both properties are the stage's, once.
+ * one); otherwise one commit with the opened head as its parent and its writer's
+ * action in its header, written apart from its ref, and the ref written only
+ * from that head — under the ref's own lock, which refuses the write where another
+ * writer got there first. Four spellings of this answer lived in the tree before
+ * (a temp worktree, an index primitive, a recursive treebuilder, the epoch's
+ * own mint), and every one looked the parent up at commit time, so a tree built
+ * from one head could be committed on top of another and discard its change;
+ * only one of the four declined an empty commit. Both properties are the stage's,
+ * once.
  *
  * A writer says what it expects of the ref, and the open refuses the other state:
  * stage_open wants the ref (a profile the view listed, the branch a command
@@ -72,11 +73,12 @@
  * by the head check — a writer with more to write opens another.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, its object
- * writer and its ref writer, nothing of mounts, content or dotta's vocabulary.
- * Called by the commands that write a branch's machinery (bootstrap, ignore),
- * by a profile's draft — every claim writer's: add's, remove's, revert's and
- * update's (core/profiles.h profile_draft_t) — by core/metadata's sheet writer,
- * by core/ignore — a .dottaignore put onto the stage its edit opened, and the
+ * writer and its ref writer, nothing of mounts, content or dotta's vocabulary:
+ * a commit's action is the word its writer hands, carried as it is. Called by
+ * the commands that write a branch's machinery (bootstrap, ignore), by a profile's
+ * draft — every claim writer's: add's, remove's, revert's and update's
+ * (core/profiles.h profile_draft_t) — by core/metadata's sheet writer, by
+ * core/ignore — a .dottaignore put onto the stage its edit opened, and the
  * machine's baseline seeded on a stage of its own — and by infra/epoch's mint;
  * a profile's draft alone creates an admission, for add.
  */
@@ -418,22 +420,30 @@ error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out);
  *
  * The index is written as a tree. A tree equal to the opened one is not committed:
  * nothing moves, `*out_committed` is false. Otherwise one commit with the opened
- * head as its parent (a root for an orphan's stage), written apart from the ref,
- * then the ref written to it only from what the open read (sys/gitops.h
- * gitops_write_reference): a head that moved, or a ref that appeared, reads as
- * ERR_CONFLICT naming the ref; a head deleted since, and every other refusal of
- * the write, in Git's words; each says nothing was committed, and the object
- * stays loose. The reflog line is git's for a commit: "commit: <summary>", a
- * root's "commit (initial): <summary>".
+ * head as its parent (a root for an orphan's stage) and the action in its header
+ * (sys/gitops.h gitops_create_commit), written apart from the ref, then the ref
+ * written to it only from what the open read (gitops_write_reference): a head
+ * that moved, or a ref that appeared, reads as ERR_CONFLICT naming the ref; a
+ * head deleted since, and every other refusal of the write, in Git's words; each
+ * says nothing was committed, and the object stays loose. The reflog line is
+ * git's for a commit: "commit: <summary>", a root's "commit (initial): <summary>".
  *
  * @param st Stage (must not be NULL)
  * @param message Commit message (must not be NULL)
+ * @param action The word its writer names the commit's action by (must not be
+ *               NULL: every commit a stage writes names one; the words are
+ *               infra/commit.h commit_action_word's)
  * @param out_committed Whether a commit was made — for the callers that must
  *                      say "nothing changed" and cannot know before staging
  *                      (optional, can be NULL)
  * @return Error or NULL on success
  */
-error_t stage_commit(stage_t *st, const char *message, bool *out_committed);
+error_t stage_commit(
+    stage_t *st,
+    const char *message,
+    const char *action,
+    bool *out_committed
+);
 
 /**
  * Free the stage

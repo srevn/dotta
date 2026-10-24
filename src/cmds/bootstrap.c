@@ -19,6 +19,7 @@
 #include "cmds/completion.h"
 #include "core/profiles.h"
 #include "core/scope.h"
+#include "infra/commit.h"
 #include "sys/bootstrap.h"
 #include "sys/editor.h"
 #include "sys/gitops.h"
@@ -135,7 +136,9 @@ static error_t bootstrap_edit(
         profile
     );
     bool committed = false;
-    err = stage_commit(stage, commit_msg, &committed);
+    err = stage_commit(
+        stage, commit_msg, commit_action_word(COMMIT_ACTION_BOOTSTRAP), &committed
+    );
     if (err) goto cleanup;
 
     /* What the session made: a script, a change to one, or nothing — a script

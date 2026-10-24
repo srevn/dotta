@@ -1619,13 +1619,14 @@ error_t gitops_commit_action(
  */
 error_t gitops_create_merge_commit(
     git_repository *repo, git_index *index, git_commit *our_commit,
-    git_commit *their_commit, const char *message, git_oid *out_oid
+    git_commit *their_commit, const char *message, const char *action, git_oid *out_oid
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(index);
     CHECK_NULL(our_commit);
     CHECK_NULL(their_commit);
     CHECK_NULL(message);
+    CHECK_NULL(action);
     CHECK_NULL(out_oid);
 
     /* The merged tree, into the repository by name: an index git_merge_trees
@@ -1648,7 +1649,7 @@ error_t gitops_create_merge_commit(
 
     /* Our side, then theirs: the two parents, through the one object writer */
     const git_commit *parents[] = { our_commit, their_commit };
-    err = gitops_create_commit(repo, sig, sig, NULL, message, tree, 2, parents, NULL, out_oid);
+    err = gitops_create_commit(repo, sig, sig, NULL, message, tree, 2, parents, action, out_oid);
     git_signature_free(sig);
     git_tree_free(tree);
 

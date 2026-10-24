@@ -1253,16 +1253,16 @@ error_t profile_changes(
  * where its claims are no longer the base's; the message, the writer's words
  * over what the commit changes of the profile's explicit claims (profile_changes,
  * infra/commit.h commit_message) — never the writer's own lists, which hold what
- * it touched, a re-capture of what the profile holds among them; then one commit
- * (sys/stage.h stage_commit: a tree equal to the opened one is none, a head another
- * writer moved since the open is refused ERR_CONFLICT, and one deleted since in
- * Git's words). One commit a draft. Whether it landed is answered as sys/stage
- * answers it: false where the gate stops it, and past the gate the tree write's
- * own answer — true where an edit the gate saw stands past the prune, since it
- * moved a content entry or a claim and a sheet whose claims moved spells other
- * bytes, and false where the prune took back the only edits the gate saw: a climb's
- * rungs nothing tracked stands beneath, authored and pruned in one draft, whose
- * message no commit carries.
+ * it touched, a re-capture of what the profile holds among them; then one commit,
+ * naming the writer's action (sys/stage.h stage_commit: a tree equal to the opened
+ * one is none, a head another writer moved since the open is refused ERR_CONFLICT,
+ * and one deleted since in Git's words). One commit a draft. Whether it landed
+ * is answered as sys/stage answers it: false where the gate stops it, and past
+ * the gate the tree write's own answer — true where an edit the gate saw stands
+ * past the prune, since it moved a content entry or a claim and a sheet whose
+ * claims moved spells other bytes, and false where the prune took back the only
+ * edits the gate saw: a climb's rungs nothing tracked stands beneath, authored
+ * and pruned in one draft, whose message no commit carries.
  *
  * Readers: cmds/add.c cmd_add and cmds/update.c update_profile, which count the
  * prune and read whether the commit landed, so a capture that put back what the

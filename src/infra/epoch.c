@@ -45,6 +45,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "crypto/keymgr.h"
+#include "infra/commit.h"
 #include "infra/content.h"
 #include "sys/entropy.h"
 #include "sys/gitops.h"
@@ -188,7 +189,7 @@ error_t epoch_load(git_repository *repo, kdf_epoch_t *out) {
 }
 
 error_t epoch_init(
-    git_repository *repo, uint16_t memory_mib, uint8_t passes,
+    git_repository *repo, uint16_t memory_mib, uint8_t passes, commit_action_t action,
     kdf_epoch_t *out, bool *out_repaired
 ) {
     CHECK_NULL(repo);
@@ -278,8 +279,9 @@ error_t epoch_init(
      * orphan's stage, committed. The census and the delete above ran on an absent
      * ref, and the stage refuses a ref that appeared since — at its open, and
      * again at the commit — which is the immutability the epoch wants: a second
-     * commit on this ref would seal every blob away. The message is purely
-     * diagnostic; nothing in dotta parses it. */
+     * commit on this ref would seal every blob away. The message is diagnostic,
+     * the header its caller's action, as every commit's is: nothing in dotta
+     * reads either. */
     stage_t *stage = NULL;
     if (!err) err = stage_orphan(repo, EPOCH_REF, &stage);
     if (!err) {
@@ -294,7 +296,9 @@ error_t epoch_init(
         );
     }
     if (!err) {
-        err = stage_commit(stage, "Initialize repository epoch", NULL);
+        err = stage_commit(
+            stage, "Initialize repository epoch", commit_action_word(action), NULL
+        );
     }
     stage_free(stage);
 

@@ -82,6 +82,8 @@
 #include <stdbool.h>
 #include <types.h>
 
+#include "infra/commit.h"
+
 /* Forward declarations — the full headers pull in plenty of machinery we do not
  * want every consumer of core/ignore.h to transitively include. The types already
  * typedef identically there */
@@ -520,12 +522,14 @@ error_t ignore_blob_write(stage_t *stage, const char *content, size_t size);
  *
  * Every refusal names BASELINE_REF, or the `.dottaignore` the stage puts on it
  * (sys/stage.h), so its two readers — cmds/init.c cmd_init and cmds/clone.c
- * cmd_clone — say nothing over one.
+ * cmd_clone — say nothing over one. The seed's commit names its reader's action
+ * (infra/commit.h commit_action_word).
  *
  * @param repo Repository (must not be NULL)
+ * @param action The command the seed's commit names: the caller's
  * @return Error or NULL on success
  */
-error_t ignore_seed_baseline(git_repository *repo);
+error_t ignore_seed_baseline(git_repository *repo, commit_action_t action);
 
 /**
  * Default baseline `.dottaignore` content.

@@ -73,6 +73,7 @@
 
 #include "crypto/kdf.h"
 #include "crypto/keymgr.h"
+#include "infra/commit.h"
 #include "sys/transfer.h"
 
 /* Custom-namespace ref. Branch-listing filters target refs/heads/... so this
@@ -105,7 +106,8 @@
  * is ignored, and the epoch that stands is what `*out` carries — the caller
  * compares it against what it asked for. Otherwise generates KDF_SALT_SIZE random
  * bytes via `entropy_fill`, writes a commit→tree→{`salt`, `params`} with the
- * pair given, and points the ref at the new commit.
+ * pair given, naming its caller's action (infra/commit.h commit_action_word),
+ * and points the ref at the new commit.
  *
  * Every fresh mint is gated on the ciphertext census, on both ways the ref can
  * fail to yield an epoch — it stands and yields none (a wrong-size blob, a missing
@@ -137,6 +139,7 @@
  * @param repo         Repository (must not be NULL)
  * @param memory_mib   Argon2 memory in MiB to mint with (a preset's; in range)
  * @param passes       Argon2 pass count to mint with (a preset's; in range)
+ * @param action       The command a mint's commit names: the caller's
  * @param out          The epoch that stands after the call: the existing one,
  *                     or the one minted (must not be NULL)
  * @param out_repaired Optional: set true iff an unreadable ref was deleted and
@@ -147,6 +150,7 @@ error_t epoch_init(
     git_repository *repo,
     uint16_t memory_mib,
     uint8_t passes,
+    commit_action_t action,
     kdf_epoch_t *out,
     bool *out_repaired
 );

@@ -1895,13 +1895,13 @@ error_t profile_commit(
     err = profile_changes(draft, draft->arena, &changes);
     if (err) return err;
 
-    /* One commit, the tree and the sheet in one tree write, whether it landed
-     * the write's own answer: none where the tree is the one the stage opened,
-     * and a head another writer moved or deleted since the open is refused
-     * (sys/stage.h stage_commit) */
+    /* One commit, the tree and the sheet in one tree write, naming its writer's
+     * action; whether it landed the write's own answer: none where the tree is
+     * the one the stage opened, and a head another writer moved or deleted since
+     * the open is refused (sys/stage.h stage_commit) */
     return stage_commit(
         draft->stage, commit_message(draft->arena, words, draft->base->name, &changes),
-        out_committed
+        commit_action_word(words->action), out_committed
     );
 }
 

@@ -669,7 +669,10 @@ error_t gitops_fetch_remote(
  * lacks is not an error of the fetch: its refspec matches no head the remote
  * advertises, so nothing is wanted for it and no ref is written
  * (lib/libgit2/src/libgit2/fetch.c filter_wants, remote.c update_one_tip), and
- * what the remote held is read off the remote-tracking refs afterwards.
+ * what the remote held is read off the remote-tracking refs afterwards. Each
+ * one follows its branch wherever the remote moved it, a force push included:
+ * the refspecs are forced, as git's own for a tracking ref is, whatever fetch
+ * refspec the remote's configuration holds, or none.
  *
  * Readers: cmds/sync.c sync_fetch (every profile in the run's scope) and
  * cmds/status.c status_print_remote (every profile it lists), each asking for

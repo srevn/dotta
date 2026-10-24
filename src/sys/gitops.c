@@ -899,9 +899,14 @@ error_t gitops_fetch_branches(
     error_t err = NULL;
     for (size_t i = 0; i < branches->count; i++) {
         /* Each refspec's halves, the branch's ref and the remote-tracking ref
-         * it lands at — refs/heads/<branch>:refs/remotes/<remote>/<branch> —
+         * it lands at — +refs/heads/<branch>:refs/remotes/<remote>/<branch> —
          * each spelled where every one is; two built names fit the refspec's
-         * buffer by its definition (DOTTA_REFSPEC_MAX) */
+         * buffer by its definition (DOTTA_REFSPEC_MAX). Forced, as git's own
+         * refspec for a tracking ref is: the ref follows the remote wherever
+         * its branch went, a force push included, where libgit2 skips a move no
+         * fast-forward makes under an unforced one (remote.c update_one_tip)
+         * and only a fetch refspec the remote's configuration holds would write
+         * it after (opportunistic_updates) */
         char refname[DOTTA_REFNAME_MAX];
         err = gitops_branch_refname(refname, sizeof(refname), branches->entries[i]);
         if (err) goto cleanup;
@@ -913,7 +918,7 @@ error_t gitops_fetch_branches(
         if (err) goto cleanup;
 
         char refspec[DOTTA_REFSPEC_MAX];
-        err = gitops_build_refname(refspec, sizeof(refspec), "%s:%s", refname, tracking);
+        err = gitops_build_refname(refspec, sizeof(refspec), "+%s:%s", refname, tracking);
         if (err) goto cleanup;
         string_array_push(&refspecs, refspec);
     }

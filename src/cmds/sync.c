@@ -76,11 +76,15 @@ typedef enum {
  * What carrying a row's verdict out came to — read by the receipt
  * (sync_print_receipt) and the glyph its rows lead with (sync_print_lead), and,
  * through the row's error, by the run's failure (sync_failure)
+ *
+ * Up to date is an act that found its work done, the branch at the remote's head
+ * and nothing to send: a pull another process made before it (sync_execute), or
+ * a rebase whose every pick the remote already held (sync_resolve).
  */
 typedef enum {
     SYNC_OUTCOME_NONE,          /* Not carried out: no act, or the run stopped before the row */
     SYNC_OUTCOME_DONE,          /* The act carried out whole */
-    SYNC_OUTCOME_UP_TO_DATE,    /* A pull found the branch at the remote's head: another process moved it */
+    SYNC_OUTCOME_UP_TO_DATE,    /* The act found its work done, the branch at the remote's head */
     SYNC_OUTCOME_FAILED,        /* The act failed, its cause the row's error */
     SYNC_OUTCOME_ROLLED_BACK,   /* A resolution undone: its verification or its push failed */
     SYNC_OUTCOME_UNVERIFIED     /* A reset that moved the branch, then failed its verification */
@@ -680,7 +684,7 @@ done:
 
 /**
  * Carry a rebase or a merge out: the resolution, its verification, then its push
- * unless --no-push withheld it
+ * where one is owed, unless --no-push withheld it
  *
  * A step that fails is the row's, its cause as it stands: each names its act
  * and its branch (sys/resolve.h, sys/gitops.h). The resolution runs in memory
@@ -688,8 +692,10 @@ done:
  * where it stood — a commit another writer landed meanwhile refuses it; a
  * verification or a push that fails after it rolls the branch back, from the
  * head the resolution left, and a branch another writer moved since refuses the
- * rollback, which stops the run naming the head. One that lands reads its history
- * once more, for the names its two sides took one deleting and one removing.
+ * rollback, which stops the run naming the head. One that lands at the remote's
+ * own head owes no push, and its row is up to date. Either way, one that lands
+ * reads its history once more, for the names its two sides took one deleting
+ * and one removing.
  *
  * @return The run's error where that rollback fails; NULL otherwise, every other
  *         failure the row's
@@ -723,15 +729,24 @@ static error_t sync_resolve(
         return sync_rollback(&resolve, row, "verification");
     }
 
-    if (row->withheld != SYNC_VERDICT_PUSH) {
-        err = gitops_push_branch(repo, remote_name, row->profile, xfer);
-        if (err) {
-            row->error = err;
-            return sync_rollback(&resolve, row, "push");
+    /* A resolution that left the branch at the remote's own head is a rebase
+     * whose every pick the remote held, each skipped (sys/gitops.h
+     * gitops_rebase_inmemory_safe) — a merge writes a commit of its own. A push
+     * would send nothing, or be refused where the remote moved past the fetch,
+     * so none is made */
+    if (git_oid_equal(&resolve.resolved_oid, &resolve.remote_oid)) {
+        row->outcome = SYNC_OUTCOME_UP_TO_DATE;
+    } else {
+        if (row->withheld != SYNC_VERDICT_PUSH) {
+            err = gitops_push_branch(repo, remote_name, row->profile, xfer);
+            if (err) {
+                row->error = err;
+                return sync_rollback(&resolve, row, "push");
+            }
         }
+        row->outcome = SYNC_OUTCOME_DONE;
     }
 
-    row->outcome = SYNC_OUTCOME_DONE;
     row->disagreements = sync_disagreements(arena, repo, &resolve);
     return NULL;
 }
@@ -859,8 +874,8 @@ static void sync_print_lead(output_t *out, const sync_row_t *row) {
     } else if (row->outcome == SYNC_OUTCOME_DONE) {
         output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN, "  ✓");
     } else {
-        /* Where it stands: as the analysis read it, or up to date where the pull
-         * found it so, another process's pull before it */
+        /* Where it stands: as the analysis read it, or up to date where the act
+         * found its work done */
         const upstream_state_t state = row->outcome == SYNC_OUTCOME_UP_TO_DATE
             ? UPSTREAM_UP_TO_DATE : row->upstream.state;
         output_colored(
@@ -1126,12 +1141,13 @@ static void sync_print_disagreements(output_t *out, const sync_row_t *row) {
  * The preview's sibling (sync_print_preview), in the past tense, each row in
  * the line both print — its lead, its clause, what the user's word withheld —
  * and at verbose what its act sent (sync_print_wire). An act carried out whole
- * is said in the preview's words (sync_print_done); a row no act moved where it
- * stands, as the preview says it (sync_print_state) — a row the run stopped before
- * among them, the run's error beneath saying why; and a failure by its cause,
- * beside where it left the branch. Beneath a resolution that landed, the names
- * its two sides took one deleting and one removing (sync_print_disagreements).
- * The remedies its rows call for close it (sync_print_remedies).
+ * is said in the preview's words (sync_print_done), and one that found its work
+ * done by what it found; a row no act moved where it stands, as the preview says
+ * it (sync_print_state) — a row the run stopped before among them, the run's
+ * error beneath saying why; and a failure by its cause, beside where it left
+ * the branch. Beneath a resolution that landed, the names its two sides took
+ * one deleting and one removing (sync_print_disagreements). The remedies its
+ * rows call for close it (sync_print_remedies).
  */
 static void sync_print_receipt(
     output_t *out,
@@ -1155,8 +1171,15 @@ static void sync_print_receipt(
                 break;
 
             case SYNC_OUTCOME_UP_TO_DATE:
-                /* What the pull found, not what it did */
+                /* What the act found, not what it did — of a rebase, that the
+                 * remote held what each of its local commits changed */
                 output_print(out, OUTPUT_NORMAL, "already up-to-date");
+                if (row->verdict == SYNC_VERDICT_REBASE) {
+                    output_print(
+                        out, OUTPUT_NORMAL, ": the remote held what its %zu local commit%s changed",
+                        row->upstream.ahead, row->upstream.ahead == 1 ? "" : "s"
+                    );
+                }
                 break;
 
             case SYNC_OUTCOME_FAILED:

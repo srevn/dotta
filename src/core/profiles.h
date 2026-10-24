@@ -18,10 +18,12 @@
  * the two documents: it opens the profile at a tree and asks the handle, which
  * reads that tree's own sheet once, at the first question that needs it. What
  * the handle reads is Git's alone, the tree and its sheet: no view, no record,
- * no disk. A writer wants the claims too: it opens the profile's draft
- * (profile_draft_t) — its next commit, built on a stage (sys/stage.h) — asks
- * the draft's base, the profile at the tree the draft opened at, and edits the
- * draft: never the two documents, which the draft keeps together by the rules
+ * no disk. What the profile's history says of a name — whether it left, and what
+ * took it — is Git's too, asked at a head and never through the handle
+ * (profile_departures). A writer wants the claims too: it opens the profile's
+ * draft (profile_draft_t) — its next commit, built on a stage (sys/stage.h) —
+ * asks the draft's base, the profile at the tree the draft opened at, and edits
+ * the draft: never the two documents, which the draft keeps together by the rules
  * its type states. The draft looks at the disk in one place, the way above a
  * file a writer captured from it, and asks the host twice more: the names of a
  * look's owner and group, where a capture names them (core/metadata.h
@@ -252,14 +254,13 @@ typedef struct profile profile_t;
  * — the sheet waits for the first question that needs it — so the open cannot fail.
  *
  * Readers: core/manifest.c manifest_build (each enabled head gitops_branch_tree
- * found) and core/workspace.c workspace_orphan_authority (each file orphan's
- * profile's head, found the same way), cmds/revert.c cmd_revert (its target
- * commit's), cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c
- * cmd_export, cmds/show.c cmd_show and cmds/list.c list_file_history (the tree
- * the verb selected), cmds/list.c list_profiles and list_files (the tree of the
- * head each listing read, so what each prints is that commit's); profile_load,
- * at the head it read; and a profile's draft, at the tree its stage opened at —
- * a head, or Git's empty tree (profile_draft_open, profile_draft_orphan).
+ * found), cmds/revert.c cmd_revert (its target commit's), cmds/diff.c
+ * diff_commit_to_workspace (the commit's), cmds/export.c cmd_export, cmds/show.c
+ * cmd_show and cmds/list.c list_file_history (the tree the verb selected),
+ * cmds/list.c list_profiles and list_files (the tree of the head each listing
+ * read, so what each prints is that commit's); profile_load, at the head it read;
+ * and a profile's draft, at the tree its stage opened at — a head, or Git's empty
+ * tree (profile_draft_open, profile_draft_orphan).
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
@@ -277,8 +278,7 @@ profile_t *profile_open(const char *name, const git_tree *tree);
  * a head that will not read is Git's error — so a reader for whom the absence
  * is an answer takes it off the refusal (cmds/profile.c profile_list, an enabled
  * row's no branch), or reads gitops_branch_tree and opens the profile at what
- * it finds (core/manifest.c manifest_build, core/workspace.c
- * workspace_orphan_authority).
+ * it finds (core/manifest.c manifest_build).
  *
  * Readers: cmds/remove.c remove_overlaps and cmds/revert.c revert_select_profile,
  * which load every local profile; cmds/ignore.c ignore_test; the questions asked
@@ -637,13 +637,12 @@ typedef struct {
  * at the name the restore writes in the head (step 11), the entry's identity
  * what the preview diffs, and revert_select_profile, at each holder's own name
  * for the argument — whether a file can be restored there (revert_restorable,
- * the one question both ask); core/workspace.c workspace_orphan_authority, for
- * a file record, folding a failure to UNVERIFIED; the encryption policy's prior
- * — the blob the profile holds at the name in the tree its draft opened at, judged
- * by its own bytes, and none where no blob stands — at each capture (cmds/update.c
- * update_capture) and in add's decision pass (cmds/add.c cmd_add); and a profile's
- * changes, whether a blob stands at a name the sheet moved and the tree did not,
- * where the base's is the commit's (profile_changes).
+ * the one question both ask); the encryption policy's prior — the blob the profile
+ * holds at the name in the tree its draft opened at, judged by its own bytes,
+ * and none where no blob stands — at each capture (cmds/update.c update_capture)
+ * and in add's decision pass (cmds/add.c cmd_add); and a profile's changes, whether
+ * a blob stands at a name the sheet moved and the tree did not, where the base's
+ * is the commit's (profile_changes).
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path (must not be NULL)
@@ -688,18 +687,16 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * remove's directory offer, which offers a claim where no blob stands at its
  * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
  * rung of the way a restore brings back, where whatever the base holds keeps
- * the rung (profile_restore_file). A reader not on this list is a bug. Four
+ * the rung (profile_restore_file). A reader not on this list is a bug. Three
  * neighbours ask profile_entry instead, the tree alone: revert's read of the
  * head at the name it writes (cmds/revert.c cmd_revert, step 11), and of each
  * holder's head in its search (revert_select_profile, at the holder's own name
  * for the argument), where a directory claim is never refused — it gives way to
  * the write where it stands, and rides it where the head's blob contradicts it;
- * the orphan probe (core/workspace.c workspace_orphan_authority), which asks
- * whether a blob still backs a file record, a subtree and a gitlink standing at
- * a name without making a file claim; and the encryption prior of update's captures
- * and of add's decision pass (cmds/update.c update_capture, cmds/add.c cmd_add),
- * a blob's bytes or none; and a profile's changes, whether a blob stands at a
- * name the tree did not move (profile_changes).
+ * the encryption prior of update's captures and of add's decision pass
+ * (cmds/update.c update_capture, cmds/add.c cmd_add), a blob's bytes or none;
+ * and a profile's changes, whether a blob stands at a name the tree did not move
+ * (profile_changes).
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -754,6 +751,59 @@ error_t profile_find(
     path_kind_t kind,
     const char *storage_path,
     const profile_claim_t **out
+);
+
+/**
+ * What a profile's history says of a name: whether it left, and what took it
+ *
+ * Six answers, one table over the commits that took the name away (sys/history.h
+ * history_removals): a removal whose action is update's deletes, and any other
+ * action, or none, keeps (infra/commit.h commit_action_t) — and a removal that
+ * keeps decides beside every other removal and every line unread.
+ */
+typedef enum {
+    PROFILE_DEPARTURE_HELD,         /* the head holds the name: it has not left */
+    PROFILE_DEPARTURE_DELETED,      /* every removal names update, and every line read */
+    PROFILE_DEPARTURE_REMOVED,      /* a removal names another action, or none: beside an unread line too */
+    PROFILE_DEPARTURE_NEVER_HELD,   /* no commit took it: every line read to its root */
+    PROFILE_DEPARTURE_GONE,         /* no head: the branch is gone */
+    PROFILE_DEPARTURE_UNVERIFIED,   /* a line went unread, the head's tree among them, and no removal keeps */
+} profile_departure_kind_t;
+
+/**
+ * The answer whole, by value: which of the six, and the commit that decided it
+ * — the first removal that keeps, or for DELETED the first removal, in the order
+ * the walk met them — Git's null id where none decided
+ */
+typedef struct profile_departure {
+    profile_departure_kind_t kind;  /* which of the six */
+    git_oid removal;                /* the deciding removal; the null id where none decided */
+} profile_departure_t;
+
+/**
+ * The departure of each name, from the history at `head`
+ *
+ * The head is the caller's: a branch's, read by name — NULL where the branch is
+ * proven gone, which answers every name GONE, a deleted branch's bytes being
+ * reachable from nothing — or any commit a history is asked at. One walk answers
+ * every name (sys/history.h history_removals). Reads Git alone and raises nothing:
+ * a read that fails leaves the names whose lines it reached UNVERIFIED, save
+ * where a removal keeps; a head that would not read is no history, the caller's
+ * to say.
+ *
+ * Readers: core/workspace.c workspace_ask_departures (each owned file orphan,
+ * at its profile's head).
+ *
+ * @param head The head, or NULL where the branch is gone (borrowed)
+ * @param storage_paths The names, validated (must not be NULL where count > 0)
+ * @param count How many
+ * @param out The departures, parallel to `storage_paths` (must not be NULL)
+ */
+void profile_departures(
+    const git_commit *head,
+    const char *const *storage_paths,
+    size_t count,
+    profile_departure_t *out
 );
 
 /**

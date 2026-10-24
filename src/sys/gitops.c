@@ -45,12 +45,14 @@ error_t gitops_init(void) {
      * for a tree by default — an entry costs its name plus 27 — so a directory
      * past ~110 entries yields a tree that is never cached, and every look through
      * it — a git_tree_entry_bypath, or a descent's git_tree_lookup — re-reads,
-     * inflates and SHA-1-verifies each tree on the way down. Two loops ask once
-     * per item, quadratic where the items scale with the directory's own width:
-     * core/workspace.c per orphaned file record (workspace_orphan_authority),
-     * and core/profiles.c per directory item of a sheet (profile_blob_above,
-     * asked by the walk and profile_contradicted at each item, and by the point
-     * questions).
+     * inflates and SHA-1-verifies each tree on the way down. Two readers ask
+     * the same trees again and again: sys/history.c's walk, which reads each
+     * tree on the paths it follows twice — a commit's as a parent at its child's
+     * read, then as the child at its own — and again for a path that reaches a
+     * commit late; and core/profiles.c per directory item of a sheet
+     * (profile_blob_above, asked by the walk and profile_contradicted at each
+     * item, and by the point questions), quadratic where the items scale with
+     * the directory's own width.
      *
      * Trees: no ceiling. Blobs: libgit2's zero, never cached — infra/content
      * keeps the one a blob needs. Total: 64 MB, below libgit2's 256 MB default.
@@ -811,6 +813,22 @@ error_t gitops_reference_commit(
 
     *out = (git_commit *) object;
     return NULL;
+}
+
+error_t gitops_branch_commit(
+    git_repository *repo, const char *branch_name, git_commit **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    char refname[DOTTA_REFNAME_MAX];
+    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
+
+    return gitops_reference_commit(repo, refname, out);
 }
 
 error_t gitops_load_reference_commit(

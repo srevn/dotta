@@ -17,8 +17,10 @@
  * claim standing at a name through the question the walk asks of each item
  * (profile_directory_item), decoded as the walk decodes it
  * (profile_decode_directory). The counts and the need of a target are the walk,
- * folded (profile_counts, profile_needs_target). The draft is three things in
- * an arena of its own: a sys/stage, opened at the profile's head or over Git's
+ * folded (profile_counts, profile_needs_target). A name's departure is its
+ * history's one walk from a head (sys/history.h), read through the one table of
+ * what each removal's action means (profile_departures). The draft is three things
+ * in an arena of its own: a sys/stage, opened at the profile's head or over Git's
  * empty tree for a profile the commit creates; the base, the profile at the tree
  * the stage opened, its sheet read at the open; and that sheet copied. An admission
  * asks a name chosen before its bytes of the copy and of the tree as chosen so
@@ -56,6 +58,7 @@
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/history.h"
 #include "sys/stage.h"
 
 /**
@@ -938,6 +941,64 @@ error_t profile_find(
     }
 
     CHECK_ARG(false, "a path kind no enumerator names");
+}
+
+void profile_departures(
+    const git_commit *head, const char *const *storage_paths, size_t count,
+    profile_departure_t *out
+) {
+    CHECK_NULL(out);
+    if (count == 0) return;
+    CHECK_NULL(storage_paths);
+
+    /* No head: the branch is gone, and with it every byte only it reached */
+    if (!head) {
+        for (size_t i = 0; i < count; i++) {
+            out[i] = (profile_departure_t){ .kind = PROFILE_DEPARTURE_GONE };
+        }
+        return;
+    }
+
+    /* The walk's answers live and die in this call: the deciding commit is copied
+     * out by value */
+    arena_t *frame = arena_create(0);
+    history_removals_t *found = arena_calloc(frame, count, sizeof(*found));
+    history_removals(head, storage_paths, count, frame, found);
+
+    /* The one table: update's removals delete the files they take, and every
+     * other action's — none's too — keep them; a removal that keeps decides beside
+     * every other removal and every line unread */
+    const char *update = commit_action_word(COMMIT_ACTION_UPDATE);
+    for (size_t i = 0; i < count; i++) {
+        const history_removals_t *removals = &found[i];
+
+        const history_removal_t *kept = NULL;
+        for (size_t k = 0; k < removals->count && !kept; k++) {
+            if (!str_equal(removals->entries[k].action, update)) {
+                kept = &removals->entries[k];
+            }
+        }
+
+        if (removals->held) {
+            out[i] = (profile_departure_t){ .kind = PROFILE_DEPARTURE_HELD };
+        } else if (kept) {
+            out[i] = (profile_departure_t){
+                .kind = PROFILE_DEPARTURE_REMOVED,
+                .removal = kept->oid,
+            };
+        } else if (removals->unread) {
+            out[i] = (profile_departure_t){ .kind = PROFILE_DEPARTURE_UNVERIFIED };
+        } else if (removals->count == 0) {
+            out[i] = (profile_departure_t){ .kind = PROFILE_DEPARTURE_NEVER_HELD };
+        } else {
+            out[i] = (profile_departure_t){
+                .kind = PROFILE_DEPARTURE_DELETED,
+                .removal = removals->entries[0].oid,
+            };
+        }
+    }
+
+    arena_free(frame);
 }
 
 struct profile_draft {

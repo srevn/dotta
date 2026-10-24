@@ -1,9 +1,9 @@
 /**
  * cleanup.c - Orphaned file and directory pruning: plan / preflight / execute
  *
- * See cleanup.h for the contract. Orphan detection, Git authority and divergence
- * are the workspace's; this module decides which orphans the run may touch, what
- * becomes of each, and carries that out.
+ * See cleanup.h for the contract. Orphan detection, a file's departure and
+ * divergence are the workspace's; this module decides which orphans the run may
+ * touch, what becomes of each, and carries that out.
  *
  * The verdict re-verifies nothing and touches neither disk, Git nor state — every
  * input is a field of the workspace item, written once at load, and no vocabulary
@@ -213,14 +213,14 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     }
 
     if (item->state == WORKSPACE_STATE_RELEASED) {
-        /* Git no longer backs a file — the branch was deleted, the path was removed
-         * from it — dotta never deployed it (the workspace's ownership gate),
+        /* A file whose history keeps its copies — a commit that took it named
+         * another action or none, no commit of the history held it, the branch
+         * is gone — dotta never deployed it (the workspace's ownership gate),
          * another kind of node stands in its place, a row stands on its entry
          * under another spelling, or it is a directory holding what no apply
          * removes; the workspace's load found it either way. The path stays on
-         * disk to protect the user's data, and the record retires because dotta
-         * cannot manage what Git cannot restore, and does not remove what it
-         * did not put there: it is released from dotta's management, not pruned.
+         * disk and the record retires: nothing at it is a copy dotta may remove,
+         * so it is released from dotta's management, not pruned.
          *
          * Decided before --force is consulted: --force prunes what would be
          * skipped, never what is released. */

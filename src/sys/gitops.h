@@ -370,10 +370,11 @@ error_t gitops_delete_branch(git_repository *repo, const char *name);
  * is one no commit could be written on. NULL is the reference's absence, proven.
  *
  * The one way a reference becomes a head. Readers: gitops_reference_tree, and
- * the readers of a tree through it (its header); gitops_load_reference_commit,
- * which refuses the absence; infra/epoch.c epoch_walk, the census, at each branch
- * it lists, one gone since the listing holding nothing, one that will not read
- * passed over.
+ * the readers of a tree through it (its header); gitops_branch_commit, and the
+ * readers of a branch's head through it; gitops_load_reference_commit, which
+ * refuses the absence; infra/epoch.c epoch_walk, the census, at each branch it
+ * lists, one gone since the listing holding nothing, one that will not read passed
+ * over.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -405,14 +406,31 @@ error_t gitops_reference_tree(
 );
 
 /**
+ * The commit a branch names, or NULL where the branch does not stand
+ *
+ * gitops_reference_commit of refs/heads/<name>, the name through the branch rule
+ * (gitops_branch_refname) on the way: gitops_branch_tree's twin, for a reader
+ * that asks the history behind the head. Readers: core/workspace.c
+ * workspace_ask_departures (each owned file orphan's profile, whose branch gone
+ * answers every name GONE).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param out The head (caller frees with git_commit_free), or NULL: the branch
+ *            does not stand (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t gitops_branch_commit(
+    git_repository *repo, const char *branch_name, git_commit **out
+);
+
+/**
  * The tree a branch names, or NULL where the branch does not stand
  *
  * gitops_reference_tree of refs/heads/<name>, the name through the branch rule
  * (gitops_branch_refname) on the way. Readers: core/manifest.c manifest_build
- * (a profile whose branch is gone contributes nothing), core/workspace.c
- * workspace_orphan_authority (a file orphan whose branch is gone is lost),
- * sys/bootstrap.c bootstrap_exists, and gitops_load_branch_tree, which refuses
- * the absence.
+ * (a profile whose branch is gone contributes nothing), sys/bootstrap.c
+ * bootstrap_exists, and gitops_load_branch_tree, which refuses the absence.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)

@@ -27,6 +27,12 @@
  * Every commit dotta writes names one in its header (commit_action_word). Four
  * commit through the template, whose {action} renders their name; the other five
  * word their own messages, and the template never renders theirs.
+ *
+ * What an action means for the copies a removal leaves is one rule, read where
+ * a profile's history is (core/profiles.c profile_departures): update's removals
+ * delete the files they take, and every other action's keep them. An action with
+ * another effect is another word: a remove that deleted files would write its
+ * own, never "remove".
  */
 typedef enum {
     COMMIT_ACTION_ADD,         /* cmds/add.c */
@@ -48,10 +54,11 @@ typedef enum {
  * "remove", "revert", "ignore", "bootstrap", "sync", "init", "clone". A value
  * no enumerator names is only a cast's, and dies (base/error.h CHECK_ARG).
  *
- * Readers: core/profiles.c profile_commit; cmds/ignore.c ignore_edit and
- * ignore_modify; cmds/bootstrap.c bootstrap_edit; infra/epoch.c epoch_init;
- * core/ignore.c ignore_seed_baseline; cmds/sync.c sync_resolve and sync_reset,
- * for the commit a resolution writes (sys/resolve.h resolve_init).
+ * Readers: core/profiles.c profile_commit, and profile_departures, update's word
+ * against each removal's; cmds/ignore.c ignore_edit and ignore_modify;
+ * cmds/bootstrap.c bootstrap_edit; infra/epoch.c epoch_init; core/ignore.c
+ * ignore_seed_baseline; cmds/sync.c sync_resolve and sync_reset, for the commit
+ * a resolution writes (sys/resolve.h resolve_init).
  *
  * @param action The action
  * @return Its word, static

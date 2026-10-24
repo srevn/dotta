@@ -1702,17 +1702,17 @@ static void apply_print_cleanup_preview(
      * — not a remedy, which stands off — and that closing line carries the half
      * the header cannot: pruned removes and released keeps, and only the line
      * under the rows says which. The causes are not listed: a release has five
-     * — the workspace's four (state RELEASED): Git let go, dotta never deployed
-     * it, another kind of path stands there, or the record is a stale key of a
-     * path a row stands on under another spelling; and a squatter above the path,
-     * whose orphan the load never looked at (core/cleanup.c cleanup_verdict's
-     * displaced arm) — and cleanup has no per-row reason for it the way
-     * cleanup_skip_reason answers for a skip, so the only honest form would be
-     * a disjunction naming all five at every row. Hence the one thing true of
-     * all five: nothing on disk was touched. A second half saying what dotta
-     * stops doing ("no longer managed by dotta") was false of the fourth, which
-     * is about a file this same run may adopt eleven lines above, and the header
-     * says the rest. */
+     * — the workspace's four (state RELEASED): a file's history keeps it, dotta
+     * never deployed it, another kind of path stands there, or the record is a
+     * stale key of a path a row stands on under another spelling; and a squatter
+     * above the path, whose orphan the load never looked at (core/cleanup.c
+     * cleanup_verdict's displaced arm) — and cleanup has no per-row reason for
+     * it the way cleanup_skip_reason answers for a skip, so the only honest form
+     * would be a disjunction naming all five at every row. Hence the one thing
+     * true of all five: nothing on disk was touched. A second half saying what
+     * dotta stops doing ("no longer managed by dotta") was false of the fourth,
+     * which is about a file this same run may adopt eleven lines above, and the
+     * header says the rest. */
     if (verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
 
@@ -1974,9 +1974,9 @@ static error_t apply_write_record(
      * (core/state.h state_retire). Neither kind, nor the reason the record ended,
      * nor what stands at the path decides anything here. The flow for an orphan:
      * the path leaves the view (profile disabled, branch moved, target changed)
-     * → the workspace reads its record as an orphan and asks Git why → the verdict
-     * → here → record retired, completing the cycle. Without it, orphaned records
-     * accumulate forever in the path_records table.
+     * → the workspace reads its record as an orphan and asks its profile's history
+     * why → the verdict → here → record retired, completing the cycle. Without
+     * it, orphaned records accumulate forever in the path_records table.
      *
      * What the run found gone: pruned, or gone by the time it looked — the
      * receipt's. */

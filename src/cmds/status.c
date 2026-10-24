@@ -690,11 +690,11 @@ static void status_print_workspace(
      * record alone, nothing on disk changing — a pure reassignment, a release,
      * a reclaim. A scope is Clean iff the line counts none. Invalid is reserved
      * for what the analysis could not establish: an item carrying a fault (an
-     * unreadable path, a comparison that could not run, a Git probe that did
-     * not answer) is one no verb resolves by default — apply skips it and the
-     * user must look. Anything else counted is Dirty: work that touches the disk
-     * or waits on the user, not an invalid workspace. With no filter every item
-     * is in scope and none is hidden. */
+     * unreadable path, a comparison that could not run, a history that would
+     * not read) is one no verb resolves by default — apply skips it and the user
+     * must look. Anything else counted is Dirty: work that touches the disk or
+     * waits on the user, not an invalid workspace. With no filter every item is
+     * in scope and none is hidden. */
     const workspace_items_t *counted[] = {
         &conflicts, &squatted, &displaced, &unverifiable, &uncommitted, &undeployed,
         &new_files, &orphaned,

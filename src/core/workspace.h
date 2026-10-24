@@ -85,6 +85,10 @@
 #include "infra/content.h"
 #include "infra/label.h"
 
+/* An owned file orphan's departure is its profile's history's answer
+ * (core/profiles.h), read by pointer; it is named here and defined there. */
+typedef struct profile_departure profile_departure_t;
+
 /* The most tags one item's line carries — six, on a deployed item: [modified],
  * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that
  * changed, a look that failed and a look not taken end the measure, so the fault's
@@ -444,14 +448,14 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  *
  * Only DEPLOYED (both kinds), ORPHANED, OVERRIDDEN and OBSTRUCTING items can
  * carry one, and UNSCANNED always does — RELEASED is born of answers, never of
- * a failed look (the record's ownership and Git's, each of which may release a
- * copy its look failed at and so clears the fault that look wrote, a look that
- * found another kind, the entry's compare, which a look that failed leaves unasked,
- * and which writes its release whole over a node the join measured, and what a
- * directory holds, read only where its measure found it readable), and UNDEPLOYED,
- * DELETED and UNTRACKED of looks that answered. And only a file row can be LOCKED:
- * a directory seals no content, so every fault it can carry comes from an errno,
- * and the scan reads no content at all.
+ * a failed look (the record's ownership and its profile's history's, each of
+ * which may release a copy its look failed at and so clears the fault that look
+ * wrote, a look that found another kind, the entry's compare, which a look that
+ * failed leaves unasked, and which writes its release whole over a node the join
+ * measured, and what a directory holds, read only where its measure found it
+ * readable), and UNDEPLOYED, DELETED and UNTRACKED of looks that answered. And
+ * only a file row can be LOCKED: a directory seals no content, so every fault
+ * it can carry comes from an errno, and the scan reads no content at all.
  *
  * Readers — the engines, which ask it against NONE: workspace_item_route (the
  * UNVERIFIABLE arm), workspace_untouched, the orphan analysis's directory pass
@@ -586,6 +590,13 @@ typedef enum {
  * const — every item is the arena's. So a pointer a reader took before a write
  * keeps the load's values, and a record's strings are never freed before the
  * arena (apply's reassignment_t, its from).
+ *
+ * `departure` is what an owned file orphan's profile's history says of its name
+ * (core/profiles.h profile_departure_t): the reason its verdict is what it is,
+ * asked once a profile between the orphan analysis's two loops (workspace.c
+ * workspace_ask_departures) and borrowed, as `row` and `record` are. NULL on
+ * every other item, and on an owned file orphan whose profile's head would not
+ * read: no history answered it.
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -608,6 +619,7 @@ typedef struct {
     divergence_type_t divergence;        /* What's wrong with it (bit flags, can combine) */
     workspace_fault_t fault;             /* Whose remedy the failed look is; NONE where none failed */
     workspace_relocation_t relocation;   /* The rule of a relocated claim's namespace, or NONE */
+    const profile_departure_t *departure; /* An owned file orphan's history's answer, or NULL */
     state_stat_t stat;                   /* What stands behind disk being the row's content; UNSET elsewhere */
 
     /* The confirmation — its kind's analysis's; the flush clears it once the store holds it */
@@ -1195,13 +1207,15 @@ typedef struct workspace workspace_t;
  * - analyze_orphans — every record whose path the view lacks, either kind, off
  *   the look the join took at it: presence, ownership, divergence, whether a
  *   landing needs its place — a row of the view beneath it, or a blob above it
- *   — and a file's Git authority, at one ref lookup and a lazy tree load per
- *   profile with present, owned file orphans, and one tree lookup per such orphan
- *   — and what is left in a directory, at one readdir per directory the ladder
- *   leaves a scope exit's. Read by core/cleanup.c cleanup_plan_build (the settle,
- *   apply's cleanup), core/deploy.c deploy_plan_build (the landing's orphans:
- *   the nodes it replaces, the copies it clears) and cmds/status.c
- *   status_print_workspace (Issues, Released paths and Overridden copies).
+ *   — and a file's departure, at one head read per profile with present, owned
+ *   file orphans and one walk of its history, every commit on the lines back to
+ *   the commits that took their names read once, the head's tree alone where it
+ *   holds every name — and what is left in a directory, at one readdir per
+ *   directory the ladder leaves a scope exit's. Read by core/cleanup.c
+ *   cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
+ *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies
+ *   it clears) and cmds/status.c status_print_workspace (Issues, Released paths
+ *   and Overridden copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
@@ -1219,7 +1233,7 @@ typedef struct workspace workspace_t;
  * Lifetime: read-only during workspace_load(), safe to stack-allocate.
  */
 typedef struct {
-    bool analyze_orphans;      /* The records the view lacks (a Git probe per profile) */
+    bool analyze_orphans;      /* The records the view lacks (a history walk per profile) */
     bool analyze_untracked;    /* New files under tracked directories (a readdir each) */
 } workspace_options_t;
 
@@ -1741,11 +1755,12 @@ workspace_items_t workspace_displaced_orphans(
  * one ladder after their state's word: absence, [displaced], the failed look,
  * [modified], then the claim axes, with [relocated] beside them. Absence,
  * [displaced] and [relocated] reach an orphan alone, an overridden copy and a
- * node being looked at by construction, and the relocation read where Git backs
- * an orphan; and a clean one is RED, a removal coming — cleanup's prune, the
- * replace of a node by the landing beneath it, the clearance of a copy by the
- * landing above it. The kind is none of theirs: another node where dotta's stood
- * is released before any measure, its [type] beside [released].
+ * node being looked at by construction, and the relocation read asked only of
+ * an owned directory and of an owned file its profile still holds; and a clean
+ * one is RED, a removal coming — cleanup's prune, the replace of a node by the
+ * landing beneath it, the clearance of a copy by the landing above it. The kind
+ * is none of theirs: another node where dotta's stood is released before any
+ * measure, its [type] beside [released].
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)

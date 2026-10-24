@@ -1355,9 +1355,9 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
 
     *guard = (sync_guard_t){ 0 };
 
-    /* Orphans stay off — a Git probe per profile for items only the settle (apply's
-     * cleanup) and status's orphan sections read; the guard counts the view's
-     * rows, and the block after the Git phase diffs two views. */
+    /* Orphans stay off — a history walk per profile for items only the settle
+     * (apply's cleanup) and status's orphan sections read; the guard counts the
+     * view's rows, and the block after the Git phase diffs two views. */
     workspace_options_t ws_opts = {
         .analyze_orphans   = false,
         .analyze_untracked = config->auto_detect_new_files  /* Respect config */
@@ -1964,16 +1964,18 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              * what the pull added and updated, what passed to another profile,
              * what another's blob stands over, what left. A departure here is a
              * Git-side removal, so an orphan it leaves is one apply releases
-             * (the record retires, the copy stays) — a file Git let go, a directory
-             * holding what no apply removes — save where the orphan analysis
-             * decides otherwise (core/workspace.c workspace_analyze_orphans),
-             * each counted released all the same (stated): a copy already gone,
-             * reclaimed; dotta's node above a row the view after stands, which
-             * the landing beneath it replaces; a copy beneath a blob it stands,
-             * which that blob's landing clears; and a directory dotta created
-             * that the run empties, which apply prunes, Git never asked of a
-             * directory. A departure with no record has no filesystem effect
-             * and asks nothing of the user, so it is not counted. */
+             * (the record retires, the copy stays) — a file its history keeps,
+             * a directory holding what no apply removes — save where the orphan
+             * analysis decides otherwise (core/workspace.c
+             * workspace_analyze_orphans), each counted released all the same
+             * (stated): a file its history says the user deleted, which apply
+             * prunes where untouched; a copy already gone, reclaimed; dotta's
+             * node above a row the view after stands, which the landing beneath
+             * it replaces; a copy beneath a blob it stands, which that blob's
+             * landing clears; and a directory dotta created that the run empties,
+             * which apply prunes, no history asked of a directory. A departure
+             * with no record has no filesystem effect and asks nothing of the
+             * user, so it is not counted. */
             output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}:", s->profile);
             const char *sep = " ";
             if (s->added > 0) {

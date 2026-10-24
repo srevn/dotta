@@ -18,11 +18,11 @@
  * make the removal at all).
  *
  * The verdicts are a function of what the workspace's load wrote on the items —
- * the occupant, divergence, Git authority, a directory's release by what it holds
- * — of the plan, and of --force. A confirmation prompt may sit between preflight
- * and execute; nothing here looks again across it, and nothing pretends to: execute
- * reports what it finds (a path gone by then, a directory that gained an entry)
- * and re-decides nothing. The same stance as core/deploy.
+ * the occupant, divergence, a file's departure, a directory's release by what
+ * it holds — of the plan, and of --force. A confirmation prompt may sit between
+ * preflight and execute; nothing here looks again across it, and nothing pretends
+ * to: execute reports what it finds (a path gone by then, a directory that gained
+ * an entry) and re-decides nothing. The same stance as core/deploy.
  *
  * One producer per fact:
  * - what stands at an orphan's path: the workspace's lstat, carried on the item
@@ -33,15 +33,15 @@
  *   node above a row and a copy beneath a standing blob, which the plan never
  *   holds (cleanup_plan_t): cleanup_verdict, from the item — RELEASED ⇒ released
  *   (left on disk, record retires — never pruned, --force included: dotta removes
- *   a file it deployed that Git still backs and a directory it created that the
- *   run empties, and lets go of a file Git lost, of what it never deployed, of
- *   a path another kind of node stands at, of a key that spells a path a row
- *   stands on under another spelling, and of a directory holding what no apply
- *   removes); a relocated home/ claim ⇒ skipped unless --force, either kind (the
- *   copy is the claim's old home — see the verdict table); a file with a
- *   cleanup_skip_reason ⇒ skipped unless --force; a directory the workspace could
- *   not verify ⇒ skipped, --force included; else prunable, a directory's remainder
- *   permitting
+ *   a file it deployed that its profile still holds or the user deleted, and a
+ *   directory it created that the run empties, and lets go of a file its history
+ *   keeps, of what it never deployed, of a path another kind of node stands at,
+ *   of a key that spells a path a row stands on under another spelling, and of
+ *   a directory holding what no apply removes); a relocated home/ claim ⇒ skipped
+ *   unless --force, either kind (the copy is the claim's old home — see the verdict
+ *   table); a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory
+ *   the workspace could not verify ⇒ skipped, --force included; else prunable,
+ *   a directory's remainder permitting
  * - what a directory holds that no apply removes: the load's readdir, which
  *   releases it (core/workspace.c workspace_analyze_orphans: RELEASED, read off
  *   the item like every other release)
@@ -73,8 +73,8 @@
  * are the workspace's, so none outlives the arena the workspace was loaded into.
  *
  * Integration:
- * - workspace.h: orphan detection, the occupant, Git authority, divergence, a
- *                directory's release by what it holds; the orphans a squatter
+ * - workspace.h: orphan detection, the occupant, a file's departure, divergence,
+ *                a directory's release by what it holds; the orphans a squatter
  *                displaces, for the plan's reach; the orphans beneath a directory,
  *                for its remainder
  * - scope.h:     the three filter dimensions
@@ -123,9 +123,9 @@
  * <file>` plans the orphan at that path, `apply <dir>` the orphans beneath it,
  * so one orphan can be retired without a whole-scope run. Scope decides reach,
  * never verdict — an orphan named by path is still skipped when modified and
- * still released when Git lost it — and it reaches exactly what it names: a parent
- * directory the filter does not cover stays, and the next run that covers it
- * prunes it.
+ * still released when its history keeps it — and it reaches exactly what it names:
+ * a parent directory the filter does not cover stays, and the next run that covers
+ * it prunes it.
  *
  * Each bucket keeps the order the workspace lends its orphans in, path order
  * (core/workspace.h workspace_orphans): the preflight orders the directories it
@@ -216,9 +216,9 @@ typedef enum {
  *
  * First match wins:
  *   a fault                        UNVERIFIED   — a look that failed outranks
- *                                  every bit a look settled: Git could not vouch
- *                                  for the path, the content compare failed (no
- *                                  key in reach, a blob a held key refuses, an
+ *                                  every bit a look settled: its history would
+ *                                  not read, the content compare failed (no key
+ *                                  in reach, a blob a held key refuses, an
  *                                  unsupported cipher version, blob corruption,
  *                                  I/O), or the file is present but unstattable
  *                                  (EACCES, EIO). Which of the three refusals
@@ -465,7 +465,7 @@ typedef struct {
     workspace_items_t prunable_files;    /* Present, no skip reason left standing (--force lifts them all) → unlinked */
     workspace_items_t refused_files;     /* As prunable, and the parent denies this run → left alone, record stays */
     workspace_items_t skipped_files;     /* Present, a skip reason stands → left alone (unless --force) */
-    workspace_items_t released_files;    /* Present, Git no longer backs it → left on disk, record retires */
+    workspace_items_t released_files;    /* Present, the load released it → left on disk, record retires */
     workspace_items_t absent_files;      /* Not on disk at load → record retires, no filesystem effect */
 
     /* Directories */

@@ -1027,8 +1027,10 @@ const manifest_row_t *manifest_lookup_claim(
  * name is the upgrade if a measure ever shows the scan.
  *
  * Reader: the relocation read (core/workspace.c workspace_analyze_orphans), once
- * per owned orphan Git did not let go — a file it backs, which has already cost
- * a Git tree probe, and a directory, which Git is not asked of.
+ * per owned orphan whose claim may stand elsewhere — a file its profile still
+ * holds, which has already cost a walk of its history, and a directory, which
+ * no history is asked of — never a file its history took away, which no row of
+ * its profile carries.
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param profile The claim's profile (NULL names no row)

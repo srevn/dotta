@@ -1188,7 +1188,8 @@ error_t gitops_create_commit(
  * such line — a hand's, git's own. The word is opaque here: what each one means
  * is infra/commit's.
  *
- * Readers: gitops_rebase_inmemory_safe, each pick's action carried onto its replay.
+ * Readers: gitops_rebase_inmemory_safe, each pick's action carried onto its replay;
+ * sys/history.c history_read, the word of each commit that took a path away.
  *
  * @param commit The commit (must not be NULL)
  * @param arena The arena the word lives in (must not be NULL)

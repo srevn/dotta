@@ -1146,7 +1146,9 @@ error_t gitops_merge_trees_safe(
  * byte for byte.
  *
  * The reference is its writer's to write, from the state it read
- * (gitops_write_reference). Readers: sys/stage.c stage_commit, with no action.
+ * (gitops_write_reference). Readers: sys/stage.c stage_commit;
+ * gitops_create_merge_commit; and each replay of gitops_rebase_inmemory_safe,
+ * with its pick's action.
  *
  * @param repo Repository (must not be NULL)
  * @param author The author (must not be NULL)
@@ -1174,9 +1176,41 @@ error_t gitops_create_commit(
 );
 
 /**
- * Create merge commit from index
+ * The action a commit's header names, or NULL where it names none
  *
- * Creates a merge commit with two parents. Does not update any references.
+ * The word gitops_create_commit writes after the committer's lines, read as libgit2
+ * reads a header (lib/libgit2/src/libgit2/commit.c git_commit_header_field):
+ * the key's first line, a value continued past a newline joined to its
+ * continuation, so a word written is the word read. NULL is a commit with no
+ * such line — a hand's, git's own. The word is opaque here: what each one means
+ * is infra/commit's.
+ *
+ * Readers: gitops_rebase_inmemory_safe, each pick's action carried onto its replay.
+ *
+ * @param commit The commit (must not be NULL)
+ * @param arena The arena the word lives in (must not be NULL)
+ * @param out The word, the arena's, or NULL: the commit names none (must not be
+ *            NULL)
+ * @return Error or NULL on success
+ */
+error_t gitops_commit_action(
+    const git_commit *commit,
+    arena_t *arena,
+    const char **out
+);
+
+/**
+ * Write a merge commit from a merged index, moving no reference
+ *
+ * The index's tree, written into the repository by name — an index git_merge_trees
+ * made is backed by no repository — then one commit with our side and theirs as
+ * its parents, in that order, signed as every commit dotta writes is
+ * (gitops_get_signature), through the one object writer (gitops_create_commit).
+ * An index that holds a conflict is refused at the tree's write, in Git's words
+ * (lib/libgit2/src/libgit2/tree.c git_tree__write_index). The reference is its
+ * writer's to write (gitops_write_reference).
+ *
+ * Reader: sys/resolve.c resolve_merge_trees.
  *
  * @param repo Repository (must not be NULL)
  * @param index Merged index (must not be NULL, must not have conflicts)
@@ -1196,10 +1230,23 @@ error_t gitops_create_merge_commit(
 );
 
 /**
- * Perform in-memory rebase without modifying HEAD
+ * Rebase a branch's commits onto another commit, in memory, moving no reference
  *
- * Rebases branch_oid onto onto_oid using libgit2's in-memory mode. This never
- * touches HEAD or the working directory.
+ * Each commit `branch_oid` holds that `onto_oid` lacks — a pick — is replayed
+ * onto the last replay written, the onto before any, in libgit2's in-memory mode:
+ * HEAD, the index and a working tree untouched, and no rebase state left in the
+ * repository. A replay keeps its pick's author, message and encoding, and the
+ * action its header names (gitops_commit_action), written by the one object writer
+ * (gitops_create_commit) under the committer every commit dotta writes carries
+ * (gitops_get_signature); every other header a pick carries — a second action
+ * line among them — is dropped, as git_commit_create drops them all. The answer
+ * is the last replay written, or the onto where no pick was replayed.
+ *
+ * A pick that conflicts is refused ERR_CONFLICT; the writer's own failure is
+ * answered in its words, every other failure in Git's. Refused, nothing but loose
+ * objects is written.
+ *
+ * Reader: sys/resolve.c resolve_rebase_inmemory.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_oid Branch to rebase (must not be NULL)

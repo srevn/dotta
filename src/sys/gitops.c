@@ -1589,7 +1589,33 @@ error_t gitops_create_commit(
 }
 
 /**
- * Create merge commit from index
+ * The action a commit's header names, or NULL where it names none
+ */
+error_t gitops_commit_action(
+    const git_commit *commit, arena_t *arena, const char **out
+) {
+    CHECK_NULL(commit);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    /* The key's first line, a value continued past a newline joined to its
+     * continuation (commit.c git_commit__header_field); no such line is a commit
+     * that names no action, and leaves the buffer as it was made */
+    git_buf word = GIT_BUF_INIT;
+    int rc = git_commit_header_field(&word, commit, GITOPS_ACTION_FIELD);
+    if (rc == GIT_ENOTFOUND) {
+        *out = NULL;
+        return NULL;
+    }
+    if (rc < 0) return error_git(rc, "Cannot read a commit's action");
+
+    *out = arena_strdup(arena, word.ptr);
+    git_buf_dispose(&word);
+    return NULL;
+}
+
+/**
+ * Write a merge commit from a merged index, moving no reference
  */
 error_t gitops_create_merge_commit(
     git_repository *repo, git_index *index, git_commit *our_commit,
@@ -1602,29 +1628,17 @@ error_t gitops_create_merge_commit(
     CHECK_NULL(message);
     CHECK_NULL(out_oid);
 
-    /* Check for conflicts */
-    if (git_index_has_conflicts(index)) {
-        return error_create(
-            ERR_CONFLICT,
-            "Cannot create merge commit: index has conflicts"
-        );
-    }
-
-    /* Write index to tree
-     * IMPORTANT: Use git_index_write_tree_to() because the index from
-     * git_merge_trees() is not backed by a repository, so we must explicitly
-     * write to the repo's ODB.
-     */
+    /* The merged tree, into the repository by name: an index git_merge_trees
+     * made is backed by none. One that holds a conflict is refused here, in Git's
+     * words (tree.c git_tree__write_index). */
     git_oid tree_oid;
     int rc = git_index_write_tree_to(&tree_oid, index, repo);
     if (rc < 0) return error_git(rc, "Cannot write the merged tree");
 
-    /* Lookup tree object */
     git_tree *tree = NULL;
     rc = git_tree_lookup(&tree, repo, &tree_oid);
     if (rc < 0) return error_git(rc, "Cannot read the merged tree");
 
-    /* Get signature with fallback */
     git_signature *sig = NULL;
     error_t err = gitops_get_signature(&sig, repo);
     if (err) {
@@ -1632,25 +1646,48 @@ error_t gitops_create_merge_commit(
         return err;
     }
 
-    /* Create merge commit with two parents
-     * NOTE: We pass NULL as the reference name to avoid updating any reference.
-     * The caller is responsible for updating branch references.
-     */
+    /* Our side, then theirs: the two parents, through the one object writer */
     const git_commit *parents[] = { our_commit, their_commit };
-    rc = git_commit_create(
-        out_oid, repo, NULL, sig, sig, NULL, message, tree, 2, parents
-    );
-
+    err = gitops_create_commit(repo, sig, sig, NULL, message, tree, 2, parents, NULL, out_oid);
     git_signature_free(sig);
     git_tree_free(tree);
 
-    if (rc < 0) return error_git(rc, "Cannot write the merge commit");
+    return err;
+}
 
-    return NULL;
+/* The replay at hand, as the loop and its writer share it: its pick's action,
+ * which the loop reads before libgit2 calls the writer, and the writer's failure,
+ * which the loop reads after. */
+typedef struct {
+    const char *action;     /* the pick's word, carried; NULL where it names none */
+    error_t error;          /* the writer's failure: the one that ended the rebase */
+} rebase_replay_t;
+
+/*
+ * libgit2's commit_create_cb, once per pick it replays: the replay written by
+ * the one object writer, carrying its pick's action. libgit2 hands the pick's
+ * author, encoding and message where the loop asked for them kept, and never
+ * the pick (rebase.c rebase_commit__create), so the action arrives through the
+ * payload; the repository is the tree's, the one libgit2 lets a commit be written
+ * in (commit.c git_commit_create_buffer). A failure is kept there, and libgit2
+ * told only that the writer refused.
+ */
+static int gitops_create_replay(
+    git_oid *out, const git_signature *author, const git_signature *committer,
+    const char *message_encoding, const char *message, const git_tree *tree,
+    size_t parent_count, const git_commit *parents[], void *payload
+) {
+    rebase_replay_t *replay = payload;
+
+    replay->error = gitops_create_commit(
+        git_tree_owner(tree), author, committer, message_encoding, message, tree,
+        parent_count, parents, replay->action, out
+    );
+    return replay->error ? GIT_EUSER : 0;
 }
 
 /**
- * Perform in-memory rebase without modifying HEAD
+ * Rebase a branch's commits onto another commit, in memory, moving no reference
  */
 error_t gitops_rebase_inmemory_safe(
     git_repository *repo, const git_oid *branch_oid, const git_oid *onto_oid,
@@ -1661,94 +1698,92 @@ error_t gitops_rebase_inmemory_safe(
     CHECK_NULL(onto_oid);
     CHECK_NULL(out_oid);
 
-    git_annotated_commit *branch_commit = NULL;
-    git_annotated_commit *onto_commit = NULL;
-    git_rebase *rebase = NULL;
-    git_signature *sig = NULL;
-    error_t err = NULL;
-    int rc;
+    /* One committer for every replay; each keeps its pick's author, encoding
+     * and message, which libgit2 reads off the pick where it is handed none */
+    git_signature *committer = NULL;
+    error_t err = gitops_get_signature(&committer, repo);
+    if (err) return err;
 
-    /* Create annotated commits for rebase */
-    rc = git_annotated_commit_lookup(&branch_commit, repo, branch_oid);
-    if (rc < 0) return error_git(rc, "Cannot read the commit to rebase");
-
-    rc = git_annotated_commit_lookup(&onto_commit, repo, onto_oid);
-    if (rc < 0) {
-        git_annotated_commit_free(branch_commit);
-        return error_git(rc, "Cannot read the commit to rebase onto");
-    }
-
-    /* Initialize in-memory rebase
-     * CRITICAL: opts.inmemory = 1 ensures HEAD is never modified
-     */
+    /* In memory: HEAD, the index and a working tree untouched, and no rebase
+     * state left in the repository — none to finish or abort, which libgit2 answers
+     * at once (rebase.c git_rebase_finish, git_rebase_abort) — each replay written
+     * by the one object writer (gitops_create_replay) */
+    rebase_replay_t replay = { 0 };
     git_rebase_options opts;
     git_rebase_options_init(&opts, GIT_REBASE_OPTIONS_VERSION);
-    opts.inmemory = 1;  /* This is the key - never touch HEAD or working directory */
+    opts.inmemory = 1;
+    opts.commit_create_cb = gitops_create_replay;
+    opts.payload = &replay;
 
-    rc = git_rebase_init(&rebase, repo, branch_commit, NULL, onto_commit, &opts);
-    git_annotated_commit_free(onto_commit);
-    git_annotated_commit_free(branch_commit);
+    git_annotated_commit *branch = NULL;
+    git_annotated_commit *onto = NULL;
+    git_rebase *rebase = NULL;
+    arena_t *frame = arena_create(0);
 
-    if (rc < 0) return error_git(rc, "Cannot begin the rebase");
-
-    /* Get signature once for all rebase operations */
-    err = gitops_get_signature(&sig, repo);
-    if (err) {
-        git_rebase_abort(rebase);
-        git_rebase_free(rebase);
-        return err;
+    int rc = git_annotated_commit_lookup(&branch, repo, branch_oid);
+    if (rc < 0) {
+        err = error_git(rc, "Cannot read the commit to rebase");
+        goto cleanup;
+    }
+    rc = git_annotated_commit_lookup(&onto, repo, onto_oid);
+    if (rc < 0) {
+        err = error_git(rc, "Cannot read the commit to rebase onto");
+        goto cleanup;
+    }
+    rc = git_rebase_init(&rebase, repo, branch, NULL, onto, &opts);
+    if (rc < 0) {
+        err = error_git(rc, "Cannot begin the rebase");
+        goto cleanup;
     }
 
-    /* Process each rebase operation Initialize commit_oid to onto_oid - if there
-     * are no operations to rebase (branch is already up-to-date or behind), we
-     * return onto_oid which is correct for both cases (no-op or fast-forward).
-     */
+    /* The last replay written: the onto, until one is */
+    git_oid rebased = *onto_oid;
     git_rebase_operation *op = NULL;
-    git_oid commit_oid;
-    git_oid_cpy(&commit_oid, onto_oid);
-
     while ((rc = git_rebase_next(&op, rebase)) == 0) {
-        /* Commit the rebased operation In inmemory mode, this doesn't touch HEAD
-         * or working directory
-         */
-        rc = git_rebase_commit(&commit_oid, rebase, NULL, sig, NULL, NULL);
-
+        /* The pick's own action, carried onto its replay verbatim — or none, a
+         * hand's — each in the frame until the rebase ends */
+        git_commit *pick = NULL;
+        rc = git_commit_lookup(&pick, repo, &op->id);
         if (rc < 0) {
-            git_signature_free(sig);
-            git_rebase_abort(rebase);
-            git_rebase_free(rebase);
+            err = error_git(rc, "Cannot read the commit to replay");
+            goto cleanup;
+        }
+        err = gitops_commit_action(pick, frame, &replay.action);
+        git_commit_free(pick);
+        if (err) goto cleanup;
 
-            /* Check for merge conflicts Both GIT_EMERGECONFLICT (-13) and
-             * GIT_EUNMERGED (-10) indicate conflicts
-             */
-            if (rc == GIT_EMERGECONFLICT || rc == GIT_EUNMERGED) {
-                return error_create(ERR_CONFLICT, "Rebase met conflicts");
-            }
+        rc = git_rebase_commit(&rebased, rebase, NULL, committer, NULL, NULL);
 
-            return error_git(rc, "Failed to commit during rebase");
+        /* The writer's own failure first: behind it libgit2 answered GIT_EUSER,
+         * and the sentence it holds is the writer's to say (gitops_tree_walk's
+         * rule) */
+        if (replay.error) {
+            err = replay.error;
+            goto cleanup;
+        }
+        if (rc == GIT_EMERGECONFLICT || rc == GIT_EUNMERGED) {
+            err = error_create(ERR_CONFLICT, "Rebase met conflicts");
+            goto cleanup;
+        }
+        if (rc < 0) {
+            err = error_git(rc, "Failed to commit during rebase");
+            goto cleanup;
         }
     }
-
-    /* Free signature now that we're done with all commits */
-    git_signature_free(sig);
-
-    /* Check if rebase completed successfully */
     if (rc != GIT_ITEROVER) {
         err = error_git(rc, "Rebase iteration failed");
-        git_rebase_abort(rebase);
-        git_rebase_free(rebase);
-        return err;
+        goto cleanup;
     }
 
-    /* Finish rebase */
-    rc = git_rebase_finish(rebase, NULL);
+    git_oid_cpy(out_oid, &rebased);
+
+cleanup:
+    arena_free(frame);
     git_rebase_free(rebase);
-
-    if (rc < 0) return error_git(rc, "Cannot finish the rebase");
-
-    /* Return the final commit OID */
-    git_oid_cpy(out_oid, &commit_oid);
-    return NULL;
+    git_annotated_commit_free(onto);
+    git_annotated_commit_free(branch);
+    git_signature_free(committer);
+    return err;
 }
 
 /**

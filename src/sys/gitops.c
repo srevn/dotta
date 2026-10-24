@@ -1761,6 +1761,13 @@ error_t gitops_rebase_inmemory_safe(
             err = replay.error;
             goto cleanup;
         }
+
+        /* A pick that takes nothing the onto lacks is skipped, its action with
+         * it: libgit2 refuses it before the writer and leaves the last replay
+         * where it was, so the next pick replays onto that one (rebase.c
+         * rebase_commit__create, rebase_commit_inmemory, rebase_movenext) */
+        if (rc == GIT_EAPPLIED) continue;
+
         if (rc == GIT_EMERGECONFLICT || rc == GIT_EUNMERGED) {
             err = error_create(ERR_CONFLICT, "Rebase met conflicts");
             goto cleanup;

@@ -1239,8 +1239,10 @@ error_t gitops_create_merge_commit(
  * action its header names (gitops_commit_action), written by the one object writer
  * (gitops_create_commit) under the committer every commit dotta writes carries
  * (gitops_get_signature); every other header a pick carries — a second action
- * line among them — is dropped, as git_commit_create drops them all. The answer
- * is the last replay written, or the onto where no pick was replayed.
+ * line among them — is dropped, as git_commit_create drops them all. A pick whose
+ * change the onto already holds — its replay would change nothing — is skipped,
+ * its action with it. The answer is the last replay written, or the onto where
+ * none was: no pick to replay, or every one skipped.
  *
  * A pick that conflicts is refused ERR_CONFLICT; the writer's own failure is
  * answered in its words, every other failure in Git's. Refused, nothing but loose

@@ -551,14 +551,15 @@ static error_t sync_rollback(
  * base that the tree diff from it to the local head deletes — a blob retyped is
  * a deletion there beside an addition — and the departures read each for what
  * it is: the base holds each name, so the local side's history answers it from
- * the local side's own commits. Then the remote's history is asked of them
- * (core/profiles.h profile_departures): a name it holds the local side took alone,
- * the common case, which costs that one walk, mostly the remote head's own descent.
- * Only the names it says the remote took, DELETED or REMOVED, are asked of the
- * local side's history and of the head the resolution left, and each the local
- * side took under the other word is a disagreement. The three heads are the
- * resolution's own reads (sys/resolve.h resolve_context_t): a push moves the
- * remote-tracking ref past the remote's.
+ * the local side's own commits. Where the local side took none, no history is
+ * read. Then the remote's history is asked of them (core/profiles.h
+ * profile_departures): a name it holds the local side took alone, the common
+ * case, which costs that one walk, mostly the remote head's own descent. Only
+ * the names it says the remote took, DELETED or REMOVED, are asked of the local
+ * side's history and of the head the resolution left, and each the local side
+ * took under the other word is a disagreement. The three heads are the resolution's
+ * own reads (sys/resolve.h resolve_context_t): a push moves the remote-tracking
+ * ref past the remote's.
  *
  * A history that will not say is no line (stated): no merge base, a tree or a
  * commit that will not load, a side whose walk went unread. Its error is dropped,
@@ -618,6 +619,7 @@ static sync_disagreements_t sync_disagreements(
 
         names[name_count++] = name;
     }
+    if (name_count == 0) goto done;
 
     /* The remote's history first, and the names it says the remote took kept,
      * in place, each beside its departure */
@@ -1898,43 +1900,44 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
  * GONE. Every departure that keeps counts removed: a removal under any action
  * but update, or under none; no commit that held the name; the branch gone. A
  * directory is asked nothing: a tracked one is a sheet item, never a blob, so
- * no history says what took it, and what is left in it decides its copy (v2sc).
- * A head that will not read answers no name, each unverified, its error dropped
- * — one a profile, a sync's bound (base/error.h "Lifetime"). A name the head
- * holds counts nowhere: it left the view and not the profile, another process
- * having disabled it or moved its target mid-sync (stated).
+ * no history says what took it, and what is left in it decides its copy (v2sc)
+ * — and where no file left, no head is read. A head that will not read answers
+ * no name, each unverified, its error dropped — one a profile, a sync's bound
+ * (base/error.h "Lifetime"). A name the head holds counts nowhere: it left the
+ * view and not the profile, another process having disabled it or moved its target
+ * mid-sync (stated).
  *
  * @param repo Repository (must not be NULL)
  * @param stats One profile's slot of the diff (must not be NULL)
- * @return The counts, zero where nothing departed
+ * @return The counts, zero where no file departed
  */
 static sync_departure_counts_t sync_departure_counts(
     git_repository *repo, const manifest_diff_stats_t *stats
 ) {
     sync_departure_counts_t counts = { 0 };
-    if (stats->departed.count == 0) return counts;
+    arena_t *frame = arena_create(0);
+    git_commit *head = NULL;
 
     /* The departed files' names, beside their answers, in a frame of the count's
      * own */
-    arena_t *frame = arena_create(0);
     const char **paths = arena_calloc(frame, stats->departed.count, sizeof(*paths));
-    size_t count = 0;
+    size_t path_count = 0;
     for (size_t i = 0; i < stats->departed.count; i++) {
         const manifest_row_t *row = stats->departed.entries[i];
         if (path_type_kind(row->type) == PATH_KIND_FILE) {
-            paths[count++] = row->storage_path;
+            paths[path_count++] = row->storage_path;
         }
     }
-    profile_departure_t *departures = arena_calloc(frame, count, sizeof(*departures));
+    if (path_count == 0) goto done;
+    profile_departure_t *departures = arena_calloc(frame, path_count, sizeof(*departures));
 
-    git_commit *head = NULL;
     error_t err = gitops_branch_commit(repo, stats->profile, &head);
     if (err) {
-        counts.unverified = count;
+        counts.unverified = path_count;
     } else {
-        profile_departures(head, paths, count, departures);
+        profile_departures(head, paths, path_count, departures);
 
-        for (size_t i = 0; i < count; i++) {
+        for (size_t i = 0; i < path_count; i++) {
             switch (departures[i].kind) {
                 case PROFILE_DEPARTURE_DELETED:
                     counts.deleted++;
@@ -1955,8 +1958,9 @@ static sync_departure_counts_t sync_departure_counts(
             }
         }
     }
-    git_commit_free(head);
 
+done:
+    git_commit_free(head);
     arena_free(frame);
     return counts;
 }

@@ -966,12 +966,22 @@ static void status_print_workspace(
         status_print_legend(out, &legend);
     }
 
-    /* Section 5: Uncommitted Changes */
+    /* Section 5: Uncommitted changes — the user's moves, every line update's to
+     * commit, as the header says. A key beneath names what update reaches and
+     * the verb that settles a line the other way, by the tags each line shows,
+     * the Issues key's shape: a deletion, which reaches every machine — another
+     * enabled profile's claim taking the place where one claims the path, which
+     * update's preview names per path (cmds/update.c update_print_preview) —
+     * and which apply puts back; and a claim alone, which apply restores, a claim
+     * being no edit (core/deploy.h deploy_content_conflicts). An edit, a kind
+     * the copy can commit, and the blob's policy are keyed by no line: apply
+     * skips the first two, and the third is update's alone. */
     if (uncommitted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Uncommitted changes",
             "use \"dotta update\" to commit these changes"
         );
+        status_legend_t legend = { .arena = frame };
 
         for (size_t i = 0; i < uncommitted.count; i++) {
             const workspace_item_t *item = uncommitted.entries[i];
@@ -981,21 +991,60 @@ static void status_print_workspace(
             char metadata[256];
             char path[PATH_MAX + 2];
 
-            if (workspace_item_tags(
+            if (!workspace_item_tags(
                 item, tags, &tag_count, &color, metadata, sizeof(metadata)
                 )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
+                continue;
             }
+            snprintf(
+                path, sizeof(path), "%s%s", item->filesystem_path,
+                path_kind_suffix(item->item_kind)
+            );
+            output_list_add(
+                list, tags, tag_count, color, path, metadata
+            );
+
+            const char *hint = NULL;
+
+            /* By the state, exhaustive as the section switch above is, so a state
+             * added to this bucket asks for an arm of its own here */
+            switch (item->state) {
+                case WORKSPACE_STATE_DEPLOYED:
+                    /* The capture route, whose every bit is a tag of its own
+                     * (workspace_item_route, workspace_item_tags): the claim
+                     * axes alone are [mode] and [ownership], a reassignment riding
+                     * beside them or not */
+                    if ((item->divergence & ~(DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ==
+                        DIVERGENCE_NONE) {
+                        hint = "changed here; 'dotta update' commits it for every machine, "
+                            "'dotta apply' restores the claim here";
+                    }
+                    break;
+
+                case WORKSPACE_STATE_DELETED:
+                    hint = "gone here; 'dotta update' deletes every machine's unchanged "
+                        "copy — or lands another enabled profile's, where one claims the "
+                        "path — and 'dotta apply' puts it back";
+                    break;
+
+                case WORKSPACE_STATE_UNDEPLOYED:
+                case WORKSPACE_STATE_ORPHANED:
+                case WORKSPACE_STATE_UNTRACKED:
+                case WORKSPACE_STATE_UNSCANNED:
+                case WORKSPACE_STATE_RELEASED:
+                case WORKSPACE_STATE_OVERRIDDEN:
+                case WORKSPACE_STATE_OBSTRUCTING:
+                    /* The section switch above files no other state here */
+                    CHECK_ARG(
+                        false, "the uncommitted bucket holds DEPLOYED and DELETED alone"
+                    );
+            }
+            status_legend_add(&legend, tags, tag_count, hint);
         }
 
         output_list_render(list);
         output_list_free(list);
+        status_print_legend(out, &legend);
     }
 
     /* Section 6: Profile reassignments — a clean row whose record names another

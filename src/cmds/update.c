@@ -1003,16 +1003,25 @@ static error_t update_execute(
  * One section per fate the partition answered — modified, new, deleted (both
  * kinds), directory claims, encryption violations — each listing its fate's items
  * and none when it holds none, every hint speaking update's own voice: what this
- * run will do. A dry run renders identically; whether anything was written is
- * the summary's one line at the end of the run, not the preview's.
+ * run will do, and of a deletion how far it reaches. A dry run renders identically;
+ * whether anything was written is the summary's one line at the end of the run,
+ * not the preview's.
  *
  * @param out Output context (must not be NULL)
+ * @param manifest The view the run was loaded over (must not be NULL; a deleted
+ *                 path's line names the claim that stands in its place once its
+ *                 own leaves, off the view)
  * @param partition The partition, whose fates are read (must not be NULL; one
  *                  that accepted nothing has nothing to preview, every fate being
  *                  an accepted item's)
  */
-static void update_print_preview(output_t *out, const update_partition_t *partition) {
+static void update_print_preview(
+    output_t *out,
+    const manifest_t *manifest,
+    const update_partition_t *partition
+) {
     CHECK_NULL(out);
+    CHECK_NULL(manifest);
     CHECK_NULL(partition);
 
     /* Display modified files section */
@@ -1080,12 +1089,22 @@ static void update_print_preview(output_t *out, const update_partition_t *partit
 
     /* Display deleted paths section — one fate, both kinds: a deleted directory
      * is a deletion, so it lists beside the deleted files rather than under a
-     * section that promises a metadata update */
+     * section that promises a metadata update. The header says how far the commit
+     * reaches: a copy its profile's history says update deleted is pruned by
+     * every machine's next apply, where dotta deployed it and it is unchanged
+     * (core/workspace.c workspace_analyze_orphans). Where another profile claims
+     * the path, its claim takes the place instead, and the line names it. */
     if (partition->deleted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Deleted paths",
-            "will be removed from their profiles"
+            "will be deleted from their profiles; every machine's next apply "
+            "prunes the copy it deployed, where unchanged"
         );
+
+        /* The view's profiles, lowest precedence first, each asked below for
+         * its claim at a deleted path */
+        size_t profile_count = 0;
+        const char *const *profiles = manifest_profiles(manifest, &profile_count);
 
         for (size_t i = 0; i < partition->deleted.count; i++) {
             const workspace_item_t *item = partition->deleted.entries[i];
@@ -1102,31 +1121,43 @@ static void update_print_preview(output_t *out, const update_partition_t *partit
                 continue;
             }
 
+            /* The claim that stands in the path's place once this one leaves:
+             * the highest other profile's there, explicit or derived, standing
+             * or not (core/manifest.h manifest_lookup_claim). What stands above
+             * the path or beneath it is not read, so a claim a blob above it
+             * stands over again, or one whose place the claims beneath it take,
+             * is named all the same (stated, as cmds/remove.c remove_overlaps
+             * states it of its claimants). */
+            const manifest_row_t *other = NULL;
+            for (size_t p = profile_count; p-- > 0 && !other;) {
+                if (strcmp(profiles[p], item->profile) == 0) continue;
+                other = manifest_lookup_claim(manifest, profiles[p], item->filesystem_path);
+            }
+
             /* Directory rows read as directories: trailing slash, kind named —
-             * the same shape the claims section uses */
+             * the same shape the claims section uses — and the other claim appended
+             * where there is one, as status's Overridden section appends the
+             * blob above a copy */
             char path[PATH_MAX + 2];
             snprintf(
                 path, sizeof(path), "%s%s", item->filesystem_path,
                 path_kind_suffix(item->item_kind)
             );
 
-            if (item->item_kind == PATH_KIND_DIRECTORY) {
-                char metadata[256];
+            char metadata[512];
+            snprintf(
+                metadata, sizeof(metadata), "%s%s",
+                item->item_kind == PATH_KIND_DIRECTORY ? "directory " : "", base_metadata
+            );
+            if (other) {
+                size_t used = strlen(metadata);
                 snprintf(
-                    metadata, sizeof(metadata), "directory %s",
-                    base_metadata
-                );
-
-                output_list_add(
-                    list, tags, tag_count, color,
-                    path, metadata
-                );
-            } else {
-                output_list_add(
-                    list, tags, tag_count, color,
-                    path, base_metadata
+                    metadata + used, sizeof(metadata) - used, ", %s's lands in its place",
+                    other->profile
                 );
             }
+
+            output_list_add(list, tags, tag_count, color, path, metadata);
         }
 
         output_list_render(list);
@@ -1632,7 +1663,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Preview: what this run will do, grouped by the fates the partition answered,
      * and nothing where it accepted nothing */
-    update_print_preview(out, &partition);
+    update_print_preview(out, manifest, &partition);
 
     /* The run's work: the accepted items — less the new files, where the user
      * declines them below. A value the command holds; the partition's list is
@@ -1980,8 +2011,11 @@ const args_command_t spec_update = {
     .description  =
         "Commit filesystem modifications to the matching profile branches\n"
         "(the reverse direction of 'apply'). Mode is captured alongside\n"
-        "content, and ownership for root/ and custom/ paths that are not\n"
-        "yours.\n",
+        "content, and ownership for paths that are not yours. A file\n"
+        "deleted from disk is deleted from its profile: every machine's\n"
+        "next apply prunes the copy it deployed where unchanged, unless\n"
+        "another enabled profile claims the path. To stop managing a file\n"
+        "and keep every copy, use 'dotta remove'.\n",
     .notes        =
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"
@@ -2000,6 +2034,7 @@ const args_command_t spec_update = {
     .epilogue     =
         "See also:\n"
         "  %s status          # See what will be committed\n"
+        "  %s remove          # Stop managing a path, every copy kept\n"
         "  %s sync            # Publish committed changes to remote\n",
     .opts_size    = sizeof(cmd_update_options_t),
     .opts         = update_opts,

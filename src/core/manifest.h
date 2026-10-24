@@ -511,9 +511,11 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * where a later profile's tracked directory takes a directory an earlier one
  * stands at, the index's own rule read from the same order; add's ancestry refusal,
  * which asks every profile but the capturing one for its claim at a link
- * (cmds/add.c add_refuse_ancestry); and update's named derivation, which asks
- * every profile for an explicit claim where the user's node squats above a leaf
- * (cmds/update.c cmd_update).
+ * (cmds/add.c add_refuse_ancestry); update's named derivation, which asks every
+ * profile for an explicit claim where the user's node squats above a leaf
+ * (cmds/update.c cmd_update); and update's preview, which asks every profile
+ * but the deleting one, the highest first, for its claim where a deletion leaves
+ * a path (cmds/update.c update_print_preview).
  *
  * Pure value return — no allocation, no error path. The names are the arena's,
  * the same pointers the rows carry, valid for the arena's lifetime.
@@ -985,10 +987,12 @@ error_t manifest_holder(
  * claim there still, standing nowhere, which counts it overridden rather than
  * departed (manifest_diff); whether any profile holds an explicit claim where
  * the user's node squats above a named update's leaf, a lost blob's place no
- * re-derivation frees (cmds/update.c cmd_update); whether the untracked scan's
- * owner holds a blob at a child no row of its own stands at (core/workspace.c
- * workspace_scan); and `ignore --test`'s note beneath a verdict that excludes a
- * path its asker holds, which the rules never reach (cmds/ignore.c ignore_test).
+ * re-derivation frees (cmds/update.c cmd_update); the claim that takes a path's
+ * place where update deletes the claim standing there, the highest other profile's
+ * (cmds/update.c update_print_preview); whether the untracked scan's owner holds
+ * a blob at a child no row of its own stands at (core/workspace.c workspace_scan);
+ * and `ignore --test`'s note beneath a verdict that excludes a path its asker
+ * holds, which the rules never reach (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

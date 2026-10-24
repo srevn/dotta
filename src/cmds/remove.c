@@ -694,11 +694,12 @@ static error_t remove_overlaps(
  * name for the place differs from the removed claim's — the name it holds it
  * under, since under two bindings one path wears two names. The closing lines
  * say what is true of the shared paths: the removal takes them from this profile
- * alone, and where another enabled profile claims one, its copy stays on the
- * filesystem — said once, here, before the act, and after it by status, which
- * reads the copy's record as that profile's reassignment. What remove does to
- * every other copy is promised once before the act, by the question
- * (remove_ask_paths) or the dry run.
+ * alone, and where another enabled profile claims one, the path stays managed
+ * under that claim — whether the removed claim stood there or another's stood
+ * over it — said once, here, before the act, and after it by status, which reads
+ * the copy's record as that profile's reassignment. What remove does to every
+ * other copy is promised once before the act, by the question (remove_ask_paths)
+ * or the dry run.
  */
 static void remove_print_overlaps(
     output_t *out,
@@ -741,17 +742,18 @@ static void remove_print_overlaps(
     );
 
     /* Said once, at the first path another enabled profile claims: the path stays
-     * in the view, so its copy is a fallback, acknowledged or replaced on apply,
-     * never pruned or released — the record rule in one clause */
+     * in the view, so its copy is that profile's to acknowledge or replace on
+     * apply, never pruned or released — the record rule in one clause, and the
+     * exception to the promise the question or the dry run makes */
     for (size_t i = 0; i < overlaps->count; i++) {
         if (overlaps->entries[i].provided) {
             output_warning(
                 out, OUTPUT_NORMAL,
-                "Some paths are provided by another enabled profile"
+                "Another enabled profile claims some of them"
             );
             output_info(
                 out, OUTPUT_NORMAL,
-                "Those paths will remain on the filesystem"
+                "Those paths stay managed, under that profile's claim"
             );
             break;
         }
@@ -812,11 +814,12 @@ static output_answer_t remove_ask_paths(
     remove_format_counts(counts, sizeof(counts), files, dirs);
 
     /* The question, and beneath it the one promise remove makes the copies before
-     * the act: what the next apply does to them in the ordinary case, the paths
-     * left on disk */
+     * the act: what every machine's next apply does to them where no other enabled
+     * profile claims the path — the overlap section above names those — each
+     * copy left on disk, its record retired */
     return output_ask(
         out, false, "Remove %s from profile '%s'?\n"
-        "(Deployed paths stay on disk)", counts, opts->profile
+        "(Every machine keeps its copy, unmanaged)", counts, opts->profile
     );
 }
 
@@ -826,9 +829,10 @@ static output_answer_t remove_ask_paths(
  * One fact in two tenses: a dry run's lines, or the warning a question is the
  * preamble of. `counts` is the profile-holdings phrase from the count family
  * (output_format_counts, or its "counts unavailable" stand-in), and the promise
- * is the one a removal of paths makes (remove_ask_paths). Where no question is
- * asked, nothing previews the deletion: the receipt says what it took
- * (remove_profile, its one reader).
+ * is the one a removal of paths makes (remove_ask_paths) but its last word: no
+ * sync carries a branch's deletion, so every other machine keeps managing its
+ * copies. Where no question is asked, nothing previews the deletion: the receipt
+ * says what it took (remove_profile, its one reader).
  */
 static void remove_print_deletion(
     output_t *out, const cmd_remove_options_t *opts, const char *counts
@@ -841,13 +845,13 @@ static void remove_print_deletion(
             out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
             opts->profile, counts
         );
-        output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
+        output_print(out, OUTPUT_NORMAL, "(Every machine would keep its copies)\n");
     } else {
         output_warning(
             out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
             opts->profile, counts
         );
-        output_info(out, OUTPUT_NORMAL, "         Deployed paths stay on disk");
+        output_info(out, OUTPUT_NORMAL, "         Every machine keeps its copies");
     }
 }
 
@@ -967,7 +971,7 @@ static error_t remove_paths(
             "Total: %s would be removed from profile\n",
             counts
         );
-        output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
+        output_print(out, OUTPUT_NORMAL, "(Every machine would keep its copy, unmanaged)\n");
     }
 
     /* The pre-remove hook, over the decided removal — a dry run's too, told so
@@ -1619,27 +1623,31 @@ static const args_opt_t remove_opts[] = {
 
 const args_command_t spec_remove = {
     .name        = "remove",
-    .summary     = "Remove paths from a profile or delete profile",
+    .summary     = "Remove paths from a profile, every copy kept, or delete a profile",
     .usage       =
         "%s remove [options] <profile> <path>...\n"
         "   or: %s remove [options] <profile> --delete-profile\n"
         "   or: %s remove [options] --profile <name> <path>...",
     .description =
-        "Untrack paths — files and tracked directories — from a profile,\n"
-        "or delete the profile branch outright.\n",
+        "Take paths — files and tracked directories — out of a profile:\n"
+        "every machine's next apply stops managing them and leaves each\n"
+        "copy on disk, unless another enabled profile claims the path.\n"
+        "To delete a file from every machine instead, delete it and run\n"
+        "'dotta update'. Or delete the profile branch outright.\n",
     .notes       =
         "Operation Modes:\n"
-        "  (default)           Remove paths from the profile branch. The\n"
-        "                      deployed paths stay on disk.\n"
+        "  (default)           Take the paths out of the profile; every\n"
+        "                      machine keeps its copy, unmanaged.\n"
         "  --delete-profile    Delete the entire profile branch. No paths\n"
         "                      may be given.\n",
     .examples    =
-        "  %s remove global ~/.bashrc                  # Untrack, keep on disk\n"
+        "  %s remove global ~/.bashrc                  # Stop managing, every copy kept\n"
         "  %s remove darwin ~/.config/nvim -n          # Preview removal\n"
         "  %s remove staging --delete-profile          # Delete whole profile\n",
     .epilogue    =
         "See also:\n"
-        "  %s profile disable <name>  # Stop deploying without deleting\n",
+        "  %s profile disable <name>  # Stop deploying without deleting\n"
+        "  %s update                  # Commit a deletion: every machine prunes its copy\n",
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,

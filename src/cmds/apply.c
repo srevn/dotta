@@ -1603,31 +1603,12 @@ static void apply_print_cleanup_preview(
             );
         }
 
-        /* The deletions, a line a profile, in the order the bucket first names
-         * each: said at a profile's first file, counting them all, where a later
-         * file's count stops at that first one, at none */
-        for (size_t i = 0; i < verdicts->prunable_files.count; i++) {
-            const workspace_item_t *item = verdicts->prunable_files.entries[i];
-            if (!item->departure || item->departure->kind != PROFILE_DEPARTURE_DELETED) continue;
-
-            size_t count = 0;
-            for (size_t j = 0; j < verdicts->prunable_files.count; j++) {
-                const workspace_item_t *other = verdicts->prunable_files.entries[j];
-
-                if (other->departure && other->departure->kind == PROFILE_DEPARTURE_DELETED &&
-                    strcmp(other->profile, item->profile) == 0) {
-                    if (j < i) break;
-                    count++;
-                }
-            }
-
-            if (count > 0) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {yellow}%zu{reset} file%s will be pruned (deleted from %s)\n",
-                    count, count == 1 ? "" : "s", item->profile
-                );
-            }
+        if (deleted > 0) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  {yellow}%zu{reset} file%s will be pruned (deleted from their profiles)\n",
+                deleted, deleted == 1 ? "" : "s"
+            );
         }
 
         if (moved > 0) {

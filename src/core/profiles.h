@@ -765,9 +765,9 @@ error_t profile_find(
  * workspace_item_tags) — "deleted from p", "removed from p", "not in p's history",
  * "p has no branch" — where HELD and UNVERIFIED add nothing to "from p", the
  * name its profile holds still and a history the tags call [unverified]; apply's
- * preview counts the prunes a deletion makes, a line a profile, "deleted from
- * p" (cmds/apply.c apply_print_cleanup_preview); a sync's Manifest counts the
- * acts (cmds/sync.c sync_departure_counts), "deleted", "removed" for every answer
+ * preview counts the prunes deletions make, "deleted from their profiles"
+ * (cmds/apply.c apply_print_cleanup_preview); a sync's Manifest counts the acts
+ * (cmds/sync.c sync_departure_counts), "deleted", "removed" for every answer
  * that keeps, and "unverified"; and the line beneath a resolution says each side's
  * act, deleted or removed (cmds/sync.c sync_print_disagreements).
  */

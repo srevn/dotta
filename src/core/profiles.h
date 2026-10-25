@@ -1030,7 +1030,9 @@ error_t profile_remove(profile_draft_t *draft, path_kind_t kind, const char *sto
  * other (crypto/cipher.h "Path binding"). In order, each refusal before anything
  * moves:
  *   - the claim off the look (core/metadata.h metadata_capture_file): an owner
- *     or a group this host cannot name, ERR_NOT_FOUND;
+ *     or a group this host cannot name, ERR_NOT_FOUND "Cannot resolve UID %u,
+ *     the owner of '%s', to a user name on this system", or its GID twin — the
+ *     draft's words over the capture's answer;
  *   - the admission (profile_draft_t): the sheet's half, ERR_CONFLICT "Cannot
  *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
  *     the byte-least such claim; then the tree's, the put's own (sys/stage.h
@@ -1082,12 +1084,12 @@ error_t profile_capture_file(
  * metadata_capture_directory), over the directory claim at the name whatever it
  * said, the one an admission wrote included (profile_admit); a FILE item no blob
  * backs there is the other kind's, and rides. One refusal, before anything moves:
- * an owner or a group this host cannot name, ERR_NOT_FOUND — so a writer may go
- * on without the claim, which stands as it stood. Nothing is asked of the base:
- * a blob another writer committed at the name since the writer read its view
- * leaves the claim written contradicted, carried, and a claim another writer
- * took from there comes back tracked — the window every other edit of that writer
- * reads its view across.
+ * an owner or a group this host cannot name, ERR_NOT_FOUND in the file capture's
+ * words (profile_capture_file) — so a writer may go on without the claim, which
+ * stands as it stood. Nothing is asked of the base: a blob another writer committed
+ * at the name since the writer read its view leaves the claim written contradicted,
+ * carried, and a claim another writer took from there comes back tracked — the
+ * window every other edit of that writer reads its view across.
  *
  * Readers: cmds/add.c cmd_add, each directory its walk entered, which refuses
  * the command where the claim cannot be made; and cmds/update.c update_profile,

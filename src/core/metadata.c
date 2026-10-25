@@ -466,47 +466,30 @@ metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind) {
 }
 
 /**
- * The ownership half of a capture: the stat's owner and group by name, wherever
- * absence would say someone else
+ * A look's ownership as a capture authors it
  *
- * Absence is the invoker on every machine (metadata_ownership), so it says the
- * owner exactly where the capturing invoker owns the path and the next machine's
- * invoker would own it too — everywhere but one place, root's own outside home/.
- * Every other owner is named, under every label, so the claim a capture authors
- * resolves, on the host it was captured on, to the node it was captured from.
- * The group rides with the owner: the invoker's own file under another group is
- * the invoker's to the capture, a group being as often a directory's inheritance
- * (macOS's /tmp is wheel's) as an intent.
- *
- * Both names or neither. A capture states what it saw, and half of what it saw
- * is a different statement: the read boundary takes a lone "group" as a narrow
- * claim deliberately made, which the owner's resolution then fills with the
- * invoker, so a name that merely failed to resolve would become indistinguishable
- * from a claim the profile meant to make narrow. The claim this host cannot spell
- * is an error here, where the user is at the terminal and the path is still theirs
- * to fix, rather than a silence for deploy to act on a year later on another
- * machine.
- *
- * On failure the item's owner may be set without its group — the caller's item
- * is a local it hands out on success alone, so no sheet and no caller ever sees
- * half of one, and the name left in the arena is unreachable.
- *
- * @param item Item to set ownership on (must not be NULL)
- * @param storage_path The item's key, for the one clause its label decides (must
- *                     not be NULL, under a label)
- * @param st Stat data with uid/gid (must not be NULL)
- * @param arena The arena the names are spelled in
- * @return Error or NULL on success — NULL with nothing named where absence says it
- *
- * Errors:
- * - ERR_NOT_FOUND: the UID or the GID has no name on this system
+ * Absence where it says the owner (metadata.h), every other owner by name, its
+ * group with it: both found before either is written to the outs, so a half that
+ * resolved never survives the other's miss.
  */
-static error_t metadata_capture_ownership(
-    metadata_item_t *item,
+metadata_ownership_t metadata_capture_ownership(
     const char *storage_path,
     const struct stat *st,
-    arena_t *arena
+    arena_t *arena,
+    const char **out_owner,
+    const char **out_group
 ) {
+    CHECK_NULL(storage_path);
+    CHECK_NULL(st);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_owner);
+    CHECK_NULL(out_group);
+
+    /* Neither name until both are found: absence names none, and so does a half
+     * this host cannot name */
+    *out_owner = NULL;
+    *out_group = NULL;
+
     const uid_t invoker = identity()->uid;
 
     /* The invoker's own is absence, which every machine reads as its own invoker
@@ -517,42 +500,31 @@ static error_t metadata_capture_ownership(
     if (st->st_uid == invoker) {
         switch (label_of(storage_path)) {
             case LABEL_HOME:
-                return NULL;
+                return METADATA_OWNERSHIP_RESOLVED;
             case LABEL_ROOT:
             case LABEL_CUSTOM:
                 if (invoker != 0) {
-                    return NULL;
+                    return METADATA_OWNERSHIP_RESOLVED;
                 }
                 break;
         }
     }
 
-    /* Resolve UID to username. "Cannot resolve" rather than "does not exist": a
-     * NULL answer is an absent entry or a lookup that failed (a directory service
-     * down), and the claim is equally unmakeable either way. The refusal names
-     * the path it was handed, so no caller names it again. */
+    /* Every other owner by name. A NULL answer is an absent entry or a lookup
+     * that failed (a directory service down), and the claim is equally unmakeable
+     * either way */
     struct passwd *pwd = getpwuid(st->st_uid);
-    if (!pwd || !pwd->pw_name) {
-        return error_create(
-            ERR_NOT_FOUND, "Cannot resolve UID %u, the owner of '%s', to a user name "
-            "on this system", (unsigned) st->st_uid, storage_path
-        );
-    }
+    if (!pwd || !pwd->pw_name) return METADATA_OWNERSHIP_NO_SUCH_USER;
 
-    item->owner = arena_strdup(arena, pwd->pw_name);
-
-    /* Resolve GID to groupname: the owner brings its group with it */
+    /* And the group the owner brings with it, found before either name is spelled,
+     * so a miss leaves nothing in the arena: getgrgid leaves getpwuid's answer
+     * standing, each family keeping its own */
     struct group *grp = getgrgid(st->st_gid);
-    if (!grp || !grp->gr_name) {
-        return error_create(
-            ERR_NOT_FOUND, "Cannot resolve GID %u, the group of '%s', to a group name "
-            "on this system", (unsigned) st->st_gid, storage_path
-        );
-    }
+    if (!grp || !grp->gr_name) return METADATA_OWNERSHIP_NO_SUCH_GROUP;
 
-    item->group = arena_strdup(arena, grp->gr_name);
-
-    return NULL;
+    *out_owner = arena_strdup(arena, pwd->pw_name);
+    *out_group = arena_strdup(arena, grp->gr_name);
+    return METADATA_OWNERSHIP_RESOLVED;
 }
 
 /**
@@ -561,7 +533,7 @@ static error_t metadata_capture_ownership(
  * The claim off the look, whatever it claims: a link the invoker owns claims
  * nothing, and its write is no item (metadata_write_item).
  */
-error_t metadata_capture_file(
+metadata_ownership_t metadata_capture_file(
     const char *storage_path,
     const struct stat *st,
     bool encrypted,
@@ -592,12 +564,14 @@ error_t metadata_capture_file(
 
     /* Ownership, where absence would misstate it (metadata_capture_ownership).
      * The lstat needs no privilege, so the claim is authored by whoever can read
-     * the path. */
-    error_t err = metadata_capture_ownership(&item, storage_path, st, arena);
-    if (err) return err;
+     * the path; a half this host cannot name is the answer, and no item. */
+    const metadata_ownership_t ownership = metadata_capture_ownership(
+        storage_path, st, arena, &item.owner, &item.group
+    );
+    if (ownership != METADATA_OWNERSHIP_RESOLVED) return ownership;
 
     *out = item;
-    return NULL;
+    return METADATA_OWNERSHIP_RESOLVED;
 }
 
 /**
@@ -607,7 +581,7 @@ error_t metadata_capture_file(
  * file capture's rule (metadata_capture_ownership), and the class the caller's,
  * carried through unread.
  */
-error_t metadata_capture_directory(
+metadata_ownership_t metadata_capture_directory(
     const char *storage_path,
     const struct stat *st,
     bool tracked,
@@ -633,11 +607,13 @@ error_t metadata_capture_directory(
     };
 
     /* Ownership, by the file capture's rule (metadata_capture_ownership) */
-    error_t err = metadata_capture_ownership(&item, storage_path, st, arena);
-    if (err) return err;
+    const metadata_ownership_t ownership = metadata_capture_ownership(
+        storage_path, st, arena, &item.owner, &item.group
+    );
+    if (ownership != METADATA_OWNERSHIP_RESOLVED) return ownership;
 
     *out = item;
-    return NULL;
+    return METADATA_OWNERSHIP_RESOLVED;
 }
 
 /**

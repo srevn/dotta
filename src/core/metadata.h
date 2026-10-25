@@ -28,10 +28,10 @@
  *   (metadata_capture_ownership). A claim a capture authors is then, on the host
  *   it was captured on, the node it was captured from, and whatever ownership
  *   the user moves a capture can commit. Both halves or neither: the read side
- *   reads a lone half as a narrow claim deliberately made, so a name the host
- *   cannot spell fails the capture rather than authoring one. A claim a hand
- *   wrote is honoured wherever it stands and replaced by the next capture over
- *   that path, which writes the item whole (metadata_write_item): a capture states
+ *   reads a lone half as a narrow claim deliberately made, so an id the host
+ *   cannot name is the capture's answer, never half a claim. A claim a hand wrote
+ *   is honoured wherever it stands and replaced by the next capture over that
+ *   path, which writes the item whole (metadata_write_item): a capture states
  *   what disk holds, and cannot tell a hand's intent from a claim that went stale
  * - a directory's existence: the sheet's ("tracked") — the one claim a tree cannot
  *   hold, since Git trees have no empty directories
@@ -453,6 +453,115 @@ metadata_items_t metadata_items_beneath(
 );
 
 /**
+ * Whether an ownership resolves on this host, asked either way: a claim's names
+ * as its ids (metadata_ownership), a look's ids as its names
+ * (metadata_capture_ownership)
+ *
+ * The half that did not resolve, where one did not — the answer the landing words,
+ * a draft's capture refuses and the compare reads as "unresolvable", no sentence
+ * minted on the way: the compare asks it of every row on every load, and the
+ * climb of every rung it passes.
+ *
+ * Must-check by its type, as an error is (include/types.h): a capture writes
+ * its claim on RESOLVED alone, so an answer nobody reads does not compile. A
+ * deliberate discard is spelled `(void) f()`.
+ */
+typedef enum {
+    METADATA_OWNERSHIP_RESOLVED = 0,   /* both halves are this host's */
+    METADATA_OWNERSHIP_NO_SUCH_USER,   /* the owner is a user this host cannot resolve */
+    METADATA_OWNERSHIP_NO_SUCH_GROUP   /* the owner resolved; the group is one it cannot */
+} metadata_ownership_t __attribute__((warn_unused_result));
+
+/**
+ * The sheet's word on a path's ownership, as this host's ids
+ *
+ * Two names, two absences, one rule each — and no label in either, and no
+ * privilege:
+ *   - an absent owner is the invoker (sys/identity), whoever runs dotta where
+ *     the sheet is read: a capture names every owner absence would misstate
+ *     (metadata_capture_ownership), so absence is the invoker's own on every
+ *     machine, and a path it covers converges to the invoker
+ *   - an absent group is no change, (gid_t) -1, chown's own sentinel: no capture
+ *     authors a group alone, a named owner brings its group with it, and a group
+ *     is as often a directory's inheritance as an intent — what a creation gives,
+ *     it keeps
+ * A named half is that name on this host, or the half this host cannot resolve
+ * with the outs untouched: a claim this host cannot spell is never guessed at,
+ * and never answered by halves.
+ *
+ * "Ownership" here is the file's — its uid and gid, the axis status prints as
+ * [ownership]. The record's ownership (core/state.h: an ownership event, dotta
+ * putting a path where it stands) is a different word wearing the same spelling.
+ *
+ * The one producer of the rule, asked whole by each reader, so what status accuses
+ * and what apply sets cannot drift and an account this host knows by two names
+ * satisfies both: the compare (core/workspace.c workspace_compare_ownership,
+ * the pair against a look, id to id), the landing (core/deploy.c
+ * resolve_deployment_ownership, the pair a write applies) and a parent no row
+ * claims (core/deploy.c create_ancestor, the pair of no claim at all). Whether
+ * the pair can be applied is the applier's to ask (sys/identity.h
+ * identity_may_chown). A reader not on this list is a bug.
+ *
+ * @param owner The claimed owner, or NULL
+ * @param group The claimed group, or NULL
+ * @param out_uid The owner: the claim's, or the invoker's (must not be NULL)
+ * @param out_gid The group: the claim's, or (gid_t) -1 (must not be NULL)
+ * @return RESOLVED with both outs written, or the half this host cannot resolve
+ *         — the owner asked first — with neither
+ */
+metadata_ownership_t metadata_ownership(
+    const char *owner,
+    const char *group,
+    uid_t *out_uid,
+    gid_t *out_gid
+);
+
+/**
+ * A look's ownership as a capture authors it: the owner and group by name, wherever
+ * absence would say someone else
+ *
+ * Absence is the invoker on every machine (metadata_ownership), so it says the
+ * owner exactly where the capturing invoker owns the path and the next machine's
+ * invoker would own it too — everywhere but one place, root's own outside home/.
+ * Every other owner is named, under every label, so the claim a capture authors
+ * resolves, on the host it was captured on, to the node it was captured from.
+ * The group rides with the owner: the invoker's own file under another group is
+ * the invoker's to the capture, a group being as often a directory's inheritance
+ * (macOS's /tmp is wheel's) as an intent. No privilege enters: an lstat needs
+ * none, so a user captures root's file as root's, and root captures its own.
+ *
+ * Both names or neither, as the other direction answers (metadata_ownership): a
+ * capture states what it saw, and half of what it saw is a different statement
+ * — the read boundary takes a lone "group" as a narrow claim deliberately made,
+ * which the owner's resolution then fills with the invoker. So an id this host
+ * has no name for — an absent entry or a lookup that failed (a directory service
+ * down), the claim unmakeable either way — answers its half and names neither:
+ * the capture authors no claim, and each reader of the answer does what it does
+ * instead (core/profiles.c profile_refuse_ownership refuses the look,
+ * profile_capture_rung keeps the rung's claim).
+ *
+ * Readers: metadata_capture_file and metadata_capture_directory, the ownership
+ * half of every claim they author.
+ *
+ * @param storage_path The look's name, for the one clause its label decides (must
+ *                     not be NULL, under a label)
+ * @param st The look, for its uid and gid (must not be NULL)
+ * @param arena The arena the names are spelled in (must not be NULL)
+ * @param out_owner The owner's name, or NULL where the capture names none (must
+ *                  not be NULL)
+ * @param out_group The group's, written with it (must not be NULL)
+ * @return RESOLVED — the look's names, or none where absence says the owner —
+ *         or the half this host cannot name, the owner asked first, naming neither
+ */
+metadata_ownership_t metadata_capture_ownership(
+    const char *storage_path,
+    const struct stat *st,
+    arena_t *arena,
+    const char **out_owner,
+    const char **out_group
+);
+
+/**
  * Capture a path's claim from stat data (regular file or symlink)
  *
  * The claim off the look, whatever it claims. A regular file always claims its
@@ -463,14 +572,10 @@ metadata_items_t metadata_items_beneath(
  * the key (metadata_write_item) — the sheet's existence rule, kept where a claim
  * enters it.
  *
- * Ownership capture (user/group): the ownership half is authored where absence,
- * which every machine reads as its own invoker (metadata_ownership), would misstate
- * the owner — an owner that is not the capturing invoker, under every label,
- * and the invoker's own where the invoker is root outside home/ (the module
- * header). No privilege enters: an lstat needs none, so a user captures root's
- * file as root's, and root captures its own. Both names or neither: where ownership
- * is captured at all, a UID or GID this host cannot name fails the capture
- * (ERR_NOT_FOUND). Half a claim would read downstream as a claim deliberately
+ * Ownership capture (user/group): metadata_capture_ownership's — the owner and
+ * group named where absence would misstate them, both or neither — and its answer
+ * is this capture's: an id this host cannot name answers its half, and the item
+ * is not written. Half a claim would read downstream as a claim deliberately
  * made narrow, its other half the invoker or whatever the creation gave.
  *
  * For a symlink, pass lstat data: the link's own uid/gid, not the target's.
@@ -485,18 +590,18 @@ metadata_items_t metadata_items_beneath(
  * refuses every other occupant. A stat of any other kind is a contract breach
  * and reads as one, not as a refusal with a remedy: no user input reaches here.
  *
- * Reader: a profile's draft, where every capture of a file meets its name
- * (core/profiles.c profile_capture_file).
+ * Reader: a profile's draft, where every capture of a file meets its name and a
+ * half this host cannot name is refused (core/profiles.c profile_capture_file).
  *
  * @param storage_path Path in profile (must not be NULL): the item's key, borrowed
  *                     by it
  * @param st File stat data (must not be NULL; a regular file's or a symlink's)
  * @param encrypted Whether the entry's bytes are sealed (the caller's word)
  * @param arena The arena the item's owner and group are named in (must not be NULL)
- * @param out The item (must not be NULL; written on success alone)
- * @return Error or NULL on success
+ * @param out The item (must not be NULL; written on RESOLVED alone)
+ * @return RESOLVED, or the half this host cannot name (metadata_capture_ownership)
  */
-error_t metadata_capture_file(
+metadata_ownership_t metadata_capture_file(
     const char *storage_path,
     const struct stat *st,
     bool encrypted,
@@ -507,28 +612,30 @@ error_t metadata_capture_file(
 /**
  * Capture a directory's claim from stat data
  *
- * Creates a directory metadata item from stat data. Follows the same ownership
- * rules as file capture — the unnameable UID among them — while the mode is always
- * claimed from the stat. The class is the caller's: a stat cannot say whether a
- * walk entered the directory or only passed above it, so `tracked` is carried
- * through to the item unread.
+ * Creates a directory metadata item from stat data. Follows the file capture's
+ * ownership rule — its answer for an id this host cannot name among it — while
+ * the mode is always claimed from the stat. The class is the caller's: a stat
+ * cannot say whether a walk entered the directory or only passed above it, so
+ * `tracked` is carried through to the item unread.
  *
- * The two callers that capture a claim answer a failure here differently, and
- * the difference is what the claim is for, each through a profile's draft
- * (core/profiles.h profile_capture_directory). **add refuses**: a directory it
- * listed is the name its walk composed beneath, so a claim that does not land
- * leaves files committed under a name nothing authors — and the listing, which
- * the command reads as a promise of its own commit, would be a wish (cmds/add.c
- * cmd_add). **update warns and carries on**: a claim it could not refresh keeps
- * standing, nothing was named from this run, and the sheet goes on saying what
- * it said (cmds/update.c update_profile). Either way the loss is the mode with
- * the ownership, so update's warning is one the user reads at any verbosity.
+ * The two callers that capture a claim answer a half this host cannot name
+ * differently, and the difference is what the claim is for, each through a
+ * profile's draft, which words the refusal (core/profiles.h
+ * profile_capture_directory). **add refuses**: a directory it listed is the name
+ * its walk composed beneath, so a claim that does not land leaves files committed
+ * under a name nothing authors — and the listing, which the command reads as a
+ * promise of its own commit, would be a wish (cmds/add.c cmd_add). **update warns
+ * and carries on**: a claim it could not refresh keeps standing, nothing was
+ * named from this run, and the sheet goes on saying what it said (cmds/update.c
+ * update_profile). Either way the loss is the mode with the ownership, so update's
+ * warning is one the user reads at any verbosity.
  *
  * Ownership capture (user/group): the file capture's rule, above. An owner or a
- * group this host has no name for is ERR_NOT_FOUND — the lookup's absence or
- * its failure alike, the claim unmakeable either way — and a derivation reads
+ * group this host has no name for is its half's answer — the lookup's absence
+ * or its failure alike, the claim unmakeable either way — and a derivation reads
  * it (core/profiles.c profile_capture_rung): its rung keeps the claim it had,
- * as it does for a path it could not look at. That is the one refusal.
+ * as it does for a path it could not look at, and nothing is refused. That is
+ * the one answer short of a claim.
  *
  * `st` is a directory's, and nothing else — the kind is the caller's to have
  * established, and every caller holds its look to one first: a profile's next
@@ -543,10 +650,10 @@ error_t metadata_capture_file(
  * @param st Directory stat data (must not be NULL; a directory's)
  * @param tracked The profile tracks the directory itself
  * @param arena The arena the item's owner and group are named in (must not be NULL)
- * @param out The item (must not be NULL; written on success alone)
- * @return Error or NULL on success
+ * @param out The item (must not be NULL; written on RESOLVED alone)
+ * @return RESOLVED, or the half this host cannot name (metadata_capture_ownership)
  */
-error_t metadata_capture_directory(
+metadata_ownership_t metadata_capture_directory(
     const char *storage_path,
     const struct stat *st,
     bool tracked,
@@ -677,63 +784,6 @@ error_t metadata_from_json(
 error_t metadata_save_to_stage(
     stage_t *stage,
     const metadata_t *metadata
-);
-
-/**
- * Whether a claim's names are this host's (metadata_ownership)
- *
- * The half that did not resolve, where one did not — the answer the landing words
- * and the compare reads as "unresolvable", no sentence minted on the way: the
- * compare asks it of every row on every load.
- */
-typedef enum {
-    METADATA_OWNERSHIP_RESOLVED = 0,   /* both halves are this host's ids */
-    METADATA_OWNERSHIP_NO_SUCH_USER,   /* the owner names a user this host cannot resolve */
-    METADATA_OWNERSHIP_NO_SUCH_GROUP   /* the owner resolved; the group names one it cannot */
-} metadata_ownership_t;
-
-/**
- * The sheet's word on a path's ownership, as this host's ids
- *
- * Two names, two absences, one rule each — and no label in either, and no
- * privilege:
- *   - an absent owner is the invoker (sys/identity), whoever runs dotta where
- *     the sheet is read: a capture names every owner absence would misstate (the
- *     module header), so absence is the invoker's own on every machine, and a
- *     path it covers converges to the invoker
- *   - an absent group is no change, (gid_t) -1, chown's own sentinel: no capture
- *     authors a group alone, a named owner brings its group with it, and a group
- *     is as often a directory's inheritance as an intent — what a creation gives,
- *     it keeps
- * A named half is that name on this host, or the half this host cannot resolve
- * with the outs untouched: a claim this host cannot spell is never guessed at,
- * and never answered by halves.
- *
- * "Ownership" here is the file's — its uid and gid, the axis status prints as
- * [ownership]. The record's ownership (core/state.h: an ownership event, dotta
- * putting a path where it stands) is a different word wearing the same spelling.
- *
- * The one producer of the rule, asked whole by each reader, so what status accuses
- * and what apply sets cannot drift and an account this host knows by two names
- * satisfies both: the compare (core/workspace.c workspace_compare_ownership,
- * the pair against a look, id to id), the landing (core/deploy.c
- * resolve_deployment_ownership, the pair a write applies) and a parent no row
- * claims (core/deploy.c create_ancestor, the pair of no claim at all). Whether
- * the pair can be applied is the applier's to ask (sys/identity.h
- * identity_may_chown). A reader not on this list is a bug.
- *
- * @param owner The claimed owner, or NULL
- * @param group The claimed group, or NULL
- * @param out_uid The owner: the claim's, or the invoker's (must not be NULL)
- * @param out_gid The group: the claim's, or (gid_t) -1 (must not be NULL)
- * @return RESOLVED with both outs written, or the half this host cannot resolve
- *         — the owner asked first — with neither
- */
-metadata_ownership_t metadata_ownership(
-    const char *owner,
-    const char *group,
-    uid_t *out_uid,
-    gid_t *out_gid
 );
 
 #endif /* DOTTA_METADATA_H */

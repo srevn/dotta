@@ -1151,6 +1151,49 @@ error_t profile_remove(profile_draft_t *draft, path_kind_t kind, const char *sto
 }
 
 /**
+ * The claim's half of a capture's refusals: a look whose owner or group this
+ * host cannot name
+ *
+ * The capture answers which half (core/metadata.h metadata_capture_ownership),
+ * and the refusal is worded here, where add and update capture: the user is at
+ * the terminal and the path is still theirs to fix, rather than a silence for
+ * deploy to act on a year later on another machine. "Cannot resolve" rather than
+ * "does not exist": the half is an absent entry or a lookup that failed alike.
+ * The refusal names the path it was handed, so no caller names it again.
+ *
+ * Readers: profile_capture_file and profile_capture_directory, each first. The
+ * climb's rung reads the answer itself and refuses nothing (profile_capture_rung).
+ *
+ * @param ownership The capture's answer
+ * @param storage_path The name the look is captured under
+ * @param st The look, for the id this host cannot name
+ * @return The refusal, ERR_NOT_FOUND naming the id and the name; or NULL where
+ *         the answer is RESOLVED
+ */
+static error_t profile_refuse_ownership(
+    metadata_ownership_t ownership, const char *storage_path, const struct stat *st
+) {
+    switch (ownership) {
+        case METADATA_OWNERSHIP_RESOLVED:
+            return NULL;
+
+        case METADATA_OWNERSHIP_NO_SUCH_USER:
+            return error_create(
+                ERR_NOT_FOUND, "Cannot resolve UID %u, the owner of '%s', to a user "
+                "name on this system", (unsigned) st->st_uid, storage_path
+            );
+
+        case METADATA_OWNERSHIP_NO_SUCH_GROUP:
+            return error_create(
+                ERR_NOT_FOUND, "Cannot resolve GID %u, the group of '%s', to a group "
+                "name on this system", (unsigned) st->st_gid, storage_path
+            );
+    }
+
+    CHECK_ARG(false, "an ownership answer no enumerator names");
+}
+
+/**
  * The sheet's half of the admission at `storage_path`: refused where a tracked
  * directory claim the commit carries stands strictly beneath the name, one the
  * base does not contradict
@@ -1298,15 +1341,16 @@ error_t profile_capture_file(
     CHECK_NULL(out);
 
     /* Every refusal before anything moves: the claim off the look first, which
-     * an owner this host cannot name refuses, its names spelled in the caller's
-     * arena — the record built from the claim is read past the draft; then the
-     * admission's two halves, the sheet's and the tree's, the put asking the
-     * second of the index it writes and writing the blob only once it is
-     * admitted */
+     * an owner this host cannot name refuses (profile_refuse_ownership), its
+     * names spelled in the caller's arena — the record built from the claim is
+     * read past the draft; then the admission's two halves, the sheet's and the
+     * tree's, the put asking the second of the index it writes and writing the
+     * blob only once it is admitted */
     metadata_item_t item;
     git_oid blob;
-    error_t err = metadata_capture_file(
-        storage_path, &capture->st, capture->encrypted, arena, &item
+    error_t err = profile_refuse_ownership(
+        metadata_capture_file(storage_path, &capture->st, capture->encrypted, arena, &item),
+        storage_path, &capture->st
     );
     if (!err) err = profile_refuse_beneath(draft, storage_path);
     if (!err) {
@@ -1344,9 +1388,13 @@ error_t profile_capture_directory(
 
     /* The claim off the look, tracked: a writer captures only a directory the
      * profile tracks. Its one refusal, an owner this host cannot name, comes
-     * before anything moves; its names are spelled in the caller's arena */
+     * before anything moves (profile_refuse_ownership); its names are spelled
+     * in the caller's arena */
     metadata_item_t item;
-    error_t err = metadata_capture_directory(storage_path, st, true, arena, &item);
+    error_t err = profile_refuse_ownership(
+        metadata_capture_directory(storage_path, st, true, arena, &item),
+        storage_path, st
+    );
     if (err) return err;
 
     /* The claim as the walk decodes it; then the sheet's copy of it, at its own
@@ -1371,8 +1419,8 @@ error_t profile_capture_directory(
  * at all leaves the copy exactly as it found it.
  *
  * Derived throughout: this rule authors the way, never intent. And it cannot
- * fail: every answer the disk gives is one of the three, and the one the capture
- * refuses is the silence of the third.
+ * fail: every answer the disk gives is one of the three, and a look the capture
+ * cannot claim, an owner this host cannot name, is the silence of the third.
  *
  * Reader: profile_capture_ancestors, each rung of each leaf it climbs.
  *
@@ -1472,15 +1520,17 @@ static void profile_capture_rung(
         return;
     }
 
-    /* A directory stands, the look's own kind, so the capture's one refusal is
-     * a name this host cannot spell (core/metadata.h metadata_capture_directory)
-     * — the same silence as a path it cannot see: a directory capture that fails
-     * loses a claim and nothing else, so the rung keeps what it had and dotta
-     * creates it as it would have before. Its error is dropped — one per such
-     * rung, per leaf climbed through it. */
+    /* A directory stands, the look's own kind, so the capture's one answer short
+     * of a claim is an owner or a group this host cannot name (core/metadata.h
+     * metadata_capture_directory) — the same silence as a path it cannot see: a
+     * claim the capture cannot make is lost and nothing else, so the rung keeps
+     * what it had and dotta creates it as it would have before. Nothing is refused,
+     * and nothing minted. */
     metadata_item_t item;
-    error_t err = metadata_capture_directory(rung, &st, false, draft->arena, &item);
-    if (err) return;
+    if (metadata_capture_directory(rung, &st, false, draft->arena, &item) !=
+        METADATA_OWNERSHIP_RESOLVED) {
+        return;
+    }
 
     /* The claim written, and counted where it moved the sheet: a re-derivation
      * that found nothing new moves nothing (core/metadata.h metadata_write_item),

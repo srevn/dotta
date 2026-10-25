@@ -192,7 +192,7 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  * reconciled against (core/workspace.h workspace_observation), add's and update's
  * from what their capture committed (cmds/add.c add_path_t, cmds/update.c
  * update_commit_t), a learning from the record the load read (core/workspace.c
- * workspace_learning, workspace_learn_mode).
+ * workspace_learning).
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation — a gone node's record's replacement among them —
@@ -225,14 +225,11 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     update's (the claim its capture answered, core/profiles.h
  *     profile_capture_file, profile_capture_directory), and on each axis a look
  *     found disk standing on, or a fix made it stand on, the row's since (a
- *     learning of the claim) — and on the mode, where a run left a directory at
- *     the working mode it could not narrow, that mode, which no claim made
- *     (core/deploy.h deploy_hold_t), so the row's reads as Git's still to bring.
- *     It is a file orphan's reference on disk too; a directory orphan is judged
- *     by its emptiness, never its claim. A link claims no mode: its column is
- *     NULL, and every other node's is permission bits, 0000–0777; an owner and
- *     a group are names, whole and never empty, NULL where the claim names none
- *     (each schema-enforced).
+ *     learning of the claim). It is a file orphan's reference on disk too; a
+ *     directory orphan is judged by its emptiness, never its claim. A link claims
+ *     no mode: its column is NULL, and every other node's is permission bits,
+ *     0000–0777; an owner and a group are names, whole and never empty, NULL
+ *     where the claim names none (each schema-enforced).
  *   - the lifecycle (deployed_at): the one act the record remembers, a moment
  *     or 0 (schema-enforced). It advances to now on every ownership event and a
  *     learning keeps it, 0 = dotta never put this here.
@@ -879,9 +876,9 @@ const state_record_t *state_find_record(
  * ROUTING INVARIANT — this is load-bearing:
  *   - Where a workspace live for this transaction is read after the write, its
  *     writes go through the workspace's writers — the flush, workspace_anchor,
- *     workspace_learn, workspace_learn_mode (core/workspace.h) — each of which
- *     points the path's item at the record this wrote. Called directly there,
- *     the item goes on holding what the load read.
+ *     workspace_learn (core/workspace.h) — each of which points the path's item
+ *     at the record this wrote. Called directly there, the item goes on holding
+ *     what the load read.
  *   - Where no workspace is read after the write — add's record phase, which
  *     loads none, and update's, whose workspace nothing reads after it
  *     (core/workspace.h's exception) — this is the legitimate direct caller.

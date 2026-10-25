@@ -813,17 +813,23 @@ typedef struct {
  * deepest-first (deploy_hold_t). Group and other bits are never widened — a 0700
  * directory is 0700 throughout — and the window is the owner's own, from the
  * act that takes the hold to the caller's release (deploy_release), which follows
- * every act beneath it, another engine's included; a run killed inside the window
- * leaves the directory at its working mode. cmd_export materializes a profile
- * the same way (export.c, materialize_entries); this is the same rule on the
- * other materializer.
+ * every act beneath it, another engine's included. cmd_export materializes a
+ * profile the same way (export.c, materialize_entries); this is the same rule
+ * on the other materializer.
+ *
+ * A run killed inside the window, or a release refused, leaves the directory at
+ * its working mode. Where the hold owed the row's mode and the record says it —
+ * every directory the run created or fixed, once apply's record phase lands
+ * (cmds/apply.c apply_write_record), and a clean one it opened for a write beneath
+ * — the next load reads the working mode as the user's [mode], update's to commit,
+ * until a plain apply narrows it, save on a derived rung: its claim says only
+ * what to create it as, so it reads clean and stays wide (stated).
  *
  * One producer, read in two files: core/deploy.c — each hold's mode
  * (materialize_directory, create_ancestor, open_landing_directory), and whether
- * a directory needs a hold at all (hold_directory) — and cmds/apply.c, for a
- * hold the release could not let go: the mode it was left at
- * (apply_print_deploy_receipt) and the mode its record learns (apply_write_record).
- * A reader not on this list is a bug.
+ * a directory needs a hold at all (hold_directory) — and cmds/apply.c
+ * apply_print_deploy_receipt, for a hold the release could not let go: the mode
+ * it was left at. A reader not on this list is a bug.
  */
 static inline mode_t deploy_working_mode(mode_t mode) {
     return mode | S_IRWXU;
@@ -1357,9 +1363,8 @@ deploy_receipt_t *deploy_execute(
  * whole, as its last act: the holds it could not let go, each with its refusal,
  * an outcome on the receipt, so nothing is returned.
  *
- * Readers of what it fills: cmds/apply.c apply_print_deploy_receipt,
- * apply_write_record and cmd_apply's exit (held). A reader of held before the
- * release is a bug.
+ * Readers of what it fills: cmds/apply.c apply_print_deploy_receipt and cmd_apply's
+ * exit (held). A reader of held before the release is a bug.
  *
  * @param arena Arena `held` lives in (must not be NULL; the one deploy_execute
  *        was handed, as every array of the receipt does)

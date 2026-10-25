@@ -1947,22 +1947,19 @@ static void apply_print_cleanup_refused(
  * and adopted, a pruned orphan's record reclaimed and a cleared copy's alike, a
  * released one released again, a fixed claim learned by the flush — all but a
  * directory the run created, which the next load observes and never owns (capture
- * is a directory's ownership event, and a look never is), a directory the release
- * left wide whose record says the mode its hold owed: the learning of the mode
- * that stands goes back with the rest, so the next load reads the working mode
- * as the user's [mode], update's to commit, until a plain apply narrows it —
- * and a node the run replaced, whose record the next load releases, another kind
- * standing there, while a row beneath it the run did not land keeps the record
- * written through the node and reads [deleted] where that record names its profile,
- * as a kill before the phase leaves it. The caller renders the fate.
+ * is a directory's ownership event, and a look never is), and a node the run
+ * replaced, whose record the next load releases, another kind standing there,
+ * while a row beneath it the run did not land keeps the record written through
+ * the node and reads [deleted] where that record names its profile, as a kill
+ * before the phase leaves it. The caller renders the fate.
  *
  * @param ctx Dispatch context (must not be NULL; writes the state it holds, in
  *            the run's transaction)
  * @param ws Workspace (must not be NULL): the items every fate carries are its own
  * @param cleanup_verdicts Cleanup's verdicts (must not be NULL)
  * @param cleanup_receipt Cleanup's receipt (must not be NULL)
- * @param deploy_receipt Deploy's receipt, its holds let go (must not be NULL;
- *        the empty receipt where the run deployed nothing)
+ * @param deploy_receipt Deploy's receipt (must not be NULL; the empty receipt
+ *        where the run deployed nothing)
  * @param now Timestamp of the run's ownership events (must be > 0)
  * @param acknowledged The pending reassignments the record acknowledged (must
  *                     not be NULL) — zero where the phase fails, since nothing
@@ -2119,14 +2116,14 @@ static error_t apply_write_record(
      *   ancestors                 claimed parents created on the way, either
      *                             class — dotta created them too, an ownership
      *                             event
-     *   held                      the directories the run could not narrow back,
-     *                             after the writes above: the record learns the
-     *                             mode the directory was left at, wherever it
-     *                             says the mode the hold owed (below)
      * Every other active directory present on disk was present at load too, and
      * has its record from the flush by the same argument; the load established
      * presence at the boundary, and nothing here walks the disk to establish it
-     * again.
+     * again. A hold the release could not let go takes no write of its own: the
+     * writes above leave the record of a directory the run created or fixed at
+     * the row's mode, the mode its hold owed, and a landing's as the load left
+     * it, while disk stands at the working mode (core/deploy.h deploy_working_mode,
+     * stated).
      *
      * A deployed file — or a converged directory — whose verdict reads a pending
      * reassignment, as the preview named it, has its record replaced by one under
@@ -2200,29 +2197,6 @@ static error_t apply_write_record(
         err = workspace_anchor(
             ws, deploy_receipt->ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
         );
-        if (err) goto cleanup;
-    }
-
-    /* The directories the run could not narrow back (core/deploy.h deploy_hold_t):
-     * each stands at the working mode its hold set, not the mode it owed. The
-     * record is the base a difference is read from — disk off it the user's,
-     * the row off it Git's to bring (core/state.h) — so a record that says the
-     * owed mode would read dotta's widening as the user's [mode], update's to
-     * commit. It learns the mode that stands, and the next load reads the row's
-     * as Git's still to bring ([stale], apply's). After the writes above, a
-     * directory the run created, fixed or created on the way holds the record
-     * they wrote, which says its row's mode — the mode its hold owed — so the
-     * test is a landing's alone: one whose record stood on another mode had
-     * diverged before the run and keeps its record, its route as the run found
-     * it, while the receipt names the mode the hold owed. One the load could
-     * not look at holds no record to correct. */
-    for (size_t i = 0; i < deploy_receipt->held.count; i++) {
-        const deploy_hold_t *hold = &deploy_receipt->held.entries[i];
-        const state_record_t *record = hold->item->record;
-
-        if (!record || record->mode != hold->mode) continue;
-
-        err = workspace_learn_mode(ws, hold->item, deploy_working_mode(hold->mode));
         if (err) goto cleanup;
     }
 

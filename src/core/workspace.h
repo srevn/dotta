@@ -1018,7 +1018,7 @@ typedef struct {
  * The partition of WORKSPACE_STATE_DEPLOYED items that every surface routing a
  * deployed item reads, so no two surfaces can route one item two ways — the shape
  * cleanup_verdict gives the orphan side. One producer (workspace_item_route)
- * and eight readers, each named with the arm it reads; a reader not on this list
+ * and nine readers, each named with the arm it reads; a reader not on this list
  * is a bug:
  *
  *   the diverged items' derivation CLEAN, the one arm a DEPLOYED item is left
@@ -1038,6 +1038,8 @@ typedef struct {
  *                                  refuses); UNVERIFIABLE, DISPLACED_* and
  *                                  KIND_DERIVED are advisory
  *   apply's CONTENT skip label     CONFLICT, UNCONFIRMED
+ *   apply's disk-wins closer       CAPTURE: update's verb where every CONTENT
+ *                                  skip reads it, add --force's otherwise
  *   diff's status line             CONFLICT, UNCONFIRMED
  *   diff's downstream direction    CAPTURE, UNVERIFIABLE, UNCONFIRMED
  *

@@ -111,40 +111,44 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each a way out one of its rows has, gated by what is actually present — the
- * reasons, the claim that holds a named squatter (the fate-borne ancestry), and
- * the read a line names: a conflict-only run is not told to fix paths by hand,
- * a squatter is told of a wider scope only where a tracked claim holds it and
- * of the re-derivation only where a derived one does, a run that holds root is
- * not told to hold it, and an unreadable-only run is offered neither a flag that
- * will not lift it nor a by-hand fix for a path dotta could not even read: it
- * closes with its own line, because dotta never writes on a guess. No line says
- * "by hand" alone: an incapacity's row already names the path a hand would open,
- * as a refused prune's does (apply_print_cleanup_refused), so the hand is named
- * only beside a second way out the row does not name. The refusals the run's
- * identity met — a landing whose bits deny the invoker, a directory it does not
- * own or may not read, a pair it cannot set, a look that met EACCES on the path
- * itself or on the node or copy a TYPE line names, and a clearance's stop the
- * bits refused — close by naming sudo, and only for a run that holds none:
- * identity()->privileged. The line offers root and promises nothing: a policy
- * may deny root a landing or a read as well. The key's refusal — the row's own
- * look's, or the node's or the copy's a TYPE line names — closes the same way,
- * naming the verb that lifts it, and the switch before it where the configuration
- * has encryption off (config->encryption_enabled) — the two facts of the run
- * this block asks; the two refusals are told apart by the field the label above
- * reads. Neither line spells the command that would: the user typed one, the
- * verb the other names says the rest when it is run, and what sudo does to their
- * environment on the way is sudo's to document, not dotta's. The consent remedy
- * teaches both directions, each at a path — a bare --force lifts every consent
- * skip of the run, the edited copies other machines' deletions left among them
- * — and names its cost the way cleanup's does: --force keeps Git's and discards
- * what stands there, and a CONTENT skip adds the disk-wins verb, 'dotta update'
- * — gated on CONTENT and not on the class, because update refuses a retyped row
- * (cmds/update.c update_partition's kind refusal). It stops there: the 'dotta
- * add --force' a Git-moved row needs is what update's own refusal says at the
- * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
- * one. The block sits between the deploy preview and cleanup's, so each engine
- * tells its story the same way — what it will do, then what it will not and why.
- * No total-count line: the exit error's message is the count's one home.
+ * reasons, the routes the CONTENT rows read, the claim that holds a named squatter
+ * (the fate-borne ancestry), and the read a line names: a conflict-only run is
+ * not told to fix paths by hand, a squatter is told of a wider scope only where
+ * a tracked claim holds it and of the re-derivation only where a derived one
+ * does, a run that holds root is not told to hold it, and an unreadable-only
+ * run is offered neither a flag that will not lift it nor a by-hand fix for a
+ * path dotta could not even read: it closes with its own line, because dotta
+ * never writes on a guess. No line says "by hand" alone: an incapacity's row
+ * already names the path a hand would open, as a refused prune's does
+ * (apply_print_cleanup_refused), so the hand is named only beside a second way
+ * out the row does not name. The refusals the run's identity met — a landing
+ * whose bits deny the invoker, a directory it does not own or may not read, a
+ * pair it cannot set, a look that met EACCES on the path itself or on the node
+ * or copy a TYPE line names, and a clearance's stop the bits refused — close by
+ * naming sudo, and only for a run that holds none: identity()->privileged. The
+ * line offers root and promises nothing: a policy may deny root a landing or a
+ * read as well. The key's refusal — the row's own look's, or the node's or the
+ * copy's a TYPE line names — closes the same way, naming the verb that lifts
+ * it, and the switch before it where the configuration has encryption off
+ * (config->encryption_enabled) — the two facts of the run this block asks; the
+ * two refusals are told apart by the field the label above reads. Neither line
+ * spells the command that would: the user typed one, the verb the other names
+ * says the rest when it is run, and what sudo does to their environment on the
+ * way is sudo's to document, not dotta's. The consent remedy teaches both
+ * directions, each at a path — a bare --force lifts every consent skip of the
+ * run, the edited copies other machines' deletions left among them — and names
+ * its cost the way cleanup's does: --force keeps Git's and discards what stands
+ * there, and a CONTENT skip adds the disk-wins verb — gated on CONTENT and not
+ * on the class, because update refuses a retyped row (cmds/update.c
+ * update_partition's kind refusal). One line closes that family, its verb true
+ * of every CONTENT row the block holds: 'dotta update <path>' where each is the
+ * user's own edit over a base (the route's CAPTURE), else 'dotta add --force
+ * <profile> <path>', which re-captures what disk holds whoever moved it
+ * (cmds/add.h) — the verb a conflict and bytes no base proves need, update refusing
+ * both. '-e' is how to ignore a skip, not how to remedy one. The block sits between
+ * the deploy preview and cleanup's, so each engine tells its story the same way
+ * — what it will do, then what it will not and why. No total-count line: the
+ * exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -369,15 +373,17 @@ static void apply_print_deploy_skips(
      * deploy_skip_needs_force), naming its cost; the disk-wins direction only
      * when a CONTENT skip is present — 'dotta update' refuses a retyped row
      * (cmds/update.c update_partition's kind refusal), so a TYPE-only block must
-     * not be told to use it; a named squatter's second way out, by the claim
-     * that holds it (ancestry) — a wider scope plans a tracked ancestor, and a
-     * derived claim is never planned, so its way out is the named re-derivation,
-     * whose own preview names what the re-capture would commit, where a squatter
-     * nothing claims has none: its row names it, and the hand is all there is.
-     * Last, UNREADABLE's closing, a clearance's stop's among them, its line naming
-     * the path it could not read — an unreadable path is not "in the way", and
-     * a fix-or-widen instruction would misname a refusal to judge what could
-     * not be seen. */
+     * not be told to use it — its verb the one every CONTENT row takes: add
+     * --force's where any is not the capture's (workspace_item_route), and update's
+     * only where that scan ran out, its loop guarded as the sudo line's is; a
+     * named squatter's second way out, by the claim that holds it (ancestry) —
+     * a wider scope plans a tracked ancestor, and a derived claim is never planned,
+     * so its way out is the named re-derivation, whose own preview names what
+     * the re-capture would commit, where a squatter nothing claims has none:
+     * its row names it, and the hand is all there is. Last, UNREADABLE's closing,
+     * a clearance's stop's among them, its line naming the path it could not
+     * read — an unreadable path is not "in the way", and a fix-or-widen instruction
+     * would misname a refusal to judge what could not be seen. */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
@@ -388,7 +394,18 @@ static void apply_print_deploy_skips(
             break;
         }
     }
-    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+    size_t c = 0;
+    for (; c < verdicts->skipped.count; c++) {
+        if (verdicts->skipped.entries[c].reason == DEPLOY_SKIP_CONTENT &&
+            workspace_item_route(verdicts->skipped.entries[c].item) != WORKSPACE_ROUTE_CAPTURE) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  To keep what is on disk instead: 'dotta add --force <profile> <path>'"
+            );
+            break;
+        }
+    }
+    for (size_t i = 0; c == verdicts->skipped.count && i < verdicts->skipped.count; i++) {
         if (verdicts->skipped.entries[i].reason == DEPLOY_SKIP_CONTENT) {
             output_info(
                 out, OUTPUT_NORMAL,

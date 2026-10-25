@@ -2018,10 +2018,11 @@ const args_command_t spec_update = {
     .description  =
         "Commit filesystem modifications to the matching profile branches\n"
         "(the reverse direction of 'apply'). Mode is captured alongside\n"
-        "content, and ownership for paths that are not yours. A file you\n"
-        "deleted is deleted from its profile, and every machine's next\n"
-        "apply deletes its unchanged copy. To stop tracking a file but\n"
-        "keep it, use 'dotta remove'.\n",
+        "content, and ownership for any path owned by someone other than\n"
+        "the user running dotta, and under a root login for the paths\n"
+        "outside home/. A file you deleted is deleted from its profile, and\n"
+        "every machine's next apply deletes its unchanged copy. To stop\n"
+        "tracking a file but keep it, use 'dotta remove'.\n",
     .notes        =
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"

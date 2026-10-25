@@ -2439,9 +2439,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         add_path_t *path = walk.directories.entries[i];
         const char *storage_path = path->claim.storage_path;
 
-        /* Stat directory to capture mode (and ownership if root/custom). lstat
-         * + S_ISDIR: the walk's look, taken again — the walk classified with
-         * lstat, so anything else standing here changed since. */
+        /* Stat the directory for its claim: the mode, and the ownership where
+         * absence would misstate it (core/metadata.h metadata_capture_ownership).
+         * lstat + S_ISDIR: the walk's look, taken again — the walk classified
+         * with lstat, so anything else standing here changed since. */
         struct stat dir_stat;
         if (fs_lstat(path->filesystem_path, &dir_stat) != 0) {
             err = error_errno(
@@ -2944,8 +2945,9 @@ const args_command_t spec_add = {
         "/etc/foo both mean <target>/etc/foo. A path spelled from here (./x,\n"
         "../x) is read where you stand.\n"
         "\n"
-        "Modes are captured for every file and directory; ownership only\n"
-        "under root/ and custom/.\n"
+        "Modes are captured for every file and directory, and ownership for\n"
+        "any path owned by someone other than the user running dotta, and\n"
+        "under a root login for the paths outside home/.\n"
         "\n"
         "-n shows what the add would do and writes nothing. It refuses what\n"
         "the add would refuse about names, but captures no file's contents,\n"

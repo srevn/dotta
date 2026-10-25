@@ -491,19 +491,23 @@ static void apply_print_deploy_skips(
  * A directory's verb is its verdict's occupant (deploy_convergence): created
  * where nothing stood, fixed where a directory did, replaced where a squatter
  * did — the replace is the one destructive deploy verb, counted on its own line
- * and coloured the way cleanup colours a removal. The files' destructive half
- * is counted the same way: a file verdict overwrites local content iff something
- * stands at its path (deploy_occupant_present — a row planned absent beneath a
- * replaced squatter is a write into an empty tree, its item a look nobody took)
- * and its item carries the conflict bits (deploy_content_conflicts, CONTENT |
- * TYPE) — reachable in a verdict only under --force, so the yellow line is the
- * forced run's counterweight to the confirmation prompt --force skips. At verbose
- * the paths are listed under their count, capped the way every preview list is
- * — one list, the glyph carrying the overwrite split: a yellow bullet on exactly
- * the rows the yellow line counted, cyan on the rest (apply_print_paths's idiom
- * — the glyph says which count the path belongs to). The ancestors the run may
- * create on the way are not here: they are the mechanics of landing a planned
- * path, and the receipt names the ones it created.
+ * and coloured the way cleanup colours a removal, the squatters whose bytes Git
+ * may lack counted beneath it: the user's node, or dotta's own off its base, by
+ * the item's conflict bits (deploy_content_conflicts) — reachable only under
+ * --force, dotta's copy as it confirmed it being replaced unasked. The files'
+ * destructive half is counted the same way: a file verdict overwrites local content
+ * iff something stands at its path (deploy_occupant_present — a row planned absent
+ * beneath a replaced squatter is a write into an empty tree, its item a look
+ * nobody took) and its item carries the conflict bits (deploy_content_conflicts,
+ * CONTENT | TYPE) — reachable in a verdict only under --force, so the yellow
+ * line is the forced run's counterweight to the confirmation prompt --force skips.
+ * At verbose the paths are listed under their count, capped the way every preview
+ * list is — one list, the glyph carrying the overwrite split: a yellow bullet
+ * on exactly the rows the yellow line counted, cyan on the rest
+ * (apply_print_paths's idiom — the glyph says which count the path belongs to),
+ * and the replaced directories' list the discard split alike. The ancestors the
+ * run may create on the way are not here: they are the mechanics of landing a
+ * planned path, and the receipt names the ones it created.
  *
  * Dotta's nodes the run replaces (deploy_preflight_t's replaces) are the third
  * destructive count, after the directories': each removed on the way to the first
@@ -645,6 +649,20 @@ static void apply_print_deploy_preview(
             replaced, replaced == 1 ? "y" : "ies"
         );
 
+        size_t discards = 0;
+        for (size_t i = 0; i < dirs->count; i++) {
+            if (deploy_convergence(dirs->entries[i].occupant) == DEPLOY_CONVERGE_REPLACE &&
+                deploy_content_conflicts(dirs->entries[i].item)) {
+                discards++;
+            }
+        }
+        if (discards > 0) {
+            output_print(
+                out, OUTPUT_NORMAL, "  {yellow}%zu{reset} of them discard%s local changes\n",
+                discards, discards == 1 ? "s" : ""
+            );
+        }
+
         size_t shown = 0;
         for (size_t i = 0; i < dirs->count && shown < LIST_LIMIT; i++) {
 
@@ -653,8 +671,11 @@ static void apply_print_deploy_preview(
             }
 
             shown++;
+            /* The glyph carries the discard split, as the files' does the overwrite one */
             output_print(
-                out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
+                out, OUTPUT_VERBOSE,
+                deploy_content_conflicts(dirs->entries[i].item)
+                    ? "    {yellow}•{reset} %s\n" : "    {cyan}•{reset} %s\n",
                 dirs->entries[i].item->filesystem_path
             );
         }

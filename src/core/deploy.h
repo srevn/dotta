@@ -242,13 +242,15 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  * divergence never conflict, whoever moved them: a claim is never an edit
  * (core/workspace.h workspace_item_route, whose STALE arm rests on this).
  *
- * Three readers, two files: the ladder's content rung and its type rung's consent
+ * Four readers, two files: the ladder's content rung and its type rung's consent
  * (deploy_preflight) — an occupant of another kind is replaced unasked where
  * Git moved past dotta's own node (STALE) and this answers no — and the forced
- * preview's counterweight (cmds/apply.c apply_print_deploy_preview) — a verdict
- * overwrites local content iff something stands at its path AND this answers
- * yes, so the preview reads it beside deploy_occupant_present. Each hands it
- * the row's item, which every fate carries (deploy_verdict_t).
+ * preview's two counterweights (cmds/apply.c apply_print_deploy_preview): a file
+ * verdict overwrites local content iff something stands at its path AND this
+ * answers yes, so the preview reads it beside deploy_occupant_present, and a
+ * directory's replace discards bytes Git may lack iff this answers yes of the
+ * squatter's row, the replace saying something stands. Each hands it the row's
+ * item, which every fate carries (deploy_verdict_t).
  *
  * @param item The row's workspace verdict (must not be NULL)
  */

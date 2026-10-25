@@ -988,18 +988,22 @@ static error_t workspace_compare_base(
  * The content's verdict is three-way, with the record as base — the kind it names,
  * and the bytes it confirmed (see the content and type analysis below):
  * DIVERGENCE_STALE says Git moved past what dotta last saw, DIVERGENCE_CONTENT
- * says disk left it — DIVERGENCE_TYPE where another kind than the row's stands,
- * the kind being the content's axis across kinds. Each is a verdict in its own
- * right — STALE without CONTENT is apply-side work that overwrites nothing of
- * the user's; CONTENT without STALE is a local edit Git has not raced; both
- * together is a conflict.
+ * says disk is not it — not the row's, where the record confirmed no bytes, and
+ * no base proves whose move that is — DIVERGENCE_TYPE where another kind than
+ * the row's stands, the kind being the content's axis across kinds. Each is a
+ * verdict in its own right — STALE without CONTENT is apply-side work that
+ * overwrites nothing of the user's; CONTENT without STALE is a local edit Git
+ * has not raced where a base confirmed the bytes, and over none, bytes neither
+ * verb takes by default (core/workspace.h workspace_item_route, UNCONFIRMED);
+ * both together is a conflict.
  *
  * The claim's verdict is one question per axis (workspace_analyze_claim): did
  * Git move it past the claim the record last reconciled? DIVERGENCE_CLAIM_MOVED
  * says so, beside the axis that differs, and is STALE's twin for the routes — a
- * move of Git's that disk has not followed, a conflict beside CONTENT. The
- * content's second question has no claim twin: apply converges every claim whoever
- * moved it, so whether disk also left the record's claim would change no verb.
+ * move of Git's that disk has not followed, a conflict beside an edit a base
+ * proves. The content's second question has no claim twin: apply converges every
+ * claim whoever moved it, so whether disk also left the record's claim would
+ * change no verb.
  *
  * Reassignment is the same pairing read on the profile axis: the record says
  * who deployed the disk content, the row says who owns the path now, and the
@@ -1136,8 +1140,10 @@ static void workspace_analyze_file(
      * where it is the node dotta last saw there: a file or a link by its confirmed
      * pair — the stat, or a read — and a directory by its kind alone, since it
      * holds no bytes. Where the record confirmed no bytes, nothing says disk's
-     * are the ones dotta saw: any difference from theirs is the user's, beside
-     * Git's move where the record is of another kind.
+     * are the ones dotta saw: any difference from theirs is CONTENT, or TYPE
+     * across kinds, whose mover no base proves (core/workspace.h
+     * workspace_item_route, UNCONFIRMED), beside Git's move where the record is
+     * of another kind.
      *
      * Source of truth for the base: the record (the path_records row). No record
      * is no base, and nothing for Git to have moved past. Cross-process correct
@@ -1390,9 +1396,11 @@ static void workspace_analyze_file(
              * dotta never confirmed, a third kind of node, a read that failed —
              * is both sides moved: TYPE, the kind the copy would commit, beside
              * STALE, the move it would commit over (the route's CONFLICT). No
-             * record, or one Git did not move past, is the user's kind alone:
-             * TYPE. One question, asked under the record's own kind, whichever
-             * path asked it.
+             * record, or one Git did not move past, is TYPE alone: the user's
+             * kind where a base confirmed the node's bytes, and where none did
+             * a kind no base attributes (the route's UNCONFIRMED, for the pair
+             * the copy can commit). One question, asked under the record's own
+             * kind, whichever path asked it.
              *
              * Either way the look stands at another kind than the row's, so the
              * claim is not asked of it; the sources ride along, the same shape
@@ -3645,9 +3653,9 @@ void workspace_buckets_add(
     CHECK_NULL(item);
     CHECK_NULL(slice);
 
-    /* The slice's bucket, by a linear search of those added to — ten at most,
-     * the cleanup verdicts' — else a new one. A slice is added to empty: the
-     * fill is what gives it items, and would overwrite any it held. */
+    /* The slice's bucket, by a linear search of those added to — a dozen at most,
+     * status's sections' — else a new one. A slice is added to empty: the fill
+     * is what gives it items, and would overwrite any it held. */
     size_t b = 0;
     while (b < buckets->count && buckets->entries[b].slice != slice) b++;
 
@@ -3800,30 +3808,50 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
     /* A look that failed outranks every bit a look settled */
     if (item->fault != WORKSPACE_FAULT_NONE) return WORKSPACE_ROUTE_UNVERIFIABLE;
 
-    /* Git's side that disk did not follow — the bytes or the kind Git moved past
-     * what dotta last reconciled (STALE), a claim it moved past the record's or
-     * one this host cannot resolve (CLAIM_MOVED): a real edit beside it — of
-     * the bytes (CONTENT) or of the kind (TYPE) — means both sides moved; alone
-     * — the user's own claims riding included, since a claim is never an edit —
-     * it is apply's to bring */
-    if (divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+    /* The content's axis first. Git's side that disk did not follow — the bytes
+     * a base confirmed or the kind every record names, which Git moved past what
+     * dotta last saw (STALE): a real edit beside it — of the bytes (CONTENT) or
+     * of the kind (TYPE) — means both sides moved; alone — the user's own claims
+     * riding included, since a claim is never an edit — it is apply's to bring */
+    if (divergence & DIVERGENCE_STALE) {
         return (divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE))
                ? WORKSPACE_ROUTE_CONFLICT : WORKSPACE_ROUTE_STALE;
     }
 
-    /* A kind mismatch of the user's alone is a capture only through the one pair
-     * the copy can commit: file ↔ symlink on a file row. Every other occupant
-     * is no verb's default, and a directory row's splits by the claim that holds
-     * the path: a tracked row is the plan's (--force replaces the squatter), a
-     * derived rung is never planned (the named re-derivation retires the claim).
-     * A deployed item is a view row's (the join), so the row holds; a file row's
-     * tracked field is a don't-care, so the kind gates the read. */
+    /* A kind mismatch Git did not move is a capture only through the one pair
+     * the copy can commit — file ↔ symlink on a file row, and over a base alone
+     * (the rung below). Every other occupant is no verb's default, and a directory
+     * row's splits by the claim that holds the path: a tracked row is the plan's
+     * (--force replaces the squatter), a derived rung is never planned (the named
+     * re-derivation retires the claim). A deployed item is a view row's (the
+     * join), so the row holds; a file row's tracked field is a don't-care, so
+     * the kind gates the read. */
     if ((divergence & DIVERGENCE_TYPE) &&
         (item->item_kind == PATH_KIND_DIRECTORY ||
         (item->occupant != FS_OCCUPANT_REGULAR &&
         item->occupant != FS_OCCUPANT_SYMLINK))) {
         return manifest_is_derived(item->row) ? WORKSPACE_ROUTE_KIND_DERIVED
                                               : WORKSPACE_ROUTE_KIND;
+    }
+
+    /* An edit — the bytes, or the kind the copy can commit, every other having
+     * answered above — over no base for the bytes (workspace_base): disk is not
+     * the row's, and nothing dotta holds says whose move that is, the user's or
+     * Git's, so no default verb rests on it. Asked before the claim's axis: a
+     * claim of Git's riding beside such bytes does not make them both sides'. */
+    if ((divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) &&
+        !workspace_base(item->record)) {
+        return WORKSPACE_ROUTE_UNCONFIRMED;
+    }
+
+    /* Then the claim's axis: a claim Git's to bring — moved past the record's,
+     * or naming an owner this host cannot resolve (CLAIM_MOVED) — beside an edit
+     * a base proves means both sides moved, and alone it is apply's to bring.
+     * TYPE never rides beside a claim bit, so the content rung's mask reads as
+     * one rule for both axes. */
+    if (divergence & DIVERGENCE_CLAIM_MOVED) {
+        return (divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE))
+               ? WORKSPACE_ROUTE_CONFLICT : WORKSPACE_ROUTE_STALE;
     }
 
     if (divergence != DIVERGENCE_NONE) return WORKSPACE_ROUTE_CAPTURE;
@@ -3981,8 +4009,9 @@ bool workspace_item_tags(
                      * converges them alike. Alone it is apply-side work — the
                      * same CYAN as [undeployed], none of the user's bytes is
                      * overwritten — which the blob's violation below outranks;
-                     * next to [modified] or [type] it names a conflict and the
-                     * primary tag's colour stands. */
+                     * next to [modified] or [type] the primary tag's colour stands,
+                     * and the route says whose the row is
+                     * (workspace_item_route). */
                     if (tag_count == 0) {
                         *color_out = OUTPUT_COLOR_CYAN;
                     }

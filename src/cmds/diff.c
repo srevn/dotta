@@ -87,16 +87,20 @@ static bool should_show_item_for_direction(
 
     /* Downstream: What would update do? The route answers verbatim
      * (workspace_item_route — the same table update's filter reads), so this
-     * cannot promise a commit update refuses (STALE, CONFLICT, KIND) or hide
-     * one it would take (a TYPE the copy can commit, ENCRYPTION, OWNERSHIP).
-     * UNVERIFIABLE is the one refusal shown: the row's status says update skips
-     * it, where a listing that left it out would say "no local changes" over a
-     * file nobody could read. */
+     * cannot promise a commit update refuses (STALE, CONFLICT, KIND, UNCONFIRMED)
+     * or hide one it would take (a TYPE the copy can commit over a base,
+     * ENCRYPTION, OWNERSHIP). Two refusals are shown, a failed look and bytes
+     * no base proves: the row's status says update skips it, where a listing
+     * that left either out would say "no local changes" over a file nobody could
+     * read, or over bytes that differ. A conflict's and a kind's local edit are
+     * left out, so a workspace holding only those reads "no local changes" here
+     * (stated). */
     if (item->state == WORKSPACE_STATE_DELETED) return true;
     if (item->state != WORKSPACE_STATE_DEPLOYED) return false;
     workspace_route_t route = workspace_item_route(item);
     return route == WORKSPACE_ROUTE_CAPTURE ||
-           route == WORKSPACE_ROUTE_UNVERIFIABLE;
+           route == WORKSPACE_ROUTE_UNVERIFIABLE ||
+           route == WORKSPACE_ROUTE_UNCONFIRMED;
 }
 
 /**
@@ -134,7 +138,7 @@ static const char *get_status_message_from_item(
      * such a path (core/workspace.h workspace_displaced_t). Total over the classes,
      * so a class added there is a build error here and never an admitted item
      * without a sentence. Upstream only in practice: the downstream filter admits
-     * nothing but the capture route. */
+     * none of the squatter's routes. */
     switch (item->displaced) {
         case WORKSPACE_DISPLACED_TRACKED:
             return "not looked at, beneath a squatted directory "
@@ -181,6 +185,10 @@ static const char *get_status_message_from_item(
             break;
     }
 
+    /* Two routes take sentences of their own, ahead of the bits' below, which
+     * would misstate them (workspace_item_route) */
+    const workspace_route_t route = workspace_item_route(item);
+
     /* Both sides moved — the route's CONFLICT: the user's bytes or kind beside
      * a move Git made, to the bytes, the kind or a claim. In the frame's words
      * (core/workspace.h divergence_type_t), as apply's skip label and update's
@@ -189,9 +197,21 @@ static const char *get_status_message_from_item(
      * filter admits neither this nor the STALE arm below. Its --force is qualified
      * as status's Conflicts header qualifies it: a directory in a blob row's
      * way goes only with all it holds (core/deploy.c check_clearance). */
-    if (workspace_item_route(item) == WORKSPACE_ROUTE_CONFLICT) {
+    if (route == WORKSPACE_ROUTE_CONFLICT) {
         return "changed in Git and on disk (apply --force <path> keeps Git's, a directory "
                "only if all dotta's)";
+    }
+
+    /* Bytes no base proves — the route's UNCONFIRMED: disk is not the row's,
+     * and dotta holds no confirmation of what stands there, so neither the kind's
+     * sentence below nor the bytes' is true of it — apply overwrites it only
+     * under --force, and update skips it. Both directions, in the words status's
+     * Unconfirmed header and update's census say it; its --force unqualified,
+     * as that header's is: a file row with a file or a link standing. */
+    if (route == WORKSPACE_ROUTE_UNCONFIRMED) {
+        return direction == DIFF_UPSTREAM
+                ? "not confirmed by dotta (apply --force <path> keeps Git's)"
+                : "not confirmed by dotta (update skips it)";
     }
 
     /* Handle divergence-based messages for deployed items: a kind the user changed,

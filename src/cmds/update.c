@@ -1532,6 +1532,21 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             refused[WORKSPACE_ROUTE_KIND_DERIVED] == 1 ? "it" : "them"
         );
     }
+    if (refused[WORKSPACE_ROUTE_UNCONFIRMED] > 0) {
+        /* Bytes no base proves: the capture would commit what nobody has shown
+         * is the user's over the profile's. The status Unconfirmed header's own
+         * words, each way out unqualified: every such row is a file row with a
+         * file or a link standing, which add captures and apply --force replaces */
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: not confirmed by dotta — 'dotta diff' compares, "
+            "'dotta apply --force <path>' keeps Git's, 'dotta add --force' keeps "
+            "disk's, 'dotta remove' stops tracking %s",
+            refused[WORKSPACE_ROUTE_UNCONFIRMED],
+            refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "" : "s",
+            refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "it" : "them"
+        );
+    }
 
     /* Where the scan could not look, by path and above the exit below, so a run
      * that found nothing to add still says where it could not look: this may be

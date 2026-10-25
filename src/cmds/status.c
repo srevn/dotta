@@ -535,7 +535,7 @@ static void status_print_workspace(
     size_t hidden = 0;
 
     /* The sections, in the order they print: each item in scope is added to its
-     * section's bucket as the walk decides it, and the eleven are filled once
+     * section's bucket as the walk decides it, and the twelve are filled once
      * the walk is done (core/workspace.h workspace_buckets_t). They are the
      * printer's own, in a frame it frees once they are printed — nothing here
      * outlives the call (include/runtime.h "Memory"). */
@@ -543,6 +543,7 @@ static void status_print_workspace(
     workspace_buckets_t *buckets = workspace_buckets_create(frame);
 
     workspace_items_t conflicts = { 0 };
+    workspace_items_t unconfirmed = { 0 };
     workspace_items_t squatted = { 0 };
     workspace_items_t displaced = { 0 };
     workspace_items_t unverifiable = { 0 };
@@ -588,6 +589,13 @@ static void status_print_workspace(
                         /* Neither verb's by default — its own header names the
                          * way out */
                         workspace_buckets_add(buckets, item, &conflicts);
+                        break;
+
+                    case WORKSPACE_ROUTE_UNCONFIRMED:
+                        /* Neither verb's by default either, and for another reason:
+                         * no base proves who moved — its own header names both
+                         * ways out */
+                        workspace_buckets_add(buckets, item, &unconfirmed);
                         break;
 
                     case WORKSPACE_ROUTE_KIND_DERIVED:
@@ -673,7 +681,7 @@ static void status_print_workspace(
 
             case WORKSPACE_STATE_OVERRIDDEN:
                 /* The landing's too, of the blob standing over it — listed apart,
-                 * each line naming that blob (section 9) */
+                 * each line naming that blob (section 10) */
                 workspace_buckets_add(buckets, item, &overridden);
                 break;
         }
@@ -696,8 +704,8 @@ static void status_print_workspace(
      * waits on the user, not an invalid workspace. With no filter every item is
      * in scope and none is hidden. */
     const workspace_items_t *counted[] = {
-        &conflicts, &squatted, &displaced, &unverifiable, &uncommitted, &undeployed,
-        &new_files, &orphaned,
+        &conflicts,  &unconfirmed, &squatted, &displaced, &unverifiable, &uncommitted,
+        &undeployed, &new_files,   &orphaned,
     };
     size_t shown = 0;
     size_t unverified = 0;
@@ -762,23 +770,24 @@ static void status_print_workspace(
 
     /* Section 1: Conflicts — the buckets no default verb resolves lead; this
      * one's header carries the remedy, true of every row beneath it (content or
-     * a kind moved on both sides, or a kind of the user's the copy cannot commit
-     * on a row a plan can hold — a rung dotta only passes through, which the
-     * user squats, has the next section, since no flag lifts it). Both --force
-     * verbs are qualified because each takes one shape and not another. `apply
-     * --force` replaces a directory in a blob row's way only with all it holds,
-     * and its walk stops at what no landing removes, --force included
-     * (core/deploy.c check_clearance) — which status, reading no clearance, cannot
-     * tell apart; and it is named with the path it lifts the skip at, since a
-     * bare one lifts every consent skip of the run, the edited copies other
-     * machines' deletions left among them. `add --force` keeps disk's bytes and
-     * not its kind: a kind change is a re-shaping of the tree and add refuses
-     * it by the claim standing at the path, naming `dotta remove` (cmds/add.c),
-     * which stops tracking the path and keeps the file. */
+     * a kind moved on both sides, in the words the frame binds — core/workspace.h
+     * divergence_type_t — or a kind the copy cannot commit on a row a plan can
+     * hold; a rung dotta only passes through, which the user squats, has its
+     * own section below, since no flag lifts it). Both --force verbs are qualified
+     * because each takes one shape and not another. `apply --force` replaces a
+     * directory in a blob row's way only with all it holds, and its walk stops
+     * at what no landing removes, --force included (core/deploy.c check_clearance)
+     * — which status, reading no clearance, cannot tell apart; and it is named
+     * with the path it lifts the skip at, since a bare one lifts every consent
+     * skip of the run, the edited copies other machines' deletions left among
+     * them. `add --force` keeps disk's bytes and not its kind: a kind change is
+     * a re-shaping of the tree and add refuses it by the claim standing at the
+     * path, naming `dotta remove` (cmds/add.c), which stops tracking the path
+     * and keeps the file. */
     if (conflicts.count > 0) {
         output_list_t *list = output_list_create(
             out, "Conflicts",
-            "changed on both sides or a different kind on disk; "
+            "changed in Git and on disk, or a different kind on disk; "
             "\"dotta diff\" to compare, \"dotta apply --force <path>\" to "
             "keep Git's (a directory only if all dotta's), \"dotta add --force\" "
             "to keep disk's bytes when the kind matches, \"dotta remove\" to stop "
@@ -810,7 +819,50 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 2: Squatted ancestors — a different kind stands at a directory
+    /* Section 2: Unconfirmed paths — bytes no base proves (the route's
+     * UNCONFIRMED): disk is not the row's, and the record holds no confirmation
+     * of what stands there, so nothing says whose move that is — the second bucket
+     * no default verb resolves, beside the conflicts. Its header carries the
+     * remedy as theirs does, each way out unqualified: every row is a file row
+     * with a regular file or a link standing — a directory row and every other
+     * kind answer at KIND, above — which `add --force` captures, a link being a
+     * file to add's kind test (cmds/add.c), and `apply --force` replaces. No
+     * key: the header is true of every line. */
+    if (unconfirmed.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Unconfirmed paths",
+            "differs from the profile, and is not confirmed by dotta; "
+            "\"dotta diff\" to compare, \"dotta apply --force <path>\" to "
+            "keep Git's, \"dotta add --force\" to keep disk's, \"dotta remove\" "
+            "to stop tracking it"
+        );
+
+        for (size_t i = 0; i < unconfirmed.count; i++) {
+            const workspace_item_t *item = unconfirmed.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 3: Squatted ancestors — a different kind stands at a directory
      * dotta only passes through (the route's KIND_DERIVED): never planned, so
      * no flag lifts it and no decision pends. One verb, the named re-derivation,
      * in the words update's counted line already uses. */
@@ -846,19 +898,19 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 3: Displaced paths — beneath a squatter one of the two sections
-     * above holds, or Undeployed changes below where it is dotta's own copy Git
-     * moved past, untouched, or Issues where it is dotta's own node at no row,
-     * the landing's of the paths beneath it (the route's DISPLACED_* arms, the
-     * squatter's own route inherited): nothing there was looked at, so the line
-     * shows [displaced] and only what no look decides or disproves beside it
-     * (the blob's verdict, a reassignment), and the header sends the user to
-     * the squatter, whose own section names its verb. The header opens with the
-     * predicate, as every sentence about such a path does, and spells the squatter
-     * out where the other four name it with the word — this is where the word
-     * is grounded (core/workspace.h workspace_displaced_t). Named by section
-     * rather than "above": under -p the squatter's row may be filtered while a
-     * child is not, and the bare status lists both. */
+    /* Section 4: Displaced paths — beneath a squatter Conflicts or Squatted
+     * ancestors above holds, or Undeployed changes below where it is dotta's
+     * own copy Git moved past, untouched, or Issues where it is dotta's own node
+     * at no row, the landing's of the paths beneath it (the route's DISPLACED_*
+     * arms, the squatter's own route inherited): nothing there was looked at,
+     * so the line shows [displaced] and only what no look decides or disproves
+     * beside it (the blob's verdict, a reassignment), and the header sends the
+     * user to the squatter, whose own section names its verb. The header opens
+     * with the predicate, as every sentence about such a path does, and spells
+     * the squatter out where the other four name it with the word — this is where
+     * the word is grounded (core/workspace.h workspace_displaced_t). Named by
+     * section rather than "above": under -p the squatter's row may be filtered
+     * while a child is not, and the bare status lists both. */
     if (displaced.count > 0) {
         output_list_t *list = output_list_create(
             out, "Displaced paths",
@@ -893,13 +945,13 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 4: Unverifiable paths — the other no-verb bucket: dotta could not
-     * look, so no verb is promised. The header says only that, and a key beneath
-     * names each failed look and its way out, one line per tag string the block
-     * shows — the Issues key's shape, for the reason that block has one: the
-     * tag is a word the reader has to be taught, and one sentence over three
-     * refusals is how a locked path came to be told to fix its permissions. A
-     * key rather than a closer because a closer speaks only for a class that
+    /* Section 5: Unverifiable paths — the bucket no verb resolves: dotta could
+     * not look, so no verb is promised. The header says only that, and a key
+     * beneath names each failed look and its way out, one line per tag string
+     * the block shows — the Issues key's shape, for the reason that block has
+     * one: the tag is a word the reader has to be taught, and one sentence over
+     * three refusals is how a locked path came to be told to fix its permissions.
+     * A key rather than a closer because a closer speaks only for a class that
      * has a remedy, and [unverified] has none — it would stand on the screen
      * unexplained. */
     if (unverifiable.count > 0) {
@@ -970,7 +1022,7 @@ static void status_print_workspace(
         status_print_legend(out, &legend);
     }
 
-    /* Section 5: Uncommitted changes — the user's moves, every line update's to
+    /* Section 6: Uncommitted changes — the user's moves, every line update's to
      * commit, as the header says. A key beneath names what update reaches and
      * the verb that settles a line the other way, by the tags each line shows,
      * the Issues key's shape: a deletion, which reaches every machine's unchanged
@@ -1051,7 +1103,7 @@ static void status_print_workspace(
         status_print_legend(out, &legend);
     }
 
-    /* Section 6: Profile reassignments — a clean row whose record names another
+    /* Section 7: Profile reassignments — a clean row whose record names another
      * profile, which apply acknowledges at its checkpoint in the record alone:
      * listed, and the line leaves it as it finds it */
     if (reassigned.count > 0) {
@@ -1085,7 +1137,7 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 7: Undeployed changes — apply's work, both kinds: what Git has
+    /* Section 8: Undeployed changes — apply's work, both kinds: what Git has
      * and disk does not, a path apply is to create or a move of Git's disk has
      * not followed ([stale]). Named as its twin, Uncommitted changes, is. */
     if (undeployed.count > 0) {
@@ -1119,7 +1171,7 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 8: New files — what the scan found beneath a directory a profile
+    /* Section 9: New files — what the scan found beneath a directory a profile
      * tracks. The header names both verbs that settle every line: update tracks
      * it, or a pattern in the profile's .dottaignore, which travels with it,
      * keeps it out on every machine — the one way out for a file a removal took
@@ -1159,7 +1211,7 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 9: Overridden copies — orphans beneath a standing blob, each the
+    /* Section 10: Overridden copies — orphans beneath a standing blob, each the
      * landing's of the row standing over it, which clears it (core/deploy.h
      * deploy_clearance). The header promises no flag and keys no tag, since a
      * line's tags name what moved and not which cell it is: a bare tag is a copy
@@ -1220,7 +1272,7 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 10: Issues — the scope exit's orphans apply prunes or skips
+    /* Section 11: Issues — the scope exit's orphans apply prunes or skips
      * (core/cleanup.h cleanup_verdict: PRUNABLE, SKIPPED), and dotta's nodes
      * the landing of the rows beneath them replaces */
     if (orphaned.count > 0) {
@@ -1269,7 +1321,7 @@ static void status_print_workspace(
             switch (item->state) {
                 case WORKSPACE_STATE_ORPHANED:
                     /* The tags' ladder past absence and a squatter, which the
-                     * section switch lists apart (section 11): the failed look
+                     * section switch lists apart (section 12): the failed look
                      * or the bits, and the relocation beside them */
                     if (item->fault != WORKSPACE_FAULT_NONE) {
                         /* Worded by whose remedy the failed look is, so the hint
@@ -1381,7 +1433,7 @@ static void status_print_workspace(
         status_print_legend(out, &legend);
     }
 
-    /* Section 11: Released paths — the scope exit's orphans apply settles in
+    /* Section 12: Released paths — the scope exit's orphans apply settles in
      * the record alone (core/cleanup.h cleanup_verdict: ABSENT, RELEASED): it
      * retires each record and touches nothing on disk, which is what the header
      * says of every line; a line says why where the item can, and the key the

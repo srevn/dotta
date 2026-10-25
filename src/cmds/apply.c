@@ -93,14 +93,14 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
  * from the row, yellow where dotta cannot vouch for what stands there. A CONTENT
  * label reads the row's route (workspace_item_route — one producer for the
  * characterization; deploy keeps its decision): modified locally where only disk
- * moved, changed in Git and on disk where both sides did. An UNREADABLE label
- * reads the item's fault the same way (apply_fault_label — locked, unreadable,
- * or the plain "cannot verify"). Every skip carries its row's item (deploy_skip_t),
- * and both reasons are path rungs, asked only where the ancestry did not answer,
- * so each reads a look at the row's own path — a CONTENT one DEPLOYED, since no
- * path bit survives absence, which makes the route read total here. A TYPE whose
- * clearance met a copy only --force removes names that copy after the profile,
- * and why (apply_consent_label).
+ * moved, changed in Git and on disk where both sides did, unconfirmed where no
+ * base proves either. An UNREADABLE label reads the item's fault the same way
+ * (apply_fault_label — locked, unreadable, or the plain "cannot verify"). Every
+ * skip carries its row's item (deploy_skip_t), and both reasons are path rungs,
+ * asked only where the ancestry did not answer, so each reads a look at the row's
+ * own path — a CONTENT one DEPLOYED, since no path bit survives absence, which
+ * makes the route read total here. A TYPE whose clearance met a copy only --force
+ * removes names that copy after the profile, and why (apply_consent_label).
  *
  * Dotta's node above rows the run keeps carries no row (core/deploy.h
  * deploy_skip_reason_t: its two reasons). Its PERMISSION reads the landing's
@@ -285,13 +285,14 @@ static void apply_print_deploy_skips(
             }
 
             case DEPLOY_SKIP_CONTENT: {
-                bool conflict = workspace_item_route(s->item) == WORKSPACE_ROUTE_CONFLICT;
+                const workspace_route_t route = workspace_item_route(s->item);
 
                 output_colored(out, row_level, OUTPUT_COLOR_RED, "  ✗");
                 output_print(out, row_level, " %s%s ", path, path_kind_suffix(s->item->item_kind));
                 output_colored(
-                    out, row_level, OUTPUT_COLOR_RED, "(%s from ",
-                    conflict ? "changed in Git and on disk" : "modified locally"
+                    out, row_level, OUTPUT_COLOR_RED, "(%s from ", route == WORKSPACE_ROUTE_CONFLICT
+                    ? "changed in Git and on disk" : route == WORKSPACE_ROUTE_UNCONFIRMED
+                    ? "unconfirmed" : "modified locally"
                 );
                 output_print(out, row_level, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, row_level, OUTPUT_COLOR_RED, ")\n");
@@ -2944,9 +2945,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* How many planned paths Git moved past what dotta last reconciled — a file's
      * bytes, kind or claim, a directory's kind or claim. [stale] alone the plan
-     * brings like any other divergence; beside [modified] it is a conflict
-     * preflight reports. Released files are covered by the orphan-prune summary
-     * below.
+     * brings like any other divergence; beside [modified] preflight reports it,
+     * a conflict or bytes no base proves, as its skip label says
+     * (apply_print_deploy_skips). Released files are covered by the orphan-prune
+     * summary below.
      *
      * The item's fact and not the plan's — the plan says what the run does, the
      * item says why — so the plan's pending items are walked once more, each

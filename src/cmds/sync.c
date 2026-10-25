@@ -146,7 +146,7 @@ typedef struct {
  */
 typedef struct {
     size_t blocking;   /* Update's work and the conflicts: what the consent is asked over */
-    size_t conflicts;  /* Status's Conflicts, no default verb: the cancel's remedies turn on it */
+    size_t conflicts;  /* No default verb (status's Conflicts, Unconfirmed): the cancel's remedies turn on it */
 } sync_guard_t;
 
 /**
@@ -1630,7 +1630,7 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
      * does, apply's; and a child beneath any of them is not an edit a pull can
      * conflict with, so it blocks nothing either. */
     size_t uncommitted_count = 0; /* CAPTURE — update's to commit */
-    size_t conflict_count = 0;    /* CONFLICT ∪ KIND — status's Conflicts: no default verb */
+    size_t conflict_count = 0;    /* CONFLICT ∪ KIND ∪ UNCONFIRMED — no default verb */
     size_t deleted_count = 0;     /* DELETED state — update's to commit */
     size_t untracked_count = 0;   /* UNTRACKED state — update --include-new's */
     size_t unverified_count = 0;  /* UNVERIFIABLE, UNSCANNED — dotta could not look; blocks nothing */
@@ -1670,13 +1670,15 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
 
                     case WORKSPACE_ROUTE_CONFLICT:
                     case WORKSPACE_ROUTE_KIND:
-                        /* Neither verb's by default (status's Conflicts): both
-                         * sides moved — the bytes or the kind, at a rung as
-                         * anywhere: dotta's copy the user edited where Git moved
-                         * past it is the user's decision — or a kind the copy
-                         * cannot commit. update refuses these, so neither the
-                         * report's next steps nor the cancel's remedies (cmd_sync)
-                         * send them there. */
+                    case WORKSPACE_ROUTE_UNCONFIRMED:
+                        /* Neither verb's by default (status's Conflicts and
+                         * Unconfirmed paths): a kind the copy cannot commit,
+                         * bytes no base proves, or both sides moved — the bytes
+                         * or the kind, at a rung as anywhere: dotta's copy the
+                         * user edited where Git moved past it is the user's
+                         * decision. update refuses these, so neither the report's
+                         * next steps nor the cancel's remedies (cmd_sync) send
+                         * them there. */
                         conflict_count++;
                         break;
 

@@ -1070,10 +1070,14 @@ static void status_print_workspace(
                     /* The capture route, whose every bit is a tag of its own
                      * (workspace_item_route, workspace_item_tags): the claim
                      * axes alone are [mode] and [ownership], a reassignment riding
-                     * beside them or not */
+                     * beside them or not. The key names what update commits and
+                     * what apply restores, and no reach: a committed claim lands
+                     * where each machine's next apply lands the row, which an
+                     * edit there or an owner its run cannot set stops — where
+                     * the deletion's key names the copies its removal reaches */
                     if ((item->divergence & ~(DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ==
                         DIVERGENCE_NONE) {
-                        hint = "changed here; 'dotta update' commits it everywhere, "
+                        hint = "changed here; 'dotta update' commits it, "
                             "'dotta apply' restores it";
                     }
                     break;

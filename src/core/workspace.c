@@ -14,11 +14,13 @@
  * and paired with it by path. It is dotta's own and nothing repairs it either:
  * the analyses read it as the base of every three-way question, and its writers
  * here (the flush, workspace_anchor, workspace_learn) write it only on disk's
- * word — a live look there, or the run's own write. Each writes a record whole
- * and publishes it: the item at the path holds the record the store holds, and
- * the one it held before is never written. A record whose path the view lacks
- * is an orphan, and the orphan analysis asks its profile's history — the only
- * authority that knows — why it is one.
+ * word — a live look there, or the run's own write: the claim its write landed,
+ * save the mode of a directory a run could not narrow back (core/deploy.h
+ * deploy_working_mode, stated). Each writes a record whole and publishes it:
+ * the item at the path holds the record the store holds, and the one it held
+ * before is never written. A record whose path the view lacks is an orphan, and
+ * the orphan analysis asks its profile's history — the only authority that knows
+ * — why it is one.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with
@@ -4367,21 +4369,21 @@ bool workspace_item_tags(
  * distilled where its comparison stood (workspace_item_t's stat); the mode
  * (DIVERGENCE_MODE) and the owner and group (DIVERGENCE_OWNERSHIP) are the row's
  * claim. Every other column is the one it is written onto — the node and the
- * binding that record was read under, the stamp. The node needs no word of the
- * row's: every learning is written onto a record of the row's kind, since a record
- * of another kind gives way to the row's first observation before anything is
- * learned onto it, or, where the observation cannot be spelled or does not take
- * its place, has nothing learned onto it (workspace_flush), so the blob is
- * confirmed as the node that record already names. A file row's blob is Git's
- * and never zero, so a learning of the content always confirms one.
+ * binding of the record handed in, the stamp. The node needs no word of the row's:
+ * every learning is written onto a record of the row's kind, since a record of
+ * another kind gives way to the row's first observation before anything is learned
+ * onto it, or, where the observation cannot be spelled or does not take its place,
+ * has nothing learned onto it (workspace_flush), so the blob is confirmed as
+ * the node that record already names. A file row's blob is Git's and never zero,
+ * so a learning of the content always confirms one.
  *
- * Two callers, which would otherwise drift apart: workspace_flush, over what
- * the analyses noted, and workspace_learn, over the claims apply's fix set.
+ * Three callers, which would otherwise drift apart: workspace_flush, over what
+ * the analyses noted; workspace_learn, over the claims apply's fix set; and
+ * workspace_anchor, over the claims an ownership event's write landed, onto the
+ * node that write left.
  */
 static state_record_t workspace_learning(
-    state_record_t onto,
-    const workspace_item_t *item,
-    divergence_type_t axes
+    state_record_t onto, const workspace_item_t *item, divergence_type_t axes
 ) {
     const manifest_row_t *row = item->row;
 
@@ -4408,21 +4410,22 @@ static state_record_t workspace_learning(
  * and the item pointed at what it wrote.
  */
 error_t workspace_anchor(
-    workspace_t *ws,
-    const workspace_item_t *item,
-    state_stat_t stat,
-    time_t now
+    workspace_t *ws, const workspace_item_t *item, state_stat_t stat,
+    divergence_type_t axes, time_t now
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(item);
 
-    /* The record the event writes, built before the statement: the row's node
-     * and claim with its content — the row's blob, zero for a directory, under
-     * the stat the event stands on — and the event's stamp */
-    const manifest_row_t *row = item->row;
+    /* The record the event writes, built before the statement: the node its write
+     * left — the row's, at the row's mode, no owner named — with the row's words
+     * learned on each axis the event established, its content — the row's blob,
+     * zero for a directory, under the stat the event stands on — and the event's
+     * stamp */
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
-    *record = workspace_observation(row, row->mode, row->owner, row->group);
-    record->blob_oid = row->blob_oid;
+    *record = workspace_learning(
+        workspace_observation(item->row, item->row->mode, NULL, NULL), item, axes
+    );
+    record->blob_oid = item->row->blob_oid;
     record->stat = stat;
     record->deployed_at = now;
 
@@ -4443,9 +4446,7 @@ error_t workspace_anchor(
  * at what it wrote.
  */
 error_t workspace_learn(
-    workspace_t *ws,
-    const workspace_item_t *item,
-    divergence_type_t axes
+    workspace_t *ws, const workspace_item_t *item, divergence_type_t axes
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(item);

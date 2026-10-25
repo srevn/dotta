@@ -197,17 +197,19 @@ typedef enum {
  * apply's skip label (cmds/apply.c apply_print_deploy_skips), diff's status line
  * and status's Conflicts header (cmds/status.c status_print_workspace). The words
  * are the three-way frame's: Git's side differs from what dotta last saw or left
- * at the path — the record, or a first look where none stands. Read as "a commit
- * moved it" they are true of a move of Git's alone, and not of a claim dotta
- * never saw disk stand on, which the record cannot tell apart from one Git moved
- * once the first flush has written what the look found, nor of an owner no host
- * here can name (stated).
+ * at the path — the record, save the mode of a directory a run could not narrow
+ * back (core/deploy.h deploy_working_mode, stated), or a first look where none
+ * stands. Read as "a commit moved it" they are true of a move of Git's alone,
+ * and not of a claim dotta never saw disk stand on, which the record cannot tell
+ * apart from one Git moved once the first flush has written what the look found,
+ * nor of an owner no host here can name (stated).
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
  * the ones a look or a fix established, which the record learns (workspace_flush,
- * workspace_learn), and the claims Git moved past the record
- * (workspace_claims_moved).
+ * workspace_learn), the ones an ownership event's write landed, which its record
+ * takes the row's word on (core/deploy.h deploy_claims_landed, workspace_anchor),
+ * and the claims Git moved past the record (workspace_claims_moved).
  */
 typedef enum {
     DIVERGENCE_NONE        = 0,       /* No divergence detected */
@@ -1918,12 +1920,13 @@ bool workspace_item_tags(
  * holds no record of that node — none, or one of a node the look found gone:
  * the row it reconciles the path against, and nothing it did there. The claim
  * is the caller's, what dotta saw standing there or put there: the look's at a
- * first observation, in a capture's words (workspace_flush), and the row's at
- * an ownership event (workspace_anchor). An ownership event is this record with
- * the row's content — its blob, under the stat the event stands on — and the
- * event's stamp; a learning of the content adds the content alone
- * (workspace_flush). The key and the binding are the row's strings, the view's
- * own, borrowed for as long as the view lives; the names are the caller's.
+ * first observation, in a capture's words (workspace_flush), and at an ownership
+ * event the node its write left, before the claims it landed are learned onto
+ * it (workspace_anchor). An ownership event is this record with the row's content
+ * — its blob, under the stat the event stands on — and the event's stamp; a
+ * learning of the content adds the content alone (workspace_flush). The key and
+ * the binding are the row's strings, the view's own, borrowed for as long as
+ * the view lives; the names are the caller's.
  *
  * Readers: core/workspace.c workspace_flush (a first observation, over no record
  * or one of another kind) and workspace_anchor (an ownership event's record). A
@@ -1947,13 +1950,22 @@ static inline state_record_t workspace_observation(
  * Anchor an active path: its ownership event, written as a fresh record the item
  * holds once the statement lands
  *
- * The event's record is the row's whole — the row's node and claim
- * (workspace_observation), the row's blob under the stat the event stands on,
- * and the event's stamp — built before the statement, written over whatever stood
- * (core/state.h state_write), and pointed at by the item once the statement landed,
- * so item->record reads the post-write record. The record the item held before
- * the event is never written: a reader that took it earlier — apply's reassignment
- * names — reads what the load read, whenever it reads.
+ * The event's record is the node its write left (workspace_observation) — the
+ * row's, at the row's mode, which every event lands, and no owner, the claim
+ * the run's own creation stands on — with the row's words learned on each claim
+ * axis the event established, as a learning writes them (workspace_learn), the
+ * row's blob under the stat the event stands on, and the event's stamp. So its
+ * claim is the row's on each axis the event's write landed — the mode on every
+ * event, the ownership where its write applied the row's pair (core/deploy.h
+ * deploy_claims_landed) — and none on an ownership it did not land: the claim
+ * the run's own creation stands on, save in a run that holds root, wherever the
+ * node is not one its write gave an owner — a creation a refused syscall raised,
+ * or another's directory a fix moved an owned record onto (stated). Built before
+ * the statement, written over whatever stood (core/state.h state_write), and
+ * pointed at by the item once the statement landed, so item->record reads the
+ * post-write record. The record the item held before the event is never written:
+ * a reader that took it earlier — apply's reassignment names — reads what the
+ * load read, whenever it reads.
  *
  * The workspace-scope writer for ownership events — add and update build theirs
  * from their captures, what each committed, and write it through state_write
@@ -1989,6 +2001,11 @@ static inline state_record_t workspace_observation(
  *             no descriptor exists to describe it); UNSET for a directory, which
  *             confirms no content. Never a fresh lstat: a look taken here binds
  *             whatever stands at the path now to a verdict from earlier.
+ * @param axes The claim axes the event established, by their divergence bits:
+ *             deploy_claims_landed's for a write; the whole claim for an adoption
+ *             or an acknowledgement, which stands on a clean look (an owner this
+ *             host cannot resolve is never clean: core/workspace.c
+ *             workspace_compare_ownership)
  * @param now Timestamp of the event (must be > 0: a record stamped 0 is one dotta
  *            never owned)
  * @return The write's failure, naming the path, or NULL on success
@@ -1997,6 +2014,7 @@ error_t workspace_anchor(
     workspace_t *ws,
     const workspace_item_t *item,
     state_stat_t stat,
+    divergence_type_t axes,
     time_t now
 );
 

@@ -190,10 +190,10 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  * asks nothing of it (state_write), so each rule is kept where a record is built:
  * a first observation from the row the path is reconciled against and the look
  * that found its node (core/workspace.h workspace_observation, core/workspace.c
- * workspace_flush), apply's ownership events from the row (core/workspace.h
- * workspace_anchor), add's and update's from what their capture committed
- * (cmds/add.c add_path_t, cmds/update.c update_commit_t), a learning from the
- * record the load read (core/workspace.c workspace_learning).
+ * workspace_flush), apply's ownership events from the row and the claim axes
+ * each landed (core/workspace.h workspace_anchor), add's and update's from what
+ * their capture committed (cmds/add.c add_path_t, cmds/update.c update_commit_t),
+ * a learning from the record the load read (core/workspace.c workspace_learning).
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation — a gone node's record's replacement among them —
@@ -224,16 +224,18 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     — disk off it the user's move, the row off it Git's claim still to bring
  *     (core/workspace.h workspace_claims_moved). The look's at the first
  *     observation, in a capture's words (core/metadata.h
- *     metadata_capture_ownership), the row's at apply's ownership events, the
- *     one a capture authored at add's and update's (the claim its capture answered,
- *     core/profiles.h profile_capture_file, profile_capture_directory), and on
- *     each axis a look found disk standing on, or a fix made it stand on, the
- *     row's since (a learning of the claim) — the first observation's own agreeing
- *     axes among them, learned by the flush that writes it. It is a file orphan's
- *     reference on disk too; a directory orphan is judged by its emptiness, never
- *     its claim. A link claims no mode: its column is NULL, and every other node's
- *     is permission bits, 0000–0777; an owner and a group are names, whole and
- *     never empty, NULL where the claim names none (each schema-enforced).
+ *     metadata_capture_ownership), the row's on each axis an ownership event's
+ *     write landed, none on an ownership it did not land (core/deploy.h
+ *     deploy_claims_landed), the one a capture authored at add's and update's
+ *     (the claim its capture answered, core/profiles.h profile_capture_file,
+ *     profile_capture_directory), and on each axis a look found disk standing
+ *     on, or a fix made it stand on, the row's since (a learning of the claim)
+ *     — the first observation's own agreeing axes among them, learned by the
+ *     flush that writes it. It is a file orphan's reference on disk too; a
+ *     directory orphan is judged by its emptiness, never its claim. A link claims
+ *     no mode: its column is NULL, and every other node's is permission bits,
+ *     0000–0777; an owner and a group are names, whole and never empty, NULL
+ *     where the claim names none (each schema-enforced).
  *   - the lifecycle (deployed_at): the one act the record remembers, a moment
  *     or 0 (schema-enforced). It advances to now on every ownership event and a
  *     learning keeps it, 0 = dotta never put this here.

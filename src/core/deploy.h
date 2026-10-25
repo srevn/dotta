@@ -171,6 +171,26 @@ typedef struct {
 } deploy_verdicts_t;
 
 /**
+ * The claim axes a verdict's write lands — what its ownership event records
+ *
+ * The mode on every write: the executor applies the row's, total for every kind
+ * that carries one, and a link's none, which its record binds NULL. The ownership
+ * where the verdict applies a pair, on every row but one naming someone this
+ * host cannot resolve: resolve_deployment_ownership writes both halves or neither,
+ * so the uid's -1 is the verdict's one sentinel for no pair, and two -1s leave
+ * the owner as the load found it, the row's claim unlanded; a pair the run may
+ * not set is a skip, never a verdict (check_ownership). An axis left out is one
+ * the record does not take the row's word on (core/workspace.h workspace_anchor,
+ * workspace_learn), so it stays Git's to bring.
+ *
+ * Readers: cmds/apply.c apply_write_record — each ownership event's axes, and
+ * the claims a fix set. A reader not on this list is a bug.
+ */
+static inline divergence_type_t deploy_claims_landed(const deploy_verdict_t *v) {
+    return v->uid == (uid_t) -1 ? DIVERGENCE_MODE : DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP;
+}
+
+/**
  * Is something known to be standing at the path?
  *
  * FS_OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it could

@@ -2122,7 +2122,8 @@ static error_t apply_write_record(
      * a deployed file as one dotta never wrote.
      *
      * The receipt is the whole of it, and the ownership rule is read off each
-     * carried-out fate, never off a bucket topology:
+     * carried-out fate, never off a bucket topology — each event's claim what
+     * its write landed (core/deploy.h deploy_claims_landed):
      *   deployed                  files written or linked — an ownership event
      *                             carrying the write's own stat: the receipt's
      *                             triple, distilled by the executor from the
@@ -2190,7 +2191,7 @@ static error_t apply_write_record(
             (*acknowledged)++;
         }
 
-        err = workspace_anchor(ws, item, o->stat, now);
+        err = workspace_anchor(ws, item, o->stat, deploy_claims_landed(o->verdict), now);
         if (err) goto cleanup;
     }
 
@@ -2213,32 +2214,27 @@ static error_t apply_write_record(
          * binding's profile half, the one the screens name. */
         if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX &&
             !workspace_unacknowledged(item->row, item->record)) {
-            /* A fix: the claims it set, which the record still lacks. It sets
-             * the mode always, and the ownership only where the verdict applies
-             * a pair — two -1s leave the owner as the load found it, apart from
-             * the row's (the flush has learned each axis disk already stood on):
-             * on a fix, an owner this host cannot resolve, which preflight warned
-             * of. So the record keeps its own there, and the claim stays Git's
-             * to bring. */
-            divergence_type_t landed = (v->uid != (uid_t) -1 || v->gid != (gid_t) -1)
-                ? DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP
-                : DIVERGENCE_MODE;
-
+            /* A fix: the claims it set that the record still lacks (the flush
+             * has learned each axis disk already stood on). No owner where the
+             * claim names one this host cannot resolve: preflight warned of it
+             * and the fix left the owner as the load found it, so the record
+             * keeps its own there, and the claim stays Git's to bring. */
             err = workspace_learn(
-                ws, item, workspace_claims_moved(item->row, item->record) & landed
+                ws, item,
+                workspace_claims_moved(item->row, item->record) & deploy_claims_landed(v)
             );
             if (err) goto cleanup;
             continue;
         }
 
-        err = workspace_anchor(ws, item, STATE_STAT_UNSET, now);
+        err = workspace_anchor(ws, item, STATE_STAT_UNSET, deploy_claims_landed(v), now);
         if (err) goto cleanup;
     }
 
     for (size_t i = 0; i < deploy_receipt->ancestors.count; i++) {
-        err = workspace_anchor(
-            ws, deploy_receipt->ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
-        );
+        const deploy_verdict_t *v = deploy_receipt->ancestors.entries[i].verdict;
+
+        err = workspace_anchor(ws, v->item, STATE_STAT_UNSET, deploy_claims_landed(v), now);
         if (err) goto cleanup;
     }
 
@@ -2876,8 +2872,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * it, the look's triple where the slow path read — whatever the record
              * this write replaces, one the load could confirm nothing onto
              * included: bound to another row. UNSET where the read met a second
-             * still open, and the next load's slow path confirms. */
-            err = workspace_anchor(ws, item, item->stat, now);
+             * still open, and the next load's slow path confirms. The whole claim,
+             * which the clean look found disk standing on. */
+            err = workspace_anchor(
+                ws, item, item->stat, DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP, now
+            );
             if (err) {
                 /* The present lands whole or ends the run, as the flush's writes
                  * do: the store refused this write before anything on disk moved,
@@ -2924,7 +2923,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         if (!opts->dry_run) {
-            err = workspace_anchor(ws, item, STATE_STAT_UNSET, now);
+            /* The whole claim, the file loop's: the clean look stands on it */
+            err = workspace_anchor(
+                ws, item, STATE_STAT_UNSET, DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP, now
+            );
             if (err) {
                 /* The file loop's stance: the present lands whole or ends the run */
                 return err;

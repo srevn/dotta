@@ -2146,13 +2146,14 @@ static error_t apply_write_record(
      *                             it as owned would set deployed_at on a directory
      *                             the user created and hand it to the prune on
      *                             the next scope exit — with one exception: a
-     *                             record dotta owns whose binding names another
-     *                             row — another profile's, a pending reassignment,
-     *                             or another name of this one's — must not outlive
-     *                             the run that converged the directory, so it
-     *                             takes the one ownership event that moves it
-     *                             onto the row, by the acknowledgement loop's
-     *                             own test
+     *                             record dotta owns of the directory's node whose
+     *                             binding names another row — another profile's,
+     *                             a pending reassignment, or another name of
+     *                             this one's — must not outlive the run that
+     *                             converged the directory, so it takes the one
+     *                             ownership event that moves it onto the row,
+     *                             by the acknowledgement loops' own test
+     *                             (core/workspace.h workspace_unacknowledged)
      *   ancestors                 claimed parents created on the way, either
      *                             class — dotta created them too, an ownership
      *                             event
@@ -2200,17 +2201,14 @@ static error_t apply_write_record(
             (*acknowledged)++;
         }
 
-        /* Whether the record follows the row: the acknowledgement loop's own
-         * test, asked of the whole binding — a record dotta owns, bound to another
-         * row, another profile's or another name of this one's. A fix's record
-         * is of the directory's kind, the flush having written the observation
-         * in place of one of another kind. The count above is the binding's profile
-         * half, the one the screens name. */
-        const state_record_t *record = item->record;
-        bool follows = record && record->deployed_at > 0 &&
-            !manifest_is_claim(item->row, record->profile, record->storage_path);
-
-        if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !follows) {
+        /* A fix learns, save where its record has yet to follow the row: one
+         * dotta owns of the directory's node, bound to another row — another
+         * profile's or another name of this one's — which the ownership event
+         * below moves onto it, by the acknowledgement loops' own test
+         * (core/workspace.h workspace_unacknowledged). The count above is the
+         * binding's profile half, the one the screens name. */
+        if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX &&
+            !workspace_unacknowledged(item->row, item->record)) {
             /* A fix: the claims it set, which the record still lacks. It sets
              * the mode always, and the ownership only where the verdict applies
              * a pair — two -1s leave the owner as the load found it, apart from
@@ -2223,7 +2221,7 @@ static error_t apply_write_record(
                 : DIVERGENCE_MODE;
 
             err = workspace_learn(
-                ws, item, workspace_claims_moved(item->row, record) & landed
+                ws, item, workspace_claims_moved(item->row, item->record) & landed
             );
             if (err) goto cleanup;
             continue;
@@ -2843,17 +2841,13 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         bool adopt = !record || record->deployed_at == 0 ||
             record->kind != workspace_type_occupant(file->type);
 
-        /* A record dotta owns whose binding names another row than this — another
-         * profile's, or another name of the same profile, whose path the view
-         * gave to this one — has yet to follow this row, and this loop is where
-         * it does. The whole binding is the test because the whole binding is
-         * what a record follows: the blob it carries is the blob of the row its
-         * binding names (core/state.h state_record_t), so a record left on a
-         * name no row stands at is never confirmed again — every load re-hashes
-         * the path, and its base drifts further from what is there. */
-        bool acknowledge = !adopt &&
-            !manifest_is_claim(file, record->profile, record->storage_path);
-        if (!adopt && !acknowledge) continue;
+        /* A record dotta owns of this file's node whose binding names another
+         * row than this — another profile's, or another name of the same profile,
+         * whose path the view gave to this one — has yet to follow this row,
+         * and this loop is where it does (core/workspace.h
+         * workspace_unacknowledged, which says why the whole binding). One already
+         * bound to this row owes nothing. */
+        if (!adopt && !workspace_unacknowledged(file, record)) continue;
 
         /* The reassignment this write acknowledges, named off the record the
          * load read, which the write below replaces and never writes. Only the
@@ -2900,22 +2894,18 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * A recordless clean directory stays the flush's observation, exactly as
      * before — and a directory record the workspace's guard released comes back
      * observed for the same reason, where an owned one was pruned. A record of
-     * another kind of node reaches this loop in no run: the flush has written
-     * the directory's observation in its place (core/workspace.h workspace_flush),
-     * so an owned file record never re-stamps a directory the user created. */
+     * another kind of node is no record of the directory, and no acknowledgement
+     * moves it onto the row (core/workspace.h workspace_unacknowledged), so an
+     * owned file record never re-stamps a directory the user created. */
     for (size_t i = 0; i < deploy_plan->directories.clean.count; i++) {
         const workspace_item_t *item = deploy_plan->directories.clean.entries[i];
         const manifest_row_t *dir = item->row;
         const state_record_t *record = item->record;
 
-        /* A record this loop moves onto the directory's row: one dotta owns,
-         * bound to another row. Its kind needs no asking: no run meets one of
-         * another kind here (above), and a preview whose flush was refused writes
-         * nothing and names nothing off one — the naming below finds its node
-         * gone (workspace_reassigned). */
-        bool acknowledge = record && record->deployed_at > 0 &&
-            !manifest_is_claim(dir, record->profile, record->storage_path);
-        if (!acknowledge) continue;
+        /* A record this loop moves onto the directory's row: one dotta owns of
+         * the directory's own node — its kind asked, never assumed — bound to
+         * another row (workspace_unacknowledged) */
+        if (!workspace_unacknowledged(dir, record)) continue;
 
         /* The file loop's naming, by the same rule: off the record the load read,
          * which the write below replaces and never writes. */

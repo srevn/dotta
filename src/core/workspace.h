@@ -652,7 +652,8 @@ typedef struct {
  * — so it is none of the row's: no bytes the row's are measured against
  * (workspace_compare_confirmed below answers it at the kind), no base for its
  * claim (workspace_claims_moved below), no record a learning is written onto
- * (core/workspace.c workspace_flush), and no witness to its deletion
+ * (core/workspace.c workspace_flush), no record an acknowledgement moves onto
+ * the row (workspace_unacknowledged below), and no witness to its deletion
  * (classify_absent). Whether that node still stands is a look's to say. While
  * it does, the row's deployment replaces dotta's own node there, which is a
  * reassignment (workspace_reassigned below); where the look found the row's own
@@ -796,11 +797,12 @@ static inline compare_result_t workspace_compare_confirmed(
  * (cmds/apply.c cmd_apply, apply_write_record); and the record's owed work, with
  * none, which asks it of the record against a view with no workspace at all,
  * workspace_stale answering first across kinds (workspace_pending below). A
- * record's WRITER asks the whole binding — profile and storage path both — which
- * is manifest_is_claim; this is the half the screens name and the receipts count.
- * Not manifest_diff_stats_t's `reassigned`, which counts one transition's own
- * delta between two views; this is the record against the view, standing from
- * whenever it began.
+ * record's WRITER asks the whole binding — profile and storage path both — of
+ * the record dotta owns of the row's own node, which is workspace_unacknowledged
+ * below; this is the half the screens name and the receipts count. Not
+ * manifest_diff_stats_t's `reassigned`, which counts one transition's own delta
+ * between two views; this is the record against the view, standing from whenever
+ * it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,
@@ -823,6 +825,40 @@ static inline bool workspace_reassigned(
     /* Of another kind: its own node's, while a look finds it standing — and no
      * look disproves nothing */
     return occupant == FS_OCCUPANT_UNKNOWN || occupant == record->kind;
+}
+
+/**
+ * Unacknowledged: the record dotta owns of the row's own node is bound to another
+ * row — the record an ownership event moves onto this one, the acknowledgement
+ *
+ * The binding's whole, where workspace_reassigned above asks its profile half:
+ * another profile's record, and one bound to another name of the row's own profile,
+ * whose path the view gave to this one. The whole binding because it is what a
+ * record follows: the blob a record carries was confirmed under it (core/state.h
+ * state_record_t), so a record left on a name no row stands at is never confirmed
+ * again — every load re-hashes the path (core/workspace.c workspace_analyze_file's
+ * content note), and its base drifts further from what is there.
+ *
+ * Of the row's own node, the kind rung (workspace_type_occupant above): a record
+ * of another kind describes another node — gone wherever the row's own kind stands
+ * in its place — and moved onto the row it would make dotta's a node it never
+ * put there, however the load came to leave that record standing: a directory
+ * the user created, owned, and pruned at the next scope exit. Owned: a record
+ * dotta only observed or confirmed names the row the path was first seen under,
+ * and an adoption takes the path over instead — a file's; a directory stays the
+ * flush's observation (cmds/apply.c cmd_apply). NULL is none.
+ *
+ * Readers: cmds/apply.c cmd_apply's two loops over the clean items — the
+ * acknowledgement — and apply_write_record's converged arm, where a directory
+ * fixed in place moves such a record onto its row as a clean one does. A reader
+ * not on this list is a bug.
+ */
+static inline bool workspace_unacknowledged(
+    const manifest_row_t *row, const state_record_t *record
+) {
+    return record && record->kind == workspace_type_occupant(row->type) &&
+           record->deployed_at > 0 &&
+           !manifest_is_claim(row, record->profile, record->storage_path);
 }
 
 /**
@@ -1909,8 +1945,8 @@ static inline state_record_t workspace_observation(const manifest_row_t *row) {
  *   - apply_write_record, the record phase (an ownership event after a write: a
  *     file deployed, a directory created — where nothing stood, in a squatter's
  *     place, or as the parent of a planned path — and a directory fixed in place
- *     whose owned record names another row, which follows the row as a clean
- *     one's does)
+ *     whose owned record of its node names another row (workspace_unacknowledged),
+ *     which follows the row as a clean one's does)
  * Learnings are not ownership events and do not come through here: they are the
  * flush's, and workspace_learn's for a directory apply fixed.
  *

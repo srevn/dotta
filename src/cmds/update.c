@@ -1092,13 +1092,17 @@ static void update_print_preview(
      * section that promises a metadata update. The header says how far the commit
      * reaches: a copy its profile's history says update deleted is pruned by
      * every machine's next apply, where dotta deployed it and it is unchanged
-     * (core/workspace.c workspace_analyze_orphans). Where another profile claims
-     * the path, its claim takes the place instead, and the line names it. */
+     * (core/workspace.c workspace_analyze_orphans), its content and its claim
+     * (core/cleanup.h cleanup_skip_reason). Where another profile claims the
+     * path, its claim takes the place instead, and the line names it — the header
+     * true of it all the same, since the copy goes. A copy dotta only observed,
+     * which no apply on its machine has adopted, is released however unchanged:
+     * the one the header leaves out (stated). */
     if (partition->deleted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Deleted paths",
-            "will be deleted from their profiles, and from every machine at its "
-            "next apply"
+            "will be deleted from their profiles, and every machine's next apply "
+            "deletes their unchanged copies"
         );
 
         /* The view's profiles, lowest precedence first, each asked below for
@@ -2015,9 +2019,9 @@ const args_command_t spec_update = {
         "Commit filesystem modifications to the matching profile branches\n"
         "(the reverse direction of 'apply'). Mode is captured alongside\n"
         "content, and ownership for paths that are not yours. A file you\n"
-        "deleted is deleted from its profile, and from every machine at\n"
-        "its next apply. To stop tracking a file but keep it, use 'dotta\n"
-        "remove'.\n",
+        "deleted is deleted from its profile, and every machine's next\n"
+        "apply deletes its unchanged copy. To stop tracking a file but\n"
+        "keep it, use 'dotta remove'.\n",
     .notes        =
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"

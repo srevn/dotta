@@ -973,13 +973,14 @@ static void status_print_workspace(
     /* Section 5: Uncommitted changes — the user's moves, every line update's to
      * commit, as the header says. A key beneath names what update reaches and
      * the verb that settles a line the other way, by the tags each line shows,
-     * the Issues key's shape: a deletion, which reaches every machine and which
-     * apply puts back — another enabled profile's claim taking the place where
-     * one claims the path, said per path by update's preview (cmds/update.c
-     * update_print_preview), never by the key; and a claim alone, which apply
-     * restores, a claim being no edit (core/deploy.h deploy_content_conflicts).
-     * An edit, a kind the copy can commit, and the blob's policy are keyed by
-     * no line: apply skips the first two, and the third is update's alone. */
+     * the Issues key's shape: a deletion, which reaches every machine's unchanged
+     * copy and which apply puts back — another enabled profile's claim taking
+     * the place where one claims the path, said per path by update's preview,
+     * whose header words the reach as the key does (cmds/update.c
+     * update_print_preview); and a claim alone, which apply restores, a claim
+     * being no edit (core/deploy.h deploy_content_conflicts). An edit, a kind
+     * the copy can commit, and the blob's policy are keyed by no line: apply
+     * skips the first two, and the third is update's alone. */
     if (uncommitted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Uncommitted changes",
@@ -1026,8 +1027,8 @@ static void status_print_workspace(
                     break;
 
                 case WORKSPACE_STATE_DELETED:
-                    hint = "gone here; 'dotta update' deletes it everywhere, 'dotta apply' "
-                        "puts it back";
+                    hint = "gone here; 'dotta update' deletes it and every machine's "
+                        "unchanged copy, 'dotta apply' puts it back";
                     break;
 
                 case WORKSPACE_STATE_UNDEPLOYED:

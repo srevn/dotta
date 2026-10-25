@@ -1335,15 +1335,15 @@ static const args_opt_t profile_disable_opts[] = {
 
 static const args_command_t spec_profile_disable = {
     .name          = "profile disable",
-    .summary       = "Disable profiles, mark for removal on next apply",
+    .summary       = "Disable profiles; next apply removes unchanged copies",
     .usage         =
         "%s profile disable [options] <name>...\n"
         "   or: %s profile disable [options] --all",
     .description   =
-        "Disables one or more profiles; the next 'dotta apply' removes what they\n"
-        "deployed. A disabled profile's target goes with its row — nothing\n"
-        "remembers it — and the receipt names the target it forgets with the\n"
-        "command that restores it.\n",
+        "Disables one or more profiles; the next 'dotta apply' removes the\n"
+        "unchanged copies they deployed. A disabled profile's target goes with\n"
+        "its row — nothing remembers it — and the receipt names the target it\n"
+        "forgets with the command that restores it.\n",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,

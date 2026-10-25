@@ -1630,8 +1630,8 @@ const args_command_t spec_remove = {
         "   or: %s remove [options] --profile <name> <path>...",
     .description =
         "Stop tracking files and directories: they leave the profile and\n"
-        "stay on disk, on every machine. To delete a file everywhere,\n"
-        "delete it and run 'dotta update'.\n",
+        "stay on disk, on every machine. To delete every machine's\n"
+        "unchanged copy instead, delete the file and run 'dotta update'.\n",
     .notes       =
         "Operation Modes:\n"
         "  (default)           Remove the paths from the profile. Nothing\n"
@@ -1644,8 +1644,8 @@ const args_command_t spec_remove = {
         "  %s remove staging --delete-profile          # Delete whole profile\n",
     .epilogue    =
         "See also:\n"
-        "  %s profile disable <name>  # Stop deploying without deleting\n"
-        "  %s update                  # Delete a file everywhere, once deleted here\n",
+        "  %s profile disable <name>  # Stop deploying a profile on this machine\n"
+        "  %s update                  # Delete every unchanged copy, once deleted here\n",
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,

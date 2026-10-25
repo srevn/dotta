@@ -809,7 +809,7 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * Why nothing stands is no fact of the path (stated): a user's rm, a bound target
  * moved, renamed or unmounted, a link on the way removed or replaced — each empties
  * the path alike, and update commits each as the user's deletion, which every
- * machine's next apply prunes where its copy is untouched, Git holding the bytes;
+ * machine's next apply prunes where its copy is unchanged, Git holding the bytes;
  * at the place's return its files are strangers, and an add of them puts the
  * claims back. A look that fails is no absence, whatever the mount
  * (workspace_look).

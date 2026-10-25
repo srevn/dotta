@@ -55,9 +55,10 @@ static const char *apply_fault_label(workspace_fault_t fault) {
  *
  * Dotta's node above a row, or a copy a row's clearance met beneath it
  * (core/deploy.h deploy_clearance's NEEDS_FORCE): the failed read's word
- * (apply_fault_label), then the edit, and what is left is one dotta never
- * confirmed. Read by the two TYPE lines that name one (apply_print_deploy_skips):
- * the node's own, and a row's beside the copy it names.
+ * (apply_fault_label), then the edit, and what is left is one whose record holds
+ * no confirmation — the record's state, never its history: a release forgets a
+ * confirmation with the record. Read by the two TYPE lines that name one
+ * (apply_print_deploy_skips): the node's own, and a row's beside the copy it names.
  */
 static const char *apply_consent_label(const workspace_item_t *orphan) {
     if (orphan->fault != WORKSPACE_FAULT_NONE) {
@@ -65,7 +66,7 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
     }
 
     return (orphan->divergence & DIVERGENCE_CONTENT)
-        ? "changed since deployment" : "never confirmed by dotta";
+        ? "changed since deployment" : "not confirmed by dotta";
 }
 
 /**

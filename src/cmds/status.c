@@ -1409,7 +1409,7 @@ static void status_print_workspace(
                     } else {
                         hint = "the paths beneath it need a directory here; "
                             "apply replaces it, 'dotta apply --force <path>' where dotta "
-                            "never confirmed it";
+                            "has not confirmed it";
                     }
                     break;
 

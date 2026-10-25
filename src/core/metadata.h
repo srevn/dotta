@@ -458,9 +458,10 @@ metadata_items_t metadata_items_beneath(
  * (metadata_capture_ownership)
  *
  * The half that did not resolve, where one did not — the answer the landing words,
- * a draft's capture refuses and the compare reads as "unresolvable", no sentence
- * minted on the way: the compare asks it of every row on every load, and the
- * climb of every rung it passes.
+ * a draft's capture refuses, the compare reads as "unresolvable" and a first
+ * observation as a claim it cannot spell, no sentence minted on the way: the
+ * compare asks it of every row on every load, the climb of every rung it passes,
+ * and the flush of every node it first observes.
  *
  * Must-check by its type, as an error is (include/types.h): a capture writes
  * its claim on RESOLVED alone, so an answer nobody reads does not compile. A
@@ -538,10 +539,12 @@ metadata_ownership_t metadata_ownership(
  * down), the claim unmakeable either way — answers its half and names neither:
  * the capture authors no claim, and each reader of the answer does what it does
  * instead (core/profiles.c profile_refuse_ownership refuses the look,
- * profile_capture_rung keeps the rung's claim).
+ * profile_capture_rung keeps the rung's claim, core/workspace.c workspace_flush
+ * leaves the node unobserved).
  *
  * Readers: metadata_capture_file and metadata_capture_directory, the ownership
- * half of every claim they author.
+ * half of every claim they author, and core/workspace.c workspace_flush, the
+ * claim a first observation records of the node the look found.
  *
  * @param storage_path The look's name, for the one clause its label decides (must
  *                     not be NULL, under a label)

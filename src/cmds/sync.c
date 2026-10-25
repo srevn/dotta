@@ -1702,10 +1702,11 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
                     case WORKSPACE_ROUTE_STALE:
                     case WORKSPACE_ROUTE_REASSIGNED:
                     case WORKSPACE_ROUTE_CLEAN:
-                        /* Apply's side or nothing: Git moved past what dotta
-                         * last reconciled — the bytes or a claim — and disk did
-                         * not, the user's claims riding included, or a pending
-                         * reassignment. No local work a pull puts at risk. */
+                        /* Apply's side or nothing: Git's side differs from what
+                         * dotta last saw or left — the bytes or a claim — and
+                         * disk did not, the user's claims riding included, or a
+                         * pending reassignment. No local work a pull puts at
+                         * risk. */
                         break;
                 }
                 break;

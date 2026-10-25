@@ -58,9 +58,9 @@ static bool should_show_item_for_direction(
     if (direction == DIFF_UPSTREAM) {
         /* Upstream: What differs that apply could act on? A comparison question,
          * not a verb route, so the bits are read directly. Show: undeployed,
-         * deleted (apply would restore), content/mode/type differs, stale (Git
-         * moved past what dotta last reconciled — the bytes, or a claim, which
-         * rides its axis bit; apply would bring it), or profile reassignment
+         * deleted (apply would restore), content/mode/type differs, stale (Git's
+         * side differs from what dotta last saw or left — the bytes, or a claim,
+         * which rides its axis bit; apply would bring it), or profile reassignment
          * (apply acknowledges reassignment). TYPE rides along — replacing the
          * occupant is apply's (--force for the kinds the copy cannot commit),
          * and status's Conflicts remedy sends the user here to compare, so hiding

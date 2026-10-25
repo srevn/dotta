@@ -1986,12 +1986,13 @@ static void apply_print_cleanup_refused(
  * what landed there, and the next apply reads it back — a deployed file clean
  * and adopted, a pruned orphan's record reclaimed and a cleared copy's alike, a
  * released one released again, a fixed claim learned by the flush — all but a
- * directory the run created, which the next load observes and never owns (capture
- * is a directory's ownership event, and a look never is), and a node the run
- * replaced, whose record the next load releases, another kind standing there,
- * while a row beneath it the run did not land keeps the record written through
- * the node and reads [deleted] where that record names its profile, as a kill
- * before the phase leaves it. The caller renders the fate.
+ * directory the run created, which the next load observes, where it can name
+ * its owner and group, and never owns (capture is a directory's ownership event,
+ * and a look never is), and a node the run replaced, whose record the next load
+ * releases, another kind standing there, while a row beneath it the run did not
+ * land keeps the record written through the node and reads [deleted] where that
+ * record names its profile, as a kill before the phase leaves it. The caller
+ * renders the fate.
  *
  * @param ctx Dispatch context (must not be NULL; writes the state it holds, in
  *            the run's transaction)
@@ -2140,31 +2141,34 @@ static error_t apply_write_record(
      *   (a fix)                   load, so the flush has already observed any
      *                             that had no record, or one of another kind of
      *                             node, in that record's place, and learned each
-     *                             claim disk already stood on: a learning of
-     *                             the claims the fix set that the record still
-     *                             lacks, never an ownership event — anchoring
-     *                             it as owned would set deployed_at on a directory
-     *                             the user created and hand it to the prune on
-     *                             the next scope exit — with one exception: a
-     *                             record dotta owns of the directory's node whose
-     *                             binding names another row — another profile's,
-     *                             a pending reassignment, or another name of
-     *                             this one's — must not outlive the run that
-     *                             converged the directory, so it takes the one
-     *                             ownership event that moves it onto the row,
-     *                             by the acknowledgement loops' own test
-     *                             (core/workspace.h workspace_unacknowledged)
+     *                             claim disk already stood on — save where this
+     *                             host could not name its owner or group, where
+     *                             a fix learns nothing and the next load observes
+     *                             it: a learning of the claims the fix set that
+     *                             the record still lacks, never an ownership
+     *                             event — anchoring it as owned would set
+     *                             deployed_at on a directory the user created
+     *                             and hand it to the prune on the next scope
+     *                             exit — with one exception: a record dotta owns
+     *                             of the directory's node whose binding names
+     *                             another row — another profile's, a pending
+     *                             reassignment, or another name of this one's —
+     *                             must not outlive the run that converged the
+     *                             directory, so it takes the one ownership event
+     *                             that moves it onto the row, by the
+     *                             acknowledgement loops' own test (core/workspace.h
+     *                             workspace_unacknowledged)
      *   ancestors                 claimed parents created on the way, either
      *                             class — dotta created them too, an ownership
      *                             event
      * Every other active directory present on disk was present at load too, and
-     * has its record from the flush by the same argument; the load established
-     * presence at the boundary, and nothing here walks the disk to establish it
-     * again. A hold the release could not let go takes no write of its own: the
-     * writes above leave the record of a directory the run created or fixed at
-     * the row's mode, the mode its hold owed, and a landing's as the load left
-     * it, while disk stands at the working mode (core/deploy.h deploy_working_mode,
-     * stated).
+     * has its record from the flush by the same argument, where this host can
+     * name its owner and group; the load established presence at the boundary,
+     * and nothing here walks the disk to establish it again. A hold the release
+     * could not let go takes no write of its own: the writes above leave the
+     * record of a directory the run created or fixed at the row's mode, the mode
+     * its hold owed, and a landing's as the load left it, while disk stands at
+     * the working mode (core/deploy.h deploy_working_mode, stated).
      *
      * A deployed file — or a converged directory — whose verdict reads a pending
      * reassignment, as the preview named it, has its record replaced by one under
@@ -2351,13 +2355,15 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * confirmations (core/workspace.h workspace_flush). A run's land in its
      * dispatch transaction, which the checkpoint below commits with the rest of
      * the present, and each owed item holds the record its write made from the
-     * flush's end — so no loop below meets a record of another kind under a clean
-     * item: the acknowledgement owns no directory the user created where dotta's
-     * file was, and a fix learns onto the observation. A preview holds none, so
-     * the flush takes and commits a scoped one of its own once it owes anything,
-     * exactly as it does for status, diff, sync and update (state_locked, in
-     * core/state.h), and one refused publishes nothing: every item holds what
-     * the load read.
+     * flush's end. A clean item may hold a record of another kind all the same,
+     * where this host has no name for its node's owner or group, which no
+     * observation spells, so the loops below ask the kind (core/workspace.h
+     * workspace_unacknowledged): the acknowledgement owns no directory the user
+     * created where dotta's file was, and a fix learns nothing onto a gone node's
+     * record. A preview holds none, so the flush takes and commits a scoped one
+     * of its own once it owes anything, exactly as it does for status, diff,
+     * sync and update (state_locked, in core/state.h), and one refused publishes
+     * nothing: every item holds what the load read.
      *
      * The failure goes with the transaction. A run's flush writes into the one
      * the run will commit, so a failure there poisons everything it has left to
@@ -2777,14 +2783,14 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * fact about a node that is gone — Git retyped the name, and the row's own
      * kind stands there clean — and its ownership stamp vouches for a node dotta
      * never wrote. The row is adopted as a row with no record is, and the ownership
-     * event rewrites the record whole. No run meets one here: a clean file is
-     * one whose content the load learned, so the flush has written the row's
-     * first observation in that record's place already (core/workspace.h
-     * workspace_flush), and the clause reads a preview whose flush was refused
-     * as the run will — "Would adopt" where the run adopts. The kind is the
-     * ladder's first rung (core/workspace.h workspace_type_occupant): a link
-     * beside a file is another kind there, where path_type_kind would call both
-     * files.
+     * event rewrites the record whole. Asked, never assumed: a clean file is
+     * one whose content the load learned, so the flush writes the row's first
+     * observation in that record's place — save where this host has no name for
+     * the file's owner or group, which no observation spells (core/workspace.h
+     * workspace_flush) — and the clause reads a preview whose flush was refused
+     * as the run will, "Would adopt" where the run adopts. The kind is the ladder's
+     * first rung (core/workspace.h workspace_type_occupant): a link beside a
+     * file is another kind there, where path_type_kind would call both files.
      *
      * A clean row whose record dotta owns under another profile, of the row's
      * own kind, is a reassignment: disk holds what A deployed, B owns the path
@@ -2800,9 +2806,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * but the blob's), and the stat it stood on is the item's too. What this
      * loop reads of the flush's work is the record alone — the observation the
      * same flush made at a clean row with no record, or in a gone node's record's
-     * place — and a learning keeps the stamp, the node and the binding it read,
-     * so all three remain valid probes here; each writer points the item at the
-     * record it wrote, so the item holds what the store holds.
+     * place, or none where the observation could not be spelled — and a learning
+     * keeps the stamp, the node and the binding it read, so all three remain
+     * valid probes here; each writer points the item at the record it wrote, so
+     * the item holds what the store holds.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -2972,27 +2979,28 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* How many planned paths Git moved past what dotta last reconciled — a file's
-     * bytes, kind or claim, a directory's kind or claim. [stale] alone the plan
-     * brings like any other divergence; beside [modified] preflight reports it,
-     * a conflict or bytes no base proves, as its skip label says
-     * (apply_print_deploy_skips). Released files are covered by the orphan-prune
-     * summary below.
+    /* How many planned paths Git's side holds otherwise than what dotta last
+     * saw or left — a file's bytes, kind or claim, a directory's kind or claim.
+     * [stale] alone the plan brings like any other divergence; beside [modified]
+     * preflight reports it, a conflict or bytes no base proves, as its skip label
+     * says (apply_print_deploy_skips). Released files are covered by the
+     * orphan-prune summary below.
      *
      * The item's fact and not the plan's — the plan says what the run does, the
      * item says why — so the plan's pending items are walked once more, each
      * bucket one kind. DIVERGENCE_STALE and DIVERGENCE_CLAIM_MOVED are the
      * workspace's verdict of that move — the content, another kind or another
-     * confirmed blob (core/workspace.h workspace_stale), or a claim
-     * (workspace_claims_moved), with a claim naming an owner this host cannot
-     * resolve counted beside them, Git's to bring though no run here can
-     * (core/workspace.h divergence_type_t) — a persistent signal that survives
-     * status→apply sequences and counts the same however the branch moved; work
-     * by definition (core/deploy.c deploy_needs_work), so only a pending item
-     * carries either. Every planned row counts, a row preflight will skip included
-     * — a Git move is the record against the view, and preflight's answer does
-     * not change it — and a row the plan skips (-e, --skip-existing) is in neither
-     * bucket. */
+     * confirmed blob (core/workspace.h workspace_stale), or a claim — the record
+     * of the node's (workspace_claims_moved), or one no record of the node holds
+     * (core/workspace.c workspace_analyze_claim) — with a claim naming an owner
+     * this host cannot resolve counted beside them, Git's to bring though no
+     * run here can (core/workspace.h divergence_type_t) — a persistent signal
+     * that survives status→apply sequences and counts the same however the branch
+     * moved; work by definition (core/deploy.c deploy_needs_work), so only a
+     * pending item carries either. Every planned row counts, a row preflight
+     * will skip included — a Git move is the record against the view, and
+     * preflight's answer does not change it — and a row the plan skips (-e,
+     * --skip-existing) is in neither bucket. */
     size_t stale_files = 0;
     size_t stale_dirs = 0;
 

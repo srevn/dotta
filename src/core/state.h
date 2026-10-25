@@ -179,20 +179,21 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *
  * The row dotta last reconciled this path against — what it deployed, or, when
  * deployed_at is 0, what it was looking at when it first observed the path —
- * and what it confirmed there. One row per filesystem path, both kinds. A row
- * exists iff dotta has observed the node its kind names at the path while it
- * was active — seen standing there, or put there: there is no "never observed"
+ * and what it saw or confirmed there. One row per filesystem path, both kinds.
+ * A row exists iff dotta has observed the node its kind names at the path while
+ * it was active — seen standing there, or put there: there is no "never observed"
  * row — the row's existence is the observation (core/workspace.c classify_absent
  * reads it, of the kind and the profile the record names), and no column restates
  * it.
  *
  * Four groups of columns, one rule each. The store writes a record whole and
  * asks nothing of it (state_write), so each rule is kept where a record is built:
- * a first observation and apply's ownership events from the row the path is
- * reconciled against (core/workspace.h workspace_observation), add's and update's
- * from what their capture committed (cmds/add.c add_path_t, cmds/update.c
- * update_commit_t), a learning from the record the load read (core/workspace.c
- * workspace_learning).
+ * a first observation from the row the path is reconciled against and the look
+ * that found its node (core/workspace.h workspace_observation, core/workspace.c
+ * workspace_flush), apply's ownership events from the row (core/workspace.h
+ * workspace_anchor), add's and update's from what their capture committed
+ * (cmds/add.c add_path_t, cmds/update.c update_commit_t), a learning from the
+ * record the load read (core/workspace.c workspace_learning).
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation — a gone node's record's replacement among them —
@@ -210,33 +211,37 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     the content (the slow-path CMP_EQUAL), which keeps the node: it is made
  *     only onto a record of the row's kind, since a record of another node, the
  *     look having found the row's in its place, gives way to the row's first
- *     observation before anything is learned onto it (core/workspace.c
+ *     observation, where its claim can be spelled, before anything is learned
+ *     onto it, and has nothing learned onto it otherwise (core/workspace.c
  *     workspace_flush) — a whole write, never a learning onto the gone node's
  *     record. No node is executable: the bit is the claim's mode, and Git's
  *     filemode the row's alone. Zero blob_oid is no content confirmation — a
  *     directory, whose whole confirmed-disk record is that it was observed (a
- *     directory has no content confirmation, schema-enforced), or a file observed
- *     but never confirmed.
- *   - the claim (mode, owner, group): the claim dotta last reconciled the path
- *     against, and so the base a difference on a claim axis is read from — disk
- *     off it the user's move, the row off it Git's claim still to bring
- *     (core/workspace.h workspace_claims_moved). The row's at the first observation
- *     and at apply's ownership events, the one a capture authored at add's and
- *     update's (the claim its capture answered, core/profiles.h
- *     profile_capture_file, profile_capture_directory), and on each axis a look
- *     found disk standing on, or a fix made it stand on, the row's since (a
- *     learning of the claim). It is a file orphan's reference on disk too; a
- *     directory orphan is judged by its emptiness, never its claim. A link claims
- *     no mode: its column is NULL, and every other node's is permission bits,
- *     0000–0777; an owner and a group are names, whole and never empty, NULL
- *     where the claim names none (each schema-enforced).
+ *     directory has no content confirmation, schema-enforced), or a file this
+ *     record holds no confirmation of.
+ *   - the claim (mode, owner, group): the claim dotta last saw the path stand
+ *     on or put there, and so the base a difference on a claim axis is read from
+ *     — disk off it the user's move, the row off it Git's claim still to bring
+ *     (core/workspace.h workspace_claims_moved). The look's at the first
+ *     observation, in a capture's words (core/metadata.h
+ *     metadata_capture_ownership), the row's at apply's ownership events, the
+ *     one a capture authored at add's and update's (the claim its capture answered,
+ *     core/profiles.h profile_capture_file, profile_capture_directory), and on
+ *     each axis a look found disk standing on, or a fix made it stand on, the
+ *     row's since (a learning of the claim) — the first observation's own agreeing
+ *     axes among them, learned by the flush that writes it. It is a file orphan's
+ *     reference on disk too; a directory orphan is judged by its emptiness, never
+ *     its claim. A link claims no mode: its column is NULL, and every other node's
+ *     is permission bits, 0000–0777; an owner and a group are names, whole and
+ *     never empty, NULL where the claim names none (each schema-enforced).
  *   - the lifecycle (deployed_at): the one act the record remembers, a moment
  *     or 0 (schema-enforced). It advances to now on every ownership event and a
  *     learning keeps it, 0 = dotta never put this here.
  *
  * Invariants:
- *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
- *     matched that blob. Zero means "never confirmed."
+ *   - blob_oid is non-zero iff this record holds a confirmation that disk content
+ *     matched that blob. Zero is none: a directory, or a file the record never
+ *     confirmed — a release forgets a confirmation with the record.
  *   - a stat matching a live look of the record's kind proves, on the fast path,
  *     that disk still equals blob_oid (state_stat_matches).
  *   - the record is stale iff the view has advanced past what dotta last saw at

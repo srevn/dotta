@@ -835,13 +835,14 @@ static workspace_state_t classify_absent(
  * record learns
  *
  * Axis by axis — DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP — where the look stands
- * off the row's claim, with DIVERGENCE_CLAIM_MOVED beside them where Git moved
- * one of those past the record's (workspace_claims_moved) or the owner claimed
- * is one this host cannot resolve (workspace_compare_ownership), all added to
- * the item's divergence; and each claim Git moved that the look already stands
- * on, added to its confirmation for the record to learn. Asked only of a look
- * standing at the row's kind, the one whose stat says anything of the row: each
- * analysis rules out absence and another kind before it asks.
+ * off the row's claim, with DIVERGENCE_CLAIM_MOVED beside them where the claim
+ * is Git's to bring — the record of this node holds it otherwise
+ * (workspace_claims_moved), no record of this node holds it at all, or the owner
+ * claimed is one this host cannot resolve (workspace_compare_ownership) — all
+ * added to the item's divergence; and each such axis of Git's that the look already
+ * stands on, added to its confirmation for the record to learn. Asked only of a
+ * look standing at the row's kind, the one whose stat says anything of the row:
+ * each analysis rules out absence and another kind before it asks.
  *
  * One rule for the two analyses of an active item (workspace_analyze_file,
  * workspace_analyze_directory). The orphan analysis asks the same compare of
@@ -871,25 +872,35 @@ static void workspace_analyze_claim(workspace_item_t *item) {
      * someone this host cannot resolve, whom no disk here stands on. */
     claims |= workspace_compare_ownership(row->owner, row->group, &item->st);
 
-    /* Who moved it. An axis Git moved past the claim the record last reconciled
-     * and disk has not followed is Git's to bring — whoever else moved it, since
-     * apply converges every claim, and update's capture would commit disk's over
-     * Git's move. The bit rides beside the axis it attributes, never alone. */
-    divergence_type_t moved = workspace_claims_moved(row, record);
+    /* Who moved it. An axis the record of this node holds otherwise than the
+     * row — Git moved it since, or the record holds it as a first look found
+     * it, never reconciled (workspace_claims_moved) — and, where no record of
+     * this node stands, every axis: none reconciled any, a gone node's record
+     * of another kind saying nothing of the row's. Where disk stands off such
+     * an axis it is Git's to bring, whoever else moved it: apply converges every
+     * claim, and update's capture would commit disk's over a claim nobody
+     * reconciled. The bit rides beside the axis it attributes, never alone — so
+     * a link's mode, which no link row is asked, rides in the mask and attributes
+     * nothing. */
+    divergence_type_t moved = record && record->kind == workspace_type_occupant(row->type)
+        ? workspace_claims_moved(row, record) : DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP;
     if (claims & moved) {
         claims |= DIVERGENCE_CLAIM_MOVED;
     }
     item->divergence |= claims;
 
-    /* An axis Git moved that disk already stands on is the record's to learn,
-     * whoever owns the path — a directory dotta never owned learns it too: the
-     * record follows every agreement, so the user's next move on that axis reads
-     * as the user's, and an orphan is measured against the claim disk stood on.
-     * As it comes, whichever row the record's binding names: a claim opens nothing,
-     * where the content's confirmation is bound to the row's binding because an
-     * encrypted blob opens under one (workspace_analyze_file). And only onto a
-     * base for it — no record, or one of another kind, is none, which
-     * workspace_claims_moved has already asked. */
+    /* Such an axis that disk already stands on is the record's to learn, in the
+     * row's words, whoever owns the path — a directory dotta never owned learns
+     * it too: the record follows every agreement, so the user's next move on
+     * that axis reads as the user's, and an orphan is measured against the claim
+     * disk stood on. Where no record of this node stands that is every axis disk
+     * stands on, learned onto the observation the same flush writes, so the first
+     * load reads as every later one. As it comes, whichever row the record's
+     * binding names: a claim opens nothing, where the content's confirmation is
+     * bound to the row's binding because an encrypted blob opens under one
+     * (workspace_analyze_file). Onto the record of this node, or the observation
+     * the flush writes in its place: over a gone node's record whose place the
+     * observation does not take, the flush learns nothing (workspace_flush). */
     item->confirmation |= moved & ~claims;
 }
 
@@ -997,13 +1008,13 @@ static error_t workspace_compare_base(
  * verb takes by default (core/workspace.h workspace_item_route, UNCONFIRMED);
  * both together is a conflict.
  *
- * The claim's verdict is one question per axis (workspace_analyze_claim): did
- * Git move it past the claim the record last reconciled? DIVERGENCE_CLAIM_MOVED
- * says so, beside the axis that differs, and is STALE's twin for the routes — a
- * move of Git's that disk has not followed, a conflict beside an edit a base
- * proves. The content's second question has no claim twin: apply converges every
- * claim whoever moved it, so whether disk also left the record's claim would
- * change no verb.
+ * The claim's verdict is one question per axis (workspace_analyze_claim): does
+ * Git's side hold it otherwise than the record of this node, or did no record
+ * of this node reconcile it? DIVERGENCE_CLAIM_MOVED says so, beside the axis
+ * that differs, and is STALE's twin for the routes — a claim of Git's that disk
+ * has not followed, a conflict beside an edit a base proves. The content's second
+ * question has no claim twin: apply converges every claim whoever moved it, so
+ * whether disk also left the record's claim would change no verb.
  *
  * Reassignment is the same pairing read on the profile axis: the record says
  * who deployed the disk content, the row says who owns the path now, and the
@@ -1108,9 +1119,9 @@ static void workspace_analyze_file(
      * and a failed look — and the verdict over what stands there follows. Where
      * what stands is the row's own kind and dotta holds no record of it — none,
      * or one of another kind, whose node the look found gone — the path is owed
-     * its observation too, which the flush makes off this same look, in the gone
-     * node's record's place wherever the verdict below reads nothing from that
-     * record (workspace_flush).
+     * its observation too, which the flush makes off this same look where this
+     * host can name its owner and group, in the gone node's record's place wherever
+     * the verdict below reads nothing from that record (workspace_flush).
      *
      * CONTENT AND TYPE ANALYSIS: the verdict is a three-way comparison with what
      * dotta last saw at the path as base:
@@ -1311,10 +1322,13 @@ static void workspace_analyze_file(
              * the user replaced, a directory where the row's file now stands —
              * and the flush writes the row's first observation in its place,
              * the content with it, disk being the row's leaving that record nothing
-             * to decide. Never onto the gone node's record itself: a confirmation
-             * there would carry the ownership stamp dotta earned for that node
-             * onto one it never wrote, where the observation is never owned,
-             * and apply adopts it as it adopts a row with no record (cmds/apply.c).
+             * to decide. Each where this host can name the look's owner and group,
+             * which an observation spells; where it cannot, the note is dropped
+             * (workspace_flush). Never onto the gone node's record itself: a
+             * confirmation there would carry the ownership stamp dotta earned
+             * for that node onto one it never wrote, where the observation is
+             * never owned, and apply adopts it as it adopts a row with no record
+             * (cmds/apply.c).
              *
              * Onto a record of this row's kind only where it is bound to this
              * row: an encrypted blob opens under one binding and no other, and
@@ -1449,15 +1463,15 @@ static void workspace_analyze_file(
  * moved on after the deployment and before the path left scope, and that move
  * is not the user's edit. The record is the honest reference on every axis —
  * its kind, blob and stat for the content, its mode, owner and group for the
- * claim — the claim dotta last reconciled the path against, which follows every
- * agreement a load found or a fix made (core/state.h state_record_t), so a claim
- * Git moved and disk followed while the path was active is measured as the one
- * disk stands on, not as an edit. Never what the row later came to claim, after
- * the path left scope. DIVERGENCE_STALE is therefore never written here, nor
- * DIVERGENCE_CLAIM_MOVED: the active items' analyses ask whether Git moved a
- * claim since the record reconciled it, and need no second question, since apply
- * converges every claim; this analysis has no row to ask that of, and asks whether
- * disk left the claim the record reconciled — the question prune safety turns on.
+ * claim — the claim dotta last saw the path stand on or put there, which follows
+ * every agreement a load found or a fix made (core/state.h state_record_t), so
+ * a claim Git moved and disk followed while the path was active is measured as
+ * the one disk stands on, not as an edit. Never what the row later came to claim,
+ * after the path left scope. DIVERGENCE_STALE is therefore never written here,
+ * nor DIVERGENCE_CLAIM_MOVED: the active items' analyses ask whether a claim is
+ * Git's to bring, and need no second question, since apply converges every claim;
+ * this analysis has no row to ask that of, and asks whether disk left the claim
+ * the record holds — the question prune safety turns on.
  *
  * Precondition: the record carries a confirmed blob, and the look found the
  * record's own kind standing. Its one caller, workspace_measure, compares only
@@ -1566,10 +1580,11 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
      * The look stands at the record's kind: the switch returned on absence, and
      * another kind is never measured. The compare workspace_analyze_claim asks
      * of a row, asked of the record's claim: the record's mode is total for every
-     * kind that carries one (written from a view row after the build resolved
-     * absence), so one full-bit compare answers; a symlink record is never asked.
-     * Both halves read the caller's look — the one stat the content verdict was
-     * made from — for zero extra syscalls.
+     * kind that carries one — the look's at a first observation, the row's at
+     * an ownership event or a learning, the capture's at add's and update's —
+     * so one full-bit compare answers; a symlink record is never asked. Both
+     * halves read the caller's look — the one stat the content verdict was made
+     * from — for zero extra syscalls.
      */
     if (record->kind != FS_OCCUPANT_SYMLINK && (item->st.st_mode & 0777) != record->mode) {
         item->divergence |= DIVERGENCE_MODE;
@@ -3035,8 +3050,9 @@ static error_t workspace_analyze_untracked(
  * where an ancestor claim has none to give (the split is at the line itself):
  * - DIVERGENCE_MODE: the mode is not the claim's
  * - DIVERGENCE_OWNERSHIP: the owner or group is not the claim's
- * - DIVERGENCE_CLAIM_MOVED: beside either, where Git moved it past the claim
- *   the record reconciled (workspace_analyze_claim)
+ * - DIVERGENCE_CLAIM_MOVED: beside either, where Git's side holds it otherwise
+ *   than the record of this node, or no record of this node reconciled it
+ *   (workspace_analyze_claim)
  * - A pending reassignment on a clean row, which no bit carries: the route reads
  *   it off the item's sources and look, and the diverged items list the item
  *   for it (workspace_list), as they list a file row's
@@ -3164,10 +3180,11 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
     /* The directory stands, the row's own kind — the arms above having ruled on
      * absence, a failed look and every other kind — so where dotta holds no record
      * of a directory the path is owed its observation, of either class, which
-     * the flush makes off this look (workspace_flush), as it does a file's: where
-     * there is none, and in the place of one of another kind, whose node the
-     * look found gone — this analysis reads a record only where another kind
-     * stands, so no verdict here is that record's.
+     * the flush makes off this look where this host can name its owner and group
+     * (workspace_flush), as it does a file's: where there is none, and in the
+     * place of one of another kind, whose node the look found gone — this analysis
+     * reads a record only where another kind stands, so no verdict here is that
+     * record's.
      *
      * An ancestor claim is a creation template, not a convergence target, and
      * this is the line the profile's word about the path begins at. Every question
@@ -3387,17 +3404,19 @@ bool workspace_pending(
          * below), and apply deploys the row — or, where the row's own kind already
          * stands in place of the node the record describes, lets the record go:
          * its load's flush observes the row's node there — a directory's always,
-         * a file's where the load learns the row's content (workspace_flush) —
-         * and a file is adopted. A FILE ↔ EXECUTABLE move Git made under an
-         * untouched copy is not stale, either blob mode standing as one: it moves
-         * the mode, the claim's question below — where a sheet claim stands,
-         * the row's mode is the claim's, and nothing moved. */
+         * a file's where the load learns the row's content, each where this host
+         * can name its owner and group (workspace_flush) — and a file is adopted.
+         * A FILE ↔ EXECUTABLE move Git made under an untouched copy is not stale,
+         * either blob mode standing as one: it moves the mode, the claim's question
+         * below — where a sheet claim stands, the row's mode is the claim's,
+         * and nothing moved. */
         if (workspace_stale(row, record)) return true;
 
-        /* The claim Git moved past the one the record reconciled, which apply
-         * brings — a claim disk already stands on included, where no load has
-         * learned it since: owed until one does. The rule keeps out a derived
-         * claim, which apply never converges. */
+        /* A claim Git's side holds otherwise than the record — moved since dotta
+         * reconciled it, or held as a first look found it — which apply brings,
+         * a claim disk already stands on included, where no load has learned it
+         * since: owed until one does. The rule keeps out a derived claim, which
+         * apply never converges. */
         if (workspace_claims_moved(row, record) != DIVERGENCE_NONE) return true;
 
         /* An owned record naming a profile the row does not: the reassignment
@@ -4003,9 +4022,9 @@ bool workspace_item_tags(
                 }
 
                 if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
-                    /* Git moved past what dotta last reconciled — the bytes,
-                     * the kind or a claim, one tag for any: the axis tags beside
-                     * it say what differs, not who moved each, since apply
+                    /* Git's side differs from what dotta last saw or left — the
+                     * bytes, the kind or a claim, one tag for any: the axis tags
+                     * beside it say what differs, not who moved each, since apply
                      * converges them alike. Alone it is apply-side work — the
                      * same CYAN as [undeployed], none of the user's bytes is
                      * overwritten — which the blob's violation below outranks;
@@ -4192,9 +4211,9 @@ bool workspace_item_tags(
 
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 /* The claim alone — the mode, the ownership, or both — left the
-                 * one the record reconciled; the content is dotta's. Warning
-                 * level: an orphan's skip (cleanup_skip_reason: CLAIM_CHANGED),
-                 * where a node's landing goes unasked, a claim being no edit. */
+                 * one the record holds; the content is dotta's. Warning level:
+                 * an orphan's skip (cleanup_skip_reason: CLAIM_CHANGED), where
+                 * a node's landing goes unasked, a claim being no edit. */
                 if (item->divergence & DIVERGENCE_MODE) {
                     if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                         tags_out[tag_count++] = "mode";
@@ -4349,11 +4368,12 @@ bool workspace_item_tags(
  * (DIVERGENCE_MODE) and the owner and group (DIVERGENCE_OWNERSHIP) are the row's
  * claim. Every other column is the one it is written onto — the node and the
  * binding that record was read under, the stamp. The node needs no word of the
- * row's: a learning of the content is written onto a record of the row's kind,
- * since a record of another kind gives way to the row's first observation before
- * anything is learned onto it (workspace_flush), so the blob is confirmed as
- * the node that record already names. A file row's blob is Git's and never zero,
- * so a learning of the content always confirms one.
+ * row's: every learning is written onto a record of the row's kind, since a record
+ * of another kind gives way to the row's first observation before anything is
+ * learned onto it, or, where the observation cannot be spelled or does not take
+ * its place, has nothing learned onto it (workspace_flush), so the blob is
+ * confirmed as the node that record already names. A file row's blob is Git's
+ * and never zero, so a learning of the content always confirms one.
  *
  * Two callers, which would otherwise drift apart: workspace_flush, over what
  * the analyses noted, and workspace_learn, over the claims apply's fix set.
@@ -4396,12 +4416,13 @@ error_t workspace_anchor(
     CHECK_NULL(ws);
     CHECK_NULL(item);
 
-    /* The record the event writes, built before the statement: the row's
-     * observation with its content — the row's blob, zero for a directory, under
+    /* The record the event writes, built before the statement: the row's node
+     * and claim with its content — the row's blob, zero for a directory, under
      * the stat the event stands on — and the event's stamp */
+    const manifest_row_t *row = item->row;
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
-    *record = workspace_observation(item->row);
-    record->blob_oid = item->row->blob_oid;
+    *record = workspace_observation(row, row->mode, row->owner, row->group);
+    record->blob_oid = row->blob_oid;
     record->stat = stat;
     record->deployed_at = now;
 
@@ -4476,6 +4497,13 @@ error_t workspace_flush(workspace_t *ws) {
      *    first owed item, so a load that owes nothing allocates nothing. */
     const state_record_t **learnings = NULL;
 
+    /* The (label, owner, group) a first observation's capture found no name for,
+     * each asked once a flush (the observation, below) — a handful at most, scanned
+     * in order, in the arena beside the learnings */
+    struct { label_t label; uid_t uid; gid_t gid; } *unresolved = NULL;
+    size_t unresolved_count = 0;
+    size_t unresolved_capacity = 0;
+
     for (size_t i = 0; i < active_count; i++) {
         workspace_item_t *item = ws->active[i];
         const state_record_t *record = item->record;
@@ -4513,20 +4541,72 @@ error_t workspace_flush(workspace_t *ws) {
              * measured a difference from, or could not read past, stays, whatever
              * it confirmed: its kind is the base both sides of a conflict moved
              * from (core/workspace.h workspace_stale), or the next readable load's
-             * (workspace_analyze_file). */
-            onto = workspace_observation(item->row);
-        } else if (record && item->confirmation != DIVERGENCE_NONE) {
+             * (workspace_analyze_file).
+             *
+             * Its claim is the one the look found, in a capture's words: the
+             * mode off the look — a link's none, its column bound NULL — and
+             * the owner and group named wherever absence would misstate them
+             * (core/metadata.h metadata_capture_ownership). The row's in its
+             * place would say disk stood on a claim it may stand off, which no
+             * later load could read as anything but the user's; each axis disk
+             * does stand on is learned in the row's words below, so the first
+             * record spells the claim as every later load reads it
+             * (workspace_analyze_claim). */
+            const label_t label = label_of(item->storage_path);
+
+            /* A node whose owner or group this host has no name for is not
+             * observed: its claim cannot be spelled, and nothing spelled in its
+             * place is what stands, so each load reads the node whole (stated),
+             * and a gone node's record at its path stays. Asked once a flush
+             * per (label, owner, group): every node of such an owner answers
+             * alike, and a lookup that misses is the slow one. The key is what
+             * the capture's rule reads, all of it — the label decides the invoker's
+             * own node, a root login's outside home/ among them — so the memo
+             * answers what the rule would. */
+            size_t u = 0;
+            for (; u < unresolved_count; u++) {
+                if (unresolved[u].label == label && unresolved[u].uid == item->st.st_uid &&
+                    unresolved[u].gid == item->st.st_gid) {
+                    break;
+                }
+            }
+            if (u < unresolved_count) continue;
+
+            const char *owner;
+            const char *group;
+            if (metadata_capture_ownership(
+                item->storage_path, &item->st, ws->arena, &owner, &group
+                ) != METADATA_OWNERSHIP_RESOLVED) {
+                unresolved = arena_grow(
+                    ws->arena, unresolved, &unresolved_capacity, unresolved_count + 1,
+                    sizeof(*unresolved)
+                );
+                unresolved[unresolved_count].label = label;
+                unresolved[unresolved_count].uid = item->st.st_uid;
+                unresolved[unresolved_count].gid = item->st.st_gid;
+                unresolved_count++;
+                continue;
+            }
+
+            onto = workspace_observation(
+                item->row, kind == FS_OCCUPANT_SYMLINK ? 0 : item->st.st_mode & 0777,
+                owner, group
+            );
+        } else if (record && record->kind == kind && item->confirmation != DIVERGENCE_NONE) {
             /* The record the load read, where the analyses noted an axis it lacks
-             * (the item's confirmation) */
+             * (the item's confirmation) — of the row's kind alone: a gone node's
+             * record, whose place the observation did not take, learns nothing
+             * of a node it does not describe (core/state.h state_record_t) */
             onto = *record;
         } else {
             /* Nothing is owed: a record the load learned nothing new of — a gone
              * node's record the verdict reads among them — or no record and no
-             * node of the row's to observe. A confirmation rides the observation:
-             * a content confirmation is noted only where the row's kind stands
-             * (the ladder's first rung, and the stat's), and a claim is learned
-             * only onto a record of the row's kind (workspace_claims_moved), so
-             * a path skipped here owes none. */
+             * node of the row's to observe. A content confirmation rides the
+             * observation, noted only where the row's kind stands (the ladder's
+             * first rung, and the stat's); the claim's axes noted over a gone
+             * node's record whose place the observation does not take — a file
+             * row whose bytes the load did not learn — are dropped here: nothing
+             * is learned onto a node the look found gone. */
             continue;
         }
 

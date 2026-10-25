@@ -78,8 +78,8 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * only if properties diverged (content, mode, ownership, etc.).
              *
              * DIVERGENCE_STALE and DIVERGENCE_CLAIM_MOVED are deploy reasons
-             * like any other: Git moved past what dotta last reconciled — the
-             * bytes or a claim — and disk did not follow.
+             * like any other: Git's side differs from what dotta last saw or
+             * left — the bytes or a claim — and disk did not follow.
              *
              * DIVERGENCE_ENCRYPTION is the one bit that is never deploy's work:
              * it says the blob is stored plaintext in Git where the auto-encrypt

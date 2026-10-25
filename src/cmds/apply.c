@@ -2724,10 +2724,13 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * or add/update) AND that workspace_analyze_file just classified as clean
      * for deploy's purposes: an item carrying no bit but the blob's, ENCRYPTION,
      * which deploy_needs_work masks out. Apply is the ownership moment: running
-     * it is how the user claims the in-scope set. Stamping here collapses the
-     * "enable → apply on a pre-existing matching file" flow to a coherent (blob,
-     * now, stat), so a later `rm file` is classified as [deleted] and `update`
-     * commits the deletion. The stat is the analysis's own — the one its comparison
+     * it is how the user claims the in-scope set. The write is the ownership
+     * event (workspace_anchor), the row's whole record with the stamp no
+     * observation carries, deployed_at — which the ownership gate reads
+     * (core/workspace.c workspace_analyze_orphans): once the path leaves the
+     * view, its profile disabled or its file deleted by update, a copy apply
+     * adopted is pruned where unchanged, and one dotta only observed is released
+     * and left alone. The stat is the analysis's own — the one its comparison
      * stood on (core/workspace.h workspace_item_t's stat) — never a fresh lstat,
      * which would bind whatever stands at the path now to a verdict from two
      * phases earlier.

@@ -1,9 +1,11 @@
 /**
  * policy.h - Centralized encryption policy decision logic
  *
- * Single source of truth for determining whether a file should be encrypted.
- * Consolidates decision logic from add, update, and other commands to ensure
- * consistent behavior across the codebase.
+ * The one answer to whether a file should be encrypted, the hierarchy below:
+ * add and update ask it whole, ahead of each capture of a file's bytes
+ * (encryption_policy_should_encrypt), and the workspace asks its priority 4 alone,
+ * the auto-encrypt patterns, of a row stored plaintext
+ * (encryption_policy_violation).
  *
  * Design principle: This module provides POLICY (should we encrypt?), while the
  * content layer provides MECHANISM (how to encrypt). This separation of concerns
@@ -52,10 +54,6 @@ typedef enum {
 
 /**
  * Determine if file should be encrypted based on policy
- *
- * This is the SINGLE SOURCE OF TRUTH for encryption decisions across all commands
- * (add, update, etc.). Consolidates scattered decision logic into one testable,
- * maintainable function.
  *
  * Policy hierarchy (priority order):
  * 0. If path is a protected meta-file → PLAINTEXT or ERROR (system integrity)

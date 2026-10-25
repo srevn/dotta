@@ -182,13 +182,13 @@ static const char *get_status_message_from_item(
     }
 
     /* Both sides moved — the route's CONFLICT: the user's bytes or kind beside
-     * a move Git made, to the bytes, the kind or a claim. The one spelling of
-     * the fact, read where apply's skip label, update's census and status's section
-     * read it, and ahead of the kind's own sentence, which a kind both sides
-     * moved would otherwise take. Upstream only in practice: the downstream filter
-     * admits neither this nor the STALE arm below. Its --force is qualified as
-     * status's Conflicts header qualifies it: a directory in a blob row's way
-     * goes only with all it holds (core/deploy.c check_clearance). */
+     * a move Git made, to the bytes, the kind or a claim. In the frame's words
+     * (core/workspace.h divergence_type_t), as apply's skip label and update's
+     * census say it, and ahead of the kind's own sentence, which a kind both
+     * sides moved would otherwise take. Upstream only in practice: the downstream
+     * filter admits neither this nor the STALE arm below. Its --force is qualified
+     * as status's Conflicts header qualifies it: a directory in a blob row's
+     * way goes only with all it holds (core/deploy.c check_clearance). */
     if (workspace_item_route(item) == WORKSPACE_ROUTE_CONFLICT) {
         return "changed in Git and on disk (apply --force <path> keeps Git's, a directory "
                "only if all dotta's)";

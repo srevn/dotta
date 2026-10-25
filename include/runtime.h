@@ -292,15 +292,17 @@ typedef enum dotta_verbosity {
  *
  * Who declares it: the commands whose subject is the view — the workspace commands
  * (status, diff, apply, sync, update — `workspace_load` borrows the view rather
- * than building one) and `profile enable` (its receipt is the diff between the
- * view before and the view after). A build that fails ends dispatch with the
- * builder's message — a tree that will not load, metadata that will not parse —
- * on every path of the command, including the ones that would not have read the
- * view; such a set is broken as a whole, and `profile disable` (or `remove`) is
- * the way out. A custom/ claim under a profile with no target is not such a
- * failure: the build is total over it — no row, recorded on the view
- * (`manifest_unbound`) — and the health consumers (status, apply, sync) surface
- * the held claims.
+ * than building one) and `profile enable`: its run builds the view after over
+ * every profile of the view before, so no enable completes on a set the build
+ * refuses, and it reads the view before once — an enabled profile's claims placed
+ * nowhere for want of a target (`manifest_unbound`), which an enable naming that
+ * profile warns of. A build that fails ends dispatch with the builder's message
+ * — a tree that will not load, metadata that will not parse — on every path of
+ * the command, including the ones that would not have read the view; such a set
+ * is broken as a whole, and `profile disable` (or `remove`) is the way out. A
+ * custom/ claim under a profile with no target is not such a failure: the build
+ * is total over it — no row, recorded on the view (`manifest_unbound`) — and
+ * the health consumers (status, apply, sync) surface the held claims.
  *
  * Who does not: a command for which the view is incidental (one lookup or one
  * count on one of its paths — `show`, `list`, `key status`, `completion`, `export`
@@ -363,8 +365,8 @@ typedef struct dotta_needs {
  *     value of the command arena, rows and indexes alike, which nothing frees.
  *     Never reassigned: a command that moves Git (a commit, a pull) or the enabled
  *     set builds the post-mutation view itself, and `run.manifest` stays the
- *     view before — which is exactly what the receipts diff against
- *     (`manifest_diff(ctx->run.manifest, after, …)`).
+ *     view before — the one sync's Manifest block diffs the pull against
+ *     (`manifest_diff`, `cmds/sync.c` `cmd_sync`).
  *
  * Owning-typed pointers where `close_run` frees (`content_cache_t *`, `keymgr
  * *`, `state_t *`, `git_repository *`); `const` where nothing does (`mounts`

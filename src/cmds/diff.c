@@ -123,7 +123,7 @@ static const char *get_status_message_from_item(
     if (item->state == WORKSPACE_STATE_DELETED) {
         return direction == DIFF_UPSTREAM
                 ? "deleted locally (file missing)"
-                : "deleted locally (would be removed by update)";
+                : "deleted locally (would be committed by update)";
     }
 
     /* Beneath a squatted directory: nothing there was looked at, so no sentence

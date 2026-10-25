@@ -449,9 +449,8 @@ typedef enum {
  * Is --force the remedy for this skip?
  *
  * The consent/incapacity split, as a value. "Needs force" is the module's own
- * word (DEPLOY_CLEARANCE_NEEDS_FORCE) and the screen's ("Use --force to overwrite
- * or replace them"). Total over the reasons, so a new one is classed here or
- * the build fails.
+ * word (DEPLOY_CLEARANCE_NEEDS_FORCE). Total over the reasons, so a new one is
+ * classed here or the build fails.
  *
  * Readers: cmds/apply.c apply_print_deploy_skips (the block's level and each
  * row's, and the --force line) and cmd_apply (the exit, which counts the

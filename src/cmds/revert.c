@@ -641,10 +641,12 @@ static bool revert_reclaims(
  * A revert changes Git and nothing on disk, and the next load reads the restored
  * claim against the record at its place: [stale] over a copy that stands, apply's
  * to bring. Over a node already gone that record is the history of a node the
- * user removed — under an earlier removal of the claim, or Git's — and would
- * read the restored claim's absence as the user's deletion again (core/workspace.c
- * classify_absent), every screen sending the user to undo the revert. So it
- * retires, and the claim starts from its first look, apply's to land (core/state.h
+ * user removed — under an earlier removal of the claim, or Git's — and where it
+ * confirmed the bytes the revert restores, as a revert undoing that removal finds
+ * it, would read the restored claim's absence as the user's deletion again
+ * (core/workspace.c classify_absent), every screen sending the user to undo the
+ * revert. So it retires, the commit having reconciled the claim with the node's
+ * absence, and the claim starts from its first look, apply's to land (core/state.h
  * state_retire). This profile's record alone, whatever its kind, the enabled
  * set or no, and whatever row stands there now: it is the restored claim's own
  * history, which would misread its absence wherever that claim comes to stand —
@@ -658,9 +660,11 @@ static bool revert_reclaims(
  * state_begin).
  *
  * Refused, the record stands, and the reclaim is what no later load re-derives:
- * cmd_revert says beneath its receipt how the restored claim reads until an apply
- * deploys it, where the profile is enabled — in a disabled one the record is an
- * orphan, which the next apply reclaims.
+ * the restored claim's absence reads as that record says — [undeployed] [stale],
+ * apply's, where it confirmed other bytes than the restored ones, and the user's
+ * deletion, which an update would commit, where it confirmed the very bytes
+ * restored (stated, cmd_revert's step 24) — and in a disabled profile the record
+ * is an orphan, which the next apply reclaims.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param profile The reverted profile (must not be NULL)
@@ -1231,25 +1235,19 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * claim's (revert_write_record). Non-fatal: the commit stands, so the store's
      * refusal is warned in its own words, a block beneath the receipt. What it
      * loses, no later load re-derives: the reclaim, so the gone node's record
-     * stays, and the next load reads the restored claim's absence as the user's
-     * deletion (core/workspace.c classify_absent), which an update would commit,
-     * undoing the revert. Said where the profile is enabled, in the ordinary
-     * case's words: the restored claim standing at its place over a record of
-     * its kind. Under another profile's row, or over a record of another kind,
-     * the place reads [undeployed] instead, apply's to land; in a disabled profile
-     * the record is an orphan the next apply reclaims, and nothing reads it wrong
-     * unless an enable comes first (stated). */
+     * stays, and the restored claim's absence reads as that record says
+     * (core/workspace.c classify_absent) — apply's to land, [stale] beside it,
+     * where it confirmed other bytes than the restored ones, as the next step
+     * says; and the user's deletion where it confirmed the very bytes restored,
+     * a revert undoing a removal whose copy the user then removed, which an update
+     * would commit, undoing the revert (stated): status lists it as deleted,
+     * and a plain apply lands it. In a disabled profile the record is an orphan
+     * the next apply reclaims, and nothing reads it wrong unless an enable comes
+     * first (stated). */
     error_t record_err = revert_write_record(ctx, profile, filesystem_path);
     if (record_err) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
-        if (state_enabled(state, profile)) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Until it is deployed, '%s' reads as deleted, and an update would "
-                "undo the revert", restored.storage_path
-            );
-        }
     }
 
     /* Step 25: the next step. The revert moved the branch HEAD, and the next

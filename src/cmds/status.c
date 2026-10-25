@@ -1143,12 +1143,19 @@ static void status_print_workspace(
 
     /* Section 8: Undeployed changes — apply's work, both kinds: what Git has
      * and disk does not, a path apply is to create or a move of Git's disk has
-     * not followed ([stale]). Named as its twin, Uncommitted changes, is. */
+     * not followed ([stale]). Named as its twin, Uncommitted changes, is. A key
+     * beneath names the one line a user meets after an act of their own: a copy
+     * removed where Git moved past what dotta last saw there, whose absence deletes
+     * nothing the view holds (core/workspace.c classify_absent), so it is here
+     * and not among the deletions above, the [stale] its record gives it beside
+     * [undeployed] saying why (workspace_item_tags). Every other line is the
+     * header's. */
     if (undeployed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Undeployed changes",
             "use \"dotta apply\" to deploy these changes"
         );
+        status_legend_t legend = { .arena = frame };
 
         for (size_t i = 0; i < undeployed.count; i++) {
             const workspace_item_t *item = undeployed.entries[i];
@@ -1158,21 +1165,58 @@ static void status_print_workspace(
             char metadata[256];
             char path[PATH_MAX + 2];
 
-            if (workspace_item_tags(
+            if (!workspace_item_tags(
                 item, tags, &tag_count, &color, metadata, sizeof(metadata)
                 )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
+                continue;
             }
+            snprintf(
+                path, sizeof(path), "%s%s", item->filesystem_path,
+                path_kind_suffix(item->item_kind)
+            );
+            output_list_add(
+                list, tags, tag_count, color, path, metadata
+            );
+
+            const char *hint = NULL;
+
+            /* By the state, exhaustive as the section switch above is, so a state
+             * added to this bucket asks for an arm of its own here */
+            switch (item->state) {
+                case WORKSPACE_STATE_UNDEPLOYED:
+                    /* The [stale] its record gives it, read as the tags read it
+                     * (core/workspace.h workspace_stale); every other absence
+                     * here, a reassignment or a violation beside it, is the
+                     * header's */
+                    if (item->record && workspace_stale(item->row, item->record)) {
+                        hint = "gone here, and changed in Git since dotta saw it; "
+                            "'dotta apply' lands Git's";
+                    }
+                    break;
+
+                case WORKSPACE_STATE_DEPLOYED:
+                    /* The STALE route, Git's move disk has not followed: the
+                     * header's, whatever claims ride it */
+                    break;
+
+                case WORKSPACE_STATE_DELETED:
+                case WORKSPACE_STATE_ORPHANED:
+                case WORKSPACE_STATE_UNTRACKED:
+                case WORKSPACE_STATE_UNSCANNED:
+                case WORKSPACE_STATE_RELEASED:
+                case WORKSPACE_STATE_OVERRIDDEN:
+                case WORKSPACE_STATE_OBSTRUCTING:
+                    /* The section switch above files no other state here */
+                    CHECK_ARG(
+                        false, "the undeployed bucket holds DEPLOYED and UNDEPLOYED alone"
+                    );
+            }
+            status_legend_add(&legend, tags, tag_count, hint);
         }
 
         output_list_render(list);
         output_list_free(list);
+        status_print_legend(out, &legend);
     }
 
     /* Section 9: New files — what the scan found beneath a directory a profile

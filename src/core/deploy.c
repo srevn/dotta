@@ -54,9 +54,10 @@ static bool deploy_needs_work(const workspace_item_t *item) {
     switch (item->state) {
         case WORKSPACE_STATE_UNDEPLOYED:
             /* The view claims the path and nothing stands there, where dotta
-             * saw none of its node — no record of its kind and its profile — or
-             * the claim is an ancestor's, which asserts none (core/workspace.c
-             * classify_absent). Needs deploying.
+             * confirmed none of what the view holds there — no record of its
+             * profile that confirmed the row's content, a directory's by its
+             * kind — or the claim is an ancestor's, which asserts none
+             * (core/workspace.c classify_absent). Needs deploying.
              *
              * No path bit survives absence (properties of non-existent files
              * cannot be compared); the blob bit, ENCRYPTION, can ride on a missing
@@ -66,8 +67,9 @@ static bool deploy_needs_work(const workspace_item_t *item) {
 
         case WORKSPACE_STATE_DELETED:
             /* The view claims the path and nothing stands there, where a record
-             * of its kind and its profile says dotta saw its node — observed or
-             * put there: the record's existence decides, never its ownership
+             * of its profile says dotta confirmed what the view still holds — a
+             * directory by its kind, a file's bytes by a base, observed or put
+             * there: the record's confirmation decides, never its ownership
              * (core/workspace.c classify_absent). Needs restoration. Absence
              * and the blob bit read as in the UNDEPLOYED arm: work by state
              * alone. */

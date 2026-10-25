@@ -272,8 +272,8 @@ static bool remove_owes(
  * landing acknowledges or replaces it — another profile's, or another of this
  * profile's names. A copy whose node stands keeps its record for the next apply:
  * should the user remove the node and a pull re-add the claim before that apply,
- * the re-add reads as the user's deletion (core/workspace.c classify_absent,
- * stated).
+ * a re-add of the bytes the record confirmed reads as the user's deletion
+ * (core/workspace.c classify_absent, stated).
  *
  * Decided under the lock from the record read there (core/state.h state_begin);
  * the lock taken only where a write may be owed (remove_owes).

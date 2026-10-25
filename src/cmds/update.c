@@ -334,11 +334,12 @@ static void update_partition(
             }
 
             case WORKSPACE_STATE_DELETED:
-                /* Removed from disk since dotta saw the claim's own node there
-                 * (core/workspace.c classify_absent): the deletion is update's
-                 * to commit, unless the user asked about new files alone. One
-                 * fate for both kinds, and a deleted violator is a deletion too:
-                 * its commit resolves the violation by removing the plaintext. */
+                /* Removed from disk since dotta confirmed there the content the
+                 * claim still holds (core/workspace.c classify_absent): the
+                 * deletion is update's to commit, unless the user asked about
+                 * new files alone. One fate for both kinds, and a deleted violator
+                 * is a deletion too: its commit resolves the violation by removing
+                 * the plaintext. */
                 if (opts->only_new) continue;
                 workspace_buckets_add(buckets, item, &partition->deleted);
                 break;
@@ -717,13 +718,13 @@ static error_t update_profile(
  * A deletion the commit took reconciled Git to the absence its walk found again,
  * so the record of the gone node — this profile's, as the lock holds it — retires
  * where no row stands at its path after the commit, the reclaim: a claim that
- * returns there starts from its first look, where the record would read its absence
- * as the user's deletion again (core/workspace.c classify_absent). A row standing
- * there keeps it, as that row's history: a lower profile's surfacing, whose landing
- * acknowledges it, or another of this profile's names. Everything else the commit
- * let go — the rungs its prune and its climb took — is the next apply's, decided
- * with the landings it may stand in the way of (core/workspace.c
- * workspace_analyze_orphans).
+ * returns there starts from its first look, where with the bytes the record
+ * confirmed the record would read its absence as the user's deletion again
+ * (core/workspace.c classify_absent). A row standing there keeps it, as that
+ * row's history: a lower profile's surfacing, whose landing acknowledges it, or
+ * another of this profile's names. Everything else the commit let go — the rungs
+ * its prune and its climb took — is the next apply's, decided with the landings
+ * it may stand in the way of (core/workspace.c workspace_analyze_orphans).
  *
  * Algorithm:
  *   1. No landed commit captured or deleted — none landed, or each re-derived
@@ -2035,9 +2036,10 @@ const args_command_t spec_update = {
         "(the reverse direction of 'apply'). Mode is captured alongside\n"
         "content, and ownership for any path owned by someone other than\n"
         "the user running dotta, and under a root login for the paths\n"
-        "outside home/. A file you deleted is deleted from its profile, and\n"
-        "every machine's next apply deletes its unchanged copy. To stop\n"
-        "tracking a file but keep it, use 'dotta remove'.\n",
+        "outside home/. A file gone from disk that dotta last saw at the\n"
+        "profile's version is deleted from its profile, and every\n"
+        "machine's next apply deletes its unchanged copy. To stop tracking\n"
+        "a file but keep it, use 'dotta remove'.\n",
     .notes        =
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"

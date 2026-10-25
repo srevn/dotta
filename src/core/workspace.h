@@ -122,7 +122,7 @@ typedef struct profile_departure profile_departure_t;
 typedef enum {
     WORKSPACE_STATE_DEPLOYED,      /* The view claims the path and something stands there */
     WORKSPACE_STATE_UNDEPLOYED,    /* The view claims the path and nothing does: apply's to create */
-    WORKSPACE_STATE_DELETED,       /* The view claims the path, dotta saw its node there, and nothing does */
+    WORKSPACE_STATE_DELETED,       /* The view still claims what dotta confirmed there, and nothing does */
     WORKSPACE_STATE_ORPHANED,      /* A record whose path the view lacks */
     WORKSPACE_STATE_UNTRACKED,     /* Beneath a tracked directory, in neither the view nor the record */
     WORKSPACE_STATE_UNSCANNED,     /* Where the scan could not look: nothing at or beneath it is offered */
@@ -894,13 +894,14 @@ static inline bool workspace_unacknowledged(
  *
  * Readers: core/workspace.c workspace_analyze_file (the bytes' base: the fast
  * path's stat and the second question), workspace_analyze_directory (whether
- * dotta's own squatter is the copy it confirmed) and workspace_measure (a file
- * compared only against one); workspace_stale below (whether the bytes are asked
- * at all); workspace_untouched below (whether a measured copy is the one dotta
- * confirmed); workspace_item_route (whether a base proves an edit's mover: the
- * UNCONFIRMED arm); cmds/add.c add_refuse_ancestry (whether only --force replaces
- * dotta's own link above a capture, the half of workspace_untouched no measure
- * is needed for). A reader not on this list is a bug.
+ * dotta's own squatter is the copy it confirmed), workspace_measure (a file
+ * compared only against one) and classify_absent (whether the bytes an absence
+ * removed were ones dotta confirmed); workspace_stale below (whether the bytes
+ * are asked at all); workspace_untouched below (whether a measured copy is the
+ * one dotta confirmed); workspace_item_route (whether a base proves an edit's
+ * mover: the UNCONFIRMED arm); cmds/add.c add_refuse_ancestry (whether only --force
+ * replaces dotta's own link above a capture, the half of workspace_untouched no
+ * measure is needed for). A reader not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
@@ -949,8 +950,11 @@ static inline bool workspace_untouched(const workspace_item_t *item) {
  *
  * Readers: core/workspace.c workspace_analyze_file (git_moved — the three-way
  * frame's first question, whichever kind stands, and half the gate on its second),
- * workspace_pending below (the record still disagrees with the view). A reader
- * not on this list is a bug.
+ * classify_absent (an absence over what the view moved past deletes nothing it
+ * holds) and workspace_item_tags (the [stale] that rides [undeployed]), with
+ * cmds/status.c status_print_workspace's key for that line; workspace_pending
+ * below (the record still disagrees with the view). A reader not on this list
+ * is a bug.
  */
 static inline bool workspace_stale(const manifest_row_t *row, const state_record_t *record) {
     return workspace_base(record) ? workspace_compare_confirmed(row, record) != CMP_EQUAL
@@ -1114,23 +1118,25 @@ typedef struct {
  * the node) and is not drift-prone. DELETED earns that triviality upstream, four
  * times: classify_absent reads absence as a deletion only for a claim that asserts
  * its path, so an ancestor claim never arrives here; only over a record of the
- * claim's own kind and profile, so a path where dotta only ever saw another kind
- * of node, or another profile's, never does either; only where a look was taken,
- * so a path whose absence the squatter above it caused is a displaced DEPLOYED
- * item instead (workspace_displaced_t); and only over a record no act of dotta's
- * own made untrue — the replace of dotta's node above a row retires the record
- * of every row beneath it, which no look wrote, nor any capture once a row stood
- * beneath the node (cmds/add.c add_refuse_ancestry; cmds/apply.c
+ * claim's own profile that confirmed the content the view still holds — a directory
+ * by its kind, a file by a base at the row's blob — so a path where dotta only
+ * ever saw another kind of node, or another profile's, or bytes it never confirmed
+ * or that Git has moved past since, never does either; only where a look was
+ * taken, so a path whose absence the squatter above it caused is a displaced
+ * DEPLOYED item instead (workspace_displaced_t); and only over a record no act
+ * of dotta's own made untrue — the replace of dotta's node above a row retires
+ * the record of every row beneath it, which no look wrote, nor any capture once
+ * a row stood beneath the node (cmds/add.c add_refuse_ancestry; cmds/apply.c
  * apply_write_record), and a commit that changed the claim at a path whose node
  * was gone retires the record there, the reclaim (cmds/update.c
  * update_write_record, cmds/remove.c remove_write_record, cmds/revert.c
  * revert_write_record) — save where the world cut the writing run short: a replace
  * stopped between its unlink and its create (core/deploy.h, the Removals bullet),
  * or a run killed, or its record refused, before that phase. Every DELETED item
- * can therefore bear update's verb, save a claim returning by a route no verb
- * writes to a node the user removed after its record was last written
- * (core/workspace.c classify_absent, stated). Callers keep their state switch
- * and read this table for the DEPLOYED arm alone.
+ * can therefore bear update's verb, save a claim returning with the bytes its
+ * record confirmed, by a route no verb writes, to a node the user removed after
+ * that record was last written (core/workspace.c classify_absent, stated). Callers
+ * keep their state switch and read this table for the DEPLOYED arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,              /* No divergence, no reassignment */
@@ -1873,6 +1879,13 @@ workspace_items_t workspace_displaced_orphans(
  *     from, but the blob apply is about to write violates the policy, and that
  *     is worth saying before it lands — and a displaced one, whose path no look
  *     reached and whose blob is Git's all the same
+ *   - Two tags ride an UNDEPLOYED row off its record, no bit standing for either,
+ *     each a reason its absence is no deletion of the row's (core/workspace.c
+ *     classify_absent): "stale", where Git moved past what dotta last saw at
+ *     the path (workspace_stale), apply-side work at the arm's CYAN, and
+ *     "reassigned", where the record dotta owns names another profile
+ *     (workspace_reassigned). A DELETED row carries neither: its record is the
+ *     row's own profile's, and confirmed the content the view holds
  *
  * Metadata Format:
  *   - "from {profile}" - Standard source profile

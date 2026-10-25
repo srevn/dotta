@@ -757,9 +757,11 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * Absence classification — the single decision for every absent active path,
  * file or directory.
  *
- * DELETED is a statement of intent: the user removed something a profile says
- * stands here, and update's job is to commit that removal and propagate it to
- * every machine. Three facts have to hold before absence can be read that way.
+ * DELETED is a statement of intent: the user removed the content dotta confirmed
+ * there, which the view still holds, and update's job is to commit that removal
+ * and propagate it to every machine. Three facts have to hold before absence
+ * can be read that way, two of them the record's words against the view — its
+ * content's and its binding's; its claim's is not asked.
  *
  * The claim has to assert the path. Every kind does but one: an ancestor claim
  * says what the rung is to be if dotta has to create it, never that the rung
@@ -770,32 +772,42 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * gone (metadata.h's residue rule: when the last tracked path beneath it goes),
  * which this would answer over the top of.
  *
- * And dotta has to have seen the path there. A record exists iff dotta has seen
- * at the path in scope the node its kind names, or put it there — an observation
- * is made only where the row's own kind stands, so a node of another kind the
- * user removes leaves no witness — so no record means there was no filesystem
- * obligation to break: absence is UNDEPLOYED, apply's to create. And the record
- * has to have seen the claim's kind of node: one of another kind (the kind rung,
- * core/workspace.h workspace_type_occupant) saw a node that is gone — a file
- * where the claim is now a directory, a link where it is now a file — and the
- * node the claim asserts was never here to be removed, so its absence deletes
- * nothing and update must not commit it as a removal.
+ * And what dotta confirmed there has to be what the view still holds — the record's
+ * content word (core/workspace.h workspace_stale): the kind of node, which every
+ * record names, and a file's bytes, which a base alone confirmed (workspace_base);
+ * a directory claims no content, so its kind is the whole of it. A record exists
+ * iff dotta has seen at the path in scope the node its kind names, or put it
+ * there — an observation is made only where the row's own kind stands, so a node
+ * of another kind the user removes leaves no witness — so no record means there
+ * was no filesystem obligation to break: absence is UNDEPLOYED, apply's to create.
+ * A record of another kind (the kind rung, core/workspace.h
+ * workspace_type_occupant) saw a node that is gone — a file where the claim is
+ * now a directory, a link where it is now a file — and the node the claim asserts
+ * was never here to be removed. A file's record holding no base confirmed none
+ * of the bytes the user removed, so the removal deletes nothing dotta knew of:
+ * a landing into absence loses nothing. And a base Git moved past confirmed bytes
+ * the view no longer holds, so their removal deletes nothing of the row's, whose
+ * newer version apply lands — as git's own checkout writes the incoming version
+ * of a tracked file the work tree lacks, unasked (lib/git/unpack-trees.c
+ * verify_uptodate_1). Each is UNDEPLOYED, never a removal for update to commit,
+ * and where the view moved past what the record describes — another kind, or
+ * other bytes — [stale] rides its line (workspace_item_tags). The claim is not
+ * asked: a claim Git moved beside the user's deletion is the deletion's, its
+ * move kept in Git's history.
  *
- * And the node dotta saw has to be the claim's profile's. A record names the
- * claim dotta last reconciled its node against, a directory's as much as a file's
- * (core/state.h state_record_t), so another profile's record witnessed that
- * profile's node, and its absence deletes nothing of this claim's: update would
- * commit the removal into a profile whose node never stood here, and every machine
- * would lose the claim at its next sync. The row is UNDEPLOYED, apply's to land,
- * and the record its history — where dotta owns it, a reassignment that landing
- * acknowledges (core/workspace.h workspace_reassigned). The profile alone, as
- * the reassignment asks it: another of the profile's names for the path is the
- * same profile's node. Where the state cannot tell the user's deletion of the
- * claim's node from that of another profile's — under a reassignment apply has
- * not acknowledged, or over a directory another profile's derivation observed
- * first — this errs the safe way: apply lands the row, nothing propagates, and
- * the deletion is the user's to commit once that landing has written the row's
- * record.
+ * And the node dotta confirmed has to be the claim's profile's. A record follows
+ * the claim dotta last saw or put its node under, a directory's as much as a
+ * file's (core/state.h state_record_t, the binding), so another profile's record
+ * witnessed that profile's node, and its absence deletes nothing of this claim's:
+ * update would commit the removal into a profile whose node never stood here,
+ * and every machine would lose the claim at its next sync. The row is UNDEPLOYED,
+ * apply's to land, and the record its history — where dotta owns it, a reassignment
+ * that landing acknowledges (core/workspace.h workspace_reassigned) — so the
+ * user's deletion over such a record, under a reassignment apply has not
+ * acknowledged or over a directory another profile's derivation observed first,
+ * is theirs to commit once that landing has written the row's record. The profile
+ * alone, as the reassignment asks it: another of the profile's names for the
+ * path is the same profile's node.
  *
  * The witness ends where a commit reconciled the node's absence: a commit that
  * changed the claim at a path whose node was gone retires the record there, the
@@ -803,10 +815,12 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * cmds/revert.c revert_write_record), so a claim that returns — a revert's, a
  * pull's re-add — starts from its first look and reads UNDEPLOYED. What no commit
  * reconciled stays (stated): a claim returning by a route no verb writes — profile
- * enable, a pulled re-add — to a path whose node the user removed after its record
- * was last written, before any apply, reads DELETED for its own profile, and
- * update would commit the removal of the claim that returned. The screens list
- * it under the update they offer, and a plain apply lands the file again.
+ * enable, a pulled re-add — with the bytes the record confirmed, to a path whose
+ * node the user removed after its record was last written, before any apply,
+ * reads DELETED for its own profile, and update would commit the removal of the
+ * claim that returned. The screens list it under the update they offer, and a
+ * plain apply lands the file again. Returning with other bytes, it reads UNDEPLOYED
+ * by the content's word above.
  *
  * Why nothing stands is no fact of the path (stated): a user's rm, a bound target
  * moved, renamed or unmounted, a link on the way removed or replaced — each empties
@@ -826,7 +840,8 @@ static workspace_state_t classify_absent(
 ) {
     if (manifest_is_derived(row)) return WORKSPACE_STATE_UNDEPLOYED;
 
-    return record && record->kind == workspace_type_occupant(row->type) &&
+    return record && !workspace_stale(row, record) &&
+           (row->type == PATH_TYPE_DIRECTORY || workspace_base(record)) &&
            strcmp(record->profile, row->profile) == 0
            ? WORKSPACE_STATE_DELETED
            : WORKSPACE_STATE_UNDEPLOYED;
@@ -3920,6 +3935,17 @@ bool workspace_item_tags(
             }
             *color_out = OUTPUT_COLOR_CYAN;
 
+            /* Git moved past what dotta last saw at the path — another kind of
+             * node, or bytes it confirmed (workspace_stale) — so the absence
+             * deletes nothing the view holds (classify_absent): derived from
+             * the record, as [reassigned] is below, and apply-side work, the
+             * arm's own colour */
+            if (item->record && workspace_stale(item->row, item->record)) {
+                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
+                    tags_out[tag_count++] = "stale";
+                }
+            }
+
             /* An encryption-policy violation is the one divergence bit that still
              * means something with nothing on disk: the blob apply is about to
              * write is plaintext the policy says to encrypt, and this is the
@@ -3958,8 +3984,9 @@ bool workspace_item_tags(
             }
             *color_out = OUTPUT_COLOR_RED;
 
-            /* No reassignment rides a deletion: its record is the row's own
-             * profile's (classify_absent) */
+            /* No reassignment and no [stale] ride a deletion: its record is the
+             * row's own profile's, and confirmed the content the view holds
+             * (classify_absent) */
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;
 
@@ -4522,12 +4549,15 @@ error_t workspace_flush(workspace_t *ws) {
              * either class of directory, the record answering whether dotta has
              * seen the path for an ancestor claim too (classify_absent). It closes
              * the "user created the path after scope entry" gap: the next absence
-             * reads DELETED, not UNDEPLOYED, and update propagates the user's
-             * removal. A node of another kind is no observation — the record
-             * would name the row's kind, which classify_absent reads as the node
-             * dotta saw here, and the user removing what they put in its place
-             * would read as the claim's deletion — and neither is no look: withheld
-             * beneath a squatter, failed, or retracted by a read that met absence.
+             * reads DELETED where the observation confirmed the row's content —
+             * a directory by its kind, a file where the load learned the row's
+             * bytes — and update propagates the user's removal; UNDEPLOYED where
+             * it confirmed none (classify_absent). A node of another kind is no
+             * observation — the record would name the row's kind, a node dotta
+             * never saw here, whose absence a directory row reads by its kind
+             * alone: the user removing what they put in its place would read as
+             * the claim's deletion — and neither is no look: withheld beneath a
+             * squatter, failed, or retracted by a read that met absence.
              *
              * Written over a record of another kind too, whose node the look
              * found gone — a link the user replaced with the row's file, a file

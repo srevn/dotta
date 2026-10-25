@@ -146,7 +146,7 @@ Filesystem (Live System)
 
 **The view** -- which paths are managed, and what belongs at each one: the contents, whether it is a file or a directory or a link, the permissions, the owner, whether it is encrypted. Precedence is already settled here, so there is one entry per path and a later profile has won any it shares. The view is never out of date, because nothing stores it — every command builds it fresh from the branches.
 
-**The record** -- for each managed path, what dotta last confirmed was on disk, whether dotta put it there, and when it first saw it. A path dotta deployed or captured is *owned*; one it merely found on disk is *observed*. When a path stops being managed, dotta removes an owned copy where the file was deleted from its profile or its profile disabled, and leaves every other copy alone.
+**The record** -- for each managed path, what dotta last confirmed was on disk, whether dotta put it there, and when it first saw it. A path dotta deployed or captured is *owned*; one it merely found on disk is *observed*. When a path stops being managed, dotta removes an unchanged owned copy where the file was deleted from its profile, its profile disabled or its target moved, and leaves every other copy alone.
 
 **Workspace** -- what dotta finds when it compares the view against the actual filesystem, with the record saying what it last confirmed. This is what `dotta status` reports, and it is worked out when the command runs, so nothing it decides is out of date.
 

@@ -1161,12 +1161,12 @@ static inline divergence_type_t workspace_claims_moved(
  *     stands and apply creates only for a claim it deploys.
  *
  * Readers: the apply hint of cmds/sync.c cmd_sync, of cmds/profile.c profile_enable
- * and profile_disable, and of cmds/revert.c revert_print_pending, each off the
- * view after its change and worded true of every arm above — apply's aim, no
- * outcome. A reader not on this list is a bug. cmds/update.c cmd_update says
- * the same sentence beside a refused record phase, on its own ground and asking
- * nothing here: each capture or deletion the phase did not record is this work
- * by construction, so the words stay one.
+ * and profile_disable, of cmds/revert.c revert_print_pending, and of cmds/remove.c
+ * remove_print_pending, each off the view after its change and worded true of
+ * every arm above — apply's aim, no outcome. A reader not on this list is a bug.
+ * cmds/update.c cmd_update says the same sentence beside a refused record phase,
+ * on its own ground and asking nothing here: each capture or deletion the phase
+ * did not record is this work by construction, so the words stay one.
  *
  * @param view The view the record is held against (must not be NULL)
  * @param records The record, as core/state.h state_records reads it (NULL when

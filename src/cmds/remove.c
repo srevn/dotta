@@ -23,6 +23,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "infra/commit.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -350,6 +351,47 @@ cleanup:
     state_rollback(state);
 
     return err;
+}
+
+/**
+ * Print the next step a removal leaves: apply's hint, where the record owes apply
+ * work against the view the removal leaves (core/workspace.h workspace_pending)
+ *
+ * Asked once the record phase has ended, so the reclaim it wrote is in the record
+ * asked. The work is what the removal let go, the next apply's: a kept file's
+ * record, which it releases, nothing on disk changing; an emptied directory dotta
+ * created, which it prunes; a deleted profile's copies — or whatever else the
+ * record owes, a change no apply has followed. None where every claim taken had
+ * its node gone already, each reclaimed. Whatever the work is, the words name
+ * apply's aim and no outcome, the sentence every reader of workspace_pending says.
+ *
+ * The removal stands, so a view that will not build or a record that will not
+ * read is warned in its own words, a block, and drops the hint, never the removal
+ * — where the record phase owed a write it built the same view under its lock,
+ * so a view that will not build is warned there and again here (stated).
+ *
+ * @param ctx Dispatch context: the store, the repository, the arena the reads
+ *        land in, and the output (must not be NULL)
+ */
+static void remove_print_pending(const dotta_ctx_t *ctx) {
+    output_t *out = ctx->out;
+
+    manifest_t *after = NULL;
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    error_t err = manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &after);
+    if (!err) err = state_records(ctx->run.state, ctx->arena, &records, &record_count);
+
+    if (err) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
+    } else if (workspace_pending(after, records, record_count)) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
+        );
+    }
 }
 
 /**
@@ -1108,6 +1150,10 @@ static error_t remove_paths(
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
     }
 
+    /* The next step, once the record phase has ended: what the removal let go
+     * is the next apply's (remove_print_pending) */
+    remove_print_pending(ctx);
+
     /* The post-remove hook, last (utils/hooks.h hook_fire_post) */
     hook_fire_post(config, out, &hook_inv);
 
@@ -1409,8 +1455,10 @@ static error_t remove_profile(
         }
     }
 
-    /* The prune itself happens on `apply` — see the Architectural note in
-     * remove_paths. */
+    /* The next step, once the record phase and the push have ended: what the
+     * deletion let go is the next apply's (remove_print_pending; the Architectural
+     * note in remove_paths) */
+    remove_print_pending(ctx);
 
     /* The post-remove hook, last (utils/hooks.h hook_fire_post): the deletion's
      * push among what the run said */

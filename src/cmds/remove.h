@@ -67,7 +67,9 @@ typedef struct {
  * Executes hooks; never touches deployed files. Writes the record only for what
  * its commit knows: the reclaim of a claim it took whose node is gone, and a
  * deletion's enabled row — non-fatal: Git stands even when the record write fails,
- * every later load re-deriving its share.
+ * every later load re-deriving its share. Then names the next step, apply's,
+ * where the record owes it work against the view the removal leaves
+ * (core/workspace.h workspace_pending), before the post-remove hook fires last.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

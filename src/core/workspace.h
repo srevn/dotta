@@ -474,8 +474,7 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * Issues'), cmds/update.c update_partition and cmd_update's census, cmds/apply.c
  * apply_fault_label, apply_consent_label and the sudo and key closers of
  * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's status
- * line and count (diff_status_line, diff_print_direction). A reader not on this
- * list is a bug.
+ * line (diff_status_line). A reader not on this list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */

@@ -413,29 +413,22 @@ static void diff_print_item(
  * @param scope Operation scope (profile + path dimensions; diff has no excludes)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
- * @param diff_count Output: number of rows listed (must not be NULL)
- * @param unverified Output: how many of them were rows the analysis could not
- *                   look at; shown by their status line, no hunk (must not be NULL)
+ * @return How many rows it listed
  */
-static void diff_print_direction(
+static size_t diff_print_direction(
     workspace_items_t diverged,
     content_cache_t *cache,
     diff_direction_t direction,
     const scope_t *scope,
     const cmd_diff_options_t *opts,
-    output_t *out,
-    size_t *diff_count,
-    size_t *unverified
+    output_t *out
 ) {
     CHECK_NULL(cache);
     CHECK_NULL(scope);
     CHECK_NULL(opts);
     CHECK_NULL(out);
-    CHECK_NULL(diff_count);
-    CHECK_NULL(unverified);
 
-    *diff_count = 0;
-    *unverified = 0;
+    size_t listed = 0;
 
     /* The comparison opens a block of its own: a name-only listing is one, paid
      * by its first name, and each entry of the full form one more, asking its
@@ -471,12 +464,10 @@ static void diff_print_direction(
             diff_print_item(item, line, cache, direction, out);
         }
 
-        (*diff_count)++;
-
-        if (item->fault != WORKSPACE_FAULT_NONE) {
-            (*unverified)++;
-        }
+        listed++;
     }
+
+    return listed;
 }
 
 /**
@@ -1313,36 +1304,22 @@ static error_t diff_workspace(
     /* Step 3: Get pre-analyzed divergence from workspace */
     workspace_items_t diverged = workspace_diverged(ws);
 
-    /* Step 4: Filter and present diffs based on direction. A row the analysis
-     * could not look at is shown by its status line and counted: it is never
-     * "in sync", and each section says how many it could not settle. */
-    size_t total_diff_count = 0;
-
+    /* Step 4: The listings, by direction. A row the analysis could not look at
+     * is listed by its status line, which names its class, so no screen is "in
+     * sync" over it. */
     if (opts->direction == DIFF_BOTH) {
-        /* Show both directions with headers */
-        size_t upstream_count = 0, downstream_count = 0;
-        size_t unverified = 0;
-
-        /* Upstream section */
+        /* Show both directions with headers: the upstream section first */
         output_section(out, OUTPUT_NORMAL, "Upstream (repository → filesystem)");
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change");
         output_gap(out, OUTPUT_NORMAL);
 
-        diff_print_direction(
-            diverged, cache, DIFF_UPSTREAM, scope, opts, out,
-            &upstream_count, &unverified
+        const size_t upstream_count = diff_print_direction(
+            diverged, cache, DIFF_UPSTREAM, scope, opts, out
         );
 
         if (upstream_count == 0 && !opts->name_only) {
             output_gap(out, OUTPUT_NORMAL);
             output_info(out, OUTPUT_NORMAL, "No upstream differences");
-        }
-        if (unverified > 0 && !opts->name_only) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(
-                out, OUTPUT_NORMAL, "%zu file%s could not be verified",
-                unverified, unverified == 1 ? "" : "s"
-            );
         }
 
         /* Downstream section */
@@ -1350,29 +1327,17 @@ static error_t diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit");
         output_gap(out, OUTPUT_NORMAL);
 
-        diff_print_direction(
-            diverged, cache, DIFF_DOWNSTREAM, scope, opts, out,
-            &downstream_count, &unverified
+        const size_t downstream_count = diff_print_direction(
+            diverged, cache, DIFF_DOWNSTREAM, scope, opts, out
         );
 
         if (downstream_count == 0 && !opts->name_only) {
             output_gap(out, OUTPUT_NORMAL);
             output_info(out, OUTPUT_NORMAL, "No downstream differences");
         }
-        if (unverified > 0 && !opts->name_only) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(
-                out, OUTPUT_NORMAL, "%zu file%s could not be verified",
-                unverified, unverified == 1 ? "" : "s"
-            );
-        }
-
-        total_diff_count = upstream_count + downstream_count;
     } else {
-        size_t unverified = 0;
-        diff_print_direction(
-            diverged, cache, opts->direction, scope, opts, out,
-            &total_diff_count, &unverified
+        const size_t count = diff_print_direction(
+            diverged, cache, opts->direction, scope, opts, out
         );
 
         /* An empty screen says what the verb it previews says of its own empty
@@ -1380,7 +1345,7 @@ static error_t diff_workspace(
          * and nothing past it — every path was loaded and analyzed, only those
          * in scope presented — else the repository (cmd_apply). Downstream,
          * update's, which names no whole to qualify. */
-        if (total_diff_count == 0 && !opts->name_only) {
+        if (count == 0 && !opts->name_only) {
             output_gap(out, OUTPUT_NORMAL);
             if (opts->direction == DIFF_UPSTREAM) {
                 if (scope_filters_profiles(scope) || scope_filters_paths(scope)) {
@@ -1394,13 +1359,6 @@ static error_t diff_workspace(
             } else {
                 output_info(out, OUTPUT_NORMAL, "No local changes to commit");
             }
-        }
-        if (unverified > 0 && !opts->name_only) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(
-                out, OUTPUT_NORMAL, "%zu file%s could not be verified",
-                unverified, unverified == 1 ? "" : "s"
-            );
         }
     }
 

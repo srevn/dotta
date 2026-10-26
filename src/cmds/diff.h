@@ -1,7 +1,9 @@
 /**
  * diff.h - Show differences between profiles and filesystem
  *
- * Displays actual content differences for modified files.
+ * The workspace form previews the two verbs at the view's rows: each direction
+ * lists the rows its verb acts on or refuses there — a file's content, kind or
+ * claim, a directory's kind or claim — with a hunk where bytes differ.
  *
  * Direction semantics (unified diff representation):
  * - DIFF_UPSTREAM:   old=filesystem, new=repo  — '-' lines are current on disk,

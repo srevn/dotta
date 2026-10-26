@@ -721,9 +721,9 @@ typedef struct {
  * where one is) and workspace_analyze_claim (the record of this node, whose claim
  * the row's is measured from — every axis unreconciled where none stands);
  * core/deploy.c occupant_conflicts (what stands at a planned path, against the
- * node its row lands); cmds/diff.c diff_print_item (another kind standing, drawn
- * by both kinds off the load's look, no blob read). A reader not on this list
- * is a bug.
+ * node its row lands); cmds/diff.c diff_print_item (another kind standing at a
+ * row of either kind, drawn by both kinds off the load's look, no blob read). A
+ * reader not on this list is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {

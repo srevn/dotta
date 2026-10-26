@@ -313,14 +313,14 @@ static void diff_print_item(
 
     const manifest_row_t *row = item->row;
 
-    /* The header, off the row */
+    /* The header, off the row: its profile, and its name with its kind's slash */
     output_print(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
         row->profile
     );
     output_print(
-        out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-        row->storage_path
+        out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s%s\n",
+        row->storage_path, path_kind_suffix(item->item_kind)
     );
 
     /* The direction's own sentence. An item's colour is its line's, worn on the
@@ -349,22 +349,26 @@ static void diff_print_item(
         /* Another kind than the row's stands — the user's (TYPE), the node dotta
          * last saw there with Git having moved the path's kind past it (STALE),
          * or the user's beside a move of Git's (both: the conflict, whose line
-         * names no kind). The kind is the whole of the difference, said off the
-         * load's own look with no blob read: a sealed one, its key cold, would
-         * fail a read of bytes that are no part of it. */
+         * names no kind) — under a file row or a directory row, whose mode is a
+         * tree's. The kind is the whole of the difference, said off the load's
+         * own look with no blob read: a sealed one, its key cold, would fail a
+         * read of bytes that are no part of it. */
         diff = (file_diff_t){
             .status = CMP_TYPE_DIFF,
             .diff_text = compare_type_mismatch(mode, &item->st),
         };
     } else {
-        /* The row's blob from the cache by its blob_oid (borrowed reference -
-         * don't free), read as the entry the row's type says it is, then the
-         * copy against it. Either read can fail where the load's did not — a
-         * blob the load never opened, its record's stat vouching for disk, or
-         * the copy read again — and the failure is this row's, as a look the
-         * load could not take is its row's: its root, where the hunk would be,
-         * as apply's receipt names the same read's. One error per such row stays
-         * for the run (base/error.h). */
+        /* The row's own kind stands, its bytes moved: a file row's alone, a
+         * directory row's look at a directory carrying none of the three bits
+         * (core/workspace.c workspace_analyze_directory sets TYPE and STALE only
+         * over another occupant, CONTENT never). The row's blob from the cache
+         * by its blob_oid (borrowed reference - don't free), read as the entry
+         * the row's type says it is, then the copy against it. Either read can
+         * fail where the load's did not — a blob the load never opened, its
+         * record's stat vouching for disk, or the copy read again — and the failure
+         * is this row's, as a look the load could not take is its row's: its
+         * root, where the hunk would be, as apply's receipt names the same read's.
+         * One error per such row stays for the run (base/error.h). */
         const buffer_t *content = NULL;
         error_t err = content_cache_get_from_blob_oid(
             cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
@@ -441,12 +445,9 @@ static void diff_print_direction(
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
-        /* Only process FILES (skip directories) */
-        if (item->item_kind != PATH_KIND_FILE) continue;
-
-        /* The path filter (user-specified paths) */
+        /* The path filter (user-specified paths), the row read by its own kind */
         if (!scope_accepts_path(
-            scope, item->filesystem_path, item->storage_path, PATH_KIND_FILE
+            scope, item->filesystem_path, item->storage_path, item->item_kind
             )) {
             continue;
         }
@@ -458,9 +459,13 @@ static void diff_print_direction(
         const char *line = diff_status_line(item, direction);
         if (!line) continue;
 
-        /* Each entry is a block; a name-only listing's names are one */
+        /* Each entry is a block; a name-only listing's names are one, each with
+         * its kind's slash */
         if (opts->name_only) {
-            output_print(out, OUTPUT_NORMAL, "%s\n", item->filesystem_path);
+            output_print(
+                out, OUTPUT_NORMAL, "%s%s\n",
+                item->filesystem_path, path_kind_suffix(item->item_kind)
+            );
         } else {
             output_gap(out, OUTPUT_NORMAL);
             diff_print_item(item, line, cache, direction, out);
@@ -633,8 +638,9 @@ static int diff_print_line_cb(
  * its claims beneath. A directory row — a claim of the tree's own metadata.json,
  * or the layer's rung at a lost blob's place — has no content to diff and is
  * passed over by its type, the test core/manifest.h leaves to a reader that wants
- * files. Each row carries the profile whose claim it is, the commit's, and its
- * blob opens under the row's own binding.
+ * files: its claim goes uncompared, as every claim does here (stated), where
+ * the workspace arm lists it. Each row carries the profile whose claim it is,
+ * the commit's, and its blob opens under the row's own binding.
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)
@@ -795,14 +801,12 @@ static error_t diff_print_view(
  * Asks each filter entry alone — an exact path by equality or ancestry, a pattern
  * by whether it matches at any rung, either polarity — against the view's rows,
  * each by both its names (the entry reads the one in its own vocabulary) and by
- * its own kind, read off its type. An entry that reaches a file row has content
- * to diff and is not answered. One that reaches only directory rows is answered
- * for what it is: a path with no content to diff — a tracked directory or a derived
- * one alike, since neither kind has any (core/manifest.h). One that reaches nothing
- * — which likely indicates a typo — is warned in the words of what the view's
- * paths are: the enabled view's are active paths, a commit's are the commit's,
- * and a miss in one says nothing of the other. The list hint follows the warnings
- * as their remedy.
+ * its own kind, read off its type. An entry that reaches a row has something to
+ * compare, a directory row as a file row, and is not answered. One that reaches
+ * nothing — which likely indicates a typo — is warned in the words of what the
+ * view's paths are: the enabled view's are active paths, a commit's are the
+ * commit's, and a miss in one says nothing of the other. The list hint follows
+ * the warnings as their remedy.
  *
  * Per-entry attribution matters here: the combined program folds one pattern's
  * negation into another's verdict and would under-count coverage on overlap;
@@ -815,6 +819,9 @@ static error_t diff_print_view(
  * Coverage is a question about the view alone — nothing here takes a look — so
  * each arm asks it before anything is compared: an entry is answered beside a
  * diff as well as in place of one, and the answer is the same under --name-only.
+ * The commit arm compares a file row's content and kind alone (diff_print_view),
+ * so an entry reaching only directory rows finds no difference in scope there,
+ * their claims uncompared as every claim is in that arm (stated).
  *
  * @param path_filter Path filter to validate (NULL = no filter, nothing to answer)
  * @param view The view the arm compares against (must not be NULL)
@@ -822,9 +829,9 @@ static error_t diff_print_view(
  *             enabled view, "path of the commit" for one commit's (must not be
  *             NULL)
  * @param out Output context for the answers
- * @return false where no entry reaches a file row — nothing under the filter
- *         can diff, and the answers are the whole report; true otherwise, and
- *         always under no filter
+ * @return false where no entry reaches a row — nothing under the filter can diff,
+ *         and the answers are the whole report; true otherwise, and always under
+ *         no filter
  */
 static bool diff_validate_filter(
     const pathspec_t *path_filter,
@@ -839,66 +846,49 @@ static bool diff_validate_filter(
     output_gap(out, OUTPUT_NORMAL);
 
     manifest_rows_t rows = manifest_rows(view);
-    size_t covered = 0;     /* Entries reaching a file row */
-    size_t unmatched = 0;   /* Entries reaching nothing, each warned */
+    size_t covered = 0;     /* Entries reaching a row; each of the rest is warned */
 
     for (size_t e = 0; e < pathspec_count(path_filter); e++) {
-        /* The row the entry reaches: a file row ends the search, content being
-         * what a diff shows, and a directory row stands until one does */
+        /* The row the entry reaches, of either kind: the first ends the search */
         const manifest_row_t *reached = NULL;
         for (size_t i = 0; i < rows.count; i++) {
             const manifest_row_t *row = rows.entries[i];
-            if (!pathspec_entry_matches_at(
+            if (pathspec_entry_matches_at(
                 path_filter, e,
                 row->filesystem_path,
                 row->storage_path,
                 path_type_kind(row->type)
                 )) {
-                continue;
+                reached = row;
+                break;
             }
-            reached = row;
-            if (row->type != PATH_TYPE_DIRECTORY) break;
         }
 
-        /* Content to diff, and nothing to say */
-        if (reached && reached->type != PATH_TYPE_DIRECTORY) {
+        /* Something to compare, and nothing to say */
+        if (reached) {
             covered++;
             continue;
         }
 
-        /* A directory row alone has nothing to diff; no row at all is warned */
+        /* No row at all is warned */
         pathspec_entry_t entry = pathspec_entry_at(path_filter, e);
-        if (reached && entry.glob) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Pattern '%s' matches only directories (no content to diff)",
-                entry.text
-            );
-        } else if (reached) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "'%s' matches only directories (no content to diff)",
-                entry.text
-            );
-        } else if (entry.glob) {
+        if (entry.glob) {
             output_warning(
                 out, OUTPUT_NORMAL,
                 "No %s matches pattern '%s'",
                 what, entry.text
             );
-            unmatched++;
         } else {
             output_warning(
                 out, OUTPUT_NORMAL,
                 "No %s matches '%s'",
                 what, entry.text
             );
-            unmatched++;
         }
     }
 
     /* The warnings' one remedy, said once under them all */
-    if (unmatched > 0) {
+    if (covered < pathspec_count(path_filter)) {
         output_hint(
             out, OUTPUT_NORMAL,
             "Use 'dotta list <profile>' to see managed files"
@@ -1014,7 +1004,7 @@ static error_t diff_commit_to_workspace(
 
     /* Step 5: The filter's coverage over the commit's view, answered before
      * anything is compared, as the workspace arm answers it over its own. Where
-     * no entry reaches content, nothing can diff, and the answers are the whole
+     * no entry reaches a row, nothing can diff, and the answers are the whole
      * report. */
     if (!diff_validate_filter(path_filter, historical, "path of the commit", out)) {
         goto cleanup;
@@ -1295,8 +1285,8 @@ static error_t diff_workspace(
     output_t *out = ctx->out;
 
     /* Step 1: The filter's coverage over the view — the one the workspace joins,
-     * and all the question needs. Where no entry reaches content, nothing can
-     * diff, the answers are the whole report, and no workspace is loaded. */
+     * and all the question needs. Where no entry reaches a row, nothing can diff,
+     * the answers are the whole report, and no workspace is loaded. */
     if (!diff_validate_filter(scope_paths(scope), manifest, "active path", out)) return NULL;
 
     /* Step 2: Load the workspace. Orphans have no reader here, and the untracked
@@ -1615,7 +1605,7 @@ static const args_opt_t diff_opts[] = {
     ARGS_FLAG(
         "name-only",
         cmd_diff_options_t,name_only,
-        "Print changed file names only"
+        "Print changed paths only"
     ),
     /* Classified positionals: paths go to paths[], git refs to git_refs[],
      * everything else to profiles[]. The classify() function above decides. */

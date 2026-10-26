@@ -243,9 +243,12 @@ void compare_diff_deinit(file_diff_t *diff);
  *
  * Readers: compare_generate_diff (its own look's CMP_TYPE_DIFF), cmds/diff.c
  * diff_print_item (the load's look, where a row's kind is not what stands and
- * no blob is read). A reader not on this list is a bug.
+ * no blob is read — a directory row's among them). A reader not on this list is
+ * a bug.
  *
- * @param mode The mode the reference expects: a blob's two spellings or a link
+ * @param mode The mode the reference expects: a blob's two spellings, a link,
+ *             or a tree — a directory row's, which no comparison takes but this
+ *             sentence names
  * @param st The look that found another kind standing (must not be NULL)
  * @return The text, the caller's to free
  */

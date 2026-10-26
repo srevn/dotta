@@ -84,7 +84,9 @@ static error_t judge(
  * and judged, and mode_stands below would ask a regular file's question about
  * it. Every caller maps a file row's type, and a tree entry's filemode reaches
  * none: the profile keys a blob's type off its entry (core/profiles.c
- * profile_decode_blob) and a gitlink claims nothing there.
+ * profile_decode_blob) and a gitlink claims nothing there. The type mismatch's
+ * sentence takes no look, so it asks a domain of its own, a tree's mode among
+ * it (compare_type_mismatch).
  *
  * Asked first in both ladders, so one caller error has one answer wherever it
  * is made. It used to sit after the pair's own stat, where an unsupported mode
@@ -512,14 +514,23 @@ void compare_diff_deinit(file_diff_t *diff) {
 char *compare_type_mismatch(git_filemode_t mode, const struct stat *st) {
     CHECK_NULL(st);
 
-    validate_mode(mode);
+    /* The comparisons' domain and a tree's: a sentence takes no look, so the
+     * mode a directory row stands as is named here, where both ladders refuse
+     * it (validate_mode) */
+    CHECK_ARG(
+        mode == GIT_FILEMODE_LINK || mode == GIT_FILEMODE_BLOB ||
+        mode == GIT_FILEMODE_BLOB_EXECUTABLE || mode == GIT_FILEMODE_TREE,
+        "a type mismatch is named over a blob's two modes, a link's and a tree's"
+    );
 
     /* fs_stat_noun reads the type bits whole, so a directory or a device standing
      * here is named rather than folded into "regular file"; the expected kind
      * is spelled in that same function's words, so the two halves of one sentence
      * name their kinds alike */
     return heap_str_format(
-        "Type mismatch: expected %s, found %s", mode == GIT_FILEMODE_LINK
-        ? "symlink" : "regular file", fs_stat_noun(st)
+        "Type mismatch: expected %s, found %s",
+        mode == GIT_FILEMODE_LINK ? "symlink" :
+        mode == GIT_FILEMODE_TREE ? "directory" : "regular file",
+        fs_stat_noun(st)
     );
 }

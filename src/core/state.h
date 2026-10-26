@@ -862,9 +862,9 @@ const char *state_target(
  *   - cmds/remove.c remove_owes and remove_write_record (every record, for the
  *     ones the removal reaches at this machine's places, before the lock and
  *     under it) and core/workspace.c workspace_pending (every record against a
- *     view, with no workspace and no disk, handed the array by cmds/sync.c cmd_sync
- *     and cmds/profile.c profile_enable and profile_disable): walks, key order
- *     unread
+ *     view, with no workspace and no disk, handed the array by cmds/sync.c
+ *     cmd_sync, cmds/profile.c profile_enable and profile_disable, and
+ *     cmds/revert.c revert_print_pending): walks, key order unread
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *

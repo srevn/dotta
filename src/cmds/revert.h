@@ -1,8 +1,8 @@
 /**
  * revert.h - Revert file to previous commit state
  *
- * Restores a file in a profile to its state at a specific commit, optionally
- * deploying the reverted file to the filesystem.
+ * Restores a file in a profile to its state at a specific commit, in one commit
+ * on that profile; nothing on disk changes, the next apply's to bring.
  */
 
 #ifndef DOTTA_CMD_REVERT_H
@@ -101,8 +101,9 @@ typedef struct {
  * 10. Prompts for confirmation (unless --force)
  * 11. Creates one commit: the restored blob, its claim and its way, and says so
  * 12. Retires this profile's record at the restored place, where its node is gone
- * 13. Names the next step — the apply, or a profile not enabled here — and fires
- *     the post-revert hook last
+ * 13. Names the next step — a profile not enabled here, and apply's hint where
+ *     the record owes apply work against the view the commit leaves
+ *     (core/workspace.h workspace_pending) — and fires the post-revert hook last
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

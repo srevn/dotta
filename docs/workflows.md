@@ -186,7 +186,7 @@ dotta revert darwin home/.bashrc a4f2c8e
 # Preview the revert
 dotta revert --dry-run home/.bashrc@HEAD~3
 
-# Revert modifies the Git repository only
+# Revert commits the restore to its profile; nothing on disk changes
 # Run apply to deploy the reverted version
 dotta apply
 ```

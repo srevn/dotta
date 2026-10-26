@@ -23,6 +23,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "infra/commit.h"
 #include "infra/content.h"
 #include "infra/mount.h"
@@ -719,6 +720,47 @@ cleanup:
 }
 
 /**
+ * Print the next step a revert leaves: apply's hint, where the record owes apply
+ * work against the view the commit leaves (core/workspace.h workspace_pending)
+ *
+ * Asked once the record phase has ended, so the reclaim it wrote is in the record
+ * asked. The work is what the restore moved, the next apply's: over a copy that
+ * stands, a record apply confirmed at other bytes than the restored ones, which
+ * the workspace reads as [stale]; over one already gone, the claim the reclaim
+ * left no record of, which it reads as [undeployed] — or whatever else the record
+ * owes, a change no apply has followed. None where the restored claim stands
+ * nowhere, another enabled profile's standing at its path, or where the record
+ * already confirmed the restored bytes. Whatever the work is, the words name
+ * apply's aim and no outcome, the sentence every reader of workspace_pending says.
+ *
+ * The revert stands, so a view that will not build or a record that will not
+ * read is warned in its own words, a block, and drops the hint, never the revert.
+ *
+ * @param ctx Dispatch context: the store, the repository, the arena the reads
+ *        land in, and the output (must not be NULL)
+ */
+static void revert_print_pending(const dotta_ctx_t *ctx) {
+    output_t *out = ctx->out;
+
+    manifest_t *after = NULL;
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    error_t err = manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &after);
+    if (!err) err = state_records(ctx->run.state, ctx->arena, &records, &record_count);
+
+    if (err) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
+    } else if (workspace_pending(after, records, record_count)) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
+        );
+    }
+}
+
+/**
  * Revert command implementation
  */
 error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
@@ -1250,24 +1292,18 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
     }
 
-    /* Step 25: the next step. The revert moved the branch HEAD, and the next
-     * load's view carries the reverted blob: over a copy that stands, the record
-     * stays where apply last confirmed it, so the workspace reads the result as
-     * [stale] until apply deploys it; over one already gone, the reclaim above
-     * left no record, so it reads [undeployed]. A disabled profile's revert reaches
-     * no view at all: a profile this machine has not enabled has nothing to apply
-     * the revert to. A block of its own. */
-    output_gap(out, OUTPUT_NORMAL);
-    if (state_enabled(state, profile)) {
-        output_info(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy changes to filesystem"
-        );
-    } else {
+    /* Step 25: the next step, once the record phase has ended. A disabled profile's
+     * revert reaches no view at all — a profile this machine has not enabled
+     * has nothing to apply the revert to — and says so, a block of its own; then
+     * what the restore moved is the next apply's (revert_print_pending). */
+    if (!state_enabled(state, profile)) {
+        output_gap(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL, "Note: Profile '%s' is not enabled on this machine",
             profile
         );
     }
+    revert_print_pending(ctx);
 
     /* Step 26: the post-revert hook, last (utils/hooks.h hook_fire_post): the
      * commit landed and the record phase's transaction ended, so the hook meets
@@ -1470,8 +1506,8 @@ const args_command_t spec_revert = {
         "   or: %s revert [options] <profile> <file> <commit>",
     .description =
         "Restore a file's content and metadata to its state at a past\n"
-        "commit. Only the Git repository is modified; run '%s apply'\n"
-        "afterward to propagate to the filesystem.\n",
+        "commit, in one commit on its profile. Nothing on disk changes;\n"
+        "the next '%s apply' brings the workspace in line.\n",
     .notes       =
         "Execution Order:\n"
         "  1. Find the profile that holds the argument (--profile if ambiguous).\n"

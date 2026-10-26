@@ -1219,8 +1219,12 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * a flag asks for them, or the config does, for the consent prompt — and
      * every discovery it makes is the run's (update_partition).
      *
-     * State is borrowed from the dispatcher (ctx->run.state). Read-only analysis.
-     * The transaction for the record write opens later in update_write_record().
+     * State is borrowed from the dispatcher (ctx->run.state), which holds no
+     * transaction: the load writes what it owes the record in one of its own,
+     * the files it verified but this command does not modify among them
+     * (core/workspace.h workspace_load), and the files the command captures get
+     * their record in its record phase, whose transaction opens there
+     * (update_write_record).
      */
     workspace_options_t ws_opts = {
         .analyze_orphans   = false,     /* Update doesn't process orphaned files */
@@ -1231,18 +1235,6 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
-    if (err) return err;
-
-    /* What the load owes the record — its observations, its confirmations
-     * (core/workspace.h workspace_flush) — the confirmations seeding the fast
-     * path for subsequent status/apply/update calls. The flush keeps the failure
-     * of the transaction it takes, so update proceeds on what the load read
-     * whatever the flush met.
-     *
-     * Files actually updated by this command get their record written separately
-     * inside update_write_record(); this flush covers the clean files the analysis
-     * verified but didn't modify. */
-    err = workspace_flush(ws);
     if (err) return err;
 
     /* The run's filter context, ahead of everything the filter says against it:

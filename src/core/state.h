@@ -931,10 +931,10 @@ const state_record_t *state_find_record(
  *
  * ROUTING INVARIANT — this is load-bearing:
  *   - Where a workspace live for this transaction is read after the write, its
- *     writes go through the workspace's writers — the flush, workspace_anchor,
- *     workspace_learn (core/workspace.h) — each of which points the path's item
- *     at the record this wrote. Called directly there, the item goes on holding
- *     what the load read.
+ *     writes go through the workspace's writers — the load's flush
+ *     (core/workspace.h workspace_load), workspace_anchor and workspace_learn —
+ *     each of which points the path's item at the record this wrote. Called
+ *     directly there, the item goes on holding what the load read.
  *   - Where no workspace is read after the write — add's record phase, which
  *     loads none, and update's, whose workspace nothing reads after it
  *     (core/workspace.h's exception) — this is the legitimate direct caller.

@@ -1764,14 +1764,6 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
         );
         if (err) return err;
-
-        /* What the load owes the record — its observations, its confirmations
-         * (core/workspace.h workspace_flush) — the confirmations seeding the
-         * fast path for subsequent status calls. The flush keeps the failure of
-         * the transaction it takes, so status renders what the load read whatever
-         * the flush met. */
-        err = workspace_flush(ws);
-        if (err) return err;
     }
 
     /* The enabled profiles and the last deployment of each */

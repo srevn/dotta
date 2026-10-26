@@ -2396,14 +2396,37 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Load workspace (partitions the view's rows and runs divergence analysis)
+    /* Load workspace (partitions the view's rows, runs divergence analysis, and
+     * writes what it owes the record)
      *
      * After workspace_load returns, every active path is an item, the clean ones
      * too — the whole enabled set, over the view the dispatcher built; the plan
      * below applies the scope.
      *
-     * Pass state handle to workspace so it analyzes within our write transaction.
-     * This ensures consistency and eliminates redundant database connections.
+     * The load writes what it owes the record before it returns — its observations,
+     * a directory's or a file's in the place of a record whose node the look
+     * found gone among them, its confirmations, a blob a row's own branch held
+     * at its name among them, and the bytes it keeps unconfirmed (core/workspace.h
+     * workspace_load) — so each stands before the plan below, and a landing that
+     * replaces a copy of such a blob replaces a node dotta keeps a record of,
+     * save one whose owner or group this host has no name for, which no observation
+     * spells. A run's writes land in its dispatch transaction, the state handle
+     * passed here, which the checkpoint below commits with the rest of the present,
+     * and each owed item holds the record its write made. A clean item may hold
+     * a record of another kind all the same, where this host has no name for
+     * its node's owner or group, which no observation spells, so the loops below
+     * ask the kind (core/workspace.h workspace_unacknowledged): the acknowledgement
+     * owns no directory the user created where dotta's file was, and a fix learns
+     * nothing onto a gone node's record. A preview holds no transaction, so the
+     * load takes and commits a scoped one of its own once it owes anything, exactly
+     * as it does for status, diff and update (state_locked, in core/state.h),
+     * and one refused publishes nothing: every item holds what the load read.
+     *
+     * The failure goes with the transaction. A run's load writes into the one
+     * the run will commit, so a failure there poisons everything it has left to
+     * do, and ends the run in the store's own words, which name the write and
+     * the path it failed at; a preview's keeps the failure of its own, as status's
+     * does.
      */
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Loading workspace...\n");
@@ -2418,33 +2441,6 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
-    if (err) return err;
-
-    /* What the load owes the record — its observations, a directory's or a file's
-     * in the place of a record whose node the look found gone among them, its
-     * confirmations, a blob a row's own branch held at its name among them, and
-     * the bytes it keeps unconfirmed (core/workspace.h workspace_flush). Written
-     * before the plan below, so a landing that replaces a copy of such a blob
-     * replaces a node dotta keeps a record of — save one whose owner or group
-     * this host has no name for, which no observation spells. A run's land in
-     * its dispatch transaction, which the checkpoint below commits with the rest
-     * of the present, and each owed item holds the record its write made from
-     * the flush's end. A clean item may hold a record of another kind all the
-     * same, where this host has no name for its node's owner or group, which no
-     * observation spells, so the loops below ask the kind (core/workspace.h
-     * workspace_unacknowledged): the acknowledgement owns no directory the user
-     * created where dotta's file was, and a fix learns nothing onto a gone node's
-     * record. A preview holds none, so the flush takes and commits a scoped one
-     * of its own once it owes anything, exactly as it does for status, diff,
-     * sync and update (state_locked, in core/state.h), and one refused publishes
-     * nothing: every item holds what the load read.
-     *
-     * The failure goes with the transaction. A run's flush writes into the one
-     * the run will commit, so a failure there poisons everything it has left to
-     * do, and ends the run in the flush's own words, which name the write and
-     * the path it failed at; a preview's keeps the failure of its own, as status's
-     * does. */
-    err = workspace_flush(ws);
     if (err) return err;
 
     /* Both kinds: a scope of tracked directories alone is a workspace, not an
@@ -2862,7 +2858,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * one whose content the load learned, so the flush writes the row's first
      * observation in that record's place — save where this host has no name for
      * the file's owner or group, which no observation spells (core/workspace.h
-     * workspace_flush) — and the clause reads a preview whose flush was refused
+     * workspace_load) — and the clause reads a preview whose flush was refused
      * as the run will, "Would adopt" where the run adopts. The kind is the ladder's
      * first rung (core/workspace.h workspace_type_occupant): a link beside a
      * file is another kind there, where path_type_kind would call both files.
@@ -2875,18 +2871,17 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the clean list; a stale reassignment is acknowledged by its deployment
      * and named on the pending list, off the verdicts below.
      *
-     * Division of labor with the earlier flush: the proof of this run's match
-     * is the item's own verdict, the one that filed it among the clean
-     * (core/deploy.c deploy_needs_work: DEPLOYED, no squatter above it, no bit
-     * but the blob's), and the stat it stood on is the item's too. What this
-     * loop reads of the flush's work is the record alone — the observation the
-     * same flush made at a clean row with no record, or in a gone node's record's
-     * place, or none where the observation could not be spelled — and a learning
-     * keeps the stamp and the node it read, and the binding of a record dotta
-     * owns, the one binding asked here (a learning of the content moves only
-     * one dotta never owned onto the row), so all three remain valid probes here;
-     * each writer points the item at the record it wrote, so the item holds what
-     * the store holds.
+     * Division of labor with the load's flush: the proof of this run's match is
+     * the item's own verdict, the one that filed it among the clean (core/deploy.c
+     * deploy_needs_work: DEPLOYED, no squatter above it, no bit but the blob's),
+     * and the stat it stood on is the item's too. What this loop reads of the
+     * flush's work is the record alone — the observation the same flush made at
+     * a clean row with no record, or in a gone node's record's place, or none
+     * where the observation could not be spelled — and a learning keeps the stamp
+     * and the node it read, and the binding of a record dotta owns, the one binding
+     * asked here (a learning of the content moves only one dotta never owned
+     * onto the row), so all three remain valid probes here; each writer points
+     * the item at the record it wrote, so the item holds what the store holds.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches

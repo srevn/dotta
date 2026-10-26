@@ -2,7 +2,7 @@
  * list.c - List profiles, files, and commit history
  *
  * Hierarchical listing interface with three levels:
- * 1. Profiles (default) - Show available profiles
+ * 1. Profiles (default) - Show every local profile
  * 2. Files (with -p) - Show files in a profile
  * 3. File History (with -p <file>) - Show commits affecting a file
  */
@@ -304,7 +304,7 @@ static error_t list_profiles(
     }
 
     /* Print header */
-    output_section(out, OUTPUT_NORMAL, "Available profiles");
+    output_section(out, OUTPUT_NORMAL, "Profiles");
 
     /* List profiles */
     for (size_t i = 0; i < profiles.count; i++) {

@@ -484,7 +484,7 @@ static const args_opt_t bootstrap_opts[] = {
     ARGS_FLAG(
         "all",
         cmd_bootstrap_options_t,all_profiles,
-        "Run every available bootstrap script"
+        "Run every local profile's bootstrap script"
     ),
     ARGS_FLAG_SET(
         "e edit",

@@ -172,7 +172,8 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
         }
     }
 
-    /* Show remote profiles if requested */
+    /* The remote's profiles not fetched here, if asked, under the title a clone
+     * that detects none gives them too (cmds/clone.c cmd_clone) */
     if (opts->show_remote) {
         error_t remote_err = gitops_resolve_default_remote(
             repo, ctx->arena, &remote_name, &remote_url
@@ -1117,7 +1118,7 @@ static const args_opt_t profile_list_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_FLAG(
         "all",             cmd_profile_options_t,show_remote,
-        "Show all available and remote profiles"
+        "Include remote profiles"
     ),
     ARGS_END,
 };

@@ -455,12 +455,13 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
         } else {
             /* No profiles detected, so none was fetched: the remote's profiles
-             * listed as guidance, with the two verbs that take one — none is
-             * here yet, and enable refuses a profile whose branch is not
-             * (cmds/profile.c profile_enable) */
+             * listed as guidance, under the title profile list gives the remote's
+             * not fetched here (cmds/profile.c profile_list), with the two verbs
+             * that take one — none is here yet, and enable refuses a profile
+             * whose branch is not (cmds/profile.c profile_enable) */
             output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
             if (remote_branches.count > 0) {
-                output_section(out, OUTPUT_NORMAL, "Available remote profiles");
+                output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
                 for (size_t i = 0; i < remote_branches.count; i++) {
                     output_info(out, OUTPUT_NORMAL, "  • %s", remote_branches.entries[i]);
                 }

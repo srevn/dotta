@@ -142,7 +142,7 @@ Dotta always looks at every enabled profile to decide what belongs where. The fl
 If a profile exists on the remote but not locally:
 
 ```bash
-# See what's available
+# List remote profiles
 dotta profile list --all
 
 # Fetch without enabling

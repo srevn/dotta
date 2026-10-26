@@ -108,27 +108,29 @@ dotta status -v
 ## Viewing Differences
 
 ```bash
-# Full workspace diff (what apply would change)
+# Full workspace diff (what apply would change, or skip)
 dotta diff
 
-# What apply would deploy (repo → filesystem)
+# What apply would deploy or skip (repo → filesystem)
 dotta diff --upstream
 
-# What update would commit (filesystem → repo)
+# What update would commit or skip (filesystem → repo)
 dotta diff --downstream
 
 # Both directions
 dotta diff --all
 
-# Diff for a specific file
+# Diff for a specific path: a file, or a directory and what it holds
 dotta diff home/.bashrc
 
 # Compare two commits
 dotta diff b3e1f9a a4f2c8e
 
-# Only show file names
+# Only show the paths
 dotta diff --name-only
 ```
+
+Each listed path opens with a status line: what differs, then what the previewed verb does about it, or why it skips the path -- `modified locally (would be committed by update)`, `changed in Git (would be deployed by apply)`, `changed in Git and on disk (update skips it)`. A directory is listed as a file is, for its mode, its ownership or its kind. Beneath the line, differing bytes draw a hunk, and a differing kind names both kinds. `dotta diff` compares the paths your enabled profiles claim: new files in tracked directories are listed by `dotta update --dry-run`, and the copies apply would remove by `dotta apply --dry-run`.
 
 ## Listing Files and History
 

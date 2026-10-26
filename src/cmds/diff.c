@@ -1591,7 +1591,7 @@ const args_command_t spec_diff = {
         "  [<path>...]           Restrict any mode to the named paths.\n",
     .examples     =
         "  %s diff                          # Preview apply (default)\n"
-        "  %s diff --name-only              # Only changed file names\n"
+        "  %s diff --name-only              # Only changed paths\n"
         "  %s diff --downstream             # Preview update\n"
         "  %s diff --all                    # Both directions\n"
         "  %s diff home/.bashrc             # Workspace, single file\n"

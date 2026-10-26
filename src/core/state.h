@@ -125,10 +125,11 @@ typedef struct {
  *
  * The read-derived constructor: a triple is born only from a struct stat the
  * caller already holds at the moment of its look — a post-commit capture's fstat,
- * or the lstat of a slow path that found disk the row's content — so the triple
- * and the bytes the caller verified describe the same moment. There is deliberately
- * no from-path variant: a fresh look taken at record-write time would bind whatever
- * stands at the path then to a verdict from earlier.
+ * the lstat of a slow path that found disk the row's content, or the look beside
+ * a load's capture of bytes no base proves (core/workspace.c workspace_ask_bases)
+ * — so the triple and the bytes the caller verified describe the same moment.
+ * There is deliberately no from-path variant: a fresh look taken at record-write
+ * time would bind whatever stands at the path then to a verdict from earlier.
  *
  * A stat whose mtime second has not closed (mtime >= now: written this very second,
  * or carrying a future mtime) demotes to UNSET — a read can only infer the bytes
@@ -219,17 +220,20 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     it established (apply's from the row it deployed or found standing, a
  *     capture's from what it read and committed: the one blob the stage wrote,
  *     never a later head's), and a learning of the content (the slow-path
- *     CMP_EQUAL), which keeps the node: it is made only onto a record of the
- *     row's kind, since a record of another node, the look having found the row's
- *     in its place, gives way to the row's first observation, where its claim
- *     can be spelled, before anything is learned onto it, and has nothing learned
- *     onto it otherwise (core/workspace.c workspace_flush) — a whole write, never
- *     a learning onto the gone node's record. No node is executable: the bit is
- *     the claim's mode, and Git's filemode the row's alone. Zero blob_oid is no
- *     content confirmation — a directory, whose whole confirmed-disk record is
- *     that it was observed (a directory has no content confirmation,
- *     schema-enforced), or a file this record holds no confirmation of: one whose
- *     bytes it keeps unconfirmed, or one it only observed.
+ *     CMP_EQUAL, and the bases' ask, which confirms a blob the row's own branch
+ *     held at its name or keeps the bytes unconfirmed at the view's head:
+ *     core/workspace.c workspace_ask_bases), which keeps the node: it is made
+ *     only onto a record of the row's kind, since a record of another node, the
+ *     look having found the row's in its place, gives way to the row's first
+ *     observation, where its claim can be spelled, before anything is learned
+ *     onto it, and has nothing learned onto it otherwise (core/workspace.c
+ *     workspace_flush) — a whole write, never a learning onto the gone node's
+ *     record. No node is executable: the bit is the claim's mode, and Git's
+ *     filemode the row's alone. Zero blob_oid is no content confirmation — a
+ *     directory, whose whole confirmed-disk record is that it was observed (a
+ *     directory has no content confirmation, schema-enforced), or a file this
+ *     record holds no confirmation of: one whose bytes it keeps unconfirmed, or
+ *     one it only observed.
  *   - the claim (mode, owner, group): the claim dotta last saw the path stand
  *     on or put there, and so the base a difference on a claim axis is read from
  *     — disk off it the user's move, the row off it Git's claim still to bring
@@ -280,10 +284,14 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     from one row, add's and update's from one capture — the name it committed
  *     under and the blob the stage wrote there — and a learning of the content
  *     from one row too, the binding written with the blob (core/workspace.c
- *     workspace_learning): onto the row's first observation, a record bound to
+ *     workspace_learning) — the row's own, or one the row's own branch held at
+ *     the row's name, committed under that very binding (core/workspace.c
+ *     workspace_ask_bases): onto the row's first observation, a record bound to
  *     the row, or one dotta never owned, and never onto one dotta owns bound to
  *     another row, whose binding only an ownership event moves (core/workspace.c
- *     workspace_analyze_file, the content's note).
+ *     workspace_analyze_file, the content's note). The bytes a record keeps
+ *     unconfirmed are under its binding too: the entry they would be at its name,
+ *     sealed as its row's are.
  *
  * The binding and the claim are what an orphan (a record whose path the view
  * lacks) is measured against — the claim is a file orphan's reference on disk,
@@ -344,10 +352,11 @@ typedef struct state_record {
  *
  * Whether there is a stat to ask about is the asker's question, not this one's.
  *
- * Readers: core/workspace.c workspace_analyze_file, of the base, and
- * workspace_compare_base, of the base or an orphan's record — the two fast paths,
- * which must not disagree about what a stat proves, and cannot: each hands in a
- * record whole, and the triple is never asked under a kind not its own.
+ * Readers: core/workspace.c workspace_analyze_file, of the base and of the bytes
+ * a load kept unconfirmed (its two fast paths), and workspace_compare_base, of
+ * the base or an orphan's record — the fast paths, which must not disagree about
+ * what a stat proves, and cannot: each hands in a record whole, and the triple
+ * is never asked under a kind not its own.
  */
 static inline bool state_stat_matches(const state_record_t *record, const struct stat *st) {
     return record->stat.mtime != 0

@@ -2348,11 +2348,15 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* What the load owes the record — its observations, a directory's or a file's
      * in the place of a record whose node the look found gone among them, its
-     * confirmations (core/workspace.h workspace_flush). A run's land in its
-     * dispatch transaction, which the checkpoint below commits with the rest of
-     * the present, and each owed item holds the record its write made from the
-     * flush's end. A clean item may hold a record of another kind all the same,
-     * where this host has no name for its node's owner or group, which no
+     * confirmations, a blob a row's own branch held at its name among them, and
+     * the bytes it keeps unconfirmed (core/workspace.h workspace_flush). Written
+     * before the plan below, so a landing that replaces a copy of such a blob
+     * replaces a node dotta keeps a record of — save one whose owner or group
+     * this host has no name for, which no observation spells. A run's land in
+     * its dispatch transaction, which the checkpoint below commits with the rest
+     * of the present, and each owed item holds the record its write made from
+     * the flush's end. A clean item may hold a record of another kind all the
+     * same, where this host has no name for its node's owner or group, which no
      * observation spells, so the loops below ask the kind (core/workspace.h
      * workspace_unacknowledged): the acknowledgement owns no directory the user
      * created where dotta's file was, and a fix learns nothing onto a gone node's

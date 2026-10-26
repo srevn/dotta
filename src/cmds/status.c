@@ -821,13 +821,15 @@ static void status_print_workspace(
 
     /* Section 2: Unconfirmed paths — bytes no base proves (the route's
      * UNCONFIRMED): disk is not the row's, and the record holds no confirmation
-     * of what stands there, so nothing says whose move that is — the second bucket
-     * no default verb resolves, beside the conflicts. Its header carries the
-     * remedy as theirs does, each way out unqualified: every row is a file row
-     * with a regular file or a link standing — a directory row and every other
-     * kind answer at KIND, above — which `add --force` captures, a link being a
-     * file to add's kind test (cmds/add.c), and `apply --force` replaces. No
-     * key: the header is true of every line. */
+     * of what stands there, nor, where it could be asked, did the row's own branch
+     * hold disk's bytes at the name (core/workspace.c workspace_ask_bases), so
+     * nothing says whose move that is — the second bucket no default verb resolves,
+     * beside the conflicts. Its header carries the remedy as theirs does, each
+     * way out unqualified: every row is a file row with a regular file or a link
+     * standing — a directory row and every other kind answer at KIND, above —
+     * which `add --force` captures, a link being a file to add's kind test
+     * (cmds/add.c), and `apply --force` replaces. No key: the header is true of
+     * every line. */
     if (unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",

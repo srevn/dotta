@@ -258,10 +258,12 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  * axis across kinds (core/workspace.h divergence_type_t) — so whatever stands
  * there is the user's, never measured against the row. A Git move without an
  * edit — STALE, the bytes or the kind, or CLAIM_MOVED, a claim — never conflicts:
- * what stands on disk is what dotta last saw there — its confirmed copy, or its
- * own directory — so the overwrite loses nothing. Mode, ownership and encryption
- * divergence never conflict, whoever moved them: a claim is never an edit
- * (core/workspace.h workspace_item_route, whose STALE arm rests on this).
+ * what stands on disk is what dotta last saw there — its confirmed copy, a blob
+ * the row's own branch held at its name among them, recorded by the flush before
+ * apply plans (cmds/apply.c cmd_apply), or its own directory — so the overwrite
+ * loses nothing. Mode, ownership and encryption divergence never conflict, whoever
+ * moved them: a claim is never an edit (core/workspace.h workspace_item_route,
+ * whose STALE arm rests on this).
  *
  * Four readers, two files: the ladder's content rung and its type rung's consent
  * (deploy_preflight) — an occupant of another kind is replaced unasked where

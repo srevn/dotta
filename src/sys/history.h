@@ -158,6 +158,8 @@ typedef struct {
  * the caller's own up to it are together the answer for the history whole. No
  * failure is raised.
  *
+ * Reader: core/workspace.c workspace_ask_bases.
+ *
  * @param repo The repository the walks read (must not be NULL)
  * @param head The newest commit's id (must not be NULL)
  * @param entries The entries, in any order, one more than once (must not be NULL

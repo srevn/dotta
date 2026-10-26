@@ -716,6 +716,9 @@ error_t content_capture_link(
  * The look is the caller's, as the pair's is (infra/compare.h): the capture's
  * own refuses what is not the kind `mode` names, and is handed back nowhere.
  *
+ * Reader: core/workspace.c workspace_ask_bases, each copy a load found bytes no
+ * base proves at.
+ *
  * @param cache The run's content cache, for its key (must not be NULL)
  * @param filesystem_path The copy (must not be NULL; a link is never followed)
  * @param mode The entry's filemode: GIT_FILEMODE_LINK, or either blob filemode

@@ -12,15 +12,18 @@
  * none. The record dotta keeps of each path (the path_records table: what it
  * deployed or observed there, when, with what stat) is loaded beside the view
  * and paired with it by path. It is dotta's own and nothing repairs it either:
- * the analyses read it as the base of every three-way question, and its writers
- * here (the flush, workspace_anchor, workspace_learn) write it only on disk's
- * word — a live look there, or the run's own write: the claim its write landed,
- * save the mode of a directory a run could not narrow back (core/deploy.h
- * deploy_working_mode, stated). Each writes a record whole and publishes it:
- * the item at the path holds the record the store holds, and the one it held
- * before is never written. A record whose path the view lacks is an orphan, and
- * the orphan analysis asks its profile's history — the only authority that knows
- * — why it is one.
+ * the analyses read it as the base of every three-way question — and, where it
+ * holds none, as the answer a load kept for the bytes, at a head the view is
+ * checked against — and its writers here (the flush, workspace_anchor,
+ * workspace_learn) write it only on disk's word — a live look there, or the run's
+ * own write: the claim its write landed, save the mode of a directory a run could
+ * not narrow back (core/deploy.h deploy_working_mode, stated) — and, of bytes
+ * no base proves, the row's own branch's beside it: whether its history held
+ * them at the row's name. Each writes a record whole and publishes it: the item
+ * at the path holds the record the store holds, and the one it held before is
+ * never written. A record whose path the view lacks is an orphan, and the orphan
+ * analysis asks its profile's history — the only authority that knows — why it
+ * is one.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with
@@ -64,6 +67,7 @@
 #include "infra/label.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/history.h"
 
 /**
  * Workspace structure
@@ -1025,7 +1029,11 @@ static error_t workspace_compare_base(
  * overwrites nothing of the user's; CONTENT without STALE is a local edit Git
  * has not raced where a base confirmed the bytes, and over none, bytes neither
  * verb takes by default (core/workspace.h workspace_item_route, UNCONFIRMED);
- * both together is a conflict.
+ * both together is a conflict. Over no base the bytes have a second witness,
+ * the row's own branch, asked of them once the join is done: a blob it held at
+ * the row's name is a base both sides held, and the verdict STALE
+ * (workspace_ask_bases), the answer kept either way, so the bytes a load kept
+ * unconfirmed are read again only once disk, the binding or the head moves.
  *
  * The claim's verdict is one question per axis (workspace_analyze_claim): does
  * Git's side hold it otherwise than the record of this node, or did no record
@@ -1174,11 +1182,15 @@ static void workspace_analyze_file(
      * are the ones dotta saw: any difference from theirs is CONTENT, or TYPE
      * across kinds, whose mover no base proves (core/workspace.h
      * workspace_item_route, UNCONFIRMED), beside Git's move where the record is
-     * of another kind.
+     * of another kind — save the row's own branch, asked of the bytes once the
+     * join is done, whose blob at the name is a base both sides held
+     * (workspace_ask_bases).
      *
      * Source of truth for the base: the record (the path_records row). No record
-     * is no base, and nothing for Git to have moved past. Cross-process correct
-     * by construction — every invocation sees the same answer.
+     * is no base, and nothing for Git to have moved past — and where it holds
+     * none, the record's answer for the bytes, kept at a head (core/workspace.h
+     * workspace_unconfirmed). Cross-process correct by construction — every
+     * invocation sees the same answer.
      */
     compare_result_t cmp_result;
 
@@ -1190,6 +1202,11 @@ static void workspace_analyze_file(
      * yet to follow, and reading the base under it authenticates a ciphertext
      * against a tree path it was never sealed at. */
     const state_record_t *base = workspace_base(record);
+
+    /* Beside it, its twin: the record's answer for bytes no base proves, where
+     * it is this row's at the head the view stands at (core/workspace.h
+     * workspace_unconfirmed). The two never stand on one record. */
+    const state_record_t *unconfirmed = workspace_unconfirmed(ws->manifest, row, record);
 
     /* The first question of the three-way frame is answered from the row and
      * the record alone: did the view move past what dotta last saw here — the
@@ -1213,7 +1230,8 @@ static void workspace_analyze_file(
      * untouched copy therefore answers CMP_TYPE_DIFF here and STALE below, the
      * same as the slow path reaches by reading — where an answer off git_moved
      * alone would have called one state clean and its mirror a mode change. A
-     * path with no base has no triple to match.
+     * path with no base has no base's triple; the bytes a load kept unconfirmed
+     * have their own, below.
      *
      * Nothing is noted for the record here: disk is the record's own pair under
      * its own stat, which the record already holds. A note would buy nothing
@@ -1237,6 +1255,18 @@ static void workspace_analyze_file(
             item->blob_oid = base->blob_oid;
             item->stat = base->stat;
         }
+    } else if (unconfirmed && state_stat_matches(unconfirmed, &item->st)) {
+        /* UNCONFIRMED FAST PATH
+         *
+         * The record keeps disk's bytes as no base proves them, under the triple
+         * the look still stands behind, against this row at the head its branch
+         * stands at: no commit of that history held them at the name, and the
+         * row that head holds is not them. So the verdict is the one the read
+         * that kept them gave, with nothing loaded, hashed or asked, and nothing
+         * noted: the record holds it. A node made unreadable since, or a sealed
+         * row with no key in reach, reads so too, as a base whose stat stands
+         * does (stated). */
+        cmp_result = CMP_DIFFERENT;
     } else {
         /* SLOW PATH: Full content comparison, ours vs theirs
          *
@@ -1375,6 +1405,17 @@ static void workspace_analyze_file(
             if (!workspace_unacknowledged(row, record)) {
                 item->confirmation |= DIVERGENCE_CONTENT;
             }
+        } else if (cmp_result == CMP_DIFFERENT && !base && !git_moved) {
+            /* Over no base, disk found none of the row's — no record, or one of
+             * the row's kind that confirmed none, which was never owned
+             * (core/state.h), so the record can take the answer whatever row it
+             * names (workspace_learning) — and the record is owed the bytes'
+             * answer: a blob the row's own branch held at its name, or the bytes
+             * kept unconfirmed at the view's head. The bases' ask completes it
+             * once the join is done, or drops it where no answer can be kept
+             * (workspace_ask_bases). A record of another kind is Git's move
+             * already, the kind's base, and owes no such answer. */
+            item->confirmation |= DIVERGENCE_CONTENT;
         }
 
         /* Second question — ours vs base — asked once, where it can change the
@@ -2070,16 +2111,152 @@ static bool workspace_transient(const char *entry, void *ctx) {
 }
 
 /**
- * The owned files' order (qsort's): by the profile each record names
+ * The asked items' order (qsort's): by the profile each is from
  *
- * The ask's runs, one a profile (workspace_ask_departures). Within a run the
- * order is the sort's and nothing reads it: the walk orders the names itself.
+ * An owned file orphan's record's, a noted file's row's: the two asks' runs,
+ * one a profile (workspace_ask_departures, workspace_ask_bases). Within a run
+ * the order is the sort's and nothing reads it: each history orders what it is
+ * asked itself.
  */
 static int workspace_profile_order(const void *a, const void *b) {
     const workspace_item_t *ia = *(const workspace_item_t *const *) a;
     const workspace_item_t *ib = *(const workspace_item_t *const *) b;
 
     return strcmp(ia->profile, ib->profile);
+}
+
+/**
+ * Put each content the join noted over no base to its row's own branch — the
+ * bytes' second witness — and keep its answer either way
+ *
+ * The file items whose analysis found disk's bytes none of the row's where no
+ * base stands, and noted the bytes' answer owed (workspace_analyze_file): each
+ * as the entry it would be at its row's name (infra/content.h content_capture_oid),
+ * asked of its row's profile's history at the head the view's rows were read
+ * from (core/manifest.h manifest_head, sys/history.h history_held), one ask a
+ * profile. A blob the history held is a base both sides held — Git at a commit
+ * the head reaches, disk now — and the frame reads it as it reads the record's:
+ * STALE in CONTENT's place, its claims riding as the join wrote them, the base
+ * the item's content. Bytes no commit held, the history read whole, are the item's
+ * content kept unconfirmed at that head. A copy the capture refuses and a history
+ * read short keep nothing: the note is dropped, and the record keeps what it held.
+ *
+ * Between the join and the list: every verdict the join wrote is in, and nothing
+ * reads one before the list derives the diverged items — the index reads looks,
+ * the orphan analysis the view, the index and the orphans' own looks.
+ *
+ * @param ws Workspace (must not be NULL), its join walked
+ */
+static void workspace_ask_bases(workspace_t *ws) {
+    /* The notes over no base — a content owed where the verdict is CONTENT, which
+     * the row's own content noted on CMP_EQUAL is not — by profile, in a frame
+     * of the ask's own, taken at the first, so a load with none allocates
+     * nothing */
+    arena_t *frame = NULL;
+    workspace_item_t **noted = NULL;
+    size_t noted_count = 0;
+    for (size_t f = 0; f < ws->file_count; f++) {
+        workspace_item_t *item = ws->active[ws->dir_count + f];
+        if (!(item->confirmation & DIVERGENCE_CONTENT) ||
+            !(item->divergence & DIVERGENCE_CONTENT)) {
+            continue;
+        }
+
+        if (!frame) {
+            frame = arena_create(0);
+            noted = arena_calloc(frame, ws->file_count, sizeof(*noted));
+        }
+        noted[noted_count++] = item;
+    }
+    if (!frame) return;
+
+    qsort(noted, noted_count, sizeof(*noted), workspace_profile_order);
+
+    /* Each as the entry it would be at its row's name, sealed as the row's is
+     * (content_capture_oid), its triple made beside this read and never after
+     * the walks: whether the look's mtime second had closed is asked of the clock
+     * at the read whose bytes are kept (core/state.h state_stat_from_read). A
+     * copy rewritten to the row's bytes between the compare's read and this one
+     * reads STALE for this load, its base the row's blob, and clean at the next
+     * (stated). A copy the capture refuses is no entry at the name — a plaintext
+     * row's opening with the cipher's magic, a sealed row's past the cipher's
+     * bound — so it has no answer to keep: its note goes, the error dropped,
+     * one a path at most (base/error.h "Lifetime"). The captured are compacted
+     * in place, each beside its entry, by profile still. */
+    history_entry_t *entries = arena_calloc(frame, noted_count, sizeof(*entries));
+    state_stat_t *stats = arena_calloc(frame, noted_count, sizeof(*stats));
+    size_t entry_count = 0;
+    for (size_t i = 0; i < noted_count; i++) {
+        workspace_item_t *item = noted[i];
+        const manifest_row_t *row = item->row;
+        const state_record_t *record = item->record;
+
+        history_entry_t *entry = &entries[entry_count];
+        *entry = (history_entry_t){
+            .path = row->storage_path,
+            .mode = gitops_type_filemode(row->type),
+        };
+        error_t err = content_capture_oid(
+            ws->content_cache, item->filesystem_path, entry->mode, entry->path,
+            row->profile, row->encrypted, &entry->blob_oid
+        );
+        if (err) {
+            item->confirmation &= ~DIVERGENCE_CONTENT;
+            continue;
+        }
+        stats[entry_count] = state_stat_from_read(&item->st);
+
+        /* Where the record's answer was for this very entry — the row's binding,
+         * these bytes — the history up to its head held none of it, so only what
+         * the head added past it is asked. Any other entry is asked whole: the
+         * same bytes capture to another id across a flip of the name's encoding,
+         * which an older commit may hold, and another binding's answer is another
+         * branch's. */
+        if (record && manifest_is_claim(row, record->profile, record->storage_path) &&
+            git_oid_equal(&record->disk_oid, &entry->blob_oid)) {
+            entry->since = record->head;
+        }
+        noted[entry_count++] = item;
+    }
+
+    /* One ask a profile, at the head its rows were read from — a view over the
+     * enabled set holds one for every row's profile — and each answer completes
+     * its note or drops it. A history read short may hold anything, so it keeps
+     * nothing; a held blob is the base; none, the history read whole, is kept
+     * at the head. Stated: a blob the store lacked while a tree named it is held
+     * by no history (history_held's store half), so a store that regains it keeps
+     * that none until disk or the binding moves, a moved head being asked past
+     * the head it was kept at — the store's half is the head's only where the
+     * store keeps Git's connectivity. */
+    bool *held = arena_calloc(frame, entry_count, sizeof(*held));
+    bool *unread = arena_calloc(frame, entry_count, sizeof(*unread));
+    for (size_t start = 0; start < entry_count;) {
+        const char *profile = noted[start]->profile;
+        size_t end = start + 1;
+        while (end < entry_count && strcmp(noted[end]->profile, profile) == 0) end++;
+
+        const git_oid *head = manifest_head(ws->manifest, profile);
+        history_held(ws->repo, head, entries + start, end - start, held + start, unread + start);
+
+        for (size_t k = start; k < end; k++) {
+            workspace_item_t *item = noted[k];
+            if (unread[k]) {
+                item->confirmation &= ~DIVERGENCE_CONTENT;
+            } else if (held[k]) {
+                item->divergence = (item->divergence & ~DIVERGENCE_CONTENT) | DIVERGENCE_STALE;
+                item->blob_oid = entries[k].blob_oid;
+                item->stat = stats[k];
+            } else {
+                item->disk_oid = entries[k].blob_oid;
+                item->head = *head;
+                item->stat = stats[k];
+            }
+        }
+
+        start = end;
+    }
+
+    arena_free(frame);
 }
 
 /**
@@ -3569,6 +3746,11 @@ error_t workspace_load(
         }
     }
 
+    /* The bytes' second witness: each content the join noted over no base, put
+     * to its row's own branch at the view's head before anything reads a verdict
+     * (workspace_ask_bases) */
+    workspace_ask_bases(ws);
+
     /* Where every row and every record stands by identity, for the two verbs
      * that act on an entry through a string. After the join's walk, which took
      * every look the index reads; before the orphan analysis, whose guard reads
@@ -4408,26 +4590,30 @@ bool workspace_item_tags(
  * The record a learning writes: `onto` with the item's content and the row's
  * claim, on each axis named
  *
- * The content (DIVERGENCE_CONTENT) is what the load found disk to be, written
- * whole — the blob, with the stat the load distilled where its comparison stood
- * (workspace_item_t's blob_oid and stat) — under the row's binding, the one it
- * was confirmed under, which the record takes with it. It is the one learning
- * that writes a binding, the binding being what an encrypted blob opens under;
- * a record whose binding names who deployed what — one dotta owns, bound to another
- * row, which an acknowledgement owes the row — is never noted the content
- * (workspace_analyze_file). The mode (DIVERGENCE_MODE) and the owner and group
- * (DIVERGENCE_OWNERSHIP) are the row's claim, written under the binding the record
- * holds: a base a confirmation left under another binding opens under that one
- * alone. Every other column is the one it is written onto — the node and the
- * stamp of the record handed in, and its binding wherever the content is not
- * learned. The node needs no word of the row's: every learning is written onto
- * a record of the row's kind, since a record of another kind gives way to the
- * row's first observation before anything is learned onto it, or, where the
+ * The content (DIVERGENCE_CONTENT) is what the load found disk to be, as the
+ * item holds it, written whole — a base, the blob with the stat the load distilled
+ * where its comparison stood, or bytes no base proves, disk's entry and the head
+ * its history was asked at with the stat of the read that found them
+ * (workspace_item_t's blob_oid, disk_oid, head and stat) — under the row's binding,
+ * the one it was confirmed under, which the record takes with it. It is the one
+ * learning that writes a binding, the binding being what an encrypted blob opens
+ * under; a record whose binding names who deployed what — one dotta owns, bound
+ * to another row, which an acknowledgement owes the row — is never noted the
+ * content (workspace_analyze_file). The mode (DIVERGENCE_MODE) and the owner
+ * and group (DIVERGENCE_OWNERSHIP) are the row's claim, written under the binding
+ * the record holds: a base a confirmation left under another binding opens under
+ * that one alone. Every other column is the one it is written onto — the node
+ * and the stamp of the record handed in, and its binding wherever the content
+ * is not learned. The node needs no word of the row's: every learning is written
+ * onto a record of the row's kind, since a record of another kind gives way to
+ * the row's first observation before anything is learned onto it, or, where the
  * observation cannot be spelled or does not take its place, has nothing learned
- * onto it (workspace_flush), so the blob is confirmed as the node that record
- * already names. The content is noted only where the load found disk to be the
- * row's, whose blob is Git's and never zero, so a learning of the content always
- * confirms one.
+ * onto it (workspace_flush), so the content is confirmed as the node that record
+ * already names. A learning of the content keeps one of the two: a base, a blob
+ * Git holds and never zero — the row's, or one the row's own branch held at its
+ * name — or bytes no base proves with their head, every note over no base being
+ * completed by the bases' ask before the flush reads it, or dropped
+ * (workspace_ask_bases).
  *
  * Three callers, which would otherwise drift apart: workspace_flush, over what
  * the analyses noted; workspace_learn, over the claims apply's fix set; and
@@ -4443,6 +4629,8 @@ static state_record_t workspace_learning(
         onto.storage_path = row->storage_path;
         onto.profile = row->profile;
         onto.blob_oid = item->blob_oid;
+        onto.disk_oid = item->disk_oid;
+        onto.head = item->head;
         onto.stat = item->stat;
     }
     if (axes & DIVERGENCE_MODE) {

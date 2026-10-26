@@ -156,14 +156,16 @@ typedef enum {
  *
  * Who moved. On the content axis two bits split a difference by its mover: CONTENT
  * that disk is not what dotta last confirmed there — where it confirmed nothing,
- * any difference from the row, whose mover no base proves (workspace_base: the
- * route's UNCONFIRMED) — STALE that Git moved past what dotta last saw there —
+ * any difference from the row whose mover no base proves (workspace_base: the
+ * route's UNCONFIRMED), the row's own branch asked of it (core/workspace.c
+ * workspace_ask_bases) — STALE that Git moved past what dotta last saw there —
  * the kind, which every record names, or the bytes a base confirmed
- * (workspace_stale) — both, a conflict. The kind is the content's axis across
- * kinds, and TYPE its CONTENT: another kind than the row's stands, and it is
- * not the node dotta last saw — a directory by its kind alone, a file or a link
- * by the pair dotta confirmed (any, where it confirmed none) — the frame across
- * kinds, under a file row and a directory row alike (core/workspace.c
+ * (workspace_stale), a blob the row's own branch held at its name that disk stands
+ * at among them (workspace_ask_bases) — both, a conflict. The kind is the content's
+ * axis across kinds, and TYPE its CONTENT: another kind than the row's stands,
+ * and it is not the node dotta last saw — a directory by its kind alone, a file
+ * or a link by the pair dotta confirmed (any, where it confirmed none) — the
+ * frame across kinds, under a file row and a directory row alike (core/workspace.c
  * workspace_analyze_file, workspace_analyze_directory). On a claim axis the axis
  * bit says what differs, and CLAIM_MOVED beside it that the claim is Git's to
  * bring: Git's side holds another than the record of this node — moved since
@@ -199,10 +201,12 @@ typedef enum {
  * are the three-way frame's: Git's side differs from what dotta last saw or left
  * at the path — the record, save the mode of a directory a run could not narrow
  * back (core/deploy.h deploy_working_mode, stated), or a first look where none
- * stands. Read as "a commit moved it" they are true of a move of Git's alone,
- * and not of a claim dotta never saw disk stand on, which the record cannot tell
+ * stands: its claim, or a blob the row's own branch held, which it found disk
+ * at. Read as "a commit moved it" they are true of a move of Git's alone, and
+ * not of a claim dotta never saw disk stand on, which the record cannot tell
  * apart from one Git moved once the first flush has written what the look found,
- * nor of an owner no host here can name (stated).
+ * nor of a blob disk held when dotta first looked, which Git had moved past before
+ * it, nor of an owner no host here can name (stated).
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -525,9 +529,16 @@ typedef enum {
  *                               analysis's — save the fault where the look's
  *                               own lstat failed, which the look classes
  *                               (workspace.c workspace_look) and no analysis
- *                               classes again
- *   the confirmation            its kind's analysis, beside the verdict; the
- *                               flush clears it once the store holds it
+ *                               classes again; and the bases' ask (workspace.c
+ *                               workspace_ask_bases), which makes a content the
+ *                               join noted over no base STALE where the row's
+ *                               own branch held it at its name, and sets the
+ *                               content it found either way
+ *   the confirmation            its kind's analysis, beside the verdict, and the
+ *                               bases' ask, which completes each content the
+ *                               join noted over no base, or drops it where no
+ *                               answer can be kept; the flush clears it once
+ *                               the store holds it
  *
  * The occupant is the load's one look at the disk, carried as the sys layer names
  * it rather than folded to a presence bit: what the lstat found at the path —
@@ -570,30 +581,41 @@ typedef enum {
  * New files label reads. An unscanned place's is its look's: a directory where
  * the walk could not look beneath one, a file otherwise.
  *
- * `blob_oid` and `stat` are the content the verdict found disk to be, in the
- * record's own two columns for it: the blob, and what stands behind disk being
- * that blob. Both are set where the content verdict found disk to be the row's
- * pair (workspace.c workspace_analyze_file) — the row's blob, under the base's
- * own stat where the fast path stood on it, or under the look's triple distilled
- * from `st` where the slow path read — and zero and UNSET on every other item.
- * The row's content is on disk whatever the record says, so both are set whatever
- * the record. Two writers carry them into the record: the flush's learning of
- * the content, which writes both whole (workspace.c workspace_learning), and
- * apply's ownership events over the clean rows (cmds/apply.c cmd_apply), which
- * write the stat beside the row's blob, the item's own on a clean row, and so
- * also reach a record the load could confirm nothing onto — one dotta owns, bound
- * to another row. The blob is named beside the stat, so the stat means one thing,
- * what stands behind the blob beside it, and never which blob that is.
+ * `blob_oid`, `disk_oid`, `head` and `stat` are the content the verdict found
+ * disk to be, in the record's own columns for it (core/state.h state_record_t):
+ * a base — the blob, and what stands behind disk being that blob — or bytes no
+ * base proves, with the head their history was asked at and the triple behind
+ * them. A base is set where the content verdict found disk to be the row's pair
+ * (workspace.c workspace_analyze_file) — the row's blob, under the base's own
+ * stat where the fast path stood on it, or under the look's triple distilled
+ * from `st` where the slow path read — and where the bases' ask found disk at a
+ * blob the row's own branch held at its name (workspace.c workspace_ask_bases),
+ * under the triple distilled beside its read; bytes no base proves where that
+ * ask found the branch holding none of them, its history read whole, at the view's
+ * head. Zero and UNSET on every other item. The row's content is on disk whatever
+ * the record says, so its pair is set whatever the record. Two writers carry
+ * them into the record: the flush's learning of the content, which writes all
+ * four whole (workspace.c workspace_learning), and apply's ownership events over
+ * the clean rows (cmds/apply.c cmd_apply), which write the stat beside the row's
+ * blob, the item's own on a clean row, and so also reach a record the load could
+ * confirm nothing onto — one dotta owns, bound to another row. The content is
+ * named beside the stat, so the stat means one thing, what stands behind the
+ * content beside it, and never which content that is.
  *
  * The confirmation is what the analyses established that the record lacks, by
- * axis, for the flush to write (workspace_flush) and nothing else to read: the
- * content (DIVERGENCE_CONTENT) where the look found disk to be the row's pair
- * and the record can take it, written with `blob_oid` and `stat` — no record,
- * or one of another kind, whose place the row's first observation takes where
- * this host can name the look's owner and group (workspace_flush, which drops
- * it otherwise), or one of the row's kind but the one an acknowledgement owes
- * the row (workspace_unacknowledged), the learning writing the row's binding
- * with the content (workspace.c workspace_analyze_file, workspace_learning);
+ * axis, for the flush to write (workspace_flush) and nothing else to read — save
+ * the bases' ask, which completes the content's notes over no base: the content
+ * (DIVERGENCE_CONTENT) where the look found disk to be the row's pair and the
+ * record can take it, written with `blob_oid` and `stat` — no record, or one of
+ * another kind, whose place the row's first observation takes where this host
+ * can name the look's owner and group (workspace_flush, which drops it otherwise),
+ * or one of the row's kind but the one an acknowledgement owes the row
+ * (workspace_unacknowledged), the learning writing the row's binding with the
+ * content (workspace.c workspace_analyze_file, workspace_learning); the content
+ * too where, over no base, the look found disk's bytes none of the row's — no
+ * record, or one of the row's kind, which confirmed none and was never owned —
+ * the record owed the bytes' answer, which the bases' ask completes before anything
+ * reads it, or drops where no answer can be kept (workspace.c workspace_ask_bases);
  * and each claim of Git's that the look found disk already standing on
  * (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP) — one Git moved past the record of
  * this node, or, over no record of this node, each axis it stands on (workspace.c
@@ -644,8 +666,10 @@ typedef struct {
     workspace_fault_t fault;             /* Whose remedy the failed look is; NONE where none failed */
     workspace_relocation_t relocation;   /* The rule of a relocated claim's namespace, or NONE */
     const profile_departure_t *departure; /* An owned file orphan's history's answer, or NULL */
-    git_oid blob_oid;                    /* The blob the verdict found disk to be; zero elsewhere */
-    state_stat_t stat;                   /* What stands behind disk being that blob; UNSET elsewhere */
+    git_oid blob_oid;                    /* The base the verdict found disk at: the row's, or a blob its branch held */
+    git_oid disk_oid;                    /* Or the entry disk's bytes are, where no base stands … */
+    git_oid head;                        /* … and the view's head its history held none of them up to */
+    state_stat_t stat;                   /* The triple behind whichever is set; UNSET elsewhere */
 
     /* The confirmation — its kind's analysis's; the flush clears it once the store holds it */
     divergence_type_t confirmation;      /* The axes the look established that the record lacks */
@@ -691,18 +715,19 @@ typedef struct {
  * own: a directory or not.
  *
  * Readers: the rung's, named above; workspace_observation (the kind a row's record
- * is born with); workspace_flush (the observation, owed only where the row's
- * own kind stands, either kind of row, over no record or one of another kind,
- * and the learning, written onto a record of the row's kind alone);
- * core/workspace.c workspace_analyze_file (the ladder's first rung, off the look
- * before any read; its content note asks the kind through workspace_unacknowledged,
- * a record of another kind taking the content through the observation written
- * in its place, where one is) and workspace_analyze_claim (the record of this
- * node, whose claim the row's is measured from — every axis unreconciled where
- * none stands); core/deploy.c occupant_conflicts (what stands at a planned path,
- * against the node its row lands); cmds/diff.c show_file_diff_from_workspace
- * (another kind standing, drawn by both kinds off the load's look, no blob read).
- * A reader not on this list is a bug.
+ * is born with); workspace_unconfirmed below (the kind a kept answer was asked
+ * under); workspace_flush (the observation, owed only where the row's own kind
+ * stands, either kind of row, over no record or one of another kind, and the
+ * learning, written onto a record of the row's kind alone); core/workspace.c
+ * workspace_analyze_file (the ladder's first rung, off the look before any read;
+ * its content note asks the kind through workspace_unacknowledged, a record of
+ * another kind taking the content through the observation written in its place,
+ * where one is) and workspace_analyze_claim (the record of this node, whose claim
+ * the row's is measured from — every axis unreconciled where none stands);
+ * core/deploy.c occupant_conflicts (what stands at a planned path, against the
+ * node its row lands); cmds/diff.c show_file_diff_from_workspace (another kind
+ * standing, drawn by both kinds off the load's look, no blob read). A reader
+ * not on this list is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {
@@ -901,12 +926,13 @@ static inline bool workspace_unacknowledged(
  * What the three-way frame reads dotta's last confirmed bytes from: a record
  * carrying a blob dotta verified on disk, a file's or a link's (core/state.h
  * state_record_t). A directory record confirms none, and neither does an
- * observation that found other bytes, so neither is a base for the bytes — the
- * kind is every record's to answer (workspace_stale below), and what a claim is
- * measured against is the record of the row's kind, a directory's among them
- * (workspace_claims_moved below). A value and not a verdict: whose the record
- * is, and whether the node standing at the path now is the one it confirmed,
- * are the reader's to ask (core/workspace.c workspace_compare_base).
+ * observation of bytes no base proves, which it keeps unconfirmed at a head where
+ * a load answered them (workspace_unconfirmed below), so neither is a base for
+ * the bytes — the kind is every record's to answer (workspace_stale below), and
+ * what a claim is measured against is the record of the row's kind, a directory's
+ * among them (workspace_claims_moved below). A value and not a verdict: whose
+ * the record is, and whether the node standing at the path now is the one it
+ * confirmed, are the reader's to ask (core/workspace.c workspace_compare_base).
  *
  * Readers: core/workspace.c workspace_analyze_file (the bytes' base: the fast
  * path's stat and the second question), workspace_analyze_directory (whether
@@ -921,6 +947,42 @@ static inline bool workspace_unacknowledged(
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
+}
+
+/**
+ * The record's answer for bytes no base proves, where it is this row's at the
+ * head the view stands at — or NULL
+ *
+ * What a load kept of disk's bytes where no base stands (core/state.h
+ * state_record_t): the entry they were found to be at the binding's name, and
+ * the head of the binding's branch whose history held none of them there up to
+ * it. It answers for the row while the row is the claim it was asked under —
+ * the record's binding, and its kind the row's — and while the view's head for
+ * the row's profile is the head it was asked at (core/manifest.h manifest_head):
+ * the row and the history are both that head's, so the answer is the one the
+ * branch would give again, in a store that keeps Git's connectivity
+ * (core/workspace.c workspace_ask_bases). Whether disk still holds those bytes
+ * is the look's to say, off the record's triple. A value and not a verdict, as
+ * workspace_base above, whose twin it is: the two never stand on one record
+ * (core/state.h, schema-enforced). A view that holds no head for the profile
+ * holds no answer kept at one.
+ *
+ * Readers: core/workspace.c workspace_analyze_file (its second fast path). A
+ * reader not on this list is a bug.
+ */
+static inline const state_record_t *workspace_unconfirmed(
+    const manifest_t *view, const manifest_row_t *row, const state_record_t *record
+) {
+    /* Kept, and of this row: its kind, under its binding */
+    if (!record || git_oid_is_zero(&record->head) ||
+        record->kind != workspace_type_occupant(row->type) ||
+        !manifest_is_claim(row, record->profile, record->storage_path)) {
+        return NULL;
+    }
+
+    /* At the head the view's rows were read from */
+    const git_oid *head = manifest_head(view, row->profile);
+    return head && git_oid_equal(head, &record->head) ? record : NULL;
 }
 
 /**
@@ -959,10 +1021,10 @@ static inline bool workspace_untouched(const workspace_item_t *item) {
  * (core/workspace.c classify_absent) — and the bytes, which a base alone confirmed
  * (workspace_base above). So a record of another kind than the row's is stale
  * whatever it confirmed, and one of the row's kind only where its base holds
- * another blob: a record that confirmed no bytes — an observation that found
- * other bytes, a directory's under a directory row — names no move of them. This
- * is the word the screens and the record's own contract keep for it, beside
- * workspace_reassigned over the same two subjects and a look.
+ * another blob: a record that confirmed no bytes — an observation, the bytes it
+ * keeps unconfirmed among them, a directory's under a directory row — names no
+ * move of them. This is the word the screens and the record's own contract keep
+ * for it, beside workspace_reassigned over the same two subjects and a look.
  *
  * Readers: core/workspace.c workspace_analyze_file (git_moved — the three-way
  * frame's first question, whichever kind stands, and half the gate on its second),
@@ -1271,19 +1333,23 @@ typedef enum {
  *                            file row's tracked field being a don't-care.
  *   CONTENT ∨ TYPE           UNCONFIRMED — disk is not the row's, and dotta holds
  *     over no base           no confirmation of what stands there (workspace_base:
- *                            no record, or one that confirmed no bytes): nothing
- *                            proves the user moved, nor that Git did, and no
- *                            default rests on what is not known. update refuses
- *                            it — its capture would commit bytes nobody has shown
- *                            are the user's over the profile's — and apply skips
- *                            it, as it skips any edit, since they may be bytes
- *                            Git lacks: apply --force keeps Git's, add --force
- *                            keeps disk's. A kind the copy can commit (file ↔
- *                            symlink on a file row) reads here too, every other
- *                            kind having answered at KIND above, whose remedies
- *                            are its own; and so does a claim of Git's riding
- *                            beside the bytes, which never makes them "changed
- *                            in Git and on disk".
+ *                            no record, or one that confirmed no bytes), nor,
+ *                            where it could be asked, did the row's own branch
+ *                            hold disk's bytes at the name — asked before the
+ *                            route is read, its answer kept (core/workspace.c
+ *                            workspace_ask_bases), a blob it held reading STALE
+ *                            above: nothing proves the user moved, nor that Git
+ *                            did, and no default rests on what is not known.
+ *                            update refuses it — its capture would commit bytes
+ *                            nobody has shown are the user's over the profile's
+ *                            — and apply skips it, as it skips any edit, since
+ *                            they may be bytes Git lacks: apply --force keeps
+ *                            Git's, add --force keeps disk's. A kind the copy
+ *                            can commit (file ↔ symlink on a file row) reads
+ *                            here too, every other kind having answered at KIND
+ *                            above, whose remedies are its own; and so does a
+ *                            claim of Git's riding beside the bytes, which never
+ *                            makes them "changed in Git and on disk".
  *   CLAIM_MOVED beside       CONFLICT — a claim Git's to bring (divergence_type_t:
  *     CONTENT ∨ TYPE         moved past the record's, or naming an owner this host
  *                            cannot resolve) beside an edit a base proves the
@@ -1370,6 +1436,11 @@ typedef struct {
  *   lacks — and none beneath a squatter that reaches the asker
  *   (workspace_displaced_t) — with dotta's own file or link above a row measured
  *   at its look, for the class every path beneath it carries
+ * - The history: where a load finds a file's bytes none of its row's and no base
+ *   stands, its row's own branch at the view's head, for whether it held them
+ *   at the row's name — one capture a file and one walk a profile, past the head
+ *   a kept answer was read to; the answer kept either way, so a later load asks
+ *   nothing while disk, the binding and the head stand
  *
  * The join is every load's and no caller's to decline: one walk over the view's
  * rows and the records it lacks, in path order. Both kinds of row, because a
@@ -1383,7 +1454,10 @@ typedef struct {
  * beneath it asks that fact before taking one: take a row beneath a squatter
  * before it and the row is looked at *through* the squatter — workspace_displaced_t
  * names what such a look answers — carrying no displaced field to say so, so
- * its bits come back as the user's own work (workspace_item_route).
+ * its bits come back as the user's own work (workspace_item_route). The bytes'
+ * answer the join notes owed over no base is the history's, asked once the walk
+ * is done and before anything reads a verdict, and every load's too: one that
+ * noted none asks nothing (workspace.c workspace_ask_bases).
  *
  * Additionally, where `analyze_untracked` asks for it: every regular file and
  * symlink beneath a tracked directory that no enabled profile claims and dotta
@@ -2122,21 +2196,29 @@ error_t workspace_learn(
  *   CMP_EQUAL), with the look's triple as its stat: persisting it beside the
  *   row's blob lets subsequent runs short-circuit via the fast-path stat AND —
  *   if Git advances blob_oid in the meantime — classify the file as stale directly
- *   from the fast path instead of re-hashing. A learning of the content writes
- *   the row's binding with it, the blob a record carries being committed under
- *   its binding (core/state.h state_record_t): onto a record bound to the row,
- *   which keeps its own; onto one dotta never owned, which takes the row's; and
- *   onto the observation, over no record or one of another kind, the row's own
- *   binding. The one record of the row's kind noted no content is one dotta owns
- *   bound to another row (core/workspace.c workspace_analyze_file), whose binding
- *   names who deployed what: its path takes the slow path on every load until
- *   an ownership event moves the record onto the standing one. And each claim
- *   axis a look of either kind found disk standing on that the record of the
- *   row's kind lacks — one Git moved, or any, where no record of the node stands
- *   (core/workspace.c workspace_analyze_claim) — in the row's words, whichever
- *   row's the record is, since a claim opens nothing: onto that record or the
- *   observation, never onto a gone node's. The record follows every agreement,
- *   so the user's next move on that axis reads as the user's.
+ *   from the fast path instead of re-hashing. The content of a file found to be
+ *   a blob its row's own branch held at its name (the bases' ask, core/workspace.c
+ *   workspace_ask_bases), with the triple of the read that found it: every later
+ *   load reads it STALE off the record. And the bytes no base proves, kept with
+ *   the view's head beside the same triple: every later load whose look stands
+ *   on the triple, at a row of that binding whose branch stands at that head,
+ *   reads them unconfirmed off the record, reading and asking nothing
+ *   (workspace_unconfirmed), and a move of disk, the binding or the head asks
+ *   again. A learning of the content writes the row's binding with it, the blob
+ *   a record carries being committed under its binding (core/state.h
+ *   state_record_t): onto a record bound to the row, which keeps its own; onto
+ *   one dotta never owned, which takes the row's; and onto the observation, over
+ *   no record or one of another kind, the row's own binding. The one record of
+ *   the row's kind noted no content is one dotta owns bound to another row
+ *   (core/workspace.c workspace_analyze_file), whose binding names who deployed
+ *   what: its path takes the slow path on every load until an ownership event
+ *   moves the record onto the standing one. And each claim axis a look of either
+ *   kind found disk standing on that the record of the row's kind lacks — one
+ *   Git moved, or any, where no record of the node stands (core/workspace.c
+ *   workspace_analyze_claim) — in the row's words, whichever row's the record
+ *   is, since a claim opens nothing: onto that record or the observation, never
+ *   onto a gone node's. The record follows every agreement, so the user's next
+ *   move on that axis reads as the user's.
  *
  * Nothing is owed from beneath a squatter, because nothing there is looked at
  * (workspace_displaced_t): a confirmation taken through one would advance the

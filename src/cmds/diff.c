@@ -203,11 +203,13 @@ static const char *get_status_message_from_item(
     }
 
     /* Bytes no base proves — the route's UNCONFIRMED: disk is not the row's,
-     * and dotta holds no confirmation of what stands there, so neither the kind's
-     * sentence below nor the bytes' is true of it — apply overwrites it only
-     * under --force, and update skips it. Both directions, in the words status's
-     * Unconfirmed header and update's census say it; its --force unqualified,
-     * as that header's is: a file row with a file or a link standing. */
+     * and dotta holds no confirmation of what stands there, nor, where it could
+     * be asked, did the row's own branch hold disk's bytes at the name
+     * (core/workspace.c workspace_ask_bases), so neither the kind's sentence
+     * below nor the bytes' is true of it — apply overwrites it only under --force,
+     * and update skips it. Both directions, in the words status's Unconfirmed
+     * header and update's census say it; its --force unqualified, as that header's
+     * is: a file row with a file or a link standing. */
     if (route == WORKSPACE_ROUTE_UNCONFIRMED) {
         return direction == DIFF_UPSTREAM
                 ? "not confirmed by dotta (apply --force <path> keeps Git's)"

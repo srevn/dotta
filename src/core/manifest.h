@@ -245,7 +245,11 @@ typedef struct manifest_row {
  * onto the claim standing at its path, and the file analysis's content note
  * (core/workspace.c workspace_analyze_file) before it confirms the row's blob
  * onto a record, which the learning binds to the row (core/workspace.c
- * workspace_learning). The let-go loops ask the other direction — whether any
+ * workspace_learning); and the two questions of a record's answer for bytes no
+ * base proves, which is the history of its binding's branch at its name: whether
+ * it is this row's (core/workspace.h workspace_unconfirmed), and whether the
+ * bases' ask may resume it past the head it was read to (core/workspace.c
+ * workspace_ask_bases). The let-go loops ask the other direction — whether any
  * row still stands at the path — and are not readers of this. NULL is no claim.
  */
 static inline bool manifest_is_claim(
@@ -541,6 +545,11 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * its branch gone (manifest_missing) — and for one profile's view, built at a
  * tree its caller holds, which names no commit (manifest_build_profile). A profile
  * whose branch stands and claims nothing has a head and no row.
+ *
+ * Readers: core/workspace.h workspace_unconfirmed (the head a kept answer for
+ * bytes no base proves stands at) and core/workspace.c workspace_ask_bases (the
+ * head each profile's history is asked back from). A reader not on this list is
+ * a bug.
  *
  * Pure value return — no allocation, no error path. The id is the view's, valid
  * for the arena's lifetime.

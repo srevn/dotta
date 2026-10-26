@@ -1223,9 +1223,13 @@ static void workspace_analyze_file(
         disk_at_base = true;
         cmp_result = workspace_compare_confirmed(row, base);
 
-        /* Where the pair is the row's content, the stat stands behind disk being
-         * the row's (workspace_item_t's stat) */
-        if (cmp_result == CMP_EQUAL) item->stat = base->stat;
+        /* Where the pair is the row's content, it is the content the verdict
+         * found disk to be, its blob and the stat standing behind it
+         * (workspace_item_t's blob_oid and stat) */
+        if (cmp_result == CMP_EQUAL) {
+            item->blob_oid = base->blob_oid;
+            item->stat = base->stat;
+        }
     } else {
         /* SLOW PATH: Full content comparison, ours vs theirs
          *
@@ -1316,36 +1320,37 @@ static void workspace_analyze_file(
             return;
         }
 
-        /* Slow path found disk == the row's pair: the stat that stands behind
-         * it is the item's, whatever the record (workspace_item_t's stat). It
-         * is distilled from the look here, where the comparison stood: whether
-         * its mtime second had closed is asked of the clock now, never of a later
-         * writer's, which would take for the record's stat a triple that a
-         * same-second rewrite after the read could stand behind (core/state.h
-         * state_stat_from_read). */
+        /* Slow path found disk == the row's pair: the row's blob and the stat
+         * that stands behind it are the content the verdict found, whatever the
+         * record (workspace_item_t's blob_oid and stat). The stat is distilled
+         * from the look here, where the comparison stood: whether its mtime second
+         * had closed is asked of the clock now, never of a later writer's, which
+         * would take for the record's stat a triple that a same-second rewrite
+         * after the read could stand behind (core/state.h state_stat_from_read). */
         if (cmp_result == CMP_EQUAL) {
+            item->blob_oid = row->blob_oid;
             item->stat = state_stat_from_read(&item->st);
 
             /* The content half of the item's confirmation, for the flush to write
              * (workspace_flush) — the claim's half is workspace_analyze_claim's,
-             * below. The row's blob, the one the look was found equal to, beside
-             * the stat above, so the next run can short-circuit via the fast
-             * path. A path with no record is noted like any other: the flush's
-             * first observation of it carries the content, and the observation
-             * is this row's. So is a path whose record is of another kind, the
-             * ladder's first rung (core/workspace.h workspace_type_occupant),
-             * never path_type_kind, whose taxonomy files a link beside the files:
-             * that record is a fact about a node the look found gone — a link
-             * the user replaced, a directory where the row's file now stands —
-             * and the flush writes the row's first observation in its place,
-             * the content with it, disk being the row's leaving that record nothing
-             * to decide. Each where this host can name the look's owner and group,
-             * which an observation spells; where it cannot, the note is dropped
-             * (workspace_flush). Never onto the gone node's record itself: a
-             * confirmation there would carry the ownership stamp dotta earned
-             * for that node onto one it never wrote, where the observation is
-             * never owned, and apply adopts it as it adopts a row with no record
-             * (cmds/apply.c).
+             * below. The content above — the row's blob, the one the look was
+             * found equal to, and the stat behind it — so the next run can
+             * short-circuit via the fast path. A path with no record is noted
+             * like any other: the flush's first observation of it carries the
+             * content, and the observation is this row's. So is a path whose
+             * record is of another kind, the ladder's first rung (core/workspace.h
+             * workspace_type_occupant), never path_type_kind, whose taxonomy
+             * files a link beside the files: that record is a fact about a node
+             * the look found gone — a link the user replaced, a directory where
+             * the row's file now stands — and the flush writes the row's first
+             * observation in its place, the content with it, disk being the row's
+             * leaving that record nothing to decide. Each where this host can
+             * name the look's owner and group, which an observation spells; where
+             * it cannot, the note is dropped (workspace_flush). Never onto the
+             * gone node's record itself: a confirmation there would carry the
+             * ownership stamp dotta earned for that node onto one it never wrote,
+             * where the observation is never owned, and apply adopts it as it
+             * adopts a row with no record (cmds/apply.c).
              *
              * Onto a record of this row's kind only where it is bound to this
              * row: an encrypted blob opens under one binding and no other, and
@@ -4390,19 +4395,22 @@ bool workspace_item_tags(
 }
 
 /**
- * The record a learning writes: `onto` with the row's words on each axis named
+ * The record a learning writes: `onto` with the item's content and the row's
+ * claim, on each axis named
  *
- * The content (DIVERGENCE_CONTENT) is the row's blob, with the stat the load
- * distilled where its comparison stood (workspace_item_t's stat); the mode
- * (DIVERGENCE_MODE) and the owner and group (DIVERGENCE_OWNERSHIP) are the row's
- * claim. Every other column is the one it is written onto — the node and the
- * binding of the record handed in, the stamp. The node needs no word of the row's:
- * every learning is written onto a record of the row's kind, since a record of
- * another kind gives way to the row's first observation before anything is learned
- * onto it, or, where the observation cannot be spelled or does not take its place,
- * has nothing learned onto it (workspace_flush), so the blob is confirmed as
- * the node that record already names. A file row's blob is Git's and never zero,
- * so a learning of the content always confirms one.
+ * The content (DIVERGENCE_CONTENT) is what the load found disk to be, written
+ * whole: the blob, with the stat the load distilled where its comparison stood
+ * (workspace_item_t's blob_oid and stat); the mode (DIVERGENCE_MODE) and the
+ * owner and group (DIVERGENCE_OWNERSHIP) are the row's claim. Every other column
+ * is the one it is written onto — the node and the binding of the record handed
+ * in, the stamp. The node needs no word of the row's: every learning is written
+ * onto a record of the row's kind, since a record of another kind gives way to
+ * the row's first observation before anything is learned onto it, or, where the
+ * observation cannot be spelled or does not take its place, has nothing learned
+ * onto it (workspace_flush), so the blob is confirmed as the node that record
+ * already names. The content is noted only where the load found disk to be the
+ * row's, whose blob is Git's and never zero, so a learning of the content always
+ * confirms one.
  *
  * Three callers, which would otherwise drift apart: workspace_flush, over what
  * the analyses noted; workspace_learn, over the claims apply's fix set; and
@@ -4415,7 +4423,7 @@ static state_record_t workspace_learning(
     const manifest_row_t *row = item->row;
 
     if (axes & DIVERGENCE_CONTENT) {
-        onto.blob_oid = row->blob_oid;
+        onto.blob_oid = item->blob_oid;
         onto.stat = item->stat;
     }
     if (axes & DIVERGENCE_MODE) {

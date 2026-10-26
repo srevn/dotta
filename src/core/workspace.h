@@ -570,28 +570,34 @@ typedef enum {
  * New files label reads. An unscanned place's is its look's: a directory where
  * the walk could not look beneath one, a file otherwise.
  *
- * `stat` is what stands behind the content verdict where it found disk to be
- * the row's pair (workspace.c workspace_analyze_file): the base's own stat where
- * the fast path stood on it, the look's triple distilled from `st` where the
- * slow path read. The row's content is on disk whatever the record says, so it
- * is set whatever the record, and UNSET on every other item. Two writers carry
- * it into the record: the flush's learning of the content, and apply's ownership
- * events over the clean rows (cmds/apply.c cmd_apply), which also reach a record
- * the load could confirm nothing onto — one bound to another row.
+ * `blob_oid` and `stat` are the content the verdict found disk to be, in the
+ * record's own two columns for it: the blob, and what stands behind disk being
+ * that blob. Both are set where the content verdict found disk to be the row's
+ * pair (workspace.c workspace_analyze_file) — the row's blob, under the base's
+ * own stat where the fast path stood on it, or under the look's triple distilled
+ * from `st` where the slow path read — and zero and UNSET on every other item.
+ * The row's content is on disk whatever the record says, so both are set whatever
+ * the record. Two writers carry them into the record: the flush's learning of
+ * the content, which writes both whole (workspace.c workspace_learning), and
+ * apply's ownership events over the clean rows (cmds/apply.c cmd_apply), which
+ * write the stat beside the row's blob, the item's own on a clean row, and so
+ * also reach a record the load could confirm nothing onto — one bound to another
+ * row. The blob is named beside the stat, so the stat means one thing, what stands
+ * behind the blob beside it, and never which blob that is.
  *
  * The confirmation is what the analyses established that the record lacks, by
  * axis, for the flush to write (workspace_flush) and nothing else to read: the
  * content (DIVERGENCE_CONTENT) where the look found disk to be the row's pair
- * and the record can take it, written with `stat` — no record, or one of another
- * kind, whose place the row's first observation takes where this host can name
- * the look's owner and group (workspace_flush, which drops it otherwise), or
- * one of the row's kind bound to the row (workspace.c workspace_analyze_file);
- * and each claim of Git's that the look found disk already standing on
- * (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP) — one Git moved past the record of
- * this node, or, over no record of this node, each axis it stands on (workspace.c
- * workspace_analyze_claim). The flush clears it once the store holds what the
- * item learned, so it is NONE on every item that owes the record nothing — orphans
- * and the scan's items always.
+ * and the record can take it, written with `blob_oid` and `stat` — no record,
+ * or one of another kind, whose place the row's first observation takes where
+ * this host can name the look's owner and group (workspace_flush, which drops
+ * it otherwise), or one of the row's kind bound to the row (workspace.c
+ * workspace_analyze_file); and each claim of Git's that the look found disk already
+ * standing on (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP) — one Git moved past the
+ * record of this node, or, over no record of this node, each axis it stands on
+ * (workspace.c workspace_analyze_claim). The flush clears it once the store holds
+ * what the item learned, so it is NONE on every item that owes the record nothing
+ * — orphans and the scan's items always.
  *
  * `record` is the record at the path as the load read it, then as each writer
  * wrote it — published, and never edited: a writer builds the record its write
@@ -636,7 +642,8 @@ typedef struct {
     workspace_fault_t fault;             /* Whose remedy the failed look is; NONE where none failed */
     workspace_relocation_t relocation;   /* The rule of a relocated claim's namespace, or NONE */
     const profile_departure_t *departure; /* An owned file orphan's history's answer, or NULL */
-    state_stat_t stat;                   /* What stands behind disk being the row's content; UNSET elsewhere */
+    git_oid blob_oid;                    /* The blob the verdict found disk to be; zero elsewhere */
+    state_stat_t stat;                   /* What stands behind disk being that blob; UNSET elsewhere */
 
     /* The confirmation — its kind's analysis's; the flush clears it once the store holds it */
     divergence_type_t confirmation;      /* The axes the look established that the record lacks */

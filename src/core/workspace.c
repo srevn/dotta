@@ -4206,8 +4206,9 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
             /* The arm's colour, once its words are written: apply's work, cyan,
              * the colour of work that costs the user nothing — save where the
              * blob it lands is a violation, whose plaintext is a cost: magenta */
-            line.color = (item->divergence & DIVERGENCE_ENCRYPTION) ? OUTPUT_COLOR_MAGENTA
-                                                                     : OUTPUT_COLOR_CYAN;
+            line.color = (item->divergence & DIVERGENCE_ENCRYPTION)
+                    ? OUTPUT_COLOR_MAGENTA
+                    : OUTPUT_COLOR_CYAN;
             break;
 
         case WORKSPACE_STATE_DELETED:

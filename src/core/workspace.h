@@ -1074,6 +1074,37 @@ static inline bool workspace_untouched(const workspace_item_t *item) {
 }
 
 /**
+ * Capturable: the node standing at the path is one its row's capture commits
+ *
+ * The item's look against its kind: a node a type of that kind stands as
+ * (workspace_type_occupant above). At a file row a regular file or a link — the
+ * row's own node, or its twin, which the capture commits as the new kind
+ * (infra/content.h content_capture_file, content_capture_link: each refuses every
+ * other node); at a directory row a directory, whose claim the capture takes
+ * (core/profiles.h profile_capture_directory). Any other node no capture commits:
+ * a directory at a file row, a file or a link at a directory row, and a FIFO, a
+ * socket or a device, which no type stands as — nor an absence, nor a node no
+ * look reached (FS_OCCUPANT_UNKNOWN). Who moved is the route's
+ * (workspace_item_route), never this.
+ *
+ * Readers: workspace_item_route (the KIND rung: a kind Git did not move that no
+ * capture commits), cmds/apply.c apply_print_deploy_skips (whether a consent
+ * skip has a disk-wins verb). A reader not on this list is a bug.
+ */
+static inline bool workspace_capturable(const workspace_item_t *item) {
+    switch (item->occupant) {
+        case FS_OCCUPANT_REGULAR:
+        case FS_OCCUPANT_SYMLINK:   return item->item_kind == PATH_KIND_FILE;
+        case FS_OCCUPANT_DIRECTORY: return item->item_kind == PATH_KIND_DIRECTORY;
+        case FS_OCCUPANT_UNKNOWN:
+        case FS_OCCUPANT_NONE:
+        case FS_OCCUPANT_OTHER:     return false;
+    }
+
+    CHECK_ARG(false, "an occupant no enumerator names");
+}
+
+/**
  * Stale: the view moved past what dotta last saw at the path — the join's content
  * word
  *
@@ -1240,11 +1271,12 @@ typedef struct {
  *   apply's skip label             CONFLICT, STALE, KIND, UNCONFIRMED, CAPTURE:
  *                                  a TYPE or a CONTENT skip's at its row's own
  *                                  path (cmds/apply.c apply_route_label)
- *   apply's disk-wins closer       CAPTURE, CONFLICT, UNCONFIRMED: update's verb
- *                                  where every consent skip at its row's own
- *                                  path that names one reads CAPTURE, add --force's
- *                                  where any reads either of the other two
- *                                  (cmds/apply.c apply_print_deploy_skips)
+ *   apply's disk-wins closer       CAPTURE, CONFLICT, UNCONFIRMED, at a node a
+ *                                  capture commits (workspace_capturable): update's
+ *                                  verb where every consent skip at its row's
+ *                                  own path that names one reads CAPTURE, add
+ *                                  --force's where any reads either of the other
+ *                                  two (cmds/apply.c apply_print_deploy_skips)
  *   diff's status line             every arm, both directions: the row's line,
  *                                  or none where the direction lists nothing
  *
@@ -1312,7 +1344,7 @@ typedef enum {
     WORKSPACE_ROUTE_UNVERIFIABLE,       /* A fault — dotta could not look */
     WORKSPACE_ROUTE_CONFLICT,           /* STALE, or CLAIM_MOVED over a base, beside CONTENT ∨ TYPE — both moved */
     WORKSPACE_ROUTE_STALE,              /* STALE ∨ CLAIM_MOVED alone — Git moved, disk did not */
-    WORKSPACE_ROUTE_KIND,               /* TYPE alone the copy cannot commit, a row a plan can hold */
+    WORKSPACE_ROUTE_KIND,               /* TYPE alone no capture commits, a row a plan can hold */
     WORKSPACE_ROUTE_KIND_DERIVED,       /* … on a rung dotta only passes through — never planned */
     WORKSPACE_ROUTE_UNCONFIRMED,        /* CONTENT ∨ TYPE over no base for the bytes — neither verb's by default */
     WORKSPACE_ROUTE_CAPTURE,            /* Any other divergence — update's to commit */
@@ -1396,17 +1428,18 @@ typedef enum {
  *                            reads here all the same, and apply's skip says what
  *                            stands in the way.
  *   TYPE alone,              KIND — a kind mismatch Git did not move (no record,
- *     non-capturable         or one Git did not move past) that the copy cannot
- *                            commit, on a row a plan can hold: a tracked directory
- *                            row's type change (the walk's race guard refuses
- *                            it — a symlink would stat as its target and launder
- *                            the target's attributes into metadata), or a file
- *                            row occupied by a directory, FIFO, socket, or device.
- *                            Resolution is explicit and the user's: apply --force
- *                            replaces what the run converges — a directory only
- *                            where all it holds is dotta's, its walk stopping
- *                            at what no landing removes (core/deploy.c
- *                            check_clearance) — and remove untracks it.
+ *     non-capturable         or one Git did not move past) that no capture
+ *                            commits (workspace_capturable), on a row a plan
+ *                            can hold: a tracked directory row's type change
+ *                            (the walk's race guard refuses it — a symlink would
+ *                            stat as its target and launder the target's attributes
+ *                            into metadata), or a file row occupied by a directory,
+ *                            FIFO, socket, or device. Resolution is explicit
+ *                            and the user's: apply --force replaces what the
+ *                            run converges — a directory only where all it holds
+ *                            is dotta's, its walk stopping at what no landing
+ *                            removes (core/deploy.c check_clearance) — and remove
+ *                            untracks it.
  *   TYPE alone on a          KIND_DERIVED — the same mismatch on a directory
  *     derived rung           dotta only passes through: neither planned nor named,
  *                            so no flag lifts it and no decision pends. One verb
@@ -1431,12 +1464,12 @@ typedef enum {
  *                            nobody has shown are the user's over the profile's
  *                            — and apply skips it, as it skips any edit, since
  *                            they may be bytes Git lacks: apply --force keeps
- *                            Git's, add --force keeps disk's. A kind the copy
- *                            can commit (file ↔ symlink on a file row) reads
- *                            here too, every other kind having answered at KIND
- *                            above, whose remedies are its own; and so does a
- *                            claim of Git's riding beside the bytes, which never
- *                            makes them "changed in Git and on disk".
+ *                            Git's, add --force keeps disk's. A kind a capture
+ *                            commits (file ↔ symlink on a file row) reads here
+ *                            too, every other kind having answered at KIND above,
+ *                            whose remedies are its own; and so does a claim of
+ *                            Git's riding beside the bytes, which never makes
+ *                            them "changed in Git and on disk".
  *   CLAIM_MOVED beside       CONFLICT — a claim Git's to bring (divergence_type_t:
  *     CONTENT ∨ TYPE         moved past the record's, or naming an owner this host
  *                            cannot resolve) beside an edit a base proves the
@@ -1455,7 +1488,7 @@ typedef enum {
  *   any other divergence     CAPTURE — the user's own, an edit a base proves or
  *                            a claim Git did not move: update's to commit. A
  *                            file row's file ↔ symlink over a base Git did not
- *                            move stays here: the copy commits it as the new kind.
+ *                            move stays here: the capture commits the new kind.
  *   none, record disagrees   REASSIGNED — a pending reassignment apply
  *                            acknowledges.
  *   none                     CLEAN.

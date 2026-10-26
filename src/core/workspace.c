@@ -1510,12 +1510,12 @@ static void workspace_analyze_file(
              * not the row's. Git moved and disk left that node too — the base's
              * kind with other bytes, a node of the record's kind whose bytes
              * dotta never confirmed, a third kind of node, a read that failed —
-             * is both sides moved: TYPE, the kind the copy would commit, beside
+             * is both sides moved: TYPE, the kind a capture would commit, beside
              * STALE, the move it would commit over (the route's CONFLICT). No
              * record, or one Git did not move past, is TYPE alone: the user's
              * kind where a base confirmed the node's bytes, and where none did
              * a kind no base attributes (the route's UNCONFIRMED, for the pair
-             * the copy can commit). One question, asked under the record's own
+             * a capture commits). One question, asked under the record's own
              * kind, whichever path asked it.
              *
              * Either way the look stands at another kind than the row's, so the
@@ -4368,27 +4368,24 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
                ? WORKSPACE_ROUTE_CONFLICT : WORKSPACE_ROUTE_STALE;
     }
 
-    /* A kind mismatch Git did not move is a capture only through the one pair
-     * the copy can commit — file ↔ symlink on a file row, and over a base alone
-     * (the rung below). Every other occupant is no verb's default, and a directory
-     * row's splits by the claim that holds the path: a tracked row is the plan's
-     * (--force replaces the squatter), a derived rung is never planned (the named
-     * re-derivation retires the claim). A deployed item is a view row's (the
-     * join), so the row holds; a file row's tracked field is a don't-care, so
-     * the kind gates the read. */
-    if ((divergence & DIVERGENCE_TYPE) &&
-        (item->item_kind == PATH_KIND_DIRECTORY ||
-        (item->occupant != FS_OCCUPANT_REGULAR &&
-        item->occupant != FS_OCCUPANT_SYMLINK))) {
+    /* A kind mismatch Git did not move is an edit only where a capture commits
+     * the node standing (workspace_capturable) — file ↔ symlink on a file row —
+     * and the user's only over a base (the rung below). Every other occupant is
+     * no verb's default, and a directory row's splits by the claim that holds
+     * the path: a tracked row is the plan's (--force replaces the squatter), a
+     * derived rung is never planned (the named re-derivation retires the claim).
+     * A deployed item is a view row's (the join), so the row holds; a file row's
+     * tracked field is a don't-care, so the kind gates the read. */
+    if ((divergence & DIVERGENCE_TYPE) && !workspace_capturable(item)) {
         return manifest_is_derived(item->row) ? WORKSPACE_ROUTE_KIND_DERIVED
                                               : WORKSPACE_ROUTE_KIND;
     }
 
-    /* An edit — the bytes, or the kind the copy can commit, every other having
-     * answered above — over no base for the bytes (workspace_base): disk is not
-     * the row's, and nothing dotta holds says whose move that is, the user's or
-     * Git's, so no default verb rests on it. Asked before the claim's axis: a
-     * claim of Git's riding beside such bytes does not make them both sides'. */
+    /* An edit — the bytes, or a kind a capture commits, every other having answered
+     * above — over no base for the bytes (workspace_base): disk is not the row's,
+     * and nothing dotta holds says whose move that is, the user's or Git's, so
+     * no default verb rests on it. Asked before the claim's axis: a claim of
+     * Git's riding beside such bytes does not make them both sides'. */
     if ((divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) &&
         !workspace_base(item->record)) {
         return WORKSPACE_ROUTE_UNCONFIRMED;

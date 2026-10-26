@@ -748,19 +748,19 @@ static void status_print_workspace(
     /* Section 1: Conflicts — the buckets no default verb resolves lead; this
      * one's header carries the remedy, true of every row beneath it, in the words
      * the frame and the route bind (core/workspace.h divergence_type_t,
-     * workspace_route_t): content or a kind moved on both sides, or a kind the
-     * copy cannot commit on a row a plan can hold — a rung dotta only passes
-     * through, which the user squats, has its own section below, since no flag
-     * lifts it. Both --force verbs are qualified because each takes one shape
-     * and not another. `apply --force` replaces a directory in a blob row's way
-     * only with all it holds, and its walk stops at what no landing removes,
-     * --force included (core/deploy.c check_clearance) — which status, reading
-     * no clearance, cannot tell apart; and it is named with the path it lifts
-     * the skip at, since a bare one lifts every consent skip of the run, the
-     * edited copies other machines' deletions left among them. `add --force`
-     * keeps disk's bytes and not its kind: a kind change is a re-shaping of the
-     * tree and add refuses it by the claim standing at the path, naming `dotta
-     * remove` (cmds/add.c), which stops tracking the path and keeps the file. */
+     * workspace_route_t): content or a kind moved on both sides, or a kind no
+     * capture commits on a row a plan can hold — a rung dotta only passes through,
+     * which the user squats, has its own section below, since no flag lifts it.
+     * Both --force verbs are qualified because each takes one shape and not
+     * another. `apply --force` replaces a directory in a blob row's way only
+     * with all it holds, and its walk stops at what no landing removes, --force
+     * included (core/deploy.c check_clearance) — which status, reading no
+     * clearance, cannot tell apart; and it is named with the path it lifts the
+     * skip at, since a bare one lifts every consent skip of the run, the edited
+     * copies other machines' deletions left among them. `add --force` keeps disk's
+     * bytes and not its kind: a kind change is a re-shaping of the tree and add
+     * refuses it by the claim standing at the path, naming `dotta remove`
+     * (cmds/add.c), which stops tracking the path and keeps the file. */
     if (conflicts.count > 0) {
         output_list_t *list = output_list_create(
             out, "Conflicts",
@@ -938,9 +938,9 @@ static void status_print_workspace(
      * the place where one claims the path, said per path by update's preview,
      * whose header words the reach as the key does (cmds/update.c
      * update_print_preview); and a claim alone, which apply restores, a claim
-     * being no edit (core/deploy.h deploy_content_conflicts). An edit, a kind
-     * the copy can commit, and the blob's policy are keyed by no line: apply
-     * skips the first two, and the third is update's alone. */
+     * being no edit (core/deploy.h deploy_content_conflicts). An edit, a kind a
+     * capture commits, and the blob's policy are keyed by no line: apply skips
+     * the first two, and the third is update's alone. */
     if (uncommitted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Uncommitted changes",

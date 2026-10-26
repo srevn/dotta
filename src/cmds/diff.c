@@ -196,7 +196,7 @@ static const char *diff_status_line(
              * directory only with all it holds. Listed both ways because status's
              * Conflicts remedy sends the user here to compare, and hiding it
              * answered that remedy with silence; downstream, update refuses it,
-             * the copy committing no such kind */
+             * no capture committing such a kind */
             return direction == DIFF_UPSTREAM
                    ? "a different kind stands on disk (apply --force <path> keeps Git's, "
                    "a directory only if all dotta's)"

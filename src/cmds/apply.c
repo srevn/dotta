@@ -76,11 +76,11 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
  * One producer for the two reasons --force lifts there, so a kind and an edit
  * read alike wherever they route alike: deploy keeps the decision, the route
  * the characterization (workspace_item_route). What moved is the route's — both
- * sides, Git's alone, a kind the copy cannot commit, bytes no base proves — and
- * the capture's is the bit's, the kind first: TYPE never rides beside CONTENT,
- * each analysis ending its measure at another kind. Readers:
- * apply_print_deploy_skips' TYPE line at the row's own path, and its CONTENT
- * line. A reader not on this list is a bug.
+ * sides, Git's alone, a kind no capture commits, bytes no base proves — and the
+ * capture's is the bit's, the kind first: TYPE never rides beside CONTENT, each
+ * analysis ending its measure at another kind. Readers: apply_print_deploy_skips'
+ * TYPE line at the row's own path, and its CONTENT line. A reader not on this
+ * list is a bug.
  */
 static const char *apply_route_label(const workspace_item_t *item) {
     switch (workspace_item_route(item)) {
@@ -143,7 +143,7 @@ static const char *apply_route_label(const workspace_item_t *item) {
  * (apply_route_label — one producer for the characterization; deploy keeps its
  * decision): modified locally, or type changed locally, where only disk moved
  * over a base, changed in Git and on disk where both sides did, unconfirmed where
- * no base proves either, a different kind where the copy cannot commit what stands,
+ * no base proves either, a different kind where no capture commits what stands,
  * and changed in Git where Git alone moved and a copy beneath the row holds it
  * back. An UNREADABLE label reads the item's fault the same way (apply_fault_label
  * — locked, unreadable, or the plain "cannot verify"). Every skip carries its
@@ -197,19 +197,19 @@ static const char *apply_route_label(const workspace_item_t *item) {
  * run, the edited copies other machines' deletions left among them — and names
  * its cost the way cleanup's does: --force keeps Git's and discards what stands
  * there, and a consent skip at a row's own path adds the disk-wins verb its route
- * has, a kind's as an edit's — none where the copy cannot commit the kind standing
- * (KIND) or Git alone moved (STALE), where keeping disk is no capture. One line
- * closes that family, its verb true of every row it names: 'dotta update <path>'
- * where each is the user's own over a base (the route's CAPTURE: an edit, or a
- * link where the row holds a file or the reverse, which the copy commits as the
- * new kind), else 'dotta add --force <profile> <path>', which re-captures what
- * disk holds whoever moved it (cmds/add.h) — the verb a conflict and bytes no
- * base proves need, update refusing both — save a kind both sides moved across
- * file and directory, which add refuses too, naming remove (stated). '-e' is
- * how to ignore a skip, not how to remedy one. The block sits between the deploy
- * preview and cleanup's, so each engine tells its story the same way — what it
- * will do, then what it will not and why. No total-count line: the exit error's
- * message is the count's one home.
+ * has, a kind's as an edit's, where a capture commits the node standing
+ * (core/workspace.h workspace_capturable) — none for a kind no capture commits,
+ * whether Git moved too (CONFLICT) or not (KIND), nor where Git alone moved
+ * (STALE), where keeping disk is no capture. One line closes that family, its
+ * verb true of every row it names: 'dotta update <path>' where each is the user's
+ * own over a base (the route's CAPTURE: an edit, or a link where the row holds
+ * a file or the reverse, which the capture commits as the new kind), else 'dotta
+ * add --force <profile> <path>', which re-captures what disk holds whoever moved
+ * it (cmds/add.h) — the verb a conflict and bytes no base proves need, update
+ * refusing both. '-e' is how to ignore a skip, not how to remedy one. The block
+ * sits between the deploy preview and cleanup's, so each engine tells its story
+ * the same way — what it will do, then what it will not and why. No total-count
+ * line: the exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -434,20 +434,22 @@ static void apply_print_deploy_skips(
      * when any skip is --force's to lift (the class the exit contract reads,
      * deploy_skip_needs_force), naming its cost; the disk-wins direction only
      * where a consent skip's route has a verb that keeps what disk holds, a kind's
-     * as an edit's — none where the copy cannot commit the kind (KIND), Git alone
-     * moved (STALE), or the row lies beneath a squatter, whose own line carries
-     * the remedy, and none at dotta's node, which no row routes — its verb the
-     * one every such row takes: add --force's where any is both sides' or bytes
-     * no base proves (workspace_item_route), and update's only where that scan
-     * ran out, its loop guarded as the sudo line's is; a named squatter's second
-     * way out, by the claim that holds it (ancestry) — a wider scope plans a
-     * tracked ancestor, and a derived claim is never planned, so its way out is
-     * the named re-derivation, whose own preview names what the re-capture would
-     * commit, where a squatter nothing claims has none: its row names it, and
-     * the hand is all there is. Last, UNREADABLE's closing, a clearance's stop's
-     * among them, its line naming the path it could not read — an unreadable
-     * path is not "in the way", and a fix-or-widen instruction would misname a
-     * refusal to judge what could not be seen. */
+     * as an edit's, at a node a capture commits (core/workspace.h
+     * workspace_capturable) — none for a kind no capture commits, whether Git
+     * moved too (CONFLICT) or not (KIND), none where Git alone moved (STALE) or
+     * the row lies beneath a squatter, whose own line carries the remedy, and
+     * none at dotta's node, which no row routes — its verb the one every such
+     * row takes: add --force's where any is both sides' or bytes no base proves
+     * (workspace_item_route), and update's only where that scan ran out, its
+     * loop guarded as the sudo line's is; a named squatter's second way out, by
+     * the claim that holds it (ancestry) — a wider scope plans a tracked ancestor,
+     * and a derived claim is never planned, so its way out is the named
+     * re-derivation, whose own preview names what the re-capture would commit,
+     * where a squatter nothing claims has none: its row names it, and the hand
+     * is all there is. Last, UNREADABLE's closing, a clearance's stop's among
+     * them, its line naming the path it could not read — an unreadable path is
+     * not "in the way", and a fix-or-widen instruction would misname a refusal
+     * to judge what could not be seen. */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
@@ -464,7 +466,8 @@ static void apply_print_deploy_skips(
 
         if (deploy_skip_needs_force(s->reason) && s->item->row &&
             (workspace_item_route(s->item) == WORKSPACE_ROUTE_CONFLICT ||
-            workspace_item_route(s->item) == WORKSPACE_ROUTE_UNCONFIRMED)) {
+            workspace_item_route(s->item) == WORKSPACE_ROUTE_UNCONFIRMED) &&
+            workspace_capturable(s->item)) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  To keep what is on disk instead: 'dotta add --force <profile> <path>'"

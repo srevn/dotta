@@ -144,7 +144,8 @@ typedef enum {
  * config's auto-encrypt policy (core/policy.h). The filesystem is not a party,
  * so it is the one bit a row in any state can carry, absence included; and because
  * no write to the path can change how a blob is stored, it is never deploy's
- * work — update re-stores the blob, status reports it.
+ * work — update resolves it, re-storing the blob sealed or committing the link
+ * that stands over it (cmds/update.c update_partition); status reports it.
  *
  * Who moved. On the content axis two bits split a difference by its mover: CONTENT
  * that disk is not what dotta last confirmed there — where it confirmed nothing,

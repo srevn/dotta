@@ -87,10 +87,12 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * it says the blob is stored plaintext in Git where the auto-encrypt
              * policy claims the path — a fact about the profile's tree, not about
              * what stands at the path. No write deploy makes can change how a
-             * blob is stored; update is the verb that re-stores it, and
-             * deploy_content_conflicts states the same rule for overwrites. A
-             * deny-mask rather than an allow-list, so a bit added later inherits
-             * the arm's default: any divergence of the path is work.
+             * blob is stored; update is the verb that resolves it — re-storing
+             * it sealed, or committing the link that stands over it (cmds/update.c
+             * update_partition) — and deploy_content_conflicts states the same
+             * rule for overwrites. A deny-mask rather than an allow-list, so a
+             * bit added later inherits the arm's default: any divergence of the
+             * path is work.
              *
              * A row beneath a squatter is work whatever its bits, because it
              * has no path bit: nothing there was looked at (core/workspace.h

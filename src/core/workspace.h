@@ -2001,7 +2001,9 @@ typedef struct {
  *
  * Readers: cmds/status.c status_print_manifest and status_print_workspace, every
  * section's rows and the keys of the keyed ones; cmds/update.c update_print_preview
- * and cmd_update's places not scanned. A reader not on this list is a bug.
+ * and cmd_update's places not scanned; cmds/apply.c apply_print_cleanup_preview,
+ * a released file's row, its path and what let it go. A reader not on this list
+ * is a bug.
  *
  * Clean (DEPLOYED, and the route CLEAN — workspace_item_route): one tag, the
  * only one that renders agreement, and only status's full listing hands such an
@@ -2102,7 +2104,9 @@ typedef struct {
  *     — the history's three answers that keep a file's copies — else "from
  *     {profile}, never deployed", the ownership gate's; "from {profile}" on the
  *     entry's release and a directory's, by what it holds, which the item cannot
- *     tell apart and the key names (cmds/status.c status_print_workspace)
+ *     tell apart and the key names (cmds/status.c status_print_workspace) — and
+ *     apply's preview says a released file's in the same words (cmds/apply.c
+ *     apply_print_cleanup_preview)
  *
  * The metadata's room is 256 bytes: a profile name past about 120 characters is
  * cut on a reassignment's line, both names riding it, and past about 250 on any

@@ -766,11 +766,12 @@ error_t profile_find(
  * workspace_item_line) — "deleted from p", "removed from p", "not in p's history",
  * "p has no branch" — where HELD and UNVERIFIED add nothing to "from p", the
  * name its profile holds still and a history the line calls [unverified]; apply's
- * preview counts the prunes deletions make, "deleted from their profiles"
- * (cmds/apply.c apply_print_cleanup_preview); a sync's Manifest counts the acts
- * (cmds/sync.c sync_departure_counts), "deleted", "removed" for every answer
- * that keeps, and "unverified"; and the line beneath a resolution says each side's
- * act, deleted or removed (cmds/sync.c sync_print_disagreements).
+ * preview counts the prunes deletions make, "deleted from their profiles", and
+ * names each released file's by its line (cmds/apply.c
+ * apply_print_cleanup_preview); a sync's Manifest counts the acts (cmds/sync.c
+ * sync_departure_counts), "deleted", "removed" for every answer that keeps, and
+ * "unverified"; and the line beneath a resolution says each side's act, deleted
+ * or removed (cmds/sync.c sync_print_disagreements).
  */
 typedef enum {
     PROFILE_DEPARTURE_HELD,         /* the head holds the name: it has not left */

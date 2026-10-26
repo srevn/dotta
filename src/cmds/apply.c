@@ -1833,27 +1833,29 @@ static void apply_print_cleanup_preview(
      * consequence, indented under the rows the way "Profile reassignments" closes
      * — not a remedy, which stands off — and that closing line carries the half
      * the header cannot: pruned removes and released keeps, and only the line
-     * under the rows says which. The causes are not listed: a release has five
-     * — the workspace's four (state RELEASED): a file's history keeps it, dotta
-     * never deployed it, another kind of path stands there, or the record is a
-     * stale key of a path a row stands on under another spelling; and a squatter
-     * above the path, whose orphan the load never looked at (core/cleanup.c
-     * cleanup_verdict's displaced arm) — and they are status's to say: its line
-     * names the first two, the item's own (core/workspace.c workspace_item_line),
-     * and its keys the rest, where cleanup has no per-row reason for a release
-     * the way cleanup_skip_reason answers for a skip. Hence the one thing true
-     * of all five: nothing on disk was touched. A second half saying what dotta
-     * stops doing ("no longer managed by dotta") was false of the fourth, which
-     * is about a file this same run may adopt eleven lines above, and the header
-     * says the rest. */
+     * under the rows says which. A release has five causes — the workspace's
+     * four (state RELEASED): a file's history keeps it, dotta never deployed
+     * it, another kind of path stands there, or the record is a stale key of a
+     * path a row stands on under another spelling; and a squatter above the path,
+     * whose orphan the load never looked at (core/cleanup.c cleanup_verdict's
+     * displaced arm) — and each row says its cause where its item can, as status's
+     * line for it does, being that line's (core/workspace.c workspace_item_line):
+     * the first two named, whose alone for the rest, which status's keys say,
+     * cleanup having no per-row reason for a release the way cleanup_skip_reason
+     * answers for a skip. Hence the closer's one thing true of all five: nothing
+     * on disk was touched. A second half saying what dotta stops doing ("no longer
+     * managed by dotta") was false of the fourth, which is about a file this
+     * same run may adopt eleven lines above, and the header says the rest. */
     if (verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
 
         for (size_t i = 0; i < verdicts->released_files.count; i++) {
-            const workspace_item_t *item = verdicts->released_files.entries[i];
+            const workspace_line_t line = workspace_item_line(verdicts->released_files.entries[i]);
 
-            output_print(out, OUTPUT_NORMAL, "  {cyan}→{reset} %s", item->filesystem_path);
-            output_print(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
+            output_print(
+                out, OUTPUT_NORMAL, "  {cyan}→{reset} %s {dim}(%s){reset}\n",
+                line.path, line.metadata
+            );
         }
 
         output_info(out, OUTPUT_NORMAL, "  Nothing on disk was touched");

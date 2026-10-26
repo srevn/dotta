@@ -477,14 +477,14 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * (core/workspace.c workspace_analyze_orphans), core/cleanup.c cleanup_skip_reason
  * and cleanup_verdict, core/deploy.c deploy_needs_work and deploy_preflight;
  * and the screens: workspace_item_tags (the tag — [locked] / [unreadable] /
- * [unverified], the same word on every arm), cmds/status.c status_print_workspace
- * (the status line, Unverifiable's key and Issues'), cmds/update.c update_partition
- * and cmd_update's census, cmds/apply.c apply_fault_label, apply_consent_label
- * and the sudo and key closers of apply_print_deploy_skips and
- * apply_print_cleanup_skips, and cmds/diff.c's filter, status line, colour and
- * count (should_show_item_for_direction, get_status_message_from_item,
- * show_file_diff_from_workspace, present_diffs_for_direction). A reader not on
- * this list is a bug.
+ * [unverified], the same word on every arm — and the line's magenta beside it),
+ * cmds/status.c status_print_workspace (the status line, Unverifiable's key and
+ * Issues'), cmds/update.c update_partition and cmd_update's census, cmds/apply.c
+ * apply_fault_label, apply_consent_label and the sudo and key closers of
+ * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's filter,
+ * status line, colour and count (should_show_item_for_direction,
+ * get_status_message_from_item, show_file_diff_from_workspace,
+ * present_diffs_for_direction). A reader not on this list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
@@ -1200,9 +1200,11 @@ typedef struct {
  *
  *   the diverged items' derivation CLEAN, the one arm a DEPLOYED item is left
  *                                  out on (workspace.c workspace_list)
- *   the tags' clean arm            CLEAN, the one arm rendered as agreement —
- *                                  [clean], or [ancestor] on a derived rung
- *                                  (workspace.c workspace_item_tags)
+ *   the tags                       CLEAN, the one arm rendered as agreement —
+ *                                  [clean], or [ancestor] on a derived rung;
+ *                                  STALE and REASSIGNED, the colour's cyan, apply's
+ *                                  work at no cost to the user (workspace.c
+ *                                  workspace_item_tags)
  *   status's section partition     every arm, one bucket each
  *   update's filter                CAPTURE accepted; every other arm refused
  *                                  and counted under its route, one slot per
@@ -1951,54 +1953,70 @@ workspace_items_t workspace_displaced_orphans(
  * Clean (DEPLOYED, and the route CLEAN — workspace_item_route): one tag, the
  * only one that renders agreement, and only status's full listing hands such an
  * item over (cmds/status.c status_print_manifest; every other caller renders
- * diverged items). "clean" (GREEN) on a row compared and found agreeing; "ancestor"
- * (DIM) on a derived rung, which was compared with nothing (core/manifest.h
+ * diverged items). "clean" on a row compared and found agreeing; "ancestor" on
+ * a derived rung, which was compared with nothing (core/manifest.h
  * manifest_is_derived).
  *
  * Tag Priority (for DEPLOYED state with divergence):
- *   0. "displaced" (YELLOW) - The path's one tag when a squatter stands above
- *      it (workspace_displaced_t): nothing there was looked at, so the item carries
+ *   0. "displaced" - The path's one tag when a squatter stands above it
+ *      (workspace_displaced_t): nothing there was looked at, so the item carries
  *      no path bit, and no tag read off a look — 1 to 3, the claim axes, 5 —
  *      can be its. What no look decides still rides: "unencrypted", the blob
  *      against the policy, and "reassigned", the record against the row. The
  *      ORPHANED arm carries "displaced" as a rider, ranked where cleanup_verdict
  *      ranks it — after [absent], before the bits — because a displaced orphan
  *      carries no bits at all and the bare arm would colour it as a prune
- *   1. "type" (RED) - Another kind than the row's stands, most severe. The claim
- *      is never asked of it — each analysis returns at another kind before the
- *      claim (core/workspace.c workspace_analyze_file, workspace_analyze_directory)
- *      — so "mode" and "ownership" never ride beside it
- *   2. "modified" (YELLOW) - Disk's bytes are not the ones dotta last confirmed,
- *      nor the row's where it confirmed none: the route says whose — a capture,
- *      a conflict, unconfirmed (workspace_item_route)
- *   3. "stale" (CYAN when alone and no violation rides: apply-side work, like
- *      "undeployed") - Git's side differs from what dotta last saw or left, the
- *      bytes, the kind or a claim; next to "modified" or "type" the primary tag's
- *      colour stands
+ *   1. "type" - Another kind than the row's stands, most severe. The claim is
+ *      never asked of it — each analysis returns at another kind before the claim
+ *      (core/workspace.c workspace_analyze_file, workspace_analyze_directory) —
+ *      so "mode" and "ownership" never ride beside it
+ *   2. "modified" - Disk's bytes are not the ones dotta last confirmed, nor the
+ *      row's where it confirmed none: the route says whose — a capture, a conflict,
+ *      unconfirmed (workspace_item_route)
+ *   3. "stale" - Git's side differs from what dotta last saw or left, the bytes,
+ *      the kind or a claim
  *   4. Secondary: "mode", "ownership" - the claim axes that differ, whoever moved
  *      them; "unencrypted" - the blob against the policy, beside "displaced" too
- *   5. "locked" / "unreadable" / "unverified" (MAGENTA when still the default) -
- *      The look that failed, worded by the item's fault (workspace_fault_t)
- *      so one path reads the same word wherever it is listed. What settles it
- *      is the block's to say, in its own words, not the row's
- *   6. "reassigned" (CYAN when alone) - A pending reassignment
- *      (workspace_reassigned), last and beside any of the above: the record against
- *      the row, and the look only where the record is of another kind
+ *   5. "locked" / "unreadable" / "unverified" - The look that failed, worded by
+ *      the item's fault (workspace_fault_t) so one path reads the same word
+ *      wherever it is listed. What settles it is the block's to say, in its own
+ *      words, not the row's
+ *   6. "reassigned" - A pending reassignment (workspace_reassigned), last and
+ *      beside any of the above: the record against the row, and the look only
+ *      where the record is of another kind
  *
  * The orphans a measure may reach — ORPHANED, OVERRIDDEN and OBSTRUCTING — take
  * one ladder after their state's word: absence, [displaced], the failed look,
  * [modified], then the claim axes, with [relocated] beside them. Absence,
  * [displaced] and [relocated] reach an orphan alone, an overridden copy and a
  * node being looked at by construction, and the relocation read asked only of
- * an owned directory and of an owned file its profile still holds; and a clean
- * one is RED, a removal coming — cleanup's prune, the replace of a node by the
- * landing beneath it, the clearance of a copy by the landing above it. The kind
- * is none of theirs: another node where dotta's stood is released before any
- * measure, its [type] beside [released].
+ * an owned directory and of an owned file its profile still holds. The kind is
+ * none of theirs: another node where dotta's stood is released before any measure,
+ * its [type] beside [released].
+ *
+ * The colour, one a line. A deployed row's is ranked once its words are written,
+ * the first rung that answers winning:
+ *   RED       another kind stands: [type]
+ *   MAGENTA   the blob's violation, [unencrypted] — any landing of it writes the
+ *             plaintext, a cost the cyan of apply's work would hide — or a look
+ *             that failed, its fault's word
+ *   CYAN      apply's work at no cost to the user: the route STALE, Git's move
+ *             disk has not followed, its claims riding or not, and REASSIGNED,
+ *             which apply acknowledges in the record alone (workspace_item_route)
+ *   YELLOW    every other: an edit, the user's own claim, bytes no base proves,
+ *             and [displaced], whose squatter's own row carries the path's severity
+ * Each rung reads what the words beside it were written from, and none reads
+ * more than they say: a displaced item carries no path bit (workspace_displaced_t),
+ * and a look that failed leaves none (divergence_type_t). Every other line takes
+ * its state's colour: [undeployed] cyan, apply's at no cost, and magenta beside
+ * [unencrypted]; [deleted] red; [new] cyan; [released], and a place the scan
+ * could not look, magenta; [clean] green and [ancestor] dim; and an orphan's by
+ * its ladder — absent cyan, [displaced] or a failed look magenta, an edit red,
+ * a claim yellow, and nothing moved red, a removal coming: cleanup's prune, the
+ * replace of a node by the landing beneath it, the clearance of a copy by the
+ * landing above it.
  *
  * The function handles special cases:
- *   - ENCRYPTION divergence upgrades color to MAGENTA over every colour but TYPE's
- *     RED, apply-side work's CYAN among them
  *   - ENCRYPTION is the one divergence a row carries where nothing was measured
  *     at its path: an UNDEPLOYED row — the copy is not on disk to have diverged
  *     from, but the blob apply is about to write violates the policy, and that
@@ -2017,8 +2035,8 @@ workspace_items_t workspace_displaced_orphans(
  *   - "{old} → {new}" - A pending reassignment (workspace_reassigned), on a
  *     deployed row and on an undeployed one
  *   - "in {profile}" - For the scan's items: a new file, and a place the scan
- *     could not look, whose one tag is the fault's word (MAGENTA), beside the
- *     join's "from" line where both stand at one path
+ *     could not look, whose one tag is the fault's word, beside the join's "from"
+ *     line where both stand at one path
  *   - "deleted from {profile}" - An orphan its profile's history says update
  *     deleted (workspace_item_t's departure), whose prune is the one coming
  *   - On a released item, what let it go wherever the item can say: "removed

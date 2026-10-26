@@ -4164,14 +4164,12 @@ bool workspace_item_tags(
     }
 
     size_t tag_count = 0;
-    *color_out = OUTPUT_COLOR_YELLOW;  /* Default color for most states */
 
     switch (item->state) {
         case WORKSPACE_STATE_UNDEPLOYED:
             if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                 tags_out[tag_count++] = "undeployed";
             }
-            *color_out = OUTPUT_COLOR_CYAN;
 
             /* Git moved past what dotta last saw at the path — another kind of
              * node, or bytes it confirmed (workspace_stale) — so the absence
@@ -4187,15 +4185,12 @@ bool workspace_item_tags(
             /* An encryption-policy violation is the one divergence bit that still
              * means something with nothing on disk: the blob apply is about to
              * write is plaintext the policy says to encrypt, and this is the
-             * last screen before it lands. Magenta outright — cyan is the colour
-             * for work that costs the user nothing, and this does. The DELETED
-             * arm stays bare: a deletion resolves the violation rather than
-             * carrying it out. */
+             * last screen before it lands. The DELETED arm stays bare: a deletion
+             * resolves the violation rather than carrying it out. */
             if (item->divergence & DIVERGENCE_ENCRYPTION) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "unencrypted";
                 }
-                *color_out = OUTPUT_COLOR_MAGENTA;
             }
 
             /* A pending reassignment rides an undeployed path: absence over another
@@ -4214,6 +4209,12 @@ bool workspace_item_tags(
             } else {
                 snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             }
+
+            /* The arm's colour, once its words are written: apply's work, cyan,
+             * the colour of work that costs the user nothing — save where the
+             * blob it lands is a violation, whose plaintext is a cost: magenta */
+            *color_out = (item->divergence & DIVERGENCE_ENCRYPTION) ? OUTPUT_COLOR_MAGENTA
+                                                                     : OUTPUT_COLOR_CYAN;
             break;
 
         case WORKSPACE_STATE_DELETED:
@@ -4229,7 +4230,9 @@ bool workspace_item_tags(
             break;
 
         case WORKSPACE_STATE_DEPLOYED: {
-            if (workspace_item_route(item) == WORKSPACE_ROUTE_CLEAN) {
+            const workspace_route_t route = workspace_item_route(item);
+
+            if (route == WORKSPACE_ROUTE_CLEAN) {
                 /* Nothing diverged, which only status's full listing renders
                  * (cmds/status.c status_print_manifest). What a row can agree
                  * with is its class's to say. A tracked row was compared and
@@ -4262,11 +4265,11 @@ bool workspace_item_tags(
                 /* Beneath a squatter (workspace_displaced_t): nothing here was
                  * looked at, so the item carries no path bit — and a tag read
                  * off a look nobody took would name work no verb takes. The path's
-                 * one tag, at the default colour: the squatter's own row carries
-                 * the path's severity, and the route lists this item under it.
-                 * What no look decides or disproves still rides below: the blob's
-                 * verdict, and the reassignment — which a look ends across kinds,
-                 * and none was taken here. */
+                 * one tag: the squatter's own row carries the path's severity,
+                 * and the route lists this item under it. What no look decides
+                 * or disproves still rides below: the blob's verdict, and the
+                 * reassignment — which a look ends across kinds, and none was
+                 * taken here. */
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "displaced";
                 }
@@ -4276,27 +4279,18 @@ bool workspace_item_tags(
                     if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                         tags_out[tag_count++] = "type";
                     }
-                    *color_out = OUTPUT_COLOR_RED;
                 } else if (item->divergence & DIVERGENCE_CONTENT) {
                     if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                         tags_out[tag_count++] = "modified";
                     }
-                    /* Keep default YELLOW color */
                 }
 
                 if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
                     /* Git's side differs from what dotta last saw or left — the
                      * bytes, the kind or a claim, one tag for any: the axis tags
                      * beside it say what differs, not who moved each, since apply
-                     * converges them alike. Alone it is apply-side work — the
-                     * same CYAN as [undeployed], none of the user's bytes is
-                     * overwritten — which the blob's violation below outranks;
-                     * next to [modified] or [type] the primary tag's colour stands,
-                     * and the route says whose the row is
+                     * converges them alike, and the route says whose the row is
                      * (workspace_item_route). */
-                    if (tag_count == 0) {
-                        *color_out = OUTPUT_COLOR_CYAN;
-                    }
                     if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                         tags_out[tag_count++] = "stale";
                     }
@@ -4322,17 +4316,10 @@ bool workspace_item_tags(
             /* The blob's verdict, on either arm: Git's alone, so no look decides
              * it and it rides beside [displaced] too — the row is written fresh
              * once the squatter goes, so this may be the last screen before it
-             * lands, as on an UNDEPLOYED row. MAGENTA over every colour but
-             * [type]'s RED, the CYAN of apply-side work among them: cyan is the
-             * colour of work that costs the user nothing, and the plaintext a
-             * stale row's landing writes is the cost the UNDEPLOYED arm's MAGENTA
-             * says. */
+             * lands, as on an UNDEPLOYED row. */
             if (item->divergence & DIVERGENCE_ENCRYPTION) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "unencrypted";
-                }
-                if (*color_out != OUTPUT_COLOR_RED) {
-                    *color_out = OUTPUT_COLOR_MAGENTA;
                 }
             }
 
@@ -4357,26 +4344,15 @@ bool workspace_item_tags(
                             break;
                     }
                 }
-                /* Upgrade color to MAGENTA (special visual treatment for
-                 * unverifiable state) */
-                if (*color_out == OUTPUT_COLOR_YELLOW) {
-                    *color_out = OUTPUT_COLOR_MAGENTA;
-                }
             }
 
             /* Profile reassignment tag (can coexist with divergence tags, and
              * with [displaced]: the record against the row, and across kinds
-             * against the item's look — workspace_reassigned)
-             *
-             * Added after divergence tags as secondary information. Color only
-             * set for pure reassignment (sole tag) to avoid overriding
-             * severity-based colors from divergence. */
+             * against the item's look — workspace_reassigned), added after the
+             * divergence tags as secondary information */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "reassigned";
-                }
-                if (tag_count == 1) {
-                    *color_out = OUTPUT_COLOR_CYAN;
                 }
 
                 snprintf(
@@ -4388,6 +4364,35 @@ bool workspace_item_tags(
                     metadata_buf, metadata_size, "from %s",
                     item->profile
                 );
+            }
+
+            /* The line's one colour, ranked once its words are written: the first
+             * rung that answers wins. Each reads what the words beside it were
+             * written from — the kind's bit, the blob's, the fault, the route —
+             * and none reads more than they say: a displaced item took no look,
+             * so it carries no path bit (workspace_displaced_t), and a look that
+             * failed leaves none (divergence_type_t) */
+            if (item->divergence & DIVERGENCE_TYPE) {
+                /* Another kind stands where the row's belongs: the most severe */
+                *color_out = OUTPUT_COLOR_RED;
+            } else if ((item->divergence & DIVERGENCE_ENCRYPTION) ||
+                item->fault != WORKSPACE_FAULT_NONE) {
+                /* The blob's violation, whose plaintext the row's landing writes
+                 * — a cost, which the cyan of apply's work below would hide, as
+                 * the UNDEPLOYED arm's magenta says — or a look that failed,
+                 * magenta on every arm that names one */
+                *color_out = OUTPUT_COLOR_MAGENTA;
+            } else if (route == WORKSPACE_ROUTE_STALE || route == WORKSPACE_ROUTE_REASSIGNED) {
+                /* Apply's work at no cost to the user: Git's move disk has not
+                 * followed, its claims riding or not — none of the user's bytes
+                 * is overwritten, the same cyan as [undeployed] — or a pending
+                 * reassignment, which apply acknowledges in the record alone */
+                *color_out = OUTPUT_COLOR_CYAN;
+            } else {
+                /* The user's move, or a decision owed — an edit, the user's own
+                 * claim, bytes no base proves — and [displaced], whose squatter's
+                 * own row carries the path's severity */
+                *color_out = OUTPUT_COLOR_YELLOW;
             }
             break;
         }

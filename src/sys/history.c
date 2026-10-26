@@ -1,11 +1,14 @@
 /**
  * history.c - A branch's history, asked about paths
  *
- * One walk a call, its state in a frame of its own (history_walk_t): every commit
- * the walk reached, by its id, with the paths waiting there to be read and the
- * paths it was read for; a queue of the commits with paths waiting, by commit
- * time; and per path, what its answer holds so far. A set of paths is one bit a
- * path, by its place in the walk's order (history_path_order), one word per 64.
+ * Two kinds of walk. The removals' is one a call, its state in a frame of its
+ * own (history_walk_t): every commit the walk reached, by its id, with the paths
+ * waiting there to be read and the paths it was read for; a queue of the commits
+ * with paths waiting, by commit time; and per path, what its answer holds so
+ * far. A set of paths is one bit a path, by its place in the walk's order
+ * (history_path_order), one word per 64. The holdings' are libgit2's revwalk,
+ * one a `since` (history_search), each over a run of the entries owed a walk,
+ * sorted by it (history_since_order) in the call's one transient.
  */
 
 #include "sys/history.h"
@@ -18,6 +21,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "sys/gitops.h"
 
 /* A path asked, beside its slot in the caller's array: the walk's order is its own */
@@ -466,4 +470,165 @@ void history_removals(
     }
 
     arena_free(walk.frame);
+}
+
+/**
+ * The holdings' order (qsort's): by `since`, so the entries one walk answers
+ * are one run
+ */
+static int history_since_order(const void *a, const void *b) {
+    const history_entry_t *x = *(const history_entry_t *const *) a;
+    const history_entry_t *y = *(const history_entry_t *const *) b;
+
+    return git_oid_cmp(&x->since, &y->since);
+}
+
+/**
+ * Whether the history under a head, past one commit, held each of a run of entries
+ *
+ * Every entry of the run is asked past the same `since`, and the store holds
+ * each one's blob (history_held). One walk answers them all: an entry is done
+ * at its first holder and taken out of the run, and the rest are asked at every
+ * commit the walk yields. The walk's end is the answer that none of the rest is
+ * held; a commit the walk or a lookup could not read is never that answer, and
+ * leaves unread every entry it could have answered.
+ *
+ * @param repo The head's repository (must not be NULL)
+ * @param head The head's id (must not be NULL)
+ * @param entries The caller's entries, whose slots the answers take (must not
+ *                be NULL)
+ * @param run The run's entries, pointers into `entries`, reordered as their holders
+ *            are found (must not be NULL)
+ * @param count How many the run holds, one at least
+ * @param held Gains each entry a holder was found for, by its slot
+ * @param unread Gains each entry a read that failed could have answered, by its
+ *               slot
+ */
+static void history_search(
+    git_repository *repo,
+    const git_oid *head,
+    const history_entry_t *entries,
+    const history_entry_t **run,
+    size_t count,
+    bool *held,
+    bool *unread
+) {
+    const git_oid *since = &run[0]->since;
+
+    /* git's order, newest first, each commit's parents read as it is passed —
+     * libgit2's unsorted walk (revwalk.c get_revision), as sys/revision.c
+     * revision_search walks — and past a commit, the same walk with that commit
+     * hidden, which limits it (history_held). A hide that is refused, a `since`
+     * the store no longer holds, hides nothing, and the walk is whole. */
+    git_revwalk *walk = NULL;
+    int rc = git_revwalk_new(&walk, repo);
+    if (rc == 0) rc = git_revwalk_push(walk, head);
+    if (rc == 0 && !git_oid_is_zero(since)) (void) git_revwalk_hide(walk, since);
+
+    size_t remaining = count;
+    git_oid id;
+    while (rc == 0 && remaining > 0 && (rc = git_revwalk_next(&id, walk)) == 0) {
+        /* A commit the walk yielded whose tree will not read: what it holds is
+         * unknown, so every entry still sought is unread there, and the walk
+         * goes on */
+        git_commit *commit = NULL;
+        git_tree *tree = NULL;
+        if (git_commit_lookup(&commit, repo, &id) < 0 || git_commit_tree(&tree, commit) < 0) {
+            for (size_t k = 0; k < remaining; k++) unread[run[k] - entries] = true;
+            git_commit_free(commit);
+            continue;
+        }
+
+        /* Each entry still sought, asked at its path: nothing there answers
+         * nothing, and a subtree on its way that will not read leaves the entry
+         * unread there; a blob of its kind and its id is its holder, and the
+         * entry is done, swapped out of the run */
+        for (size_t k = 0; k < remaining;) {
+            const size_t slot = (size_t) (run[k] - entries);
+
+            git_tree_entry *entry = NULL;
+            const int entry_rc = git_tree_entry_bypath(&entry, tree, run[k]->path);
+            if (entry_rc < 0) {
+                if (entry_rc != GIT_ENOTFOUND) unread[slot] = true;
+                k++;
+                continue;
+            }
+
+            if (git_tree_entry_type(entry) == GIT_OBJECT_BLOB &&
+                (git_tree_entry_filemode(entry) == GIT_FILEMODE_LINK) ==
+                (run[k]->mode == GIT_FILEMODE_LINK) &&
+                git_oid_equal(git_tree_entry_id(entry), &run[k]->blob_oid)) {
+                /* Held, whatever a commit that would not read held before it */
+                held[slot] = true;
+                unread[slot] = false;
+                run[k] = run[--remaining];
+            } else {
+                k++;
+            }
+            git_tree_entry_free(entry);
+        }
+
+        git_tree_free(tree);
+        git_commit_free(commit);
+    }
+    git_revwalk_free(walk);
+
+    /* A walk that ended short of its last commit — a walk that would not start,
+     * a head that would not read, a parent that would not parse, a hidden commit
+     * that would not — answers none of the rest: each is unread */
+    if (rc != GIT_ITEROVER) {
+        for (size_t k = 0; k < remaining; k++) unread[run[k] - entries] = true;
+    }
+}
+
+void history_held(
+    git_repository *repo,
+    const git_oid *head,
+    const history_entry_t *entries,
+    size_t count,
+    bool *held,
+    bool *unread
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(head);
+    CHECK_NULL(held);
+    CHECK_NULL(unread);
+    if (count == 0) return;
+    CHECK_NULL(entries);
+
+    /* The store's half first, once an entry, and the head's own: an entry whose
+     * blob the store lacks is held by nothing, whatever a tree names, and one
+     * asked since the head itself has nothing left to read — neither costs a
+     * commit. A store that will not open answers nothing it was asked. What is
+     * left is owed a walk, gathered in the call's one transient, the heap's
+     * (include/runtime.h "Memory"). */
+    const history_entry_t **asked = heap_calloc(count, sizeof(*asked));
+    size_t owed = 0;
+
+    git_odb *odb = NULL;
+    int rc = git_repository_odb(&odb, repo);
+    for (size_t i = 0; i < count; i++) {
+        held[i] = false;
+        unread[i] = false;
+
+        if (git_oid_equal(&entries[i].since, head)) continue;
+        if (rc < 0) {
+            unread[i] = true;
+        } else if (git_odb_exists(odb, &entries[i].blob_oid) == 1) {
+            asked[owed++] = &entries[i];
+        }
+    }
+    git_odb_free(odb);
+
+    /* One walk a `since`: the entries owed a walk past one commit are one run */
+    qsort(asked, owed, sizeof(*asked), history_since_order);
+    for (size_t start = 0; start < owed;) {
+        size_t end = start + 1;
+        while (end < owed && git_oid_equal(&asked[end]->since, &asked[start]->since)) end++;
+
+        history_search(repo, head, entries, asked + start, end - start, held, unread);
+        start = end;
+    }
+
+    free(asked);
 }

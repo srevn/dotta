@@ -75,11 +75,12 @@
  * The stat — the record's fast path
  *
  * Field of a state_record_t: the (mtime, size, ino) triple captured at the moment
- * dotta confirmed disk content equals record.blob_oid. If a later live stat matches
- * all three fields, disk is still equal to record.blob_oid without re-hashing —
- * the same approach Git uses with its index (state_stat_matches) — and where a
- * regular file's size is not the triple's, disk is not record.blob_oid, nothing
- * read (state_stat_disproves).
+ * dotta confirmed disk content equals record.blob_oid, or found it the entry
+ * the record keeps unconfirmed (record.disk_oid). If a later live stat matches
+ * all three fields, disk still holds those bytes without re-hashing — the same
+ * approach Git uses with its index (state_stat_matches) — and where a regular
+ * file's size is not the triple's, disk is not record.blob_oid, nothing read
+ * (state_stat_disproves).
  *
  * Sentinel: All-zero state means unset — forces the slow path (safe default).
  * mtime == 0 acts as validity gate: a file with genuine mtime=0 (epoch) simply
@@ -204,25 +205,31 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     (core/workspace.h workspace_unacknowledged) — and every other learning
  *     keeps the one it read. A storage name in the grammar and a profile never
  *     empty, each whole (schema-enforced).
- *   - the content (kind, blob_oid, stat): the node the record describes — a regular
- *     file, a link or a directory, in a look's own words (fs_occupant_t) — and
- *     the blob dotta last verified it holds, with the stat of that moment. The
- *     first observation writes the node alone, the row's; the blob and the stat
- *     advance only after disk-matches-blob verification — an ownership event,
- *     which writes all three from what it established (apply's from the row it
- *     deployed or found standing, a capture's from what it read and committed:
- *     the one blob the stage wrote, never a later head's), and a learning of
- *     the content (the slow-path CMP_EQUAL), which keeps the node: it is made
- *     only onto a record of the row's kind, since a record of another node, the
- *     look having found the row's in its place, gives way to the row's first
- *     observation, where its claim can be spelled, before anything is learned
- *     onto it, and has nothing learned onto it otherwise (core/workspace.c
- *     workspace_flush) — a whole write, never a learning onto the gone node's
- *     record. No node is executable: the bit is the claim's mode, and Git's
- *     filemode the row's alone. Zero blob_oid is no content confirmation — a
- *     directory, whose whole confirmed-disk record is that it was observed (a
- *     directory has no content confirmation, schema-enforced), or a file this
- *     record holds no confirmation of.
+ *   - the content (kind, blob_oid, disk_oid, head, stat): the node the record
+ *     describes — a regular file, a link or a directory, in a look's own words
+ *     (fs_occupant_t) — and what it holds, in one of two answers: the base dotta
+ *     last verified it holds — a blob both sides held — with the stat of that
+ *     moment; or, where none stands, the entry a load found its bytes to be at
+ *     the binding's name, and the head of the binding's branch whose history
+ *     held none of them there up to it, with the stat of that read — bytes no
+ *     base proves, kept so a load reads them again only once disk, the binding
+ *     or the head moves. The first observation writes the node alone, the row's;
+ *     the blob and the stat advance only after disk-matches-blob verification —
+ *     an ownership event, which writes the node, the blob and the stat from what
+ *     it established (apply's from the row it deployed or found standing, a
+ *     capture's from what it read and committed: the one blob the stage wrote,
+ *     never a later head's), and a learning of the content (the slow-path
+ *     CMP_EQUAL), which keeps the node: it is made only onto a record of the
+ *     row's kind, since a record of another node, the look having found the row's
+ *     in its place, gives way to the row's first observation, where its claim
+ *     can be spelled, before anything is learned onto it, and has nothing learned
+ *     onto it otherwise (core/workspace.c workspace_flush) — a whole write, never
+ *     a learning onto the gone node's record. No node is executable: the bit is
+ *     the claim's mode, and Git's filemode the row's alone. Zero blob_oid is no
+ *     content confirmation — a directory, whose whole confirmed-disk record is
+ *     that it was observed (a directory has no content confirmation,
+ *     schema-enforced), or a file this record holds no confirmation of: one whose
+ *     bytes it keeps unconfirmed, or one it only observed.
  *   - the claim (mode, owner, group): the claim dotta last saw the path stand
  *     on or put there, and so the base a difference on a claim axis is read from
  *     — disk off it the user's move, the row off it Git's claim still to bring
@@ -248,8 +255,12 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *   - blob_oid is non-zero iff this record holds a confirmation that disk content
  *     matched that blob. Zero is none: a directory, or a file the record never
  *     confirmed — a release forgets a confirmation with the record.
+ *   - disk_oid and head are set together, only where blob_oid is zero, on a file
+ *     or a link dotta never owned (schema-enforced): a finding about the record's
+ *     own binding at that head, whose bytes the triple stands behind.
  *   - a stat matching a live look of the record's kind proves, on the fast path,
- *     that disk still equals blob_oid (state_stat_matches).
+ *     that disk still holds what the content names: the base, or the bytes kept
+ *     unconfirmed (state_stat_matches).
  *   - the record is stale iff the view has advanced past what dotta last saw at
  *     the path: another kind than the record's, which every record names, or,
  *     where the record confirmed a blob, another blob. The pair, not the blob
@@ -292,8 +303,10 @@ typedef struct state_record {
 
     /* The content */
     fs_occupant_t kind;       /* The node: REGULAR, SYMLINK or DIRECTORY */
-    git_oid blob_oid;         /* Content-confirmed blob (zero = never confirmed: a directory, or observed only) */
-    state_stat_t stat;        /* Fast-path stat triple, bound to blob_oid (all-zero = unusable) */
+    git_oid blob_oid;         /* The base: a blob both sides held, which disk was found at (zero = none) */
+    git_oid disk_oid;         /* Where none stands: the entry a read found the node's bytes to be (zero = none kept) */
+    git_oid head;             /* Beside it: the head of the binding's branch, holding none of them at the name up to it */
+    state_stat_t stat;        /* The triple behind blob_oid, or behind disk_oid (all-zero = unusable) */
 
     /* The claim */
     mode_t mode;              /* Meaningful iff kind != SYMLINK */
@@ -311,12 +324,13 @@ typedef struct state_record {
  * True iff the record's triple is set, the look is a node of the kind the triple
  * was taken of, and the look's own (mtime, size, ino) are the triple — safety-grade
  * rather than a guess because of the two constructors above: a set triple is
- * born only beside bytes dotta had verified or had itself written, and only the
- * writes that verify advance it (a learning of the content, an ownership event),
- * so a look that matches it is the same node unwritten since — disk still holds
- * the record's blob, with nothing loaded and nothing hashed. An UNSET triple
- * (mtime 0 — never confirmed, or the read-derived constructor's smudge) matches
- * no look, which is the slow path by default.
+ * born only beside bytes dotta had verified or had itself written — a base, or
+ * bytes kept unconfirmed — and only the writes that verify advance it (a learning
+ * of the content, an ownership event), so a look that matches it is the same
+ * node unwritten since — disk still holds what the content names, with nothing
+ * loaded and nothing hashed. An UNSET triple (mtime 0 — never confirmed, or the
+ * read-derived constructor's smudge) matches no look, which is the slow path by
+ * default.
  *
  * The kind is the stat's own: the record's, the node the triple was taken of. A
  * node's kind is fixed for the life of its inode, and the inode is the filesystem's
@@ -795,10 +809,11 @@ const char *state_target(
  * Every record, in filesystem_path order
  *
  * The one read of the path_records table. Allocates the array and every string
- * field from the caller's arena; lifetime is tied to the arena. A NULL blob column
- * hydrates to a zero OID, a link's NULL mode to 0. Every column is read exactly
- * or the read fails: a conversion SQLite cannot allocate is ERR_MEMORY, never a
- * NULL taken for a value the column holds — an owner the path has, read as none.
+ * field from the caller's arena; lifetime is tied to the arena. A NULL id column
+ * — the blob, disk's entry, the head — hydrates to a zero OID, a link's NULL
+ * mode to 0. Every column is read exactly or the read fails: a conversion SQLite
+ * cannot allocate is ERR_MEMORY, never a NULL taken for a value the column holds
+ * — an owner the path has, read as none.
  *
  * In strcmp order (the principle above). Readers, and what each takes from it:
  *   - core/workspace.c workspace_partition: pairs each record with the active

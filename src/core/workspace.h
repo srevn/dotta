@@ -1948,9 +1948,11 @@ workspace_items_t workspace_displaced_orphans(
  * An item's line: its tags, their colour, where it stands and whose it is
  *
  * A value workspace_item_line makes whole, nothing in it borrowed. The tags are
- * spelled as the line shows them, each bracketed, a space between — the one
- * spelling of a tag string, which a list prints (base/output.h output_list_add)
- * and status's legend keys (cmds/status.c status_legend_add).
+ * spelled as the line shows them, each bracketed, a space between: the string a
+ * list prints (base/output.h output_list_add) and status's legend keys
+ * (cmds/status.c status_legend_add). Apply's receipt writes a fixed directory's
+ * two claim tags in the same spelling by hand (cmds/apply.c
+ * apply_print_deploy_receipt).
  */
 typedef struct {
     char tags[WORKSPACE_ITEM_MAX_TAGS * 16];  /* "[modified] [stale]": the words, in Tag Priority */
@@ -2047,10 +2049,10 @@ typedef struct {
  *   - Two tags ride an UNDEPLOYED row off its record, no bit standing for either,
  *     each a reason its absence is no deletion of the row's (core/workspace.c
  *     classify_absent): "stale", where Git moved past what dotta last saw at
- *     the path (workspace_stale), apply-side work at the arm's CYAN, and
- *     "reassigned", where the record dotta owns names another profile
- *     (workspace_reassigned). A DELETED row carries neither: its record is the
- *     row's own profile's, and confirmed the content the view holds
+ *     the path (workspace_stale), apply-side work, and "reassigned", where the
+ *     record dotta owns names another profile (workspace_reassigned). A DELETED
+ *     row carries neither: its record is the row's own profile's, and confirmed
+ *     the content the view holds
  *
  * The path is the item's filesystem path, a directory's with its trailing slash
  * (include/types.h path_kind_suffix): the kind the claim names, never the

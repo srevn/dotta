@@ -4137,9 +4137,8 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
 
 /**
  * A tag on the line, after the ones before it, as the line shows it: bracketed,
- * a space before every one but the first — the one spelling of a tag string.
- * The line's room is the count's (WORKSPACE_ITEM_MAX_TAGS), so a tag past it is
- * the count's bug.
+ * a space before every one but the first. The line's room is the count's
+ * (WORKSPACE_ITEM_MAX_TAGS), so a tag past it is the count's bug.
  */
 static void workspace_line_add(workspace_line_t *line, const char *tag) {
     const size_t used = strlen(line->tags);

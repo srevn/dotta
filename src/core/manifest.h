@@ -640,15 +640,17 @@ error_t manifest_mount_table(
 
 /**
  * One claim the build could not place: its profile has no deployment target on
- * this machine. Recorded, never dropped in silence — the health consumers (status,
- * apply, sync) surface these; export reads the count alone, for the reason its
- * refusal gives, and so does add's enable hint over its own opened tree
- * (cmds/add.c); and an enable that names an enabled profile holding them says
- * so, with the flag (cmds/profile.c profile_enable). The repair is one command
- * (`profile enable <p> --target /path`), the untracking another (`remove`). The
- * screen says **no target** or **needs a target**, never "unbound": the header's
- * word is what the build could not do, the screen's is what the user must give.
- * Strings are the build arena's, same lifetime as the rows.
+ * this machine. Recorded, never dropped in silence — the health consumers surface
+ * these (cmds/status.c status_print_profiles, cmds/apply.c cmd_apply, cmds/sync.c
+ * cmd_sync); export reads the count alone, for the reason its refusal gives
+ * (cmds/export.c export_collect_filesystem), and so does add's enable hint over
+ * its own opened tree (cmds/add.c add_print_enable); and an enable that names
+ * an enabled profile holding them says so, with the flag (cmds/profile.c
+ * profile_enable). The repair is one command (`profile enable <p> --target /path`),
+ * the untracking another (`remove`). The screen says **no target** or **needs a
+ * target**, never "unbound": the header's word is what the build could not do,
+ * the screen's is what the user must give. Strings are the build arena's, same
+ * lifetime as the rows.
  */
 typedef struct {
     const char *profile;
@@ -734,10 +736,12 @@ typedef struct {
  * (manifest_holds_name).
  *
  * Readers: the health channel's own listing (cmds/status.c status_print_profiles),
- * and the completed selection's refusal in add (cmds/add.c add_refuse_moves) —
- * which reads the slice as every name its claims can move, since no group can
- * grow under an uncommitted claim and only which member is kept can change; which
- * side of a place they move is another question (manifest_moved_place).
+ * apply's section (cmds/apply.c cmd_apply) and sync's after its Git phase
+ * (cmds/sync.c cmd_sync), and the completed selection's refusal in add (cmds/add.c
+ * add_refuse_moves) — which reads the slice as every name its claims can move,
+ * since no group can grow under an uncommitted claim and only which member is
+ * kept can change; which side of a place they move is another question
+ * (manifest_moved_place).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded names, valid for the arena's lifetime

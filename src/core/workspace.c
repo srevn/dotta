@@ -4434,9 +4434,9 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
 
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 /* The claim alone — the mode, the ownership, or both — left the
-                 * one the record holds; the content is dotta's. Warning level:
-                 * an orphan's skip (cleanup_skip_reason: CLAIM_CHANGED), where
-                 * a node's landing goes unasked, a claim being no edit. */
+                 * one the record holds; the content is dotta's: an orphan's skip
+                 * (cleanup_skip_reason: CLAIM_CHANGED), where a node's landing
+                 * goes unasked, a claim being no edit. */
                 if (item->divergence & DIVERGENCE_MODE) {
                     workspace_line_add(&line, "mode");
                 }

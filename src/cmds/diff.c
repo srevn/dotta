@@ -38,11 +38,13 @@
  * so no row is listed without a line and no line is said of a row no direction
  * lists. Upstream previews apply at the rows: every row it lands, restores,
  * converges or acknowledges, and every one it skips for --force or for a look
- * that failed. Downstream previews update: every row it commits, and two it
- * refuses, which a listing that left them out would call "no local changes" over
- * a difference — a failed look, bytes no base proves. Read off the row's state
- * and, deployed, its route (core/workspace.h workspace_item_route), each switch
- * exhaustive, so an arm either gains is a build error here.
+ * that failed. Downstream previews update: every row a local difference or a
+ * failed look stands on, which it commits or refuses — a listing that left out
+ * a refusal would call "no local changes" over a difference — and never a row
+ * only Git moved, nor one nothing looked at, neither carrying a difference of
+ * disk's. Read off the row's state and, deployed, its route (core/workspace.h
+ * workspace_item_route), each switch exhaustive, so an arm either gains is a
+ * build error here.
  *
  * @param item One of the diverged items, a row of the view's (must not be NULL)
  * @param direction The direction asking: one of the two
@@ -152,12 +154,13 @@ static const char *diff_status_line(
              * (core/workspace.h divergence_type_t), as apply's skip label and
              * update's census say it. Its --force is qualified as status's
              * Conflicts header qualifies it: a directory in a blob row's way
-             * goes only with all it holds (core/deploy.c check_clearance).
-             * Downstream leaves out the edit update refuses here (stated) */
+             * goes only with all it holds (core/deploy.c check_clearance). The
+             * user's edit is listed downstream too, which update refuses: its
+             * capture would commit disk over the move Git made */
             return direction == DIFF_UPSTREAM
                    ? "changed in Git and on disk (apply --force <path> keeps Git's, "
                    "a directory only if all dotta's)"
-                   : NULL;
+                   : "changed in Git and on disk (update skips it)";
 
         case WORKSPACE_ROUTE_STALE:
             /* Git moved and disk did not follow: no local difference, the claims
@@ -190,23 +193,22 @@ static const char *diff_status_line(
         case WORKSPACE_ROUTE_KIND:
             /* Another kind the user put there, Git having moved nothing past
              * it, in the words update's census says it: --force's to replace, a
-             * directory only with all it holds. Listed upstream because status's
+             * directory only with all it holds. Listed both ways because status's
              * Conflicts remedy sends the user here to compare, and hiding it
-             * answered that remedy with silence; downstream leaves out the kind
-             * update refuses (stated) */
+             * answered that remedy with silence; downstream, update refuses it,
+             * the copy committing no such kind */
             return direction == DIFF_UPSTREAM
                    ? "a different kind stands on disk (apply --force <path> keeps Git's, "
                    "a directory only if all dotta's)"
-                   : NULL;
+                   : "a different kind stands on disk (update skips it)";
 
         case WORKSPACE_ROUTE_KIND_DERIVED:
             /* The same at a rung dotta only passes through, which no plan holds,
-             * so no flag lifts it: the named re-derivation retires the claim,
-             * in the words status's Squatted ancestors header says it */
-            return direction == DIFF_UPSTREAM
-                   ? "a different kind stands at a directory dotta only passes through "
-                   "('dotta update <dir>' re-derives it)"
-                   : NULL;
+             * so no flag lifts it: one verb in both directions, the named
+             * re-derivation, which retires the claim — in the words status's
+             * Squatted ancestors header says it */
+            return "a different kind stands at a directory dotta only passes through "
+                   "('dotta update <dir>' re-derives it)";
 
         case WORKSPACE_ROUTE_UNCONFIRMED:
             /* Bytes no base proves: disk is not the row's, and dotta holds no

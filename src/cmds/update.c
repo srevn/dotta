@@ -621,8 +621,8 @@ static error_t update_profile(
     size_t ancestors_retired = 0;
     for (size_t i = 0; i < commit->captured_count; i++) {
         profile_capture_ancestors(
-            draft, ctx->run.mounts, commit->captured[i].storage_path, &ancestors_captured,
-            &ancestors_retired
+            draft, ctx->run.mounts, commit->captured[i].storage_path,
+            &ancestors_captured, &ancestors_retired
         );
     }
 
@@ -636,8 +636,8 @@ static error_t update_profile(
      * twice for free: the derivation counts only differences. */
     for (size_t i = 0; i < rows.count; i++) {
         profile_capture_ancestors(
-            draft, ctx->run.mounts, rows.entries[i]->storage_path, &ancestors_captured,
-            &ancestors_retired
+            draft, ctx->run.mounts, rows.entries[i]->storage_path,
+            &ancestors_captured, &ancestors_retired
         );
     }
 
@@ -678,7 +678,8 @@ static error_t update_profile(
 
     if (pruned > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "  Pruned %zu ancestor claim%s", pruned, pruned == 1 ? "" : "s"
+            out, OUTPUT_VERBOSE, "  Pruned %zu ancestor claim%s",
+            pruned, pruned == 1 ? "" : "s"
         );
     }
 

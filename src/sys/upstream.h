@@ -110,8 +110,9 @@ output_color_t upstream_state_color(upstream_state_t state);
  * word for it: up-to-date, ahead, behind, diverged, no remote branch, no local
  * branch. The helps' keys say the phrase itself, each count named by the letter
  * its glyph carries — "n commits ahead", list's "diverged (n ahead, m behind)"
- * — and no act: what sync does with a state is its strategy's (cmds/sync.c
- * sync_verdict), so a key naming one would be false under another (cmds/status.c
+ * — and no act: what sync does with a branch ahead, behind or diverged is its
+ * strategy's (cmds/sync.c sync_verdict), so a key naming one would be false under
+ * another, and the keys beside them name none either, a key a state (cmds/status.c
  * spec_status, cmds/list.c spec_list).
  *
  * Readers: cmds/status.c status_print_remote, cmds/sync.c sync_print_state,

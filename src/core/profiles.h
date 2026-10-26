@@ -606,9 +606,10 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target);
  * a path the profile's view places nothing at (revert_target_claim; cmds/export.c
  * export_collect_filesystem, which adds why where some of the profile's claims
  * stand nowhere here), and an argument as typed that reaches no claim of the
- * profile's (cmds/remove.c remove_resolve). A DIRECTORY or a SUBMODULE each verb
- * refuses by its noun in its own words, and list reads NOTHING as a deleted file
- * whose history it searches (cmds/list.c list_file_history).
+ * profile's (cmds/remove.c remove_resolve). The other answers are each verb's
+ * own: show, revert and list, which act on one file, refuse a DIRECTORY or a
+ * SUBMODULE by its noun, and list reads NOTHING as a deleted file whose history
+ * it searches (cmds/list.c list_file_history).
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */

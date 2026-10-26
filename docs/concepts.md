@@ -80,7 +80,7 @@ Ignore patterns cannot exclude a root. A pattern is matched against the stored n
 
 Each profile chooses its own names. For example, `web` can store `~/jail/etc/x` as `custom/etc/x` while `global` stores it as `home/jail/etc/x`. Because both deploy to the same pathname, [profile precedence](profiles.md#layering-and-precedence) decides which one wins.
 
-Each profile also maintains a `.dotta/metadata.json` file recording the permissions of every path it manages, and the owner of every path owned by someone other than the user running `dotta`. A path with no owner recorded belongs to whoever runs `dotta`, on every machine, so that user's own files record none — except under a root login, where the paths outside the home directory record root as their owner, since the next machine's user is not root. `dotta status` reports a path whose owner is not the recorded one, or not the user running it where none is recorded, and either verb settles it: `dotta apply` gives the path back, `dotta update` records the owner it has now. A recorded owner this machine has no account for is left to Git: `dotta status` lists it with the changes in Git, `dotta apply` names the account it could not find (or stops, under `strict_ownership`), and `dotta update` never replaces it with the local user. Metadata is captured during `add`/`update` and restored during `apply`.
+Each profile also maintains a `.dotta/metadata.json` file recording the permissions of every path it manages, and the owner of every path owned by someone other than the user running `dotta`. A path with no owner recorded belongs to whoever runs `dotta`, on every machine, so that user's own files record none — except under a root login, where the paths outside the home directory record root as their owner, since the next machine's user is not root. `dotta status` reports a path whose owner isn't the recorded one (or isn't you, where none is recorded). Once dotta has seen the path with its recorded owner, it's your call: `dotta apply` sets the owner back, `dotta update` records the one it has now. Before that — on a fresh machine, say — the recorded owner wins: `dotta status` lists the path with the changes in Git, and `dotta apply` sets it. An owner this machine has no account for stays the profile's too: `dotta apply` names the account it couldn't find (or stops, under `strict_ownership`), and `dotta update` never swaps it for you. Metadata is captured during `add`/`update` and restored during `apply`.
 
 ### Spellings and Symlinks
 
@@ -126,9 +126,9 @@ Nothing is ever checked out. Every command reads the branches and writes commits
 
 ## The View and the Record
 
-Dotta stores only what it cannot work out for itself.
+Dotta stores what it cannot work out for itself, and a few notes that save it work.
 
-What *should* be at each path, and from which profile, is **the view**. Dotta rebuilds it on every command from the branches, the enabled profiles, and where this machine keeps the home directory and each profile's target. What dotta *did* at a path — **the record** — is the one thing it cannot recompute, so that is the one thing it keeps, in the store's `dotta.db`.
+What *should* be at each path, and from which profile, is **the view**. Dotta rebuilds it on every command from the branches, the enabled profiles, and where this machine keeps the home directory and each profile's target. What dotta *did* at a path — **the record** — it cannot work out again, so it keeps that in the store's `dotta.db`, along with a few notes from the last time it looked, so it doesn't re-read a file it has already checked.
 
 The architecture mirrors Git's three-tree model:
 

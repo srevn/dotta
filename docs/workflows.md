@@ -74,7 +74,7 @@ dotta update --include-new
 dotta update -m "Update shell config"
 ```
 
-Deleting a file and running `dotta update` deletes it and every machine's unchanged copy: see [Removing Files](#removing-files).
+To delete a file everywhere, delete it and run `dotta update`: see [Removing Files](#removing-files).
 
 ## Checking Status
 
@@ -239,5 +239,7 @@ dotta remove global ~/.bashrc --dry-run
 ```
 
 `dotta remove` stops tracking a path: it stays on disk, on every machine. To delete a file instead, delete it and run `dotta update`: every machine's next `dotta apply` deletes its unchanged copy, or lands another enabled profile's file where one claims the path. A machine where the file was changed keeps it until `dotta apply --force <path>`.
+
+That works when the copy you deleted was the profile's latest version. If the profile has moved on since you last applied, or dotta never saw your copy match it, the deletion doesn't count: `update` leaves the profile as it is, and `dotta apply` brings the file back.
 
 A file removed from a directory the profile tracks shows up again as a new file; `dotta ignore <profile> --add <pattern>` keeps it out.

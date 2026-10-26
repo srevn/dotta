@@ -304,7 +304,7 @@ Bytes are the single authoritative source for "is this blob encrypted?":
 
 That authority is the **read path's**, and it is not the only question asked about a blob. Where the answer is a decision or a key — which route a read takes, which blobs a rotation must not orphan — the bytes answer, and nothing else may. Where the answer is a screen or a schedule, the branch's own claim sheet answers instead: `dotta list -v`'s `[E]` mark and the size beside it, `dotta show`'s `(encrypted)` annotation, and which blobs `dotta export` decrypts before its first write. Those readers open no content blob at all, because a packed object has no partial read and asking six bytes costs the whole file. What makes the sheet trustworthy there is the store refusal below, and a sheet written by hand to lie costs a glyph, a number, or the moment a passphrase prompt appears — never a byte, a secret, or a key.
 
-Whether a capture may store plaintext is the one decision both answer, and either can only seal: a file stays encrypted where the sheet's `encrypted` stamp says so or its committed bytes are ciphertext (`core/profiles.h profile_sealed`), the stamp read first and the blob only where the stamp says none. Where the two disagree, whether the file is meant encrypted is unknown, and the capture publishes nothing. So a stamp a hand writes over plaintext is a seal like any other: the next capture encrypts the file, `--no-encrypt` is refused over it, and with encryption off its capture is refused — removing the path and adding it again is the way out.
+When `add` or `update` stores a file again, it keeps the file encrypted if the profile has it encrypted: `.dotta/metadata.json` marks it `encrypted`, or its committed bytes are ciphertext. If the two disagree, dotta can't tell which was meant, so it keeps the file encrypted. A file marked `encrypted` by hand is treated like any other encrypted file: it's encrypted the next time it's committed, `--no-encrypt` is refused for it, and with encryption turned off, committing it stops with an error. Removing the path and adding it again starts it over.
 
 ### Store refusal and write-time invariant
 
@@ -377,7 +377,7 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
 1. User: dotta add -p myprofile ~/.ssh/id_rsa --encrypt
 
 2. Policy decision (core/policy.c):
-   - Priority: --encrypt > --no-encrypt > the profile's seal
+   - Priority: --encrypt > --no-encrypt > already encrypted in the profile
                > auto-encrypt patterns > default plaintext.
 
 3. Read plaintext from filesystem.
@@ -437,7 +437,7 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
 
 ## Auto-encryption policy
 
-Implemented in `src/core/policy.c`. Decides from the configuration, the request, and the seal the caller asked of the profile (`core/profiles.h profile_sealed`), without calling cryptographic primitives.
+Implemented in `src/core/policy.c`. It decides from your configuration, the command's flags, and whether the profile already holds the file encrypted — no cryptography involved.
 
 ### Configuration
 
@@ -455,19 +455,19 @@ Patterns compile once into a `gitignore_ruleset_t` at `config_load` — whether 
 
 The grammar is gitignore's — `!` negation, directory-only patterns, anchoring, and `**` recursive globs (via `base/gitignore`) — but the program is *selection*, not exclusion: the last rule that reaches the path decides, where a rule reaches a path when it matches the path itself or any directory above it. A `!` stands wherever the user put it and nothing is final, so `[".ssh/", "!.ssh/*.pub"]` leaves the public keys plaintext while `["!.ssh/*.pub", ".ssh/"]` does not. `.dottaignore` reads the other program (an excluded directory is final), and `base/gitignore.h` states both.
 
-A file already stored encrypted is unaffected by a pattern change: priority 3 reads the profile's seal — its stamp, or its committed bytes — and keeps it encrypted.
+A file already stored encrypted stays encrypted when the patterns change (priority 3).
 
 ### Decision priority
 
 `encryption_policy_should_encrypt`:
 
 1. **Explicit `--encrypt`** on the command line.
-2. **Explicit `--no-encrypt`** on the command line.
-3. **The profile's seal.** A file the profile holds encrypted — its stamp in `.dotta/metadata.json` says so, or its committed bytes are ciphertext — stays encrypted on subsequent `add` and `update`, so workflows like *add → modify → update* don't accidentally drop encryption.
+2. **Explicit `--no-encrypt`** on the command line — refused for a file the profile already holds encrypted.
+3. **Already encrypted.** A file the profile already holds encrypted stays encrypted on later `add` and `update` runs, so *add → modify → update* doesn't quietly drop encryption.
 4. **Auto-encrypt patterns**.
 5. **Default plaintext.**
 
-Priorities 1 and 3 are **not** gated on `config.encryption_enabled`. If the user explicitly requested encryption or a file's prior state says "encrypted", the policy says so; the content layer surfaces a friendly "enable encryption" error rather than silently coercing a previously-encrypted file to plaintext.
+Priorities 1 and 3 apply even with encryption turned off: rather than quietly storing such a file as plaintext, dotta stops with an error saying encryption is disabled.
 
 ## Key management
 

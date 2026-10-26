@@ -457,17 +457,6 @@ static error_t show_commit(
     const git_signature *author = git_commit_author(commit);
     time_t commit_time = (time_t) author->when.time;
 
-    struct tm tm_info;
-    localtime_r(&commit_time, &tm_info);
-    char time_buf[64];
-    strftime(
-        time_buf, sizeof(time_buf), "%a %b %d %H:%M:%S %Y",
-        &tm_info
-    );
-
-    char relative_buf[64];
-    timeutil_relative(commit_time, relative_buf, sizeof(relative_buf));
-
     output_print(
         out, OUTPUT_NORMAL, "{yellow}commit %s{reset} {cyan}(%s){reset}\n",
         oid_str, profile
@@ -478,10 +467,18 @@ static error_t show_commit(
         author->name, author->email
     );
 
-    output_print(
-        out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
-        time_buf, relative_buf
-    );
+    /* The date, where a local time places the author's (base/timeutil.h
+     * timeutil_absolute) */
+    char time_buf[64];
+    if (timeutil_absolute(commit_time, time_buf, sizeof(time_buf))) {
+        char relative_buf[64];
+        timeutil_relative(commit_time, relative_buf, sizeof(relative_buf));
+
+        output_print(
+            out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
+            time_buf, relative_buf
+        );
+    }
 
     output_gap(out, OUTPUT_NORMAL);
 

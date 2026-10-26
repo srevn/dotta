@@ -68,3 +68,19 @@ void timeutil_relative(
         );
     }
 }
+
+/**
+ * Format timestamp as absolute time string
+ */
+bool timeutil_absolute(
+    time_t timestamp,
+    char *buf,
+    size_t buf_size
+) {
+    /* The broken-down local time first: one localtime_r cannot place is left
+     * unfilled, and strftime never reads it */
+    struct tm tm_info;
+    if (!localtime_r(&timestamp, &tm_info)) return false;
+
+    return strftime(buf, buf_size, "%a %b %d %H:%M:%S %Y", &tm_info) > 0;
+}

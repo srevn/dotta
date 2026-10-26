@@ -692,24 +692,6 @@ cleanup:
 }
 
 /**
- * Format timestamp as human-readable date (for verbose commit display)
- *
- * @param timestamp Git timestamp to format
- * @param buf Caller-provided buffer (stack allocated)
- * @param buf_size Buffer size in bytes
- * @return true on success, false if timestamp is invalid
- */
-static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
-    time_t t = (time_t) timestamp;
-
-    struct tm tm_info;
-    if (!localtime_r(&t, &tm_info)) return false;
-    strftime(buf, buf_size, "%a %b %d %H:%M:%S %Y", &tm_info);
-
-    return true;
-}
-
-/**
  * List file history - Level 3
  *
  * Default: Oneline format (hash, summary, time) Verbose: Full commit format
@@ -905,9 +887,10 @@ static error_t list_file_history(
                 oid_str
             );
 
-            /* Display timestamp if valid */
+            /* The date, where a local time places the commit's (base/timeutil.h
+             * timeutil_absolute) */
             char date_buf[LIST_TIMESTAMP_BUFFER_SIZE];
-            if (format_time(commit->time, date_buf, sizeof(date_buf))) {
+            if (timeutil_absolute(commit->time, date_buf, sizeof(date_buf))) {
                 char relative_str[64];
                 timeutil_relative(commit->time, relative_str, sizeof(relative_str));
 

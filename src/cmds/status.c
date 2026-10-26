@@ -481,6 +481,9 @@ static void status_print_legend(output_t *out, const status_legend_t *legend) {
  *
  * Shows the consistency between the view, the record and the filesystem: the
  * status line, then the diverged items in actionable sections (git-like structure).
+ * The status line is said on every run, a clean one included: it is the run's
+ * answer, and a clean one says what it compared — the paths aligned — as an empty
+ * apply or diff says its own.
  *
  * The status line is one fold of the items that ask the disk or the user something,
  * over the scope, decided and worded the same whatever the filter: under -p it
@@ -504,11 +507,6 @@ static void status_print_workspace(
 ) {
     /* The diverged items, read by the status line's fold and by the sections */
     workspace_items_t diverged = workspace_diverged(ws);
-
-    /* A load holding none is clean (workspace_diverged), and says so only when
-     * asked. One holding any opens the section whatever the filter reaches: a
-     * filtered profile that reads Clean still counts the divergence it hides. */
-    if (diverged.count == 0 && !output_is_verbose(out)) return;
 
     /* The diverged items the filter hides, counted beneath the sections */
     size_t hidden = 0;
@@ -1397,18 +1395,19 @@ static void status_print_workspace(
 /**
  * Print the remote sync status for profiles
  *
- * By default shows only enabled profiles for consistency with workspace status.
- * Use show_all_profiles to report on every branch in the repository. Its failures
- * are lines of its own section, as its siblings' are: no remote configured is
- * no section, and every other failure is a warning in its place.
+ * By default shows only enabled profiles for consistency with workspace status;
+ * --all reports on every branch in the repository. Its failures are lines of
+ * its own section, as its siblings' are: no remote configured is no section —
+ * said in its place where --remote asked for it — and every other failure is a
+ * warning in its place.
  */
 static void status_print_remote(
     const dotta_ctx_t *ctx,
-    const string_array_t *profiles,
-    bool show_all_profiles,
-    bool no_fetch
+    const cmd_status_options_t *opts,
+    const string_array_t *profiles
 ) {
     CHECK_NULL(ctx);
+    CHECK_NULL(opts);
     CHECK_NULL(profiles);
 
     git_repository *repo = ctx->run.repo;
@@ -1421,11 +1420,17 @@ static void status_print_remote(
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     error_t err = gitops_resolve_default_remote(
-        repo, ctx->arena, &remote_name, no_fetch ? NULL : &remote_url
+        repo, ctx->arena, &remote_name, opts->no_fetch ? NULL : &remote_url
     );
     if (error_code(err) == ERR_NOT_FOUND) {
-        /* No remote configured — no section to print (sys/gitops.h names this
-         * read) */
+        /* No remote configured (sys/gitops.h names this read): no section to
+         * print, and where --remote asked for one, the resolver's words in its
+         * place, as remote's listing says them (cmds/remote.c) — the default
+         * scope has no remote half to report */
+        if (opts->want_remote) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_info(out, OUTPUT_NORMAL, "%s", error_line(err));
+        }
         return;
     }
     if (err) {
@@ -1443,7 +1448,7 @@ static void status_print_remote(
     string_array_t all_local;
     const string_array_t *check = profiles;
 
-    if (show_all_profiles) {
+    if (opts->all_profiles) {
         /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
         err = gitops_list_branches(repo, ctx->arena, &all_local);
         if (err) {
@@ -1460,7 +1465,7 @@ static void status_print_remote(
     if (check->count == 0) return;
 
     /* Fetch if requested */
-    if (!no_fetch) {
+    if (!opts->no_fetch) {
         /* xfer is required by gitops network ops (credential state machine +
          * approve/reject are needed even without verbose progress). Status's
          * fetch is a background refresh: progress is always ephemeral so it never
@@ -1738,9 +1743,10 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* Show remote sync status (if requested): no remote configured is no section,
-     * and every failure of its own is a line of it */
+     * said in its place where --remote asked for it, and every failure of its
+     * own is a line of it */
     if (opts->show_remote) {
-        status_print_remote(ctx, scope_profiles(scope), opts->all_profiles, opts->no_fetch);
+        status_print_remote(ctx, opts, scope_profiles(scope));
     }
 
     return NULL;

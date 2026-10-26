@@ -12,7 +12,6 @@
  * improves testability and maintainability.
  *
  * Policy hierarchy (priority order):
- * 0. Meta-file protection → PLAINTEXT or ERROR (system integrity)
  * 1. Explicit --encrypt flag → ENCRYPT (highest priority)
  * 2. Explicit --no-encrypt flag → PLAINTEXT, or ERROR where the profile holds
  *    it sealed
@@ -57,11 +56,6 @@ typedef enum {
  * Determine if file should be encrypted based on policy
  *
  * Policy hierarchy (priority order):
- * 0. If path is a protected meta-file → PLAINTEXT or ERROR (system integrity)
- *    Example: .bootstrap, .dottaignore, .dotta/metadata.json Behavior: If explicit
- *    --encrypt → ERROR; otherwise → PLAINTEXT Rationale: System files must be
- *    readable/executable by dotta
- *
  * 1. If request is ENCRYPT → ENCRYPT (highest priority) Example: User ran `dotta
  *    add --encrypt file`
  *
@@ -123,7 +117,7 @@ typedef enum {
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_VALIDATION: --encrypt on a meta-file, or --no-encrypt over a seal
+ * - ERR_VALIDATION: --no-encrypt over a seal
  */
 error_t encryption_policy_should_encrypt(
     const config_t *config,

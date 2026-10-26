@@ -377,10 +377,8 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
 1. User: dotta add -p myprofile ~/.ssh/id_rsa --encrypt
 
 2. Policy decision (core/policy.c):
-   - Protected meta-files (.bootstrap, .dottaignore, .dotta/metadata.json)
-     are always plaintext (rejected with an error if --encrypt is requested).
-   - Otherwise priority: --encrypt > --no-encrypt > the profile's seal
-                         > auto-encrypt patterns > default plaintext.
+   - Priority: --encrypt > --no-encrypt > the profile's seal
+               > auto-encrypt patterns > default plaintext.
 
 3. Read plaintext from filesystem.
    - Reject plaintexts starting with "DOTTA\x09" (magic collision).
@@ -463,14 +461,13 @@ A file already stored encrypted is unaffected by a pattern change: priority 3 re
 
 `encryption_policy_should_encrypt`:
 
-1. **Protected meta-files** (`.bootstrap`, `.dottaignore`, `.dotta/metadata.json`) — always plaintext. Explicit `--encrypt` on these files is rejected with a clear error.
-2. **Explicit `--encrypt`** on the command line.
-3. **Explicit `--no-encrypt`** on the command line.
-4. **The profile's seal.** A file the profile holds encrypted — its stamp in `.dotta/metadata.json` says so, or its committed bytes are ciphertext — stays encrypted on subsequent `add` and `update`, so workflows like *add → modify → update* don't accidentally drop encryption.
-5. **Auto-encrypt patterns**.
-6. **Default plaintext.**
+1. **Explicit `--encrypt`** on the command line.
+2. **Explicit `--no-encrypt`** on the command line.
+3. **The profile's seal.** A file the profile holds encrypted — its stamp in `.dotta/metadata.json` says so, or its committed bytes are ciphertext — stays encrypted on subsequent `add` and `update`, so workflows like *add → modify → update* don't accidentally drop encryption.
+4. **Auto-encrypt patterns**.
+5. **Default plaintext.**
 
-Priorities 1 and 4 are **not** gated on `config.encryption_enabled`. If the user explicitly requested encryption or a file's prior state says "encrypted", the policy says so; the content layer surfaces a friendly "enable encryption" error rather than silently coercing a previously-encrypted file to plaintext.
+Priorities 1 and 3 are **not** gated on `config.encryption_enabled`. If the user explicitly requested encryption or a file's prior state says "encrypted", the policy says so; the content layer surfaces a friendly "enable encryption" error rather than silently coercing a previously-encrypted file to plaintext.
 
 ## Key management
 

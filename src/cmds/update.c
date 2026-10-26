@@ -1116,11 +1116,10 @@ static void update_print_preview(
             const char *tags[WORKSPACE_ITEM_MAX_TAGS];
             size_t tag_count;
             output_color_t color;
-            char base_metadata[256];
+            char metadata[512];
 
             if (!workspace_item_tags(
-                item, tags, &tag_count, &color,
-                base_metadata, sizeof(base_metadata)
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
                 )) {
                 continue;
             }
@@ -1138,20 +1137,13 @@ static void update_print_preview(
                 other = manifest_lookup_claim(manifest, profiles[p], item->filesystem_path);
             }
 
-            /* Directory rows read as directories: trailing slash, kind named —
-             * the same shape the claims section uses — and the other claim appended
-             * where there is one, as status's Overridden section appends the
-             * blob above a copy */
+            /* A directory row reads as one by its trailing slash, as on every
+             * list, and the other claim is appended where there is one, as status's
+             * Overridden section appends the blob above a copy */
             char path[PATH_MAX + 2];
             snprintf(
                 path, sizeof(path), "%s%s", item->filesystem_path,
                 path_kind_suffix(item->item_kind)
-            );
-
-            char metadata[512];
-            snprintf(
-                metadata, sizeof(metadata), "%s%s",
-                item->item_kind == PATH_KIND_DIRECTORY ? "directory " : "", base_metadata
             );
             if (other) {
                 size_t used = strlen(metadata);
@@ -1178,34 +1170,20 @@ static void update_print_preview(
         for (size_t i = 0; i < partition->modified_dirs.count; i++) {
             const workspace_item_t *item = partition->modified_dirs.entries[i];
 
-            /* Extract tags and metadata using helper */
             const char *tags[WORKSPACE_ITEM_MAX_TAGS];
             size_t tag_count;
             output_color_t color;
-            char base_metadata[256];
+            char metadata[256];
+            char path[PATH_MAX + 2];
 
             if (workspace_item_tags(
-                item, tags, &tag_count, &color,
-                base_metadata, sizeof(base_metadata)
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
                 )) {
-                /* Build custom content with trailing slash for directories */
-                char path[PATH_MAX + 2];
                 snprintf(
                     path, sizeof(path), "%s%s", item->filesystem_path,
                     path_kind_suffix(item->item_kind)
                 );
-
-                /* Build custom metadata with explicit "directory" indicator */
-                char metadata[256];
-                snprintf(
-                    metadata, sizeof(metadata), "directory %s",
-                    base_metadata
-                );
-
-                output_list_add(
-                    list, tags, tag_count, color,
-                    path, metadata
-                );
+                output_list_add(list, tags, tag_count, color, path, metadata);
             }
         }
 

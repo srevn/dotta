@@ -4271,11 +4271,7 @@ bool workspace_item_tags(
                     tags_out[tag_count++] = "displaced";
                 }
             } else {
-                /* Primary tag based on most severe divergence
-                 *
-                 * Priority order (by severity):
-                 *   TYPE > CONTENT > STALE/CLAIM_MOVED > MODE/OWNERSHIP/ENCRYPTION
-                 */
+                /* The primary tag, the content's axis: another kind, else other bytes */
                 if (item->divergence & DIVERGENCE_TYPE) {
                     if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                         tags_out[tag_count++] = "type";
@@ -4306,16 +4302,11 @@ bool workspace_item_tags(
                     }
                 }
 
-                /* Secondary tags: the claim axes that differ
-                 *
-                 * MODE: Skip if TYPE divergence present (type change makes mode
-                 *       irrelevant) The condition !((item->divergence &
-                 *       DIVERGENCE_TYPE) && tag_count > 0) prevents MODE from
-                 *       showing when TYPE is the primary tag
-                 * OWNERSHIP: Always show if present
-                 */
-                if ((item->divergence & DIVERGENCE_MODE) &&
-                    !((item->divergence & DIVERGENCE_TYPE) && tag_count > 0)) {
+                /* Secondary tags: the claim axes that differ — never beside [type],
+                 * since a look at another kind than the row's returns before
+                 * the claim is asked (workspace_analyze_file,
+                 * workspace_analyze_directory) */
+                if (item->divergence & DIVERGENCE_MODE) {
                     if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                         tags_out[tag_count++] = "mode";
                     }

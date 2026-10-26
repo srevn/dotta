@@ -1964,7 +1964,10 @@ workspace_items_t workspace_displaced_orphans(
  *      ORPHANED arm carries "displaced" as a rider, ranked where cleanup_verdict
  *      ranks it — after [absent], before the bits — because a displaced orphan
  *      carries no bits at all and the bare arm would colour it as a prune
- *   1. "type" (RED) - File type changed (symlink ↔ regular), most severe
+ *   1. "type" (RED) - Another kind than the row's stands, most severe. The claim
+ *      is never asked of it — each analysis returns at another kind before the
+ *      claim (core/workspace.c workspace_analyze_file, workspace_analyze_directory)
+ *      — so "mode" and "ownership" never ride beside it
  *   2. "modified" (YELLOW) - Disk's bytes are not the ones dotta last confirmed,
  *      nor the row's where it confirmed none: the route says whose — a capture,
  *      a conflict, unconfirmed (workspace_item_route)
@@ -1994,7 +1997,6 @@ workspace_items_t workspace_displaced_orphans(
  * measure, its [type] beside [released].
  *
  * The function handles special cases:
- *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
  *   - ENCRYPTION divergence upgrades color to MAGENTA over every colour but TYPE's
  *     RED, apply-side work's CYAN among them
  *   - ENCRYPTION is the one divergence a row carries where nothing was measured

@@ -10,6 +10,21 @@
  * Everything else — what should stand at a path, from whom — is computed from
  * Git at every load (core/manifest.h) and never stored.
  *
+ * A record holds two kinds of column, and the rule above names the first. What
+ * dotta did or saw at the path — the binding, the kind, the blob it confirmed,
+ * the claim, the stamp — is its own and never derivable: a verdict reads each,
+ * and a column of this kind removed is a verdict changed. What a load derived
+ * there, kept with the key that fixes it — the stat triple behind the content,
+ * and for bytes no base proves the entry a read found disk to be with the head
+ * whose history held none of it (state_stat_t, state_record_t's content group)
+ * — is derivable again at a read's or a walk's price, and is read only where it
+ * spares that read or that walk: a column of this kind removed is the price paid
+ * at every load, and no verdict moved. Git's index keeps both kinds in one entry,
+ * the blob beside the stat data that vouches for it (lib/git/read-cache.c
+ * ie_match_stat), and keeps a negative the same way, which names a directory
+ * holds untracked under its stat and its exclude files' ids (lib/git/dir.h
+ * untracked_cache_dir).
+ *
  * The enabled set is this machine's mount table, one line of fstab per row: the
  * name is what is mounted (the branch — the repository is the device, and knows
  * nothing of where any machine mounts it), the position is the mount order (later
@@ -59,8 +74,9 @@
  *   a parent before everything beneath it, and every key found by a binary search
  *   by strcmp. The getters' ORDER BY is the promise; the storage makes the read
  *   a walk of the table.
- * - Nothing derivable is stored, and nothing no read asks for: the record is
- *   dotta's own and never derivable; the expected side is Git's and lives in Git
+ * - Nothing derivable is stored but what a load keeps under its key, and nothing
+ *   no read asks for: what dotta did at a path is its own and never derivable
+ *   (the two kinds of column, above); the expected side is Git's and lives in Git
  */
 
 #ifndef DOTTA_STATE_H

@@ -186,20 +186,21 @@ typedef enum {
  * ownership", never "permissions", which is one word for two axes. STALE and
  * CLAIM_MOVED are one word: [stale] on a tag (workspace_item_line), and "changed
  * in Git" in a sentence — update's census (cmds/update.c cmd_update), apply's
- * count (cmds/apply.c cmd_apply), diff's status line (cmds/diff.c diff_status_line)
- * — and "changed in Git and on disk" where the route reads both sides moved
- * (CONFLICT, workspace_item_route): update's census, apply's skip label
- * (cmds/apply.c apply_print_deploy_skips), diff's status line and status's
- * Conflicts header (cmds/status.c status_print_workspace). The words are the
- * three-way frame's: Git's side differs from what dotta last saw or left at the
- * path — the record, save the mode of a directory a run could not narrow back
- * (core/deploy.h deploy_working_mode, stated), or a first look where none stands:
- * its claim, or a blob the row's own branch held, which it found disk at. Read
- * as "a commit moved it" they are true of a move of Git's alone, and not of a
- * claim dotta never saw disk stand on, which the record cannot tell apart from
- * one Git moved once the first flush has written what the look found, nor of a
- * blob disk held when dotta first looked, which Git had moved past before it,
- * nor of an owner no host here can name (stated).
+ * count (cmds/apply.c cmd_apply), diff's status line (cmds/diff.c
+ * diff_status_line), which names a claim's axes in the act after it, this one
+ * bit for both axes attributing none — and "changed in Git and on disk" where
+ * the route reads both sides moved (CONFLICT, workspace_item_route): update's
+ * census, apply's skip label (cmds/apply.c apply_print_deploy_skips), diff's
+ * status line and status's Conflicts header (cmds/status.c status_print_workspace).
+ * The words are the three-way frame's: Git's side differs from what dotta last
+ * saw or left at the path — the record, save the mode of a directory a run could
+ * not narrow back (core/deploy.h deploy_working_mode, stated), or a first look
+ * where none stands: its claim, or a blob the row's own branch held, which it
+ * found disk at. Read as "a commit moved it" they are true of a move of Git's
+ * alone, and not of a claim dotta never saw disk stand on, which the record cannot
+ * tell apart from one Git moved once the first flush has written what the look
+ * found, nor of a blob disk held when dotta first looked, which Git had moved
+ * past before it, nor of an owner no host here can name (stated).
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:

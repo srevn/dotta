@@ -170,37 +170,42 @@ static const char *diff_status_line(
                 return "changed in Git (would be deployed by apply)";
             }
 
-            /* A claim Git brings alone, which carries no bytes to name: the axes
-             * apply changes, in the words status tags the same row with
-             * (core/workspace.h divergence_type_t) — both, where both differ,
-             * and the ownership where the mode does not, CLAIM_MOVED riding only
-             * an axis it attributes */
+            /* A claim Git brings alone, which carries no bytes to name: the route's
+             * word, then the axes apply changes, in the words status tags the
+             * same row with (core/workspace.h divergence_type_t) — both, where
+             * both differ, and the ownership where the mode does not, CLAIM_MOVED
+             * riding only an axis it attributes. The axes sit in the act, never
+             * in what moved: one bit for both axes attributes neither, and beside
+             * Git's owner the mode may be the user's, which apply restores all
+             * the same */
             if ((item->divergence & DIVERGENCE_MODE) &&
                 (item->divergence & DIVERGENCE_OWNERSHIP)) {
-                return "mode and ownership would change on apply";
+                return "changed in Git (mode and ownership would change on apply)";
             }
             if (item->divergence & DIVERGENCE_MODE) {
-                return "mode would change on apply";
+                return "changed in Git (mode would change on apply)";
             }
-            return "ownership would change on apply";
+            return "changed in Git (ownership would change on apply)";
 
         case WORKSPACE_ROUTE_KIND:
             /* Another kind the user put there, Git having moved nothing past
-             * it: --force's to replace, a directory only with all it holds. Listed
-             * upstream because status's Conflicts remedy sends the user here to
-             * compare, and hiding it answered that remedy with silence; downstream
-             * leaves out the kind update refuses (stated) */
+             * it, in the words update's census says it: --force's to replace, a
+             * directory only with all it holds. Listed upstream because status's
+             * Conflicts remedy sends the user here to compare, and hiding it
+             * answered that remedy with silence; downstream leaves out the kind
+             * update refuses (stated) */
             return direction == DIFF_UPSTREAM
-                   ? "type would change on apply --force <path> (a directory only if "
-                   "all dotta's)"
+                   ? "a different kind stands on disk (apply --force <path> keeps Git's, "
+                   "a directory only if all dotta's)"
                    : NULL;
 
         case WORKSPACE_ROUTE_KIND_DERIVED:
-            /* The same kind at a rung dotta only passes through, which no plan
-             * holds */
+            /* The same at a rung dotta only passes through, which no plan holds,
+             * so no flag lifts it: the named re-derivation retires the claim,
+             * in the words status's Squatted ancestors header says it */
             return direction == DIFF_UPSTREAM
-                   ? "type would change on apply --force <path> (a directory only if "
-                   "all dotta's)"
+                   ? "a different kind stands at a directory dotta only passes through "
+                   "('dotta update <dir>' re-derives it)"
                    : NULL;
 
         case WORKSPACE_ROUTE_UNCONFIRMED:
@@ -219,37 +224,39 @@ static const char *diff_status_line(
         case WORKSPACE_ROUTE_CAPTURE:
             /* The user's own, over a base: update's to commit. TYPE never rides
              * beside CONTENT or a claim bit — each analysis ends its measure at
-             * another kind — so the word is picked by the bit, the kind first */
+             * another kind — so the word is picked by the bit, the kind first.
+             * An edit of the bytes or of the kind apply keeps, overwriting it
+             * only under --force (core/deploy.h deploy_content_conflicts) */
             if (item->divergence & DIVERGENCE_TYPE) {
                 return direction == DIFF_UPSTREAM
-                       ? "type would change on apply --force <path> (a directory only if "
-                       "all dotta's)"
-                       : "type changed locally";
+                       ? "type changed locally (apply --force <path> keeps Git's)"
+                       : "type changed locally (would be committed by update)";
             }
             if (item->divergence & DIVERGENCE_CONTENT) {
                 return direction == DIFF_UPSTREAM
-                       ? "would be overwritten by apply"
+                       ? "modified locally (apply --force <path> keeps Git's)"
                        : "modified locally (would be committed by update)";
             }
 
             /* A claim alone, named by the axes it differs on in the words status
              * tags the same row with (core/workspace.h divergence_type_t) — both,
-             * where both differ */
+             * where both differ — which apply restores unasked, a claim being
+             * never an edit, and update commits, as status's key for it says */
             if ((item->divergence & DIVERGENCE_MODE) &&
                 (item->divergence & DIVERGENCE_OWNERSHIP)) {
                 return direction == DIFF_UPSTREAM
-                       ? "mode and ownership would change on apply"
-                       : "mode and ownership changed locally";
+                       ? "mode and ownership changed locally (would be restored by apply)"
+                       : "mode and ownership changed locally (would be committed by update)";
             }
             if (item->divergence & DIVERGENCE_MODE) {
                 return direction == DIFF_UPSTREAM
-                       ? "mode would change on apply"
-                       : "mode changed locally";
+                       ? "mode changed locally (would be restored by apply)"
+                       : "mode changed locally (would be committed by update)";
             }
             if (item->divergence & DIVERGENCE_OWNERSHIP) {
                 return direction == DIFF_UPSTREAM
-                       ? "ownership would change on apply"
-                       : "ownership changed locally";
+                       ? "ownership changed locally (would be restored by apply)"
+                       : "ownership changed locally (would be committed by update)";
             }
 
             /* The blob's policy alone: how Git stores the content, not a difference

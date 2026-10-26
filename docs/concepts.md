@@ -72,7 +72,7 @@ dotta add web home/        # the same thing
 dotta add web /            # tracks the machine's root as root
 ```
 
-A tracked home is just a tracked directory: `apply` restores its permissions, `update --include-new` looks inside it for new files, and on scope exit it is released while anything dotta did not put there still stands in it. Once it holds nothing but dotta's own copies, dotta removes it — the same rule every directory gets.
+A tracked home is just a tracked directory: `apply` restores its permissions, `update --include-new` looks inside it for new files, and on scope exit it is released while anything dotta did not put there still stands in it. Once it holds nothing but dotta's own copies, dotta prunes it — the same rule every directory gets.
 
 Ignore patterns cannot exclude a root. A pattern is matched against the stored name with `home/`, `root/` or `custom/` stripped off, and a root's name is just that word, so nothing is left to match. `dotta add web ~ -e '*'` tracks the home directory and nothing inside it. One exception: Git's ignore rules are read where a path physically stands, so a root that a repository around it excludes — a target inside a project's ignored directory — is refused, and no `-e` reaches it; `respect_gitignore = false` is the one way past.
 
@@ -150,7 +150,7 @@ Filesystem (Live System)
 
 **Workspace** -- what dotta finds when it compares the view against the actual filesystem, with the record saying what it last confirmed. This is what `dotta status` reports, and it is worked out when the command runs, so nothing it decides is out of date.
 
-**Apply** -- walks the view and compares each path against disk, deploying only what actually changed: contents, permissions, owner, encryption. A path it lands takes its place whole: dotta's own file or link in its way is replaced, and dotta's own copies beneath a file it lands are cleared — or the path waits, and says why. It then removes or releases the leftovers according to the record, and writes the record for what it did.
+**Apply** -- walks the view and compares each path against disk, deploying only what actually changed: contents, permissions, owner, encryption. A path it lands takes its place whole: dotta's own file or link in its way is replaced, and dotta's own copies beneath a file it lands are cleared — or the path waits, and says why. It then prunes or releases the leftovers according to the record, and writes the record for what it did.
 
 This design gives:
 

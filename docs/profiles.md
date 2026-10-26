@@ -31,7 +31,7 @@ dotta profile list
 dotta profile list --all
 ```
 
-Enabling a profile puts its files in play: dotta now expects them on disk, and a higher profile still wins any path they share, or one beneath a file of its own (see [Layering and Precedence](#layering-and-precedence)). Disabling takes them back out: at the next `apply`, a path a lower profile also holds falls back to it, a file dotta deployed is removed where unchanged, and one it only found there is left alone, under the [usual cleanup rules](concepts.md#the-view-and-the-record). Both end by naming `dotta apply` when it has work to do, and `dotta apply --dry-run` shows what that work is.
+Enabling a profile puts its files in play: dotta now expects them on disk, and a higher profile still wins any path they share, or one beneath a file of its own (see [Layering and Precedence](#layering-and-precedence)). Disabling takes them back out: at the next `apply`, a path a lower profile also holds falls back to it, a file dotta deployed is pruned where unchanged, and one it only found there is left alone, under the [usual cleanup rules](concepts.md#the-view-and-the-record). Both end by naming `dotta apply` when it has work to do, and `dotta apply --dry-run` shows what that work is.
 
 `enable`, `disable`, `reorder` and `fetch` also work without the `profile` in front of them: `dotta enable global` is `dotta profile enable global`.
 
@@ -100,7 +100,7 @@ dotta add web --target ~/jail ~/jail   # tracks the jail as custom
 dotta add web custom/                  # the same thing
 ```
 
-It then behaves like any [added directory](concepts.md#directories): `apply` creates it and restores its permissions, `update --include-new` scans it, and disabling the profile removes it once nothing but dotta's own copies is left inside. A target that is a symlink is stored as the link instead — name what is inside it to track the directory it points at.
+It then behaves like any [added directory](concepts.md#directories): `apply` creates it and restores its permissions, `update --include-new` scans it, and once the profile is disabled, `apply` prunes it when nothing but dotta's own copies is left inside. A target that is a symlink is stored as the link instead — name what is inside it to track the directory it points at.
 
 **To move the `custom/` files**, run `dotta profile enable <name> --target <new>`. The next `apply` deploys them at the new target and cleans up the old copies under the [usual cleanup rules](concepts.md#the-view-and-the-record).
 

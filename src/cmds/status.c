@@ -760,15 +760,17 @@ static void status_print_workspace(
      * copies other machines' deletions left among them. `add --force` keeps disk's
      * bytes and not its kind: a kind change is a re-shaping of the tree and add
      * refuses it by the claim standing at the path, naming `dotta remove`
-     * (cmds/add.c), which stops tracking the path and keeps the file. */
+     * (cmds/add.c), which stops tracking the path and keeps the file. It is spelled
+     * whole, the profile before the path: add reads its first word as the profile,
+     * so a path typed alone leaves it none (cmds/add.c add_post_parse). */
     if (conflicts.count > 0) {
         output_list_t *list = output_list_create(
             out, "Conflicts",
             "changed in Git and on disk, or a different kind stands on disk; "
             "\"dotta diff\" to compare, \"dotta apply --force <path>\" to "
-            "keep Git's (a directory only if all dotta's), \"dotta add --force\" "
-            "to keep disk's bytes when the kind matches, \"dotta remove\" to stop "
-            "tracking it"
+            "keep Git's (a directory only if all dotta's), \"dotta add --force "
+            "<profile> <path>\" to keep disk's bytes when the kind matches, "
+            "\"dotta remove\" to stop tracking it"
         );
 
         for (size_t i = 0; i < conflicts.count; i++) {
@@ -791,15 +793,15 @@ static void status_print_workspace(
      * way out unqualified: every row is a file row with a regular file or a link
      * standing — a directory row and every other kind answer at KIND, above —
      * which `add --force` captures, a link being a file to add's kind test
-     * (cmds/add.c), and `apply --force` replaces. No key: the header is true of
-     * every line. */
+     * (cmds/add.c), spelled whole as the Conflicts header spells it, and `apply
+     * --force` replaces. No key: the header is true of every line. */
     if (unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
             "differs from the profile, and is not confirmed by dotta; "
             "\"dotta diff\" to compare, \"dotta apply --force <path>\" to "
-            "keep Git's, \"dotta add --force\" to keep disk's, \"dotta remove\" "
-            "to stop tracking it"
+            "keep Git's, \"dotta add --force <profile> <path>\" to keep disk's, "
+            "\"dotta remove\" to stop tracking it"
         );
 
         for (size_t i = 0; i < unconfirmed.count; i++) {

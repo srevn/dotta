@@ -1393,13 +1393,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * matches, refusing a change across file and directory; apply --force
          * replaces a directory only with all it holds, which no load reads
          * (core/deploy.c check_clearance), and is named with its path, for the
-         * reasons that header gives */
+         * reasons that header gives; add is spelled whole, as that header spells
+         * it */
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
             "'dotta apply --force <path>' keeps Git's (a directory only if all dotta's), "
-            "'dotta add --force' keeps disk's when the kind matches, 'dotta remove' "
-            "stops tracking %s",
+            "'dotta add --force <profile> <path>' keeps disk's when the kind matches, "
+            "'dotta remove' stops tracking %s",
             refused[WORKSPACE_ROUTE_CONFLICT],
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "it" : "them"
@@ -1441,12 +1442,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         /* Bytes no base proves: the capture would commit what nobody has shown
          * is the user's over the profile's. The status Unconfirmed header's own
          * words, each way out unqualified: every such row is a file row with a
-         * file or a link standing, which add captures and apply --force replaces */
+         * file or a link standing, which add captures and apply --force replaces,
+         * each spelled as that header spells it */
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: not confirmed by dotta — 'dotta diff' compares, "
-            "'dotta apply --force <path>' keeps Git's, 'dotta add --force' keeps "
-            "disk's, 'dotta remove' stops tracking %s",
+            "'dotta apply --force <path>' keeps Git's, 'dotta add --force <profile> "
+            "<path>' keeps disk's, 'dotta remove' stops tracking %s",
             refused[WORKSPACE_ROUTE_UNCONFIRMED],
             refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "it" : "them"

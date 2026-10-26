@@ -362,13 +362,13 @@ typedef struct manifest manifest_t;
  * Each profile is read at its branch's head, once: the commit whose tree its
  * claims come from, its id kept beside them (manifest_head), so the rows and
  * the head are one read of the ref. A profile whose branch does not exist
- * contributes no rows; the scope layer already warns about the dead branch on
- * every run, and the workspace reads that profile's records as orphans. The unbound
- * claim is the dead branch's sibling at claim scale: this machine cannot place
- * it, and the build says so as data, not failure. Only those two questions are
- * tolerant: a branch that exists but cannot be loaded (corrupt object, I/O) still
- * fails the build, as do a failed lookup and metadata that will not parse — those
- * stay retryable errors, never silent omissions.
+ * contributes no rows and is listed among the missing (manifest_missing), which
+ * the health commands say, and the workspace reads that profile's records as
+ * orphans. The unbound claim is the dead branch's sibling at claim scale: this
+ * machine cannot place it, and the build says so as data, not failure. Only those
+ * two questions are tolerant: a branch that exists but cannot be loaded (corrupt
+ * object, I/O) still fails the build, as do a failed lookup and metadata that
+ * will not parse — those stay retryable errors, never silent omissions.
  *
  * Per profile, in order: the claims its walk shows (core/profiles.h profile_walk)
  * — the tree's blobs first, then the DIRECTORY items of its metadata.json — are
@@ -520,16 +520,18 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * with one list.
  *
  * Readers: the scope, which borrows it as its enabled set and lends it on
- * (core/scope.c scope_build, core/scope.h scope_enabled); the untracked scan's
- * registration (core/workspace.c workspace_analyze_untracked), where a later
- * profile's tracked directory takes a directory an earlier one stands at, the
- * index's own rule read from the same order; add's ancestry refusal, which asks
- * every profile but the capturing one for its claim at a link (cmds/add.c
- * add_refuse_ancestry); update's named derivation, which asks every profile for
- * an explicit claim where the user's node squats above a leaf (cmds/update.c
- * cmd_update); and update's preview, which asks every profile but the deleting
- * one, the highest first, for its claim where a deletion leaves a path
- * (cmds/update.c update_print_preview).
+ * (core/scope.c scope_build, core/scope.h scope_enabled); show's and list's file
+ * arms, which refuse the set they search when it is empty (cmds/show.c cmd_show,
+ * cmds/list.c list_file_history); the untracked scan's registration
+ * (core/workspace.c workspace_analyze_untracked), where a later profile's tracked
+ * directory takes a directory an earlier one stands at, the index's own rule
+ * read from the same order; add's ancestry refusal, which asks every profile
+ * but the capturing one for its claim at a link (cmds/add.c add_refuse_ancestry);
+ * update's named derivation, which asks every profile for an explicit claim where
+ * the user's node squats above a leaf (cmds/update.c cmd_update); and update's
+ * preview, which asks every profile but the deleting one, the highest first,
+ * for its claim where a deletion leaves a path (cmds/update.c
+ * update_print_preview).
  *
  * Pure value return — no allocation, no error path. The set and its names are
  * the arena's, each name the same pointer its rows carry, valid for the arena's
@@ -580,7 +582,8 @@ const git_oid *manifest_head(const manifest_t *manifest, const char *profile);
  * add's label receipt, its let-go and its ancestry refusal (cmds/add.c
  * add_print_labels, add_write_record, add_refuse_ancestry), each of which builds
  * a view of its own and reads the table back from it rather than beside it. Show
- * and list build one too and ask it nothing: their arm reads the view by key alone.
+ * and list build one too and ask it nothing: their arm asks the view its set
+ * and the row an argument names, by key alone (core/scope.h scope_resolve_claim).
  *
  * Pure value return — no allocation, no error path.
  *
@@ -959,8 +962,9 @@ bool manifest_active_beneath(const manifest_t *manifest, const char *path);
  * (manifest_holds_row): the layer's rung stands under a name no profile holds,
  * and is no holder.
  *
- * Linear scan, once per command. Readers: cmds/show.c cmd_show and cmds/list.c
- * list_file_history, each without a profile.
+ * Linear scan, once per command. Reader: the claim a file argument names in the
+ * enabled set, by name (core/scope.h scope_resolve_claim) — show's and list's,
+ * each without a profile.
  *
  * @param arena Arena the refusal's holders are joined in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

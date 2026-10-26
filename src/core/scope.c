@@ -104,7 +104,7 @@ error_t scope_build(
 }
 
 /* -------------------------------------------------------------------- */
-/* The enabled set as a value                                           */
+/* The enabled set, and the questions asked of it                       */
 /* -------------------------------------------------------------------- */
 
 error_t scope_resolve_enabled(
@@ -308,6 +308,36 @@ error_t scope_resolve_range(
     return error_create(
         ERR_VALIDATION, "Commits belong to different profiles ('%s' and '%s')",
         holder1, holder2
+    );
+}
+
+error_t scope_resolve_claim(
+    const manifest_t *view, const path_input_t *arg, arena_t *arena,
+    const manifest_row_t **out_row
+) {
+    CHECK_NULL(view);
+    CHECK_NULL(arg);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_row);
+
+    /* Asked in the key the argument names: a path is the row standing there, a
+     * name its one holder — or, held once per binding, the refusal naming each */
+    error_t err = NULL;
+    switch (arg->key) {
+        case PATH_KEY_FILESYSTEM:
+            *out_row = manifest_lookup(view, arg->filesystem_path);
+            break;
+
+        case PATH_KEY_STORAGE:
+            err = manifest_holder(arena, view, arg->storage_path, out_row);
+            break;
+    }
+    if (err || *out_row) return err;
+
+    /* None: the view's absence, every enabled profile's, the argument in its key */
+    return error_create(
+        ERR_NOT_FOUND, "'%s' not found in any enabled profile",
+        arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path
     );
 }
 

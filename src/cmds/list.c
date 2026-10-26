@@ -24,6 +24,7 @@
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
+#include "core/scope.h"
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
@@ -756,28 +757,28 @@ static error_t list_file_history(
         }
     } else {
         /* The owner is the view's: the enabled set at HEAD, precedence resolved,
-         * asked in the key the argument names. A path is one row, the winner
-         * standing there whatever its name. A name keys within one profile, so
-         * the view may hold it once (home/, root/, or one binding), or once per
-         * binding under custom/ — and then no profile is the answer, and the
-         * view's refusal names each holder with the path that tells them apart
-         * (core/manifest.h manifest_holder). The view is the arena's. */
+         * which holds the set it was built from. The view is the arena's. */
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
 
-        const manifest_row_t *row = NULL;
-        if (arg.key == PATH_KEY_FILESYSTEM) {
-            row = manifest_lookup(manifest, arg.filesystem_path);
-        } else {
-            err = manifest_holder(ctx->arena, manifest, arg.storage_path, &row);
-            if (err) return err;
-        }
-        if (!row) {
-            return error_create(
-                ERR_NOT_FOUND, "File '%s' not found in enabled profiles", opts->file_path
+        /* Nowhere to search: refused as show refuses it — the fact the set's
+         * own words, the way through this command's — over the set the view was
+         * built from, the one searched below */
+        err = scope_require_enabled(state, manifest_profiles(manifest), ctx->arena);
+        if (err) {
+            return error_wrap(
+                err, "Cannot search for '%s'; -p searches a profile by name",
+                arg.key == PATH_KEY_FILESYSTEM ? arg.filesystem_path : arg.storage_path
             );
         }
+
+        /* The claim the argument names there, in its key: the row standing at a
+         * path, a name's one holder (core/scope.h scope_resolve_claim) */
+        const manifest_row_t *row = NULL;
+        err = scope_resolve_claim(manifest, &arg, ctx->arena, &row);
+        if (err) return err;
+
         /* The winner names both halves: whose claim stands there, and what it
          * is called — the row is that profile's own, so there is nothing to look
          * up again in the profile. */

@@ -179,12 +179,12 @@ static error_t revert_select_profile(
     /* Each profile loaded once and asked in the key the argument named, and each
      * that holds it what its head's tree holds at its own name for it — the entry
      * the read meets there (cmd_revert step 11). The question is every local
-     * profile's, not the enabled set's, whose holder the view answers
-     * (core/manifest.h manifest_holder: show, list). A profile names a path once
-     * and holds a name once, so each answers once at most. Two are kept as
-     * themselves — the first holder, and the first a file can be restored into
-     * — and each that can is spelled as found, beside its own name for the
-     * argument, which is all the refusal for several reads. */
+     * profile's, not the enabled set's, whose claim the view answers (core/scope.h
+     * scope_resolve_claim: show, list). A profile names a path once and holds a
+     * name once, so each answers once at most. Two are kept as themselves — the
+     * first holder, and the first a file can be restored into — and each that
+     * can is spelled as found, beside its own name for the argument, which is
+     * all the refusal for several reads. */
     const char *holder = NULL;
     const char *restorable = NULL;
     string_array_t holders;

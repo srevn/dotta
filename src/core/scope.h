@@ -6,15 +6,18 @@
  *
  *   - off the view, which lends the set it was built from (core/manifest.h
  *     manifest_profiles): a scope borrows it (scope_build) and lends it on
- *     (scope_enabled);
- *   - without it, for a command that builds no scope: scope_resolve_enabled reads
- *     the state's rows and asks Git which branches stand.
+ *     (scope_enabled), and a command that holds the view and no scope reads it
+ *     there;
+ *   - without it: scope_resolve_enabled reads the state's rows and asks Git which
+ *     branches stand.
  *
- * The questions asked of the set take it as a value, whichever way it was read:
- * the refusal an empty set earns (scope_require_enabled), and which of the set
- * holds a commit (scope_resolve_commit, scope_resolve_range). The commands that
- * build no scope would give one nothing but the set to carry: each one's -p names
- * any local profile, enabled or not, and never reads the set.
+ * The questions asked of the set take what they read, whichever way the set was
+ * read: the refusal an empty set earns (scope_require_enabled) and which of the
+ * set holds a commit (scope_resolve_commit, scope_resolve_range) take the set
+ * as a value, and the claim a file argument names (scope_resolve_claim) takes
+ * the set's view, precedence resolved. The commands that build no scope would
+ * give one nothing but the set to carry: each one's -p names any local profile,
+ * enabled or not, and never reads the set.
  *
  * A scope answers, for a command that holds the view, "what subset of the view
  * — every enabled profile at its head, precedence resolved — does this invocation
@@ -80,13 +83,16 @@
 #include <stdbool.h>
 #include <types.h>
 
+#include "infra/path.h"
 #include "infra/pathspec.h"
 
-/* Forward decls: manifest_t's and state_t's full APIs live in core/manifest.h
- * and core/state.h. scope reads the view's profiles and the state's enabled rows
- * alone, so the header stays free of both dependencies. C11 §6.7p3 permits
- * typedef-name redeclaration. */
+/* Forward decls: the view's and the state's full APIs live in core/manifest.h
+ * and core/state.h. scope reads the view — its set, and its row for an argument
+ * — and the state's enabled rows alone, so the header names the three types and
+ * stays free of both dependencies. C11 §6.7p3 permits typedef-name
+ * redeclaration. */
 typedef struct manifest manifest_t;
+typedef struct manifest_row manifest_row_t;
 typedef struct state state_t;
 
 /**
@@ -152,7 +158,7 @@ error_t scope_build(
 );
 
 /* -------------------------------------------------------------------- */
-/* The enabled set as a value                                           */
+/* The enabled set, and the questions asked of it                       */
 /* -------------------------------------------------------------------- */
 
 /**
@@ -166,10 +172,11 @@ error_t scope_build(
  * reader decides what an empty set means to it, and words it through
  * scope_require_enabled, which tells the two apart.
  *
- * Readers: the commands that read the enabled set and build no scope — cmds/show.c
- * cmd_show, cmds/ignore.c ignore_test and cmds/bootstrap.c cmd_bootstrap. A command
- * that builds one borrows the same set off the view (core/manifest.h
- * manifest_profiles, through scope_build).
+ * Readers: show's commit search (cmds/show.c cmd_show), cmds/bootstrap.c
+ * cmd_bootstrap, and cmds/ignore.c ignore_test, for either key it takes. A command
+ * that holds the view reads the same set off it (core/manifest.h
+ * manifest_profiles): the scope it builds borrows it (scope_build), and show's
+ * and list's file arms ask it there.
  *
  * Asks each enabled branch whether it is here (sys/gitops.h gitops_branch_exists)
  * and loads no tree.
@@ -194,15 +201,16 @@ error_t scope_resolve_enabled(
  * The refusal an empty enabled set earns, or NULL where it holds a profile
  *
  * `enabled` is the set a command reads: the enabled rows whose branch is here —
- * the view's (core/manifest.h manifest_profiles, through scope_enabled) or the
- * resolver's (scope_resolve_enabled). Empty, it is one of two facts, and the
- * rows say which: none is enabled, or each one is and Git holds no branch for
- * it — a row whose branch is here is in the set, since both producers drop a
- * row only on a proven absence and fail on every other answer.
+ * the view's (core/manifest.h manifest_profiles, asked there or through
+ * scope_enabled) or the resolver's (scope_resolve_enabled). Empty, it is one of
+ * two facts, and the rows say which: none is enabled, or each one is and Git
+ * holds no branch for it — a row whose branch is here is in the set, since both
+ * producers drop a row only on a proven absence and fail on every other answer.
  *
- * Readers: cmds/update.c cmd_update, cmds/sync.c cmd_sync and cmds/show.c cmd_show
- * refuse with it; cmds/diff.c cmd_diff, cmds/bootstrap.c cmd_bootstrap and
- * cmds/ignore.c ignore_test warn it and go on.
+ * Readers: cmds/update.c cmd_update, cmds/sync.c cmd_sync, cmds/show.c cmd_show
+ * — its commit search and its file search — and cmds/list.c list_file_history
+ * refuse with it, each the set it searches or acts on; cmds/diff.c cmd_diff,
+ * cmds/bootstrap.c cmd_bootstrap and cmds/ignore.c ignore_test warn it and go on.
  *
  * @param state State handle (must not be NULL): its enabled rows
  * @param enabled The set the command reads (must not be NULL)
@@ -314,6 +322,46 @@ error_t scope_resolve_range(
     git_commit **out_commit1,
     git_commit **out_commit2,
     const char **out_profile
+);
+
+/**
+ * The claim a file argument names in the enabled set: the view's row for it
+ *
+ * Asked of the set's view (core/manifest.h manifest_build) — every enabled profile
+ * at its head, precedence resolved — in the key the argument names (infra/path.h):
+ * a path is the row standing there, whatever its name and whoever holds it, the
+ * layer's rung among them, a directory no document holds (core/manifest.c
+ * manifest_layer); a name keys within one profile, so the view holds it once —
+ * under home/ or root/, or one binding — or once per binding under custom/, and
+ * then no profile is the answer: the refusal names each holder with the path
+ * that tells them apart (core/manifest.h manifest_holder), returned as it is.
+ *
+ * Absence is every enabled profile's, as the commit search's is: ERR_NOT_FOUND,
+ * "'<x>' not found in any enabled profile", <x> the argument in its key — the
+ * path, or the name with its directory spelling shed — the set's half of the
+ * sentence one profile's absence says (core/profiles.h profile_held_kind_t).
+ * The view answers what stands, so a claim an enabled profile holds that stands
+ * nowhere here — one this machine cannot place, one its profile did not keep,
+ * one beneath another profile's blob — is absent all the same, and -p reads a
+ * profile's own claims. An empty set is that same absence; both readers refuse
+ * an empty enabled set in their own words before they ask.
+ *
+ * Readers: cmds/show.c cmd_show and cmds/list.c list_file_history, each without
+ * a profile. With one, the profile names the argument itself (core/manifest.h
+ * manifest_claim_name).
+ *
+ * @param view The enabled set's view (must not be NULL)
+ * @param arg The argument, read (must not be NULL; infra/path.h path_input_resolve)
+ * @param arena Arena a refusal's holders are joined in (must not be NULL)
+ * @param out_row The row, borrowed from the view (must not be NULL; NULL beside
+ *                a refusal)
+ * @return Error or NULL on success
+ */
+error_t scope_resolve_claim(
+    const manifest_t *view,
+    const path_input_t *arg,
+    arena_t *arena,
+    const manifest_row_t **out_row
 );
 
 /* -------------------------------------------------------------------- */

@@ -544,9 +544,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         }
 
         if (bootstrap_found.count > 0) {
-            output_section(
-                out, OUTPUT_NORMAL, "Bootstrap scripts available"
-            );
+            /* The scripts found, under the title every listing of them takes
+             * (utils/bootstrap.h bootstrap_spec_t) */
+            output_section(out, OUTPUT_NORMAL, "Found bootstrap scripts");
             for (size_t i = 0; i < bootstrap_found.count; i++) {
                 output_print(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} %s/%s\n",

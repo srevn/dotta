@@ -36,7 +36,9 @@
  *   profiles       The profiles whose scripts run, in execution order: the
  *                  caller's listing, every one of which has a .bootstrap script
  *                  (sys/bootstrap.h bootstrap_exists) — the set the caller showed
- *                  before asking to run it.
+ *                  before asking to run it, titled "Found bootstrap scripts"
+ *                  wherever it is listed (cmds/bootstrap.c bootstrap_run,
+ *                  cmds/clone.c cmd_clone).
  *   dry_run        True: check each script — its shebang validated in memory —
  *                  and report "would execute". No /tmp write, no process spawn,
  *                  no side effects.

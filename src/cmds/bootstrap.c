@@ -290,7 +290,8 @@ static error_t bootstrap_run(
         return NULL;
     }
 
-    /* Display what will be executed */
+    /* The scripts found, under the title every listing of them takes
+     * (utils/bootstrap.h bootstrap_spec_t) */
     output_section(out, OUTPUT_NORMAL, "Found bootstrap scripts");
     for (size_t i = 0; i < found.count; i++) {
         output_print(

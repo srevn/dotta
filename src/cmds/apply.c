@@ -70,6 +70,53 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
 }
 
 /**
+ * A consent skip's label at its row's own path, in its route's word
+ * (core/workspace.h workspace_route_t, the words on screen)
+ *
+ * One producer for the two reasons --force lifts there, so a kind and an edit
+ * read alike wherever they route alike: deploy keeps the decision, the route
+ * the characterization (workspace_item_route). What moved is the route's — both
+ * sides, Git's alone, a kind the copy cannot commit, bytes no base proves — and
+ * the capture's is the bit's, the kind first: TYPE never rides beside CONTENT,
+ * each analysis ending its measure at another kind. Readers:
+ * apply_print_deploy_skips' TYPE line at the row's own path, and its CONTENT
+ * line. A reader not on this list is a bug.
+ */
+static const char *apply_route_label(const workspace_item_t *item) {
+    switch (workspace_item_route(item)) {
+        case WORKSPACE_ROUTE_CONFLICT:
+            return "changed in Git and on disk";
+        case WORKSPACE_ROUTE_STALE:
+            /* A TYPE skip's alone: dotta's own directory, which Git retyped,
+             * held back by a copy beneath it that only --force removes */
+            return "changed in Git";
+        case WORKSPACE_ROUTE_KIND:
+            return "a different kind";
+        case WORKSPACE_ROUTE_UNCONFIRMED:
+            return "unconfirmed";
+        case WORKSPACE_ROUTE_CAPTURE:
+            return (item->divergence & DIVERGENCE_TYPE)
+                ? "type changed locally" : "modified locally";
+        case WORKSPACE_ROUTE_CLEAN:
+        case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+        case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+        case WORKSPACE_ROUTE_DISPLACED_STALE:
+        case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
+        case WORKSPACE_ROUTE_UNVERIFIABLE:
+        case WORKSPACE_ROUTE_KIND_DERIVED:
+        case WORKSPACE_ROUTE_REASSIGNED:
+            break;
+    }
+
+    /* A failed look is UNREADABLE's skip, a derived rung is never planned, a
+     * clean or reassigned row is no work, and a row beneath a squatter takes
+     * the squatter's ancestor (core/deploy.c check_ancestry) */
+    CHECK_ARG(
+        false, "a consent skip at its row's own path routes where consent waits"
+    );
+}
+
+/**
  * Print the deploy skips: what the run will not do, and why
  *
  * The skips are reported and the run goes on: the verdicts already exclude them,
@@ -91,24 +138,34 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
  * not writable, or not readable, by the bits there. The row-fact reasons read
  * the way cleanup's skip block three lines away reads: a short label, then the
  * profile whose claim goes undelivered — red where content or type moved away
- * from the row, yellow where dotta cannot vouch for what stands there. A CONTENT
- * label reads the row's route (workspace_item_route — one producer for the
- * characterization; deploy keeps its decision): modified locally where only disk
- * moved, changed in Git and on disk where both sides did, unconfirmed where no
- * base proves either. An UNREADABLE label reads the item's fault the same way
- * (apply_fault_label — locked, unreadable, or the plain "cannot verify"). Every
- * skip carries its row's item (deploy_skip_t), and both reasons are path rungs,
- * asked only where the ancestry did not answer, so each reads a look at the row's
- * own path — a CONTENT one DEPLOYED, since no path bit survives absence, which
- * makes the route read total here. A TYPE whose clearance met a copy only --force
- * removes names that copy after the profile, and why (apply_consent_label).
+ * from the row, yellow where dotta cannot vouch for what stands there. The two
+ * reasons --force lifts read the row's route at its own path, a kind as an edit
+ * (apply_route_label — one producer for the characterization; deploy keeps its
+ * decision): modified locally, or type changed locally, where only disk moved
+ * over a base, changed in Git and on disk where both sides did, unconfirmed where
+ * no base proves either, a different kind where the copy cannot commit what stands,
+ * and changed in Git where Git alone moved and a copy beneath the row holds it
+ * back. An UNREADABLE label reads the item's fault the same way (apply_fault_label
+ * — locked, unreadable, or the plain "cannot verify"). Every skip carries its
+ * row's item (deploy_skip_t), and at a row's own path the three are path rungs,
+ * asked only where the ancestry did not answer, so each reads a look at that
+ * path — a TYPE or a CONTENT one DEPLOYED, something standing there and no path
+ * bit surviving absence, which makes the route read total here. A TYPE whose
+ * clearance met a copy only --force removes names that copy after the profile,
+ * and why (apply_consent_label).
  *
  * Dotta's node above rows the run keeps carries no row (core/deploy.h
  * deploy_skip_reason_t: its two reasons). Its PERMISSION reads the landing's
  * sentence, as a row's does; its TYPE says where it stands — in the way of the
  * paths beneath it — and why only --force replaces it, off its own measure
- * (apply_consent_label). The rows beneath it follow it, each in its class's
- * sentence naming it.
+ * (apply_consent_label). The rows beneath a squatter follow it, each in its class
+ * (core/deploy.c check_ancestry): beneath one the run skipped for --force (TYPE),
+ * the displaced class's predicate, the squatter named by its path — not looked
+ * at, beneath it (core/workspace.h workspace_displaced_t) — its own line above
+ * saying why it stays and naming the remedy for both; beneath any other (ANCESTOR),
+ * the landing's sentence, the squatter not a directory — the one line that names
+ * it where the run gives the squatter no fate, out of its scope or a rung no
+ * plan holds.
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each a way out one of its rows has, gated by what is actually present — the
@@ -269,12 +326,17 @@ static void apply_print_deploy_skips(
                         apply_consent_label(s->item)
                     );
                 } else if (s->ancestor) {
+                    /* Beneath a squatter the run skipped, its class taken: the
+                     * displaced class's predicate, the squatter by its path,
+                     * its own line above */
                     output_colored(
-                        out, row_level, OUTPUT_COLOR_RED, "(wrong type at %.*s from ",
+                        out, row_level, OUTPUT_COLOR_RED, "(not looked at, beneath %.*s from ",
                         (int) s->ancestor, path
                     );
                 } else {
-                    output_colored(out, row_level, OUTPUT_COLOR_RED, "(wrong type from ");
+                    output_colored(
+                        out, row_level, OUTPUT_COLOR_RED, "(%s from ", apply_route_label(s->item)
+                    );
                 }
                 output_print(out, row_level, "{cyan}%s{reset}", s->item->profile);
                 if (s->blocker.item) {
@@ -290,14 +352,10 @@ static void apply_print_deploy_skips(
             }
 
             case DEPLOY_SKIP_CONTENT: {
-                const workspace_route_t route = workspace_item_route(s->item);
-
                 output_colored(out, row_level, OUTPUT_COLOR_RED, "  ✗");
                 output_print(out, row_level, " %s%s ", path, path_kind_suffix(s->item->item_kind));
                 output_colored(
-                    out, row_level, OUTPUT_COLOR_RED, "(%s from ", route == WORKSPACE_ROUTE_CONFLICT
-                    ? "changed in Git and on disk" : route == WORKSPACE_ROUTE_UNCONFIRMED
-                    ? "unconfirmed" : "modified locally"
+                    out, row_level, OUTPUT_COLOR_RED, "(%s from ", apply_route_label(s->item)
                 );
                 output_print(out, row_level, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, row_level, OUTPUT_COLOR_RED, ")\n");
@@ -2991,8 +3049,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * saw or left — a file's bytes, kind or claim, a directory's kind or claim.
      * [stale] alone the plan brings like any other divergence; beside [modified]
      * preflight reports it, a conflict or bytes no base proves, as its skip label
-     * says (apply_print_deploy_skips). Released files are covered by the
-     * orphan-prune summary below.
+     * says (apply_route_label). Released files are covered by the orphan-prune
+     * summary below.
      *
      * The item's fact and not the plan's — the plan says what the run does, the
      * item says why — so the plan's pending items are walked once more, each

@@ -186,21 +186,21 @@ typedef enum {
  * ownership", never "permissions", which is one word for two axes. STALE and
  * CLAIM_MOVED are one word: [stale] on a tag (workspace_item_line), and "changed
  * in Git" in a sentence — update's census (cmds/update.c cmd_update), apply's
- * count (cmds/apply.c cmd_apply), diff's status line (cmds/diff.c
- * diff_status_line), which names a claim's axes in the act after it, this one
- * bit for both axes attributing none — and "changed in Git and on disk" where
- * the route reads both sides moved (CONFLICT, workspace_item_route): update's
- * census, apply's skip label (cmds/apply.c apply_print_deploy_skips), diff's
- * status line and status's Conflicts header (cmds/status.c status_print_workspace).
- * The words are the three-way frame's: Git's side differs from what dotta last
- * saw or left at the path — the record, save the mode of a directory a run could
- * not narrow back (core/deploy.h deploy_working_mode, stated), or a first look
- * where none stands: its claim, or a blob the row's own branch held, which it
- * found disk at. Read as "a commit moved it" they are true of a move of Git's
- * alone, and not of a claim dotta never saw disk stand on, which the record cannot
- * tell apart from one Git moved once the first flush has written what the look
- * found, nor of a blob disk held when dotta first looked, which Git had moved
- * past before it, nor of an owner no host here can name (stated).
+ * count (cmds/apply.c cmd_apply) and skip label (cmds/apply.c apply_route_label),
+ * diff's status line (cmds/diff.c diff_status_line), which names a claim's axes
+ * in the act after it, this one bit for both axes attributing none — and "changed
+ * in Git and on disk" where the route reads both sides moved (CONFLICT,
+ * workspace_item_route): update's census, apply's skip label, diff's status line
+ * and status's Conflicts header (cmds/status.c status_print_workspace). The words
+ * are the three-way frame's: Git's side differs from what dotta last saw or left
+ * at the path — the record, save the mode of a directory a run could not narrow
+ * back (core/deploy.h deploy_working_mode, stated), or a first look where none
+ * stands: its claim, or a blob the row's own branch held, which it found disk
+ * at. Read as "a commit moved it" they are true of a move of Git's alone, and
+ * not of a claim dotta never saw disk stand on, which the record cannot tell
+ * apart from one Git moved once the first flush has written what the look found,
+ * nor of a blob disk held when dotta first looked, which Git had moved past before
+ * it, nor of an owner no host here can name (stated).
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -323,7 +323,12 @@ typedef enum {
  * a displaced orphan), and where the squatter is dotta's own copy the first two
  * add its state in the squatter's own words — "changed in Git", "changed in Git
  * and on disk"; the Displaced paths header, where the word is grounded, spells
- * the squatter out instead.
+ * the squatter out instead; and apply's label for a row beneath a squatter it
+ * skipped names the squatter by its path, "not looked at, beneath <dir>", the
+ * squatter's own line listed above it (cmds/apply.c apply_print_deploy_skips).
+ * A landing's reason is no such sentence: it names the way, never the look, and
+ * apply's ANCESTOR says the squatter "is not a directory" — the one line that
+ * names it where the run gives the squatter no fate.
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
@@ -1201,11 +1206,34 @@ typedef struct {
  *                                  reads back as one line per refusing arm —
  *                                  the one reader the compiler does not hold to
  *                                  the table: a new arm needs its line there
- *   apply's CONTENT skip label     CONFLICT, UNCONFIRMED
+ *   apply's skip label             CONFLICT, STALE, KIND, UNCONFIRMED, CAPTURE:
+ *                                  a TYPE or a CONTENT skip's at its row's own
+ *                                  path (cmds/apply.c apply_route_label)
  *   apply's disk-wins closer       CAPTURE: update's verb where every CONTENT
  *                                  skip reads it, add --force's otherwise
  *   diff's status line             every arm, both directions: the row's line,
  *                                  or none where the direction lists nothing
+ *
+ * The words on screen, beside the bindings this table does not repeat — the frame's
+ * for CONFLICT and STALE (divergence_type_t), the squatter's for the four DISPLACED
+ * arms (workspace_displaced_t), the failed look's for UNVERIFIABLE
+ * (workspace_fault_t). A sentence says the route, a tag the bit: [type] stands
+ * beside every arm a kind reaches.
+ *   KIND           "a different kind stands on disk" — status's Conflicts header,
+ *                  update's census, diff's status line — and "a different kind"
+ *                  on apply's skip label
+ *   KIND_DERIVED   "a different kind stands at a directory dotta only passes
+ *                  through" — status's Squatted ancestors header, update's census,
+ *                  diff's status line
+ *   UNCONFIRMED    "not confirmed by dotta" — status's Unconfirmed paths header,
+ *                  update's census, diff's status line — and "unconfirmed" on
+ *                  apply's skip label; the sentence is apply_consent_label's
+ *                  too, of an orphan whose record confirmed no bytes: the same
+ *                  fact, read off no route (cmds/apply.c)
+ *   CAPTURE        what moved, by the bit, the kind first — "type changed
+ *                  locally", "modified locally", "<axes> changed locally" — diff's
+ *                  status line; the first two on apply's skip label, a claim
+ *                  waiting on no consent
  *
  * The route is the first arm its ladder reaches (workspace_item_route), so a
  * multi-bit divergence routes under the reason the ladder meets first: the

@@ -433,17 +433,19 @@ static inline deploy_clearance_t deploy_clearance(const workspace_item_t *item) 
  * own fields (cmds/apply.c apply_print_deploy_skips): the ancestor it names
  * (PERMISSION, ANCESTOR, a TYPE or an OWNERSHIP that names one), the path a
  * clearance names at the row's path or beneath it (OCCUPIED, a clearance's
- * PERMISSION and UNREADABLE, and a TYPE its edit holds back), its own occupant
- * (TYPE), its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look
+ * PERMISSION and UNREADABLE, and a TYPE its edit holds back), its own item (a
+ * TYPE and a CONTENT at the row's own path, by the row's route, as one —
+ * cmds/apply.c apply_route_label; UNREADABLE; and FOREIGN, the owner its look
  * found — another, or the run itself, its read refused — and a PERMISSION that
  * names its landing, the bit that refused: the search where the row's own look
  * was refused beneath it, else the write), its own claim (an OWNERSHIP that names
  * none). So a row beneath a skipped squatter takes the squatter's class and never
  * its reason (check_ancestry): the squatter's sentence is about the squatter,
- * whatever reason a later rung adds. A row beneath an absent directory skipped
- * for its pair takes OWNERSHIP all the same, read as a sentence about its own
- * way — that directory named, which needs root to create — and never about the
- * directory's claim, which the directory's own line says.
+ * whatever reason a later rung adds, and a TYPE one's is the displaced class's
+ * (core/workspace.h workspace_displaced_t). A row beneath an absent directory
+ * skipped for its pair takes OWNERSHIP all the same, read as a sentence about
+ * its own way — that directory named, which needs root to create — and never
+ * about the directory's claim, which the directory's own line says.
  *
  * Dotta's node above rows of the run takes a skip of its own where the run keeps
  * it, with no row: two of the reasons, in their order — PERMISSION where its

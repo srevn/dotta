@@ -890,8 +890,8 @@ static bool node_is_replaced(const deploy_preflight_t *verdicts, const char *pat
  *                 squatter's class, the squatter named — the fate is the
  *                 squatter's, so the class (--force or not) and the exit code
  *                 must be too — in the one sentence true of any squatter: TYPE
- *                 ("wrong type at" it) where --force lifts both, ANCESTOR ("is
- *                 not a directory") where no flag does. Never the squatter's
+ *                 ("not looked at, beneath" it) where --force lifts both, ANCESTOR
+ *                 ("is not a directory") where no flag does. Never the squatter's
  *                 own reason: a reason is a sentence about the row that carries
  *                 it (deploy_skip_reason_t), and the squatter's — a parent refusing
  *                 it, a pair its own claim names — is false of the row beneath.

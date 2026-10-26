@@ -245,10 +245,13 @@ typedef struct manifest_row {
  * onto the claim standing at its path, and the file analysis's content note
  * (core/workspace.c workspace_analyze_file) before it confirms the row's blob
  * onto a record, which the learning binds to the row (core/workspace.c
- * workspace_learning); and the two questions of a record's answer for bytes no
- * base proves, which is the history of its binding's branch at its name: whether
- * it is this row's (core/workspace.h workspace_unconfirmed), and whether the
- * bases' ask may resume it past the head it was read to (core/workspace.c
+ * workspace_learning); its twin across ownership (core/workspace.h
+ * workspace_unlearned) — what the base fast path and the directory analysis ask
+ * before a load moves a record dotta never owned onto the row whose content it
+ * found standing; and the two questions of a record's answer for bytes no base
+ * proves, which is the history of its binding's branch at its name: whether it
+ * is this row's (core/workspace.h workspace_unconfirmed), and whether the bases'
+ * ask may resume it past the head it was read to (core/workspace.c
  * workspace_ask_bases). The let-go loops ask the other direction — whether any
  * row still stands at the path — and are not readers of this. NULL is no claim.
  */

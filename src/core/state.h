@@ -202,10 +202,13 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     and at every ownership event (apply deploy, adoption, acknowledgement,
  *     add, update); a learning of the content writes the row's, which the content
  *     is confirmed under — a record dotta never owned takes it, its claim kept,
- *     and one dotta owns bound to another row is never noted the content
- *     (core/workspace.h workspace_unacknowledged) — and every other learning
- *     keeps the one it read. A storage name in the grammar and a profile never
- *     empty, each whole (schema-enforced).
+ *     wherever a load finds the row's content standing, read, under a stat over
+ *     the row's very blob, or a directory's by its kind (core/workspace.h
+ *     workspace_unlearned), so its binding names the row a load last learned
+ *     its content under; one dotta owns bound to another row is never noted the
+ *     content (workspace_unacknowledged) — and every other learning keeps the
+ *     one it read. A storage name in the grammar and a profile never empty, each
+ *     whole (schema-enforced).
  *   - the content (kind, blob_oid, disk_oid, head, stat): the node the record
  *     describes — a regular file, a link or a directory, in a look's own words
  *     (fs_occupant_t) — and what it holds, in one of two answers: the base dotta
@@ -220,12 +223,13 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     it established (apply's from the row it deployed or found standing, a
  *     capture's from what it read and committed: the one blob the stage wrote,
  *     never a later head's), and a learning of the content (the slow-path
- *     CMP_EQUAL, and the bases' ask, which confirms a blob the row's own branch
- *     held at its name or keeps the bytes unconfirmed at the view's head:
- *     core/workspace.c workspace_ask_bases), which keeps the node: it is made
- *     only onto a record of the row's kind, since a record of another node, the
- *     look having found the row's in its place, gives way to the row's first
- *     observation, where its claim can be spelled, before anything is learned
+ *     CMP_EQUAL; the base fast path's, which writes the record's own pair back
+ *     beside the row's binding; and the bases' ask, which confirms a blob the
+ *     row's own branch held at its name or keeps the bytes unconfirmed at the
+ *     view's head: core/workspace.c workspace_ask_bases), which keeps the node:
+ *     it is made only onto a record of the row's kind, since a record of another
+ *     node, the look having found the row's in its place, gives way to the row's
+ *     first observation, where its claim can be spelled, before anything is learned
  *     onto it, and has nothing learned onto it otherwise (core/workspace.c
  *     workspace_flush) — a whole write, never a learning onto the gone node's
  *     record. No node is executable: the bit is the claim's mode, and Git's

@@ -801,17 +801,24 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  *
  * And the node dotta confirmed has to be the claim's profile's. A record follows
  * the claim dotta last saw or put its node under, a directory's as much as a
- * file's (core/state.h state_record_t, the binding), so another profile's record
- * witnessed that profile's node, and its absence deletes nothing of this claim's:
- * update would commit the removal into a profile whose node never stood here,
- * and every machine would lose the claim at its next sync. The row is UNDEPLOYED,
- * apply's to land, and the record its history — where dotta owns it, a reassignment
- * that landing acknowledges (core/workspace.h workspace_reassigned) — so the
- * user's deletion over such a record, under a reassignment apply has not
- * acknowledged or over a directory another profile's derivation observed first,
- * is theirs to commit once that landing has written the row's record. The profile
- * alone, as the reassignment asks it: another of the profile's names for the
- * path is the same profile's node.
+ * file's (core/state.h state_record_t, the binding) — one dotta never owned,
+ * the row a load last learned its content under, wherever its look finds that
+ * row's content standing (core/workspace.h workspace_unlearned) — so another
+ * profile's record witnessed that profile's node, and its absence deletes nothing
+ * of this claim's: update would commit the removal into a profile whose node
+ * never stood here, and every machine would lose the claim at its next sync.
+ * The move needs a node standing, which no absence has: a removal update committed
+ * leaves the record at the path, bound to the profile it removed from, where
+ * another profile's claim of the same bytes may stand, and that claim reads
+ * UNDEPLOYED rather than a second deletion. The row is UNDEPLOYED, apply's to
+ * land, and the record its history — where dotta owns it, a reassignment that
+ * landing acknowledges (core/workspace.h workspace_reassigned) — so the user's
+ * deletion over such a record, under a reassignment apply has not acknowledged,
+ * or of a node no load found standing under the row since the row came to stand
+ * there (stated: a removal between an enable and the next load), is theirs to
+ * commit once that landing has written the row's record. The profile alone, as
+ * the reassignment asks it: another of the profile's names for the path is the
+ * same profile's node.
  *
  * The witness ends where a commit reconciled the node's absence: a commit that
  * changed the claim at a path whose node was gone retires the record there, the
@@ -1049,12 +1056,13 @@ static error_t workspace_compare_base(
  * — that apply acknowledges by rewriting the record (the adoption loop for a
  * clean row, the deployment itself for a stale one). Only an owned record
  * qualifies: an observed or confirmed record that dotta never deployed names
- * the row a load last confirmed its content under, or first saw the path under,
- * never a deployer, and apply adopts such a path rather than acknowledging it.
- * And across kinds only while the look finds the record's own node standing —
- * that is when disk holds what A deployed (workspace_reassigned). No bit of this
- * verdict says so: the route reads it off the item's sources and look, and a
- * clean reassignment is among the diverged items by that reading alone
+ * the row a load last learned its content under, or first saw the path under,
+ * never a deployer — this analysis's notes move it onto the row (core/workspace.h
+ * workspace_unlearned) — and apply adopts such a path rather than acknowledging
+ * it. And across kinds only while the look finds the record's own node standing
+ * — that is when disk holds what A deployed (workspace_reassigned). No bit of
+ * this verdict says so: the route reads it off the item's sources and look, and
+ * a clean reassignment is among the diverged items by that reading alone
  * (workspace_list).
  *
  * The blob bit, ENCRYPTION (workspace.h, divergence_type_t), is settled here
@@ -1233,16 +1241,13 @@ static void workspace_analyze_file(
      * path with no base has no base's triple; the bytes a load kept unconfirmed
      * have their own, below.
      *
-     * Nothing is noted for the record here: disk is the record's own pair under
-     * its own stat, which the record already holds. A note would buy nothing
-     * and cost two things: the flush's transaction on every clean load, and —
-     * where the deploy wrote the stat this very second — the stat itself, which
-     * a read in an open second demotes to none (core/state.h state_stat_from_read).
-     * Nor does the binding move here: a record dotta never owned, bound to another
-     * row whose very blob it confirmed — a plaintext blob two profiles share,
-     * which opens under either — keeps that row's binding until a learning of
-     * the content or apply's adoption moves it, and an absence meanwhile reads
-     * undeployed, over another profile's record (classify_absent, stated). */
+     * Nothing of the content is noted for the record here: disk is the record's
+     * own pair under its own stat, which the record already holds. A note would
+     * buy nothing and cost two things: the flush's transaction on every clean
+     * load, and — where the deploy wrote the stat this very second — the stat
+     * itself, which a read in an open second demotes to none (core/state.h
+     * state_stat_from_read). The one thing such a record can lack is the row's
+     * binding, noted below, once. */
     if (base && state_stat_matches(base, &item->st)) {
         /* the look stands behind the stat ⟹ disk == the base's pair */
         disk_at_base = true;
@@ -1254,6 +1259,26 @@ static void workspace_analyze_file(
         if (cmp_result == CMP_EQUAL) {
             item->blob_oid = base->blob_oid;
             item->stat = base->stat;
+
+            /* The row's binding, owed with that content to a record dotta never
+             * owned that another row's binding names (core/workspace.h
+             * workspace_unlearned): the stat stands over the row's very blob,
+             * which a read would have confirmed onto it under the row's — a
+             * plaintext blob two profiles share, since a sealed one is sealed
+             * under its own name's binding and never equal across two
+             * (crypto/cipher.h). Its own blob and stat ride, nothing re-derived,
+             * so the learning moves the binding alone and the next load finds
+             * the record the row's. Only here: where Git moved past the base,
+             * the base is no blob of the row's, and the row's binding written
+             * beside it would name one it was never committed under. So a sealed
+             * twin — one plaintext sealed under both bindings, two ids — reads
+             * STALE while its stat stands, apply rewriting identical bytes; once
+             * the stat moves, the slow path decrypts the row's blob and learns
+             * it where a key is in reach, and reads [locked] where none is
+             * (stated). */
+            if (workspace_unlearned(row, base)) {
+                item->confirmation |= DIVERGENCE_CONTENT;
+            }
         }
     } else if (unconfirmed && state_stat_matches(unconfirmed, &item->st)) {
         /* UNCONFIRMED FAST PATH
@@ -1263,9 +1288,11 @@ static void workspace_analyze_file(
          * stands at: no commit of that history held them at the name, and the
          * row that head holds is not them. So the verdict is the one the read
          * that kept them gave, with nothing loaded, hashed or asked, and nothing
-         * noted: the record holds it. A node made unreadable since, or a sealed
-         * row with no key in reach, reads so too, as a base whose stat stands
-         * does (stated). */
+         * noted: the record holds it, under the row's binding, which the answer's
+         * key holds (core/workspace.h workspace_unconfirmed), so no binding is
+         * owed here as the base fast path's may be. A node made unreadable since,
+         * or a sealed row with no key in reach, reads so too, as a base whose
+         * stat stands does (stated). */
         cmp_result = CMP_DIFFERENT;
     } else {
         /* SLOW PATH: Full content comparison, ours vs theirs
@@ -1395,13 +1422,15 @@ static void workspace_analyze_file(
              * and no other, so a learning of the content writes the binding it
              * was confirmed under, the row's, with it (workspace_learning): a
              * record bound to the row keeps its own, and one dotta never owned
-             * takes the row's — on such a record the binding's one work is its
-             * blob's, since no reassignment reads a record dotta never owned
-             * (core/workspace.h workspace_reassigned). A record dotta owns, bound
-             * to another row, is the reassignment or the rename an ownership
-             * event moves onto this row: no learning moves it, so it takes the
-             * slow path on every load until apply's acknowledgement does, the
-             * stat above riding that ownership event. */
+             * takes the row's — on such a record the binding names the row a
+             * load last learned its content under, which its blob opens under
+             * and an absence asks of it (classify_absent), and no reassignment
+             * reads one (core/workspace.h workspace_reassigned,
+             * workspace_unlearned). A record dotta owns, bound to another row,
+             * is the reassignment or the rename an ownership event moves onto
+             * this row: no learning moves it, so it takes the slow path on every
+             * load until apply's acknowledgement does, the stat above riding
+             * that ownership event. */
             if (!workspace_unacknowledged(row, record)) {
                 item->confirmation |= DIVERGENCE_CONTENT;
             }
@@ -3395,7 +3424,19 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * reads a record only where another kind stands, so no verdict here is that
      * record's.
      *
-     * An ancestor claim is a creation template, not a convergence target, and
+     * And where dotta holds one it never owned, bound to another row, that record
+     * is owed the row's binding (core/workspace.h workspace_unlearned): the look
+     * found the directory's whole content, its kind, standing under this row —
+     * the content a file's record learns the binding with — and a directory's
+     * zero blob and unset stat ride. Of either class, as the observation is:
+     * the binding names the row a load last learned the node's content under,
+     * never the profile's word about tracking it. Below every arm above, so where
+     * no directory stands nothing moves. */
+    if (workspace_unlearned(row, record)) {
+        item->confirmation |= DIVERGENCE_CONTENT;
+    }
+
+    /* An ancestor claim is a creation template, not a convergence target, and
      * this is the line the profile's word about the path begins at. Every question
      * above is asked of both classes: an unreadable path is a fact about the
      * path, a squatter is noted of either class by the look — a squatter above
@@ -4596,24 +4637,27 @@ bool workspace_item_tags(
  * its history was asked at with the stat of the read that found them
  * (workspace_item_t's blob_oid, disk_oid, head and stat) — under the row's binding,
  * the one it was confirmed under, which the record takes with it. It is the one
- * learning that writes a binding, the binding being what an encrypted blob opens
- * under; a record whose binding names who deployed what — one dotta owns, bound
- * to another row, which an acknowledgement owes the row — is never noted the
- * content (workspace_analyze_file). The mode (DIVERGENCE_MODE) and the owner
- * and group (DIVERGENCE_OWNERSHIP) are the row's claim, written under the binding
- * the record holds: a base a confirmation left under another binding opens under
- * that one alone. Every other column is the one it is written onto — the node
- * and the stamp of the record handed in, and its binding wherever the content
- * is not learned. The node needs no word of the row's: every learning is written
- * onto a record of the row's kind, since a record of another kind gives way to
- * the row's first observation before anything is learned onto it, or, where the
- * observation cannot be spelled or does not take its place, has nothing learned
- * onto it (workspace_flush), so the content is confirmed as the node that record
- * already names. A learning of the content keeps one of the two: a base, a blob
- * Git holds and never zero — the row's, or one the row's own branch held at its
- * name — or bytes no base proves with their head, every note over no base being
- * completed by the bases' ask before the flush reads it, or dropped
- * (workspace_ask_bases).
+ * learning that writes a binding, the binding naming the row a load last learned
+ * the content under: what an encrypted blob opens under, and what an absence
+ * asks of the record (classify_absent); a record whose binding names who deployed
+ * what — one dotta owns, bound to another row, which an acknowledgement owes
+ * the row — is never noted the content (workspace_analyze_file). The mode
+ * (DIVERGENCE_MODE) and the owner and group (DIVERGENCE_OWNERSHIP) are the row's
+ * claim, written under the binding the record holds: a base a confirmation left
+ * under another binding opens under that one alone. Every other column is the
+ * one it is written onto — the node and the stamp of the record handed in, and
+ * its binding wherever the content is not learned. The node needs no word of
+ * the row's: every learning is written onto a record of the row's kind, since a
+ * record of another kind gives way to the row's first observation before anything
+ * is learned onto it, or, where the observation cannot be spelled or does not
+ * take its place, has nothing learned onto it (workspace_flush), so the content
+ * is confirmed as the node that record already names. A learning of the content
+ * keeps one of the two: a base, a blob Git holds and never zero — the row's, or
+ * one the row's own branch held at its name — or bytes no base proves with their
+ * head, every note over no base being completed by the bases' ask before the
+ * flush reads it, or dropped (workspace_ask_bases). Save a directory's, whose
+ * whole content is its kind: its learning writes the binding alone, beside a
+ * zero blob and an unset stat (workspace_analyze_directory).
  *
  * Three callers, which would otherwise drift apart: workspace_flush, over what
  * the analyses noted; workspace_learn, over the claims apply's fix set; and

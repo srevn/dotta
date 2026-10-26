@@ -612,10 +612,15 @@ typedef enum {
  * or one of the row's kind but the one an acknowledgement owes the row
  * (workspace_unacknowledged), the learning writing the row's binding with the
  * content (workspace.c workspace_analyze_file, workspace_learning); the content
- * too where, over no base, the look found disk's bytes none of the row's — no
- * record, or one of the row's kind, which confirmed none and was never owned —
- * the record owed the bytes' answer, which the bases' ask completes before anything
- * reads it, or drops where no answer can be kept (workspace.c workspace_ask_bases);
+ * too where the look found the row's own content standing with no byte read — a
+ * stat standing over the row's very blob, the row's directory — onto one dotta
+ * never owned bound to another row (workspace_unlearned), its own content riding
+ * and the row's binding the whole of what it lacks (workspace.c
+ * workspace_analyze_file, workspace_analyze_directory); the content too where,
+ * over no base, the look found disk's bytes none of the row's — no record, or
+ * one of the row's kind, which confirmed none and was never owned — the record
+ * owed the bytes' answer, which the bases' ask completes before anything reads
+ * it, or drops where no answer can be kept (workspace.c workspace_ask_bases);
  * and each claim of Git's that the look found disk already standing on
  * (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP) — one Git moved past the record of
  * this node, or, over no record of this node, each axis it stands on (workspace.c
@@ -696,18 +701,18 @@ typedef struct {
  * — so it is none of the row's: no bytes the row's are measured against
  * (workspace_compare_confirmed below answers it at the kind), no base for its
  * claim (workspace_claims_moved below), no record a learning is written onto
- * (core/workspace.c workspace_flush), no record an acknowledgement moves onto
- * the row (workspace_unacknowledged below), and no witness to its deletion
- * (classify_absent). Whether that node still stands is a look's to say. While
- * it does, the row's deployment replaces dotta's own node there, which is a
- * reassignment (workspace_reassigned below); where the look found the row's own
- * kind in its place, that node is gone, and the load's flush writes the row's
- * first observation over the record wherever no verdict reads it — a directory
- * row's always, a file row's where the load learned the row's content
- * (workspace_flush) — which apply adopts, a file's, as it adopts a path with no
- * record (cmds/apply.c cmd_apply's adoption); save where this host has no name
- * for the look's owner or group, which no observation spells, and the gone node's
- * record stays.
+ * (core/workspace.c workspace_flush), no record an acknowledgement or a learning
+ * moves onto the row (workspace_unacknowledged, workspace_unlearned below), and
+ * no witness to its deletion (classify_absent). Whether that node still stands
+ * is a look's to say. While it does, the row's deployment replaces dotta's own
+ * node there, which is a reassignment (workspace_reassigned below); where the
+ * look found the row's own kind in its place, that node is gone, and the load's
+ * flush writes the row's first observation over the record wherever no verdict
+ * reads it — a directory row's always, a file row's where the load learned the
+ * row's content (workspace_flush) — which apply adopts, a file's, as it adopts
+ * a path with no record (cmds/apply.c cmd_apply's adoption); save where this
+ * host has no name for the look's owner or group, which no observation spells,
+ * and the gone node's record stays.
  *
  * The same division one layer down, over a stat: infra/compare.c mode_stands,
  * under a git filemode, and core/state.h state_stat_matches, under the record's
@@ -822,9 +827,9 @@ static inline compare_result_t workspace_compare_confirmed(
  * before its own).
  *
  * Only an owned record qualifies: an observed or confirmed record dotta never
- * deployed names the row a load last confirmed its content under, or first saw
- * the path under, never a deployer, and apply adopts such a path rather than
- * acknowledging it.
+ * deployed names the row a load last learned its content under, or first saw
+ * the path under, never a deployer (workspace_unlearned below), and apply adopts
+ * such a path rather than acknowledging it.
  *
  * Both kinds — and of a directory's two classes, the tracked one alone. A
  * reassignment is a question about tracking the path, which core/manifest.h asks
@@ -892,18 +897,19 @@ static inline bool workspace_reassigned(
  * never confirmed again until the acknowledgement moves it — no learning moves
  * an owned record's binding, so every load re-hashes the path (core/workspace.c
  * workspace_analyze_file's content note), and its base drifts further from what
- * is there. One dotta never owned takes the row's binding with the content a
- * load confirms (core/workspace.c workspace_learning).
+ * is there. One dotta never owned takes the row's binding wherever a load learns
+ * its content under the row (workspace_unlearned below, its twin).
  *
  * Of the row's own node, the kind rung (workspace_type_occupant above): a record
  * of another kind describes another node — gone wherever the row's own kind stands
  * in its place — and moved onto the row it would make dotta's a node it never
  * put there, however the load came to leave that record standing: a directory
  * the user created, owned, and pruned at the next scope exit. Owned: a record
- * dotta only observed or confirmed names the row a load last confirmed its content
- * under, or first saw the path under, never a deployer, and an adoption takes
- * the path over instead — a file's; a directory stays the flush's observation
- * (cmds/apply.c cmd_apply). NULL is none.
+ * dotta only observed or confirmed names the row a load last learned its content
+ * under, or first saw the path under, never a deployer — a load's learning moves
+ * it onto the row (workspace_unlearned below), and an adoption takes a file's
+ * path over after; a directory stays the flush's observation (cmds/apply.c
+ * cmd_apply). NULL is none.
  *
  * Readers: cmds/apply.c cmd_apply's two loops over the clean items — the
  * acknowledgement — and apply_write_record's converged arm, where a directory
@@ -917,6 +923,38 @@ static inline bool workspace_unacknowledged(
 ) {
     return record && record->kind == workspace_type_occupant(row->type) &&
            record->deployed_at > 0 &&
+           !manifest_is_claim(row, record->profile, record->storage_path);
+}
+
+/**
+ * Unlearned: the record dotta never owned of the row's own node is bound to another
+ * row — the record a load's learning moves onto this one
+ *
+ * workspace_unacknowledged's twin across ownership. Of a record of the row's
+ * own node bound to another row, the one dotta owns follows the row at an ownership
+ * event, and the one it never owned at a learning of its content under the row,
+ * which writes the row's binding with it (core/workspace.c workspace_learning).
+ * So the binding of a record dotta never owned names the row a load last learned
+ * its content under: what a blob it confirmed opens under, what an absence asks
+ * of it (core/workspace.c classify_absent), what the verbs' reclaims and an
+ * orphan's scope read of it. The whole binding, as the acknowledgement asks it;
+ * a record of another kind gives way to the row's first observation instead
+ * (workspace_flush).
+ *
+ * Asked where a load finds the row's content standing with no byte read, where
+ * the binding is the whole of what such a record lacks: the slow path's read
+ * confirms the content onto every record of the row's kind but the one an
+ * acknowledgement owes (workspace_unacknowledged above), and needs no such clause.
+ *
+ * Readers: core/workspace.c workspace_analyze_file's base fast path, over the
+ * row's very blob, and workspace_analyze_directory, the row's directory standing.
+ * A reader not on this list is a bug.
+ */
+static inline bool workspace_unlearned(
+    const manifest_row_t *row, const state_record_t *record
+) {
+    return record && record->kind == workspace_type_occupant(row->type) &&
+           record->deployed_at == 0 &&
            !manifest_is_claim(row, record->profile, record->storage_path);
 }
 
@@ -2208,17 +2246,22 @@ error_t workspace_learn(
  *   a record carries being committed under its binding (core/state.h
  *   state_record_t): onto a record bound to the row, which keeps its own; onto
  *   one dotta never owned, which takes the row's; and onto the observation, over
- *   no record or one of another kind, the row's own binding. The one record of
- *   the row's kind noted no content is one dotta owns bound to another row
- *   (core/workspace.c workspace_analyze_file), whose binding names who deployed
- *   what: its path takes the slow path on every load until an ownership event
- *   moves the record onto the standing one. And each claim axis a look of either
- *   kind found disk standing on that the record of the row's kind lacks — one
- *   Git moved, or any, where no record of the node stands (core/workspace.c
- *   workspace_analyze_claim) — in the row's words, whichever row's the record
- *   is, since a claim opens nothing: onto that record or the observation, never
- *   onto a gone node's. The record follows every agreement, so the user's next
- *   move on that axis reads as the user's.
+ *   no record or one of another kind, the row's own binding. Where the load read
+ *   no byte — the base fast path standing over the row's very blob, the row's
+ *   directory standing — a record dotta never owned bound to another row is owed
+ *   that binding all the same, noted with its own content, which the learning
+ *   writes back beside it: the move alone, once (core/workspace.h
+ *   workspace_unlearned). The one record of the row's kind a load finds the row's
+ *   content standing on and notes none of it onto is one dotta owns bound to
+ *   another row (core/workspace.c workspace_analyze_file), whose binding names
+ *   who deployed what: its path takes the slow path on every load until an
+ *   ownership event moves the record onto the standing one. And each claim axis
+ *   a look of either kind found disk standing on that the record of the row's
+ *   kind lacks — one Git moved, or any, where no record of the node stands
+ *   (core/workspace.c workspace_analyze_claim) — in the row's words, whichever
+ *   row's the record is, since a claim opens nothing: onto that record or the
+ *   observation, never onto a gone node's. The record follows every agreement,
+ *   so the user's next move on that axis reads as the user's.
  *
  * Nothing is owed from beneath a squatter, because nothing there is looked at
  * (workspace_displaced_t): a confirmation taken through one would advance the
@@ -2234,12 +2277,12 @@ error_t workspace_learn(
  * so a clean reassignment keeps reading as one until apply acknowledges it. The
  * writes here that change a record's binding are the observation over a gone
  * node's, whose binding named a node no longer standing, and the content learned
- * onto a record dotta never owned, whose binding's one work is its blob's — never
- * a reassignment, which is an owned record's, of the row's own node or of another
- * still standing (workspace_reassigned). Nor does any stamp deployed_at — this
- * flush records what the load saw, not deployments, and apply and the capturing
- * verbs remain its writers; the observation takes a gone node's stamp away with
- * its record.
+ * onto a record dotta never owned, whose binding names the row a load last learned
+ * its content under (workspace_unlearned) — never a reassignment, which is an
+ * owned record's, of the row's own node or of another still standing
+ * (workspace_reassigned). Nor does any stamp deployed_at — this flush records
+ * what the load saw, not deployments, and apply and the capturing verbs remain
+ * its writers; the observation takes a gone node's stamp away with its record.
  *
  * Every write is decided from the load, so each lands only on the store the load
  * read. A run of apply passes its dispatch transaction, taken before the load

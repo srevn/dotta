@@ -47,11 +47,11 @@ dotta apply ~/.bashrc ~/.zshrc
 # Force overwrite modified files
 dotta apply --force
 
-# Keep orphaned files (don't remove files from disabled profiles)
+# Keep orphaned files (prune none, a disabled profile's included)
 dotta apply --keep-orphans
 ```
 
-`apply` performs full synchronization: it deploys new and updated files, and removes dotta's own unchanged copies of orphaned files — those of disabled profiles, and those deleted from their profiles.
+`apply` performs full synchronization: it deploys new and updated files, and prunes dotta's own unchanged copies of orphaned files — those of disabled profiles, and those deleted from their profiles.
 
 ### Updating (Filesystem to Repo)
 
@@ -230,14 +230,14 @@ After a pull, `sync` lists what it did to each profile's files — added, update
 # Stop tracking a file; it stays on disk
 dotta remove global ~/.bashrc
 
-# Stop tracking a directory; it stays on disk
+# Stop tracking a directory; its files stay on disk
 dotta remove global ~/.config/nvim
 
 # Delete a file and every machine's unchanged copy
 rm ~/.bashrc
 dotta update
 
-# Delete an entire profile; nothing is deleted from disk
+# Delete an entire profile; no file is deleted from disk
 dotta remove test --delete-profile
 
 # Preview removal

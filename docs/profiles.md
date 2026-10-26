@@ -18,7 +18,7 @@ dotta profile enable global darwin
 #
 # Hint: Run 'dotta apply' to bring the workspace in line with the enabled profiles
 
-# Disable a profile (next apply removes its unchanged copies)
+# Disable a profile (next apply prunes its unchanged copies)
 dotta profile disable darwin
 
 # See which profiles would change, without changing them

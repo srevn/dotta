@@ -816,10 +816,12 @@ static output_answer_t remove_ask_paths(
     /* The question, and beneath it the one promise remove makes the copies before
      * the act: what every machine's next apply does to them where no other enabled
      * profile claims the path — the overlap section above names those — each
-     * copy left on disk, its record retired */
+     * file's copy left on disk, its record retired. The files' alone: a directory
+     * goes by what is left in it, whatever took its claim, one dotta created
+     * pruned once empty (core/workspace.c workspace_analyze_orphans) */
     return output_ask(
         out, false, "Remove %s from profile '%s'?\n"
-        "(Nothing is deleted from disk, on any machine)", counts, opts->profile
+        "(No file is deleted from disk, on any machine)", counts, opts->profile
     );
 }
 
@@ -829,10 +831,12 @@ static output_answer_t remove_ask_paths(
  * One fact in two tenses: a dry run's lines, or the warning a question is the
  * preamble of. `counts` is the profile-holdings phrase from the count family
  * (output_format_counts, or its "counts unavailable" stand-in), and the promise
- * is the one a removal of paths makes (remove_ask_paths) but its last word: no
- * sync carries a branch's deletion, so every other machine keeps managing its
- * copies. Where no question is asked, nothing previews the deletion: the receipt
- * says what it took (remove_profile, its one reader).
+ * is the one a removal of paths makes, the files' (remove_ask_paths), true here
+ * on other grounds: this machine's next apply releases each file's copy, no history
+ * answering for a branch that is gone, and no sync carries a branch's deletion,
+ * so every other machine keeps managing its copies. Where no question is asked,
+ * nothing previews the deletion: the receipt says what it took (remove_profile,
+ * its one reader).
  */
 static void remove_print_deletion(
     output_t *out, const cmd_remove_options_t *opts, const char *counts
@@ -845,13 +849,17 @@ static void remove_print_deletion(
             out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
             opts->profile, counts
         );
-        output_print(out, OUTPUT_NORMAL, "(Nothing would be deleted from disk, on any machine)\n");
+        output_print(
+            out, OUTPUT_NORMAL, "(No file would be deleted from disk, on any machine)\n"
+        );
     } else {
         output_warning(
             out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
             opts->profile, counts
         );
-        output_info(out, OUTPUT_NORMAL, "         Nothing is deleted from disk, on any machine");
+        output_info(
+            out, OUTPUT_NORMAL, "         No file is deleted from disk, on any machine"
+        );
     }
 }
 
@@ -971,7 +979,9 @@ static error_t remove_paths(
             "Total: %s would be removed from profile\n",
             counts
         );
-        output_print(out, OUTPUT_NORMAL, "(Nothing would be deleted from disk, on any machine)\n");
+        output_print(
+            out, OUTPUT_NORMAL, "(No file would be deleted from disk, on any machine)\n"
+        );
     }
 
     /* The pre-remove hook, over the decided removal — a dry run's too, told so
@@ -1629,12 +1639,12 @@ const args_command_t spec_remove = {
         "   or: %s remove [options] <profile> --delete-profile\n"
         "   or: %s remove [options] --profile <name> <path>...",
     .description =
-        "Stop tracking files and directories: they leave the profile and\n"
-        "stay on disk, on every machine. To delete every machine's\n"
+        "Stop tracking files and directories: they leave the profile, and no\n"
+        "file is deleted from disk, on any machine. To delete every machine's\n"
         "unchanged copy instead, delete the file and run 'dotta update'.\n",
     .notes       =
         "Operation Modes:\n"
-        "  (default)           Remove the paths from the profile. Nothing\n"
+        "  (default)           Remove the paths from the profile. No file\n"
         "                      is deleted from disk.\n"
         "  --delete-profile    Delete the entire profile branch. No paths\n"
         "                      may be given.\n",

@@ -97,13 +97,13 @@ dotta status -v
 
 `dotta status` groups paths by what to do about them and tags each one -- `[undeployed]`, `[clean]`, `[modified]`, `[deleted]`, `[orphaned]` and more. A path can carry several tags at once (`[orphaned] [relocated]`), and where a tag needs explaining, status prints a short legend under the group. `dotta status --full` lists every managed path with its state and the profile it comes from.
 
-**Remote indicators** -- `dotta list --remote` prints these compact markers; `dotta status` spells the same states out in words (`↑ 2 ahead`):
+**Remote indicators** -- `dotta list --remote` prints these compact markers; `dotta status` spells the same states out in words (`↑ 2 commits ahead`). What `dotta sync` does with each is its strategy's (see [Syncing with Remote](#syncing-with-remote)):
 
 - `[=]` up-to-date
-- `[↑n]` n commits ahead (ready to push)
-- `[↓n]` n commits behind (run `dotta sync`)
-- `[↕n+m]` diverged
-- `[•]` no remote tracking branch
+- `[↑n]` n commits ahead
+- `[↓n]` n commits behind
+- `[↕n+m]` diverged (n ahead, m behind)
+- `[•]` no remote branch
 
 ## Viewing Differences
 

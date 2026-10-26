@@ -28,13 +28,6 @@
 # Default: ~/.local/share/dotta/repo
 repo_dir = "~/.local/share/dotta/repo"
 
-# Strict Mode
-# Refuse where the repository's state would otherwise be proceeded past:
-#   - Sync with uncommitted changes: When true, block sync; when false, warn and prompt for confirmation
-#
-# Default: false
-strict_mode = false
-
 # Strict Ownership
 # What apply does with an ownership claim this system cannot resolve — a root/
 # or custom/ file captured as a user or group this machine does not have:
@@ -44,7 +37,7 @@ strict_mode = false
 strict_ownership = false
 
 # Auto-detect New Files
-# Automatically detect new files in tracked directories during update/sync
+# Automatically detect new files in tracked directories during status and update
 # When true, new files will be detected and included based on security settings
 # When false, new files are only added with explicit --include-new flag
 # Default: true

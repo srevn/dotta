@@ -468,8 +468,8 @@ content_cache_t *content_cache_create(
  * one run. A workspace load asks each managed path once, so a load never hits
  * itself; the hit is a second reader later in the same run — deploy taking back
  * what apply's load decrypted, the renderer taking back what its own load did.
- * A command with no second reader (status, update, sync) writes entries it will
- * not ask for, which is a memo's ordinary cost; it is the cost
+ * A command with no second reader (status, update) writes entries it will not
+ * ask for, which is a memo's ordinary cost; it is the cost
  * content_compare_blob_to_disk declines for a base, whose key this list shows
  * no reader can name.
  *

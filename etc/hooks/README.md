@@ -231,8 +231,8 @@ report is printed; a run stopped at a profile fires none
 
 ### `pre-sync`
 
-**When:** Before synchronizing with the remote: after sync's workspace check,
-before its question and the fetch
+**When:** Before synchronizing with the remote: before the fetch, once the run's
+profiles and its remote are known
 **Use For:** Gating sync on network conditions, host policy, or remote reachability
 
 **Example Use Cases:**
@@ -254,13 +254,10 @@ before its question and the fetch
 - Exit 0: Continue with sync
 - Exit non-zero: Abort sync operation
 
-**Fire ordering:** Pre-sync fires once sync has checked the workspace — a
-`strict_mode` refusal fires none — and before the question it asks over
-uncommitted changes, so it can fire over a sync the user then declines, with
-no post-sync after it. It fires before the fetch as well, so a run whose force
-push or reset is declined after the fetch, or refused there off a terminal, has
-fired it with no post-sync after it. Network or push failures may suppress
-post-sync too — the same operational asymmetry every hook pair carries.
+**Fire ordering:** Pre-sync fires before the fetch, so a run whose force push
+or reset is declined after it, or refused there off a terminal, has fired it
+with no post-sync after it. Network or push failures may suppress post-sync too
+— the same operational asymmetry every hook pair carries.
 
 ### `post-sync`
 
@@ -355,11 +352,10 @@ makes refuses theirs and a branch it deletes comes back with their commit;
 update reads the profile after it and builds on the hook's commit;
 `remove --delete-profile` deletes the branch whatever the hook committed to it.
 
-sync decides twice: it checks the workspace before `pre-sync` and asks its
-question after it, and decides what to pull and push after the fetch that
-follows the hook — a run that force pushes or resets asks once there, beneath
-what it will do and before any profile acts, and off a terminal is refused
-there. The enabled-set writers (`profile enable`, `disable`, `reorder`,
+sync decides after `pre-sync`: what to pull and push is decided after the fetch
+that follows the hook — a run that force pushes or resets asks once there,
+beneath what it will do and before any profile acts, and off a terminal is
+refused there. The enabled-set writers (`profile enable`, `disable`, `reorder`,
 `interactive`, `clone`) and dotta's own files (`ignore`, `bootstrap --edit`)
 fire none.
 

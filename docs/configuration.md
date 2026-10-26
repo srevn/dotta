@@ -2,7 +2,7 @@
 
 Dotta is configured through `~/.config/dotta/config.toml`. A fully annotated sample is available at [`etc/config.example.toml`](../etc/config.example.toml).
 
-A missing file means the defaults. A file that cannot be read, does not parse, or holds a key or value dotta refuses stops every command, and the error names the file and the reason. Every value is read in its key's type — `strict_mode = "yes"` is refused, not read as the default — and the error names the key as `[section] key`.
+A missing file means the defaults. A file that cannot be read, does not parse, or holds a key or value dotta refuses stops every command, and the error names the file and the reason. Every value is read in its key's type — `strict_ownership = "yes"` is refused, not read as the default — and the error names the key as `[section] key`.
 
 ## Environment Variables
 
@@ -20,9 +20,8 @@ DOTTA_EDITOR         # Editor for bootstrap/ignore (fallback: VISUAL → EDITOR 
 ```toml
 [core]
 repo_dir = "~/.local/share/dotta/repo"   # Repository location
-strict_mode = false                      # Block sync on uncommitted changes, vs warn and prompt
 strict_ownership = false                 # Abort apply on an unresolvable owner or group, vs warn
-auto_detect_new_files = true             # Detect new files in tracked dirs during update
+auto_detect_new_files = true             # Detect new files in tracked dirs during status and update
 ```
 
 ### [security]

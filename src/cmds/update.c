@@ -292,17 +292,16 @@ static void update_partition(
         switch (item->state) {
             case WORKSPACE_STATE_DEPLOYED: {
                 /* The route table partitions the deployed items — the same producer
-                 * status's sections and sync's guard read (workspace_item_route;
-                 * workspace.h carries each arm's why). CAPTURE is the one arm
-                 * update commits; every other arm is refused and counted under
-                 * its route, so the preview never promises an update the executor
-                 * would refuse and the census says why in the table's words.
-                 * Under --only-new the user asked about new files alone: neither
-                 * accepted nor counted — but a directory the load could not look
-                 * at, beneath which the scan did not look either (no root is
-                 * registered where the join's look failed, and the walk adds no
-                 * item where a rung's did), so the new files asked for may stand
-                 * there. */
+                 * status's sections read (workspace_item_route; workspace.h carries
+                 * each arm's why). CAPTURE is the one arm update commits; every
+                 * other arm is refused and counted under its route, so the preview
+                 * never promises an update the executor would refuse and the
+                 * census says why in the table's words. Under --only-new the
+                 * user asked about new files alone: neither accepted nor counted
+                 * — but a directory the load could not look at, beneath which
+                 * the scan did not look either (no root is registered where the
+                 * join's look failed, and the walk adds no item where a rung's
+                 * did), so the new files asked for may stand there. */
                 const workspace_route_t route = workspace_item_route(item);
                 if (opts->only_new && (route != WORKSPACE_ROUTE_UNVERIFIABLE ||
                     item->item_kind != PATH_KIND_DIRECTORY)) {

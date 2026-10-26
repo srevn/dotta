@@ -3085,9 +3085,9 @@ static workspace_fault_t workspace_scan(
              * would commit one file twice or promise a commit of a copy cleanup
              * is about to prune. All three are the load's own facts, built before
              * the scan runs (workspace_partition, workspace_index_entries), so
-             * status, sync and update read one answer whatever else each ran.
-             * The identity probe is paid only for a child neither string claimed
-             * — the offers. */
+             * status and update read one answer whatever else each ran. The
+             * identity probe is paid only for a child neither string claimed —
+             * the offers. */
             continue;
         }
 
@@ -4772,8 +4772,8 @@ error_t workspace_flush(workspace_t *ws) {
 
     /* Whose transaction the writes are for: the caller's — a run of apply, whose
      * dispatch transaction was taken before the load read anything — or one this
-     * flush takes, status's, diff's, sync's, update's and a preview's, whose
-     * failures are then the flush's own, from the first (below) */
+     * flush takes, status's, diff's, update's and a preview's, whose failures
+     * are then the flush's own, from the first (below) */
     const bool scoped = !state_locked(ws->state);
     error_t err = NULL;
 

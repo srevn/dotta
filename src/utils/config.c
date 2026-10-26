@@ -229,7 +229,6 @@ config_t *config_create_default(arena_t *arena) {
 
     /* Set defaults */
     config->repo_dir = str_path_join(arena, identity()->home, DEFAULT_REPO_DIR);
-    config->strict_mode = false;
     config->strict_ownership = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
@@ -283,8 +282,6 @@ static error_t read_key(
     if (strcmp(section, "core") == 0) {
         if (strcmp(key, "repo_dir") == 0)
             return read_path(value, section, key, arena, &config->repo_dir);
-        if (strcmp(key, "strict_mode") == 0)
-            return read_bool(value, section, key, &config->strict_mode);
         if (strcmp(key, "strict_ownership") == 0)
             return read_bool(value, section, key, &config->strict_ownership);
         if (strcmp(key, "auto_detect_new_files") == 0)

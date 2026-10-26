@@ -47,7 +47,6 @@ struct config {
 
     /* [core] */
     const char *repo_dir;        /* The store's directory: DOTTA_REPO_DIR, else this key, else the default — absolute, folded */
-    bool strict_mode;            /* Refuse where the repo's state would otherwise be proceeded past */
     bool strict_ownership;       /* An ownership claim this system cannot resolve aborts */
     bool auto_detect_new_files;  /* Auto-detect new files in tracked directories */
 

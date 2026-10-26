@@ -1,9 +1,10 @@
 /**
  * sync.h - Remote synchronization command
  *
- * Synchronizes local repository with remote (fetch, pull, push). Handles branch
- * divergence resolution strategies. Requires clean workspace - use 'update' command
- * first to commit local changes.
+ * Exchanges commits with the remote (fetch, pull, push), each profile's branch
+ * against its remote's, a divergence by the strategy. The files on disk and the
+ * record are no part of it: apply lands what a pull brought, and update commits
+ * what disk holds.
  */
 
 #ifndef DOTTA_CMD_SYNC_H
@@ -24,7 +25,6 @@ typedef struct {
     bool no_push;                /* Pull only: the remote's branches stay as they are */
     bool no_pull;                /* Push only: the local branches stay as they are */
     int verbosity;               /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
-    bool force;                  /* Force sync even with uncommitted changes */
     const char *diverged;        /* --diverged's word (NULL: the config's strategy) */
     sync_strategy_t diverged_strategy; /* Its strategy, iff diverged (sync_post_parse) */
 } cmd_sync_options_t;
@@ -32,8 +32,7 @@ typedef struct {
 /**
  * Sync command implementation
  *
- * The run, in its order: the workspace guard — none under --force — then the
- * pre-sync hook and the guard's question; the epoch, the fetch and each profile's
+ * The run, in its order: the pre-sync hook; the epoch, the fetch and each profile's
  * state against the remote; then the run decided whole, a verdict a profile from
  * its state, the divergence strategy and the user's word (--no-push, --no-pull,
  * auto_pull), and one question where a force push or a reset discards commits
@@ -46,8 +45,9 @@ typedef struct {
  * end. The view a pull would leave is unknown without the pull, so the standing
  * view's health and the apply hint are status's and the live run's.
  *
- * Requires workspace to be clean (no uncommitted changes) unless --force is used.
- * Run 'update' command first to commit local changes to profile branches.
+ * The run reads no file on disk and writes no record, so an edit not yet committed
+ * is not sent, and a pull over it leaves it where it stands for the next load
+ * to read.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

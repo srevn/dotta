@@ -323,13 +323,13 @@ typedef enum {
  * another kind stands at is *squatted*, the path beneath it is *displaced* —
  * the tag, status's section, this class — and every sentence about such a path
  * opens "not looked at", the predicate its neighbours spell "locked", "cannot
- * be read" and "could not be verified". The four that name the squatter say
+ * be read" and "could not be verified". The three that name the squatter say
  * "beneath a squatted directory" (cmds/update.c cmd_update's four census lines,
- * cmds/diff.c get_status_message_from_item, cmds/sync.c sync_guard's note,
- * cmds/status.c status_print_workspace's key for a displaced orphan), and where
- * the squatter is dotta's own copy the first two add its state in the squatter's
- * own words — "changed in Git", "changed in Git and on disk"; the Displaced paths
- * header, where the word is grounded, spells the squatter out instead.
+ * cmds/diff.c get_status_message_from_item, cmds/status.c status_print_workspace's
+ * key for a displaced orphan), and where the squatter is dotta's own copy the
+ * first two add its state in the squatter's own words — "changed in Git", "changed
+ * in Git and on disk"; the Displaced paths header, where the word is grounded,
+ * spells the squatter out instead.
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
@@ -1195,7 +1195,7 @@ typedef struct {
  * The partition of WORKSPACE_STATE_DEPLOYED items that every surface routing a
  * deployed item reads, so no two surfaces can route one item two ways — the shape
  * cleanup_verdict gives the orphan side. One producer (workspace_item_route)
- * and nine readers, each named with the arm it reads; a reader not on this list
+ * and eight readers, each named with the arm it reads; a reader not on this list
  * is a bug:
  *
  *   the diverged items' derivation CLEAN, the one arm a DEPLOYED item is left
@@ -1210,10 +1210,6 @@ typedef struct {
  *                                  reads back as one line per refusing arm —
  *                                  the one reader the compiler does not hold to
  *                                  the table: a new arm needs its line there
- *   sync's guard                   CAPTURE blocks (update's work); CONFLICT ∪
- *                                  KIND ∪ UNCONFIRMED block (the decisions update
- *                                  refuses); UNVERIFIABLE, DISPLACED_* and
- *                                  KIND_DERIVED are advisory
  *   apply's CONTENT skip label     CONFLICT, UNCONFIRMED
  *   apply's disk-wins closer       CAPTURE: update's verb where every CONTENT
  *                                  skip reads it, add --force's otherwise
@@ -1446,11 +1442,10 @@ typedef struct workspace workspace_t;
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
  *   by cmds/update.c update_partition (the new files, and the places listed by
- *   path), cmds/status.c status_print_workspace (New files, and Unverifiable)
- *   and cmds/sync.c sync_guard (the clean-workspace guard). Declined for a second
- *   reason the orphan analysis has no equivalent of: auto_detect_new_files and
- *   --include-new are the user saying whether to look at all, so this one is a
- *   config read where the other is a per-command constant.
+ *   path) and cmds/status.c status_print_workspace (New files, and Unverifiable).
+ *   Declined for a second reason the orphan analysis has no equivalent of:
+ *   auto_detect_new_files and --include-new are the user saying whether to look
+ *   at all, so this one is a config read where the other is a per-command constant.
  *
  * A reader not named above is a bug. Declining an analysis declines its items;
  * it never asserts there are none — a load with the orphan analysis off reads
@@ -2287,8 +2282,8 @@ error_t workspace_learn(
  * Every write is decided from the load, so each lands only on the store the load
  * read. A run of apply passes its dispatch transaction, taken before the load
  * read anything, and the writes land in it. Where the caller holds none — status,
- * diff, sync, update and a preview of apply — the flush takes the store's lock
- * only where the store still stands as the handle's admission left it (core/state.h
+ * diff, update and a preview of apply — the flush takes the store's lock only
+ * where the store still stands as the handle's admission left it (core/state.h
  * state_resume): the view was built from what the admission read, and the record
  * read after it, so the writes land on the store the load decided from, or not
  * at all — a commit since, a learning's as much as a move, refuses the flush
@@ -2296,8 +2291,7 @@ error_t workspace_learn(
  * moved after it was read. A load that owes nothing, the common one, takes no
  * lock and writes nothing. The lock is a boundary of the row cache that reads
  * the enabled rows again (core/state.h state_begin), so a reader after the flush
- * — cmds/status.c status_print_profiles, cmds/sync.c cmd_sync's view after the
- * pull — reads the rows that lock read.
+ * — cmds/status.c status_print_profiles — reads the rows that lock read.
  *
  * Each owed item's record is built before any statement, and published — the
  * item holds it, and owes nothing more — once the store holds it: after the flush's

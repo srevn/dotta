@@ -218,7 +218,7 @@ dotta update    # Commit local changes
 dotta sync      # Push/pull with remote
 ```
 
-`sync` requires a clean workspace (no uncommitted changes). Use `dotta update` first, or `--force` to override.
+`sync` moves commits and nothing else: it neither reads nor changes the files on this machine, so an edit not yet committed with `dotta update` stays here. A file you edited that a pull also changed then reads as changed in Git and on disk, for you to decide: `dotta apply --force <path>` keeps the pulled version, `dotta add --force <profile> <path>` keeps yours. Committed first, the two edits leave the profile diverged instead, and `dotta sync --diverged merge` (or `rebase`) merges them where they touch different lines.
 
 After a pull, `sync` lists what it did to each profile's files — added, updated, reassigned to another profile, overridden by another profile's file, removed or deleted (see [Removing Files](#removing-files)) — and names `dotta apply` for as long as it has work to do.
 

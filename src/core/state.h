@@ -596,12 +596,11 @@ error_t state_resume(state_t *state);
  * a write inside it had replaced them, and they are the table again, since no
  * other connection can move it while the lock is held. Nothing is read, so nothing
  * can fail, and a reader after a rollback reads the table it returned to: status's
- * header and sync's post-pull view after a flush's (cmds/status.c
- * status_print_profiles, cmds/sync.c cmd_sync), and add's receipt after its record
- * phase's (cmds/add.c cmd_add). The handle's account decides it (state_locked):
- * after a transaction SQLite ended itself the ROLLBACK finds none, and the rows
- * still go back — the table as it stood when the transaction began, which a writer
- * may have moved since the lock was lost.
+ * header after a flush's (cmds/status.c status_print_profiles), and add's receipt
+ * after its record phase's (cmds/add.c cmd_add). The handle's account decides
+ * it (state_locked): after a transaction SQLite ended itself the ROLLBACK finds
+ * none, and the rows still go back — the table as it stood when the transaction
+ * began, which a writer may have moved since the lock was lost.
  *
  * @param state State (must not be NULL)
  */

@@ -8,12 +8,13 @@
 #
 # Exit with non-zero status to abort the sync operation.
 #
-# Gate semantics: pre-sync fires AFTER the workspace dirty-check has
-# resolved (clean workspace, --force, or user explicitly confirmed
-# dirty sync). Reaching this hook means sync is committed to attempting
-# network operations, so pre-sync and post-sync run as a matched pair
-# on the happy path. Network or push failures may still suppress
-# post-sync — the same operational asymmetry every hook pair carries.
+# Gate semantics: pre-sync fires before the fetch, once sync knows its
+# profiles and its remote, and before the one question a force push or
+# a reset asks. Reaching this hook means sync is about to reach the
+# network, so pre-sync and post-sync run as a matched pair on the happy
+# path. A declined force push or reset, or a network or push failure,
+# suppresses post-sync — the same operational asymmetry every hook pair
+# carries.
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository

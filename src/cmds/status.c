@@ -872,13 +872,13 @@ static void status_print_workspace(
 
     /* Section 5: Unverifiable paths — the bucket no verb resolves: dotta could
      * not look, so no verb is promised. The header says only that, and a key
-     * beneath names each failed look and its way out, one line per tag string
-     * the block shows — the Issues key's shape, for the reason that block has
-     * one: the tag is a word the reader has to be taught, and one sentence over
-     * three refusals is how a locked path came to be told to fix its permissions.
-     * A key rather than a closer because a closer speaks only for a class that
-     * has a remedy, and [unverified] has none — it would stand on the screen
-     * unexplained. */
+     * beneath names each failed look, and its way out where it has one, one line
+     * per tag string the block shows — the Issues key's shape, for the reason
+     * that block has one: the tag is a word the reader has to be taught, and
+     * one sentence over three refusals is how a locked path came to be told to
+     * fix its permissions. A key rather than a closer because a closer speaks
+     * only for a class that has a remedy, and [unverified] has none — it would
+     * stand on the screen unexplained. */
     if (unverifiable.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unverifiable paths",
@@ -901,8 +901,9 @@ static void status_print_workspace(
              * only where the run holds none — offered, never promised, since a
              * policy may deny root the read as well. The residual class has no
              * remedy to name — there is no one remedy for a foreign epoch, a
-             * cipher this build does not read and an I/O error — so its line
-             * names the verb that will print the cause instead. */
+             * cipher this build does not read and an I/O error — and no verb
+             * that lists the path prints its cause, the class being all the item
+             * carries (workspace_fault_t), so its line names no verb. */
             const char *hint = NULL;
 
             switch (item->fault) {
@@ -920,8 +921,7 @@ static void status_print_workspace(
                     break;
                 case WORKSPACE_FAULT_NONE:
                 case WORKSPACE_FAULT_UNVERIFIED:
-                    hint = "no remedy dotta can name; the verb that "
-                        "meets it prints why";
+                    hint = "no remedy dotta can name";
                     break;
             }
             status_legend_add(&legend, line.tags, hint);

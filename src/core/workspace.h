@@ -448,15 +448,15 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  *   UNVERIFIED   anything else: a foreign epoch, a cipher version this build does
  *                not read, a Git object that would not load, an I/O error, a
  *                probe that could not answer. Dotta names no remedy for these,
- *                because there is no one remedy to name — the verb that meets
- *                the refusal prints its cause, and a block that lists such a
- *                path points at the verb.
+ *                because there is no one remedy to name, and no verb that lists
+ *                such a path can print its cause (below).
  *
  * The class is the whole of what the item carries. The mechanism's own sentence
- * stays in the error the analysis dropped, where the verb that raises it prints
- * it ("dotta show", "dotta export", add's and update's wraps): a report is a
- * list of paths and their state, and every block in cmds/ closes by naming a
- * remedy in its own fixed words, never by quoting a line another layer wrote.
+ * stays in the error the analysis dropped, and a verb that raises the refusal
+ * itself prints it — "dotta show" and "dotta export" reading Git's side, add's
+ * and update's captures reading disk's: a report is a list of paths and their
+ * state, and every block in cmds/ says the class in its own fixed words, and
+ * the remedy where the class has one, never quoting a line another layer wrote.
  *
  * Only DEPLOYED (both kinds), ORPHANED, OVERRIDDEN and OBSTRUCTING items can
  * carry one, and UNSCANNED always does — RELEASED is born of answers, never of
@@ -485,6 +485,9 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  *                key and in its help (cmds/status.c spec_status), and "Run under
  *                sudo to <its act> them" closing update's census and apply's
  *                two skip blocks
+ *   UNVERIFIED   none: "no remedy dotta can name" on status's Unverifiable key,
+ *                and update's census sends the user to the listing that names
+ *                each path
  *
  * Readers — the engines, which ask it against NONE: workspace_item_route (the
  * UNVERIFIABLE arm), workspace_untouched, the orphan analysis's directory pass

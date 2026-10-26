@@ -1393,22 +1393,46 @@ static void status_print_workspace(
 }
 
 /**
- * Print the remote sync status for profiles
+ * What the remote section reads: the remote, and the profiles it reports on
  *
- * By default shows only enabled profiles for consistency with workspace status;
- * --all reports on every branch in the repository. Its failures are lines of
- * its own section, as its siblings' are: no remote configured is no section —
- * said in its place where --remote asked for it — and every other failure is a
- * warning in its place.
+ * The transport's answer (status_remote), a value of the command arena: the name
+ * the resolver gave, and the set the transport chose — the scope's, borrowed,
+ * or under --all the listing it made. The zero value is no section.
  */
-static void status_print_remote(
+typedef struct {
+    const char *name;                /* The default remote; NULL where no section stands */
+    const string_array_t *profiles;  /* The scope's, or every local branch under --all */
+} status_remote_t;
+
+/**
+ * The remote half's transport: the remote resolved, the set chosen, the set fetched
+ * — each step saying its own lines where it runs
+ *
+ * By default the set is the scope's profiles, for consistency with workspace
+ * status; --all reports on every branch in the repository. Its failures are lines
+ * of its own section, as its siblings' are: no remote configured is no section
+ * — said in its place where --remote asked for it — a remote the resolver could
+ * not choose or read, and a listing --all could not make, are a warning in its
+ * place and no section, and an empty set is no section, unsaid. The fetch, unless
+ * --no-fetch, is the half's one write, each profile's remote-tracking ref:
+ * announced at -v while it runs, its failure a warning beneath the announce at
+ * -v, and the section then read from the refs at hand.
+ *
+ * @param ctx Dispatch context (must not be NULL)
+ * @param opts Command options: --remote, --all and --no-fetch (must not be NULL)
+ * @param scope The operation scope, whose profiles are the default set (must
+ *              not be NULL)
+ * @return The remote and the set the section reads; the zero value where no section
+ *         stands
+ */
+static status_remote_t status_remote(
     const dotta_ctx_t *ctx,
     const cmd_status_options_t *opts,
-    const string_array_t *profiles
+    const scope_t *scope
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(profiles);
+    CHECK_NULL(scope);
 
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
@@ -1416,7 +1440,8 @@ static void status_print_remote(
     bool verbose = output_is_verbose(out);
 
     /* Detect remote (name + URL — URL feeds the credential helper when we fetch
-     * below). Both outputs are arena-borrowed for the call's lifetime. */
+     * below). Both are the command arena's, so the name outlives this call in
+     * the value it returns. */
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     error_t err = gitops_resolve_default_remote(
@@ -1431,7 +1456,7 @@ static void status_print_remote(
             output_gap(out, OUTPUT_NORMAL);
             output_info(out, OUTPUT_NORMAL, "%s", error_line(err));
         }
-        return;
+        return (status_remote_t){ 0 };
     }
     if (err) {
         /* A remote the resolver could not choose, or one it could not read: the
@@ -1441,28 +1466,29 @@ static void status_print_remote(
         output_warning(
             out, OUTPUT_NORMAL, "Cannot tell remote sync status: %s", error_line(err)
         );
-        return;
+        return (status_remote_t){ 0 };
     }
 
-    /* Build profile array to check */
-    string_array_t all_local;
-    const string_array_t *check = profiles;
+    /* The set: the scope's profiles, or on explicit request every local branch
+     * (lightweight, no ref resolution), listed in the command arena, where the
+     * value keeps it */
+    const string_array_t *profiles = scope_profiles(scope);
 
     if (opts->all_profiles) {
-        /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
-        err = gitops_list_branches(repo, ctx->arena, &all_local);
+        string_array_t *all_local = arena_calloc(ctx->arena, 1, sizeof(*all_local));
+        err = gitops_list_branches(repo, ctx->arena, all_local);
         if (err) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Cannot list every profile for remote sync status: %s",
                 error_line(err)
             );
-            return;
+            return (status_remote_t){ 0 };
         }
-        check = &all_local;
+        profiles = all_local;
     }
 
-    if (check->count == 0) return;
+    if (profiles->count == 0) return (status_remote_t){ 0 };
 
     /* Fetch if requested */
     if (!opts->no_fetch) {
@@ -1488,7 +1514,7 @@ static void status_print_remote(
         }
 
         /* Perform batched fetch — single network op for all branches */
-        err = gitops_fetch_branches(repo, remote_name, check, xfer);
+        err = gitops_fetch_branches(repo, remote_name, profiles, xfer);
 
         /* Resolve the "Fetching from ..." preamble line (verbose only) */
         if (verbose) {
@@ -1517,9 +1543,35 @@ static void status_print_remote(
         transfer_context_free(xfer);
     }
 
+    return (status_remote_t){ .name = remote_name, .profiles = profiles };
+}
+
+/**
+ * Print the remote sync status: a row per profile of the set the transport chose,
+ * each its state against the remote, then the summary — nothing where no section
+ * stands
+ *
+ * Reads what it prints and writes nothing: each profile's state off the refs
+ * the transport left (sys/upstream.h upstream_analyze_profile), and at -v the
+ * two heads its rows name.
+ *
+ * @param ctx Dispatch context (must not be NULL)
+ * @param remote The transport's answer (status_remote; must not be NULL)
+ */
+static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *remote) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(remote);
+
+    if (!remote->name) return;
+
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
+
+    bool verbose = output_is_verbose(out);
+
     /* The remote sync status section, under the title list's remote listing takes
      * too (cmds/list.c list_profiles) */
-    output_section(out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote_name);
+    output_section(out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote->name);
 
     /* Analyze and display each profile's sync state */
     size_t up_to_date = 0;
@@ -1530,8 +1582,8 @@ static void status_print_remote(
     size_t no_local = 0;
     size_t failed = 0;
 
-    for (size_t i = 0; i < check->count; i++) {
-        const char *profile = check->entries[i];
+    for (size_t i = 0; i < remote->profiles->count; i++) {
+        const char *profile = remote->profiles->entries[i];
 
         /* Analyze upstream state. A profile whose state could not be read is a
          * row of the section like any other, on the report's stream, its cause
@@ -1540,7 +1592,7 @@ static void status_print_remote(
          * a failure has no commit for -v to show. The error is dropped, one per
          * such profile. */
         upstream_info_t info;
-        err = upstream_analyze_profile(repo, remote_name, profile, &info);
+        error_t err = upstream_analyze_profile(repo, remote->name, profile, &info);
         if (err) {
             output_print(
                 out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {red}(✗ %s){reset}\n",
@@ -1609,7 +1661,7 @@ static void status_print_remote(
              * above. */
             char remote_ref[DOTTA_REFNAME_MAX];
             err = gitops_remote_branch_refname(
-                remote_ref, sizeof(remote_ref), remote_name, profile
+                remote_ref, sizeof(remote_ref), remote->name, profile
             );
             git_commit *remote_commit = NULL;
             if (!err) err = gitops_load_reference_commit(repo, remote_ref, &remote_commit);
@@ -1742,11 +1794,12 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         status_print_workspace(out, ws, manifest, scope, config);
     }
 
-    /* Show remote sync status (if requested): no remote configured is no section,
-     * said in its place where --remote asked for it, and every failure of its
-     * own is a line of it */
+    /* The remote half (if requested): its transport, then its section — no remote
+     * configured is no section, said in its place where --remote asked for one,
+     * and every failure of its own is a line of it */
     if (opts->show_remote) {
-        status_print_remote(ctx, opts, scope_profiles(scope));
+        const status_remote_t remote = status_remote(ctx, opts, scope);
+        status_print_remote(ctx, &remote);
     }
 
     return NULL;

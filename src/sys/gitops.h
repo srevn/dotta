@@ -695,8 +695,8 @@ error_t gitops_fetch_remote(
  * refspec the remote's configuration holds, or none.
  *
  * Readers: cmds/sync.c sync_fetch (every profile in the run's scope) and
- * cmds/status.c status_print_remote (every profile it lists), each asking for
- * branches the remote may never have held; cmds/profile.c profile_fetch (the
+ * cmds/status.c status_remote (every profile its section lists), each asking
+ * for branches the remote may never have held; cmds/profile.c profile_fetch (the
  * profiles the remote was just listed as holding, gitops_list_remote_branches).
  *
  * @param repo Repository (must not be NULL)
@@ -824,7 +824,7 @@ error_t gitops_get_remote_url(
  *   4. No remotes → ERR_NOT_FOUND, and nothing else is: a listing that fails,
  *      and a URL lookup that fails, are libgit2's errors (ERR_GIT). Read by
  *      cmds/remove.c remove_profile, as a profile that is this repository's alone,
- *      and cmds/status.c status_print_remote, as no section to print.
+ *      and cmds/status.c status_remote, as no section to print.
  *
  * When `out_url` is non-NULL, also looks up the remote's URL
  * (gitops_get_remote_url). A remote configured without a URL yields `*out_url =

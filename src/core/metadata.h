@@ -202,15 +202,17 @@ typedef struct stage stage_t;
  * and one that holds only a key looks the item up first. `encrypted` is
  * cross-checked nowhere: the content reader classifies the blob's own bytes and
  * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
- * answers "was it sealed when it was written" — a screen's question, or a
- * schedule's. Readers, each through the claim the profile decodes from it
- * (core/profiles.c profile_decode_blob): cmds/export.c export_entry_from_claim
- * (which blobs phase 1 reads), cmds/list.c list_collect_file, for list_files
- * (the mark, and the framing taken off the size beside it), and list_size_claim
- * (the same framing, in the fold the rows' total must agree with), cmds/show.c
- * show_print_blob (the annotation), the verbose capture lines of add and update
- * (cmds/add.c add_capture, cmds/update.c update_profile) and, onto the view's
- * rows (core/manifest.h manifest_row_t.encrypted), cmds/export.c
+ * answers "was it sealed when it was written" — a screen's question, a schedule's,
+ * and, where it says sealed, the seal a capture keeps, whatever bytes another
+ * writer committed under it. Readers, each through the claim the profile decodes
+ * from it (core/profiles.c profile_decode_blob): cmds/export.c
+ * export_entry_from_claim (which blobs phase 1 reads), cmds/list.c
+ * list_collect_file, for list_files (the mark, and the framing taken off the
+ * size beside it), and list_size_claim (the same framing, in the fold the rows'
+ * total must agree with), cmds/show.c show_print_blob (the annotation),
+ * core/profiles.c profile_sealed (the seal), the verbose capture lines of add
+ * and update (cmds/add.c add_capture, cmds/update.c update_profile) and, onto
+ * the view's rows (core/manifest.h manifest_row_t.encrypted), cmds/export.c
  * export_entry_from_row, core/workspace.c workspace_analyze_file and cmds/key.c
  * key_status.
  *

@@ -14,8 +14,9 @@
  * Policy hierarchy (priority order):
  * 0. Meta-file protection → PLAINTEXT or ERROR (system integrity)
  * 1. Explicit --encrypt flag → ENCRYPT (highest priority)
- * 2. Explicit --no-encrypt flag → PLAINTEXT, or ERROR over stored ciphertext
- * 3. File previously encrypted (byte truth) → ENCRYPT (maintain state)
+ * 2. Explicit --no-encrypt flag → PLAINTEXT, or ERROR where the profile holds
+ *    it sealed
+ * 3. The profile holds the file sealed → ENCRYPT (maintain state)
  * 4. Auto-encrypt patterns, when encryption is enabled → ENCRYPT (a selector —
  *    the last rule that reaches the path wins; base/gitignore.h)
  * 5. Default → PLAINTEXT (safe default)
@@ -64,13 +65,13 @@ typedef enum {
  * 1. If request is ENCRYPT → ENCRYPT (highest priority) Example: User ran `dotta
  *    add --encrypt file`
  *
- * 2. If request is PLAINTEXT → PLAINTEXT, or ERROR when the path's committed
- *    content is already encrypted Example: User ran `dotta add --no-encrypt file`
- *    Rationale: the flag's job is to keep a path out of the auto-encrypt patterns'
- *    reach (priority 4), not to declassify. Storing ciphertext back as plaintext
- *    would publish the secret to the branch and its history, so the conflict is
- *    refused rather than silently resolved either way; declassifying is
- *    remove-then-add, which leaves no prior state for priority 3 to read
+ * 2. If request is PLAINTEXT → PLAINTEXT, or ERROR when the profile holds the
+ *    path sealed Example: User ran `dotta add --no-encrypt file` Rationale: the
+ *    flag's job is to keep a path out of the auto-encrypt patterns' reach (priority
+ *    4), not to declassify. Storing a sealed file as plaintext would publish
+ *    the secret to the branch and its history, so the conflict is refused rather
+ *    than silently resolved either way; declassifying is remove-then-add, which
+ *    leaves no prior state for priority 3 to read
  *
  * 3. If previously_encrypted=true → ENCRYPT (maintain state) Example: `dotta
  *    update` on already-encrypted file Rationale: Preserve encryption state to
@@ -99,29 +100,30 @@ typedef enum {
  *   so on a previously-encrypted file would leak its content.
  *
  * Source of `previously_encrypted`:
- *   The caller computes this from byte truth: content_classify on the blob the
- *   profile holds at the name, judged by its mode — so a link, whose bytes are
- *   its target, keeps no name sealed — as both callers do, off the tree its
- *   profile's draft opened at (core/profiles.h profile_entry): update at each
- *   capture (cmds/update.c update_capture), add in its decision pass (cmds/add.c
- *   cmd_add). With no blob at the name there are no prior bytes, and the caller
- *   passes false. Policy never opens a metadata side-channel, and neither caller
- *   reads one for this: bytes are the single authority for whether a file IS
- *   encrypted, metadata.encrypted is a byte-derived cache (established at the
- *   write boundary in cmds/add.c, cmds/update.c, and cmds/revert.c's restore),
- *   and a sheet that disagrees with its tree is a state the view tolerates
- *   (core/profiles.c profile_step) — here, where a wrong answer publishes a secret.
+ *   The seal the profile holds at the name in the tree its draft opened at, asked
+ *   by the caller (core/profiles.h profile_sealed): update at each capture
+ *   (cmds/update.c update_capture), add in its decision pass (cmds/add.c cmd_add);
+ *   false where no blob stands, a link keeping no name sealed. Its two witnesses,
+ *   the blob's bytes and the claim's stamp, a cache of them established at the
+ *   write boundary (cmds/add.c, cmds/update.c, and cmds/revert.c's restore),
+ *   seal wherever either does: a sheet that disagrees with its tree is a state
+ *   the view tolerates (core/profiles.c profile_step), and here a wrong answer
+ *   publishes a secret. Stated: a stamp a hand writes over plaintext is a seal
+ *   like any other — the next capture seals the file, --no-encrypt is refused
+ *   over it, and with encryption off its capture is refused, update's after a
+ *   preview that listed it — and remove-then-add is the way out. Policy reads
+ *   the answer as the bool and opens no document.
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)
  * @param request What the user asked for on the command line
- * @param previously_encrypted Whether the file's prior bytes were encrypted (or
- *                             attempt-encrypted at an unsupported version)
+ * @param previously_encrypted Whether the profile holds the name sealed
+ *                             (core/profiles.h profile_sealed)
  * @param out_should_encrypt Output decision (must not be NULL)
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_VALIDATION: --encrypt on a meta-file, or --no-encrypt over ciphertext
+ * - ERR_VALIDATION: --encrypt on a meta-file, or --no-encrypt over a seal
  */
 error_t encryption_policy_should_encrypt(
     const config_t *config,

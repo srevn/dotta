@@ -16,7 +16,9 @@
  * decode (profile_decode_blob), over the entry that rule answers; and the directory
  * claim standing at a name through the question the walk asks of each item
  * (profile_directory_item), decoded as the walk decodes it
- * (profile_decode_directory). The counts and the need of a target are the walk,
+ * (profile_decode_directory). The seal at a name is the blob's, asked of its
+ * two witnesses: its stamp through the same decode, its bytes where the stamp
+ * says none (profile_sealed). The counts and the need of a target are the walk,
  * folded (profile_counts, profile_needs_target). A name's departure is its
  * history's one walk from a head (sys/history.h), read through the one table of
  * what each removal's action means (profile_departures). The draft is three things
@@ -314,8 +316,10 @@ error_t profile_load_sheet(profile_t *profile) {
  *
  * Readers: profile_step, at every blob the walk meets, and profile_find, at the
  * one it is asked — so the file claim a point question answers is the walk's;
- * and profile_capture_file, at the blob it put — so the claim a capture answers
- * is the one the next walk shows there.
+ * profile_sealed, at the blob a seal is asked of — so the stamp it reads is the
+ * one the screens read off the walk's claim; and profile_capture_file, at the
+ * blob it put — so the claim a capture answers is the one the next walk shows
+ * there.
  *
  * @param path The claim's name, which the claim keeps (must not be NULL)
  * @param id The blob's id (must not be NULL)
@@ -941,6 +945,55 @@ error_t profile_find(
     }
 
     CHECK_ARG(false, "a path kind no enumerator names");
+}
+
+error_t profile_sealed(profile_t *profile, const char *storage_path, bool *out) {
+    CHECK_NULL(profile);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out);
+
+    *out = false;
+
+    /* The blob at the name, or no seal: the tree's answer, the sheet unread where
+     * it gives none (profile_entry) */
+    profile_held_t held;
+    error_t err = profile_entry(profile, storage_path, &held);
+    if (err || held.kind != PROFILE_HELD_FILE) return err;
+
+    /* The stamp first, off the sheet the handle holds, where the bytes cost the
+     * blob loaded whole to reach six of them: the blob's claim decoded as the
+     * walk decodes it, so a link carries none (profile_decode_blob). A stamp
+     * that says sealed is the answer, whatever bytes another writer committed
+     * under it. */
+    err = profile_load_sheet(profile);
+    if (err) return err;
+    const profile_claim_t claim = profile_decode_blob(
+        storage_path, &held.oid, held.filemode,
+        metadata_find_item(profile->sheet, PATH_KIND_FILE, storage_path)
+    );
+    if (claim.encrypted) {
+        *out = true;
+        return NULL;
+    }
+
+    /* Then the bytes, which stay sealed where the stamp was lost over them — a
+     * hand's edit, a directory's item at the name: judged by the entry's mode,
+     * so a link's target is no seal whatever it begins with, and sealed at any
+     * cipher version, this build's or another. A blob that will not load is this
+     * question failing, never "not sealed": a sniff that defaulted would flip
+     * the policy silently. */
+    content_kind_t kind;
+    err = content_classify(
+        git_tree_owner(profile->tree), &held.oid, held.filemode, &kind, NULL
+    );
+    if (err) {
+        return error_wrap(
+            err, "Cannot read '%s' in profile '%s'", storage_path, profile->name
+        );
+    }
+
+    *out = kind != CONTENT_PLAINTEXT;
+    return NULL;
 }
 
 void profile_departures(

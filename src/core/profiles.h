@@ -32,7 +32,8 @@
  *
  * The decode, stated once, applied by the walk to every name it meets
  * (profile_walk) and by profile_find to the one it is asked, by the same rules
- * — so the claim profile_find answers at a name is the one the walk shows there:
+ * — so the claim profile_find answers at a name is the one the walk shows there,
+ * and the stamp profile_sealed reads the one the walk's claim carries:
  * - a name in the grammar is content and nothing else is: dotta's own files and
  *   whatever a hand left beside the labels are machinery, skipped, a tree of it
  *   with everything beneath (infra/label.h label_prefixes)
@@ -351,16 +352,17 @@ typedef enum {
  * metadata_load_from_tree).
  *
  * Readers: profile_walk, profile_contradicted and the point questions
- * (profile_holds, profile_find), which read the sheet through it; a profile's
- * draft, which reads it at the open, strictly, and copies it for the commit
- * (profile_draft_open, profile_draft_orphan); cmds/revert.c cmd_revert, which
- * reads its target commit's before any question of it, its failure said as the
- * commit's; cmds/show.c show_file, whose header says what its tolerant read lost;
- * cmds/list.c list_files, whose verbose rows say what its tolerant walk lost;
- * cmds/export.c cmd_export, which says what a tolerant arm's collection lost,
- * once, beside the two arms whose copy came out empty, where the failure is the
- * answer (export_collect_profile, export_collect_storage); and cmds/remove.c
- * remove_profile, which says before its preview what its hooks' tolerant list lost.
+ * (profile_holds, profile_find, profile_sealed), which read the sheet through
+ * it; a profile's draft, which reads it at the open, strictly, and copies it
+ * for the commit (profile_draft_open, profile_draft_orphan); cmds/revert.c
+ * cmd_revert, which reads its target commit's before any question of it, its
+ * failure said as the commit's; cmds/show.c show_file, whose header says what
+ * its tolerant read lost; cmds/list.c list_files, whose verbose rows say what
+ * its tolerant walk lost; cmds/export.c cmd_export, which says what a tolerant
+ * arm's collection lost, once, beside the two arms whose copy came out empty,
+ * where the failure is the answer (export_collect_profile, export_collect_storage);
+ * and cmds/remove.c remove_profile, which says before its preview what its hooks'
+ * tolerant list lost.
  *
  * @param profile Handle (must not be NULL)
  * @return The sheet's failure, in the loader's words, or NULL
@@ -648,16 +650,14 @@ typedef struct {
  * holds.
  *
  * Readers: profile_holds, which asks it first and the sheet on its silence;
- * profile_find, whose file claim is the blob it answers; cmds/revert.c cmd_revert,
- * at the name the restore writes in the head (step 11), the entry's identity
- * what the preview diffs, and revert_select_profile, at each holder's own name
- * for the argument — whether a file can be restored there (revert_restorable,
- * the one question both ask); the encryption policy's prior — the blob the profile
- * holds at the name in the tree its draft opened at, judged by its own bytes,
- * and none where no blob stands — at each capture (cmds/update.c update_capture)
- * and in add's decision pass (cmds/add.c cmd_add); and a profile's changes, whether
- * a blob stands at a name the sheet moved and the tree did not, where the base's
- * is the commit's (profile_changes).
+ * profile_find, whose file claim is the blob it answers; profile_sealed, whose
+ * seal is that blob's, its stamp or its bytes, and none where no blob stands;
+ * cmds/revert.c cmd_revert, at the name the restore writes in the head (step
+ * 11), the entry's identity what the preview diffs, and revert_select_profile,
+ * at each holder's own name for the argument — whether a file can be restored
+ * there (revert_restorable, the one question both ask); and a profile's changes,
+ * whether a blob stands at a name the sheet moved and the tree did not, where
+ * the base's is the commit's (profile_changes).
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path (must not be NULL)
@@ -708,9 +708,8 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * holder's head in its search (revert_select_profile, at the holder's own name
  * for the argument), where a directory claim is never refused — it gives way to
  * the write where it stands, and rides it where the head's blob contradicts it;
- * the encryption prior of update's captures and of add's decision pass
- * (cmds/update.c update_capture, cmds/add.c cmd_add), a blob's bytes or none;
- * and a profile's changes, whether a blob stands at a name the tree did not move
+ * the seal a capture keeps (profile_sealed), which a blob alone holds; and a
+ * profile's changes, whether a blob stands at a name the tree did not move
  * (profile_changes).
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
@@ -767,6 +766,34 @@ error_t profile_find(
     const char *storage_path,
     const profile_claim_t **out
 );
+
+/**
+ * Whether the profile holds `storage_path` sealed: the seal a capture there keeps
+ *
+ * Asked of the blob at the name, and sealed where either of its two witnesses
+ * says so — the claim's stamp, as the walk decodes it (none on a link), and the
+ * blob's own bytes, judged by its mode (infra/content.h content_classify). The
+ * stamp is a cache of the bytes (core/metadata.h), and where the two disagree
+ * whether the name is meant sealed is unknown, so the answer is the one that
+ * publishes nothing. The stamp is read first, the bytes only where it says none.
+ * No blob at the name — no entry, a subtree, a gitlink a hand left — holds no seal.
+ *
+ * Strict, with no policy to spell: a stamp unread could be the seal itself, so
+ * a sheet that will not load is this answer's failure wherever a blob stands.
+ *
+ * Readers: the encryption policy's prior (core/policy.h
+ * encryption_policy_should_encrypt), asked of a draft's base, whose sheet the
+ * open read (profile_draft_base) — cmds/add.c cmd_add's decision pass, before
+ * any capture, and cmds/update.c update_capture, at each file it captures.
+ *
+ * @param profile Handle (must not be NULL); its sheet read through it where a
+ *                blob stands at the name
+ * @param storage_path A validated storage path (must not be NULL)
+ * @param out Whether the name is sealed (must not be NULL; false after an error)
+ * @return Error or NULL on success: the tree's or the blob's, under "Cannot read
+ *         '%s' in profile '%s'"; the sheet's, in the loader's words
+ */
+error_t profile_sealed(profile_t *profile, const char *storage_path, bool *out);
 
 /**
  * What a profile's history says of a name: whether it left, and what took it

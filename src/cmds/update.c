@@ -34,13 +34,12 @@
  * Capture a path from the filesystem as the entry it becomes
  *
  * A regular file is sealed as the policy decides (core/policy.h), and the seal
- * it keeps — priority 3 — is read off the blob the profile holds at this name
- * in the tree its draft opened at, by that blob's own bytes (core/profiles.h
- * profile_entry, infra/content.h content_classify), never from the sheet's copy
- * of that fact. The view projects the copy for its screens, and a sheet that
- * disagrees with its tree — a hand edit, another tool's commit, the contradicted
- * claim a profile decodes as no claim at all (core/profiles.c profile_step) —
- * would otherwise have this capture store a secret in the clear.
+ * it keeps — priority 3 — is the one the profile holds at this name in the tree
+ * its draft opened at, its stamp or its blob's own bytes (core/profiles.h
+ * profile_sealed). Either sealing is the answer, so a sheet that disagrees with
+ * its tree — a hand edit, another tool's commit, the contradicted claim a profile
+ * decodes as no claim at all (core/profiles.c profile_step) — never has this
+ * capture store in the clear what either calls a secret.
  *
  * Routed by what the load observed at the path, as add routes by what its listing
  * found there (cmds/add.c add_capture) — every item on this route carries an
@@ -55,9 +54,9 @@
  * the caller's. So the profile is asked here and never edited: the one question
  * asked of it is the prior above.
  *
- * @param ctx Dispatch context (must not be NULL; supplies the repository, the
- *            key and the encryption policy)
- * @param base The profile as its draft opened it (must not be NULL): the blob
+ * @param ctx Dispatch context (must not be NULL; supplies the key and the
+ *            encryption policy)
+ * @param base The profile as its draft opened it (must not be NULL): the seal
  *             it holds at the item's name is the prior this capture's policy
  *             reads, and its name the seal's key
  * @param item The path to capture (must not be NULL; its occupant chooses the
@@ -89,26 +88,14 @@ static error_t update_capture(
         return content_capture_link(filesystem_path, out);
     }
 
-    /* Priority 3's source: the blob the profile holds at this name in the tree
-     * its draft opened at — the head, which no edit moves — judged by its bytes
-     * and its mode; no blob at all, a name new to the profile or a gitlink a
-     * hand left, which places nothing, is no prior. A blob that cannot be read
-     * is an error, not "not encrypted": a sniff that defaulted would flip the
-     * policy silently. */
-    profile_held_t prior;
-    error_t err = profile_entry(base, storage_path, &prior);
+    /* Priority 3's source: the seal the profile holds at this name in the tree
+     * its draft opened at — the head, which no edit moves; no blob at all, a
+     * name new to the profile or a gitlink a hand left, which places nothing,
+     * holds none. A seal that cannot be read is the capture's failure, never
+     * "not encrypted". */
+    bool sealed = false;
+    error_t err = profile_sealed(base, storage_path, &sealed);
     if (err) return err;
-    content_kind_t prior_kind = CONTENT_PLAINTEXT;
-    if (prior.kind == PROFILE_HELD_FILE) {
-        err = content_classify(
-            ctx->run.repo, &prior.oid, prior.filemode, &prior_kind, NULL
-        );
-        if (err) {
-            return error_wrap(
-                err, "Failed to classify the committed bytes of '%s'", storage_path
-            );
-        }
-    }
 
     /* Handle regular file - determine encryption policy using centralized logic */
     bool should_encrypt = false;
@@ -116,7 +103,7 @@ static error_t update_capture(
         ctx->config,
         storage_path,
         ENCRYPTION_REQUEST_NONE,  /* update carries no encryption flags */
-        prior_kind != CONTENT_PLAINTEXT,
+        sealed,
         &should_encrypt
     );
     if (err) return err;

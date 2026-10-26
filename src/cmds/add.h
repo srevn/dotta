@@ -87,13 +87,13 @@ typedef struct {
  * core/policy). A path beneath a tracked `home/jail/etc` is matched as `jail/etc/x`
  * and not as `etc/x`, whichever root it physically lies under. The source tree's
  * own `.gitignore` keeps reading where the path stands, that repository's rules
- * being relative to its own root. Prior ciphertext is preserved by the policy's
- * read of the committed bytes and not by a pattern, so a re-capture under a name
- * no pattern matches stays sealed. The encryption verdict is decided with the
- * name, before any capture runs: a verdict that seals on a machine with encryption
- * turned off refuses the command before a byte of it is stored, and a link —
- * whose entry is its target — is never sealed, nor keeps a name sealed
- * (infra/content.h).
+ * being relative to its own root. A prior seal is preserved by the profile's
+ * own — its stamp or its committed bytes (core/profiles.h profile_sealed) — and
+ * not by a pattern, so a re-capture under a name no pattern matches stays sealed.
+ * The encryption verdict is decided with the name, before any capture runs: a
+ * verdict that seals on a machine with encryption turned off refuses the command
+ * before a byte of it is stored, and a link — whose entry is its target — is
+ * never sealed, nor keeps a name sealed (infra/content.h).
  *
  * **What the selection promises**: a command that succeeds captures every path
  * it listed, files and directories alike, each as the kind it was listed as — a

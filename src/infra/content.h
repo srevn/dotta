@@ -68,8 +68,8 @@
  *   (cipher for the format's constants and header, keymgr for every encrypt and
  *   decrypt)
  * - Used by: infra/epoch (the census classifies), core (workspace's looks, deploy's
- *   reads, policy's byte truth), commands (show, diff, export, revert, list;
- *   add and update through the two captures)
+ *   reads, a profile's seal), commands (show, diff, export, revert, list; add
+ *   and update through the two captures)
  */
 
 #ifndef DOTTA_CONTENT_H
@@ -137,13 +137,14 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * Asked where the answer is a decision or a key, never where it is a screen or
  * a schedule: the store's refusal of a plaintext that reads as ciphertext makes
  * the profile's stamp true for every file dotta seals, and a screen reads that
- * stamp instead (core/metadata.h metadata_item_t). Readers: `cmds/add.c cmd_add`
- * and `cmds/update.c update_capture` (policy priority 3, where a wrong answer
- * commits a secret in the clear), `cmds/revert.c cmd_revert` (the stamp it writes,
- * and existence for every filemode), `infra/epoch.c epoch_present_blob` (which
- * blobs a rotation must not orphan, where a false absence outlives the run).
- * Every reader is outside this module, and that is the shape rather than an
- * accident: content's own functions judge bytes they already hold
+ * stamp instead (core/metadata.h metadata_item_t) — as the seal a capture keeps
+ * does first, asking the bytes only where the stamp says none. Readers:
+ * `core/profiles.c profile_sealed` (that seal, policy priority 3, where a wrong
+ * answer commits a secret in the clear), `cmds/revert.c cmd_revert` (the stamp
+ * it writes, and existence for every filemode), `infra/epoch.c epoch_present_blob`
+ * (which blobs a rotation must not orphan, where a false absence outlives the
+ * run). Every reader is outside this module, and that is the shape rather than
+ * an accident: content's own functions judge bytes they already hold
  * (content_classify_bytes on a view, classify_entry inside a read), so none of
  * them pays a load to ask. A reader not on this list is a bug.
  *

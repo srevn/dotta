@@ -302,7 +302,9 @@ Bytes are the single authoritative source for "is this blob encrypted?":
 - `CONTENT_ENCRYPTED` → decrypt via `keymgr_decrypt`.
 - `CONTENT_UNSUPPORTED_VERSION` → `ERR_CRYPTO` with a version-skew diagnostic citing the unrecognized version byte; prevents deploying unrecognized ciphertext verbatim to the filesystem.
 
-That authority is the **read path's**, and it is not the only question asked about a blob. Where the answer is a decision or a key — which route a read takes, whether a capture may store plaintext, which blobs a rotation must not orphan — the bytes answer, and nothing else may. Where the answer is a screen or a schedule, the branch's own claim sheet answers instead: `dotta list -v`'s `[E]` mark and the size beside it, `dotta show`'s `(encrypted)` annotation, and which blobs `dotta export` decrypts before its first write. Those readers open no content blob at all, because a packed object has no partial read and asking six bytes costs the whole file. What makes the sheet trustworthy there is the store refusal below, and a sheet written by hand to lie costs a glyph, a number, or the moment a passphrase prompt appears — never a byte, a secret, or a key.
+That authority is the **read path's**, and it is not the only question asked about a blob. Where the answer is a decision or a key — which route a read takes, which blobs a rotation must not orphan — the bytes answer, and nothing else may. Where the answer is a screen or a schedule, the branch's own claim sheet answers instead: `dotta list -v`'s `[E]` mark and the size beside it, `dotta show`'s `(encrypted)` annotation, and which blobs `dotta export` decrypts before its first write. Those readers open no content blob at all, because a packed object has no partial read and asking six bytes costs the whole file. What makes the sheet trustworthy there is the store refusal below, and a sheet written by hand to lie costs a glyph, a number, or the moment a passphrase prompt appears — never a byte, a secret, or a key.
+
+Whether a capture may store plaintext is the one decision both answer, and either can only seal: a file stays encrypted where the sheet's `encrypted` stamp says so or its committed bytes are ciphertext (`core/profiles.h profile_sealed`), the stamp read first and the blob only where the stamp says none. Where the two disagree, whether the file is meant encrypted is unknown, and the capture publishes nothing. So a stamp a hand writes over plaintext is a seal like any other: the next capture encrypts the file, `--no-encrypt` is refused over it, and with encryption off its capture is refused — removing the path and adding it again is the way out.
 
 ### Store refusal and write-time invariant
 
@@ -377,7 +379,7 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
 2. Policy decision (core/policy.c):
    - Protected meta-files (.bootstrap, .dottaignore, .dotta/metadata.json)
      are always plaintext (rejected with an error if --encrypt is requested).
-   - Otherwise priority: --encrypt > --no-encrypt > previous metadata state
+   - Otherwise priority: --encrypt > --no-encrypt > the profile's seal
                          > auto-encrypt patterns > default plaintext.
 
 3. Read plaintext from filesystem.
@@ -437,7 +439,7 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
 
 ## Auto-encryption policy
 
-Implemented in `src/core/policy.c`. Evaluates booleans from `config_t` and `metadata_t` without calling cryptographic primitives.
+Implemented in `src/core/policy.c`. Decides from the configuration, the request, and the seal the caller asked of the profile (`core/profiles.h profile_sealed`), without calling cryptographic primitives.
 
 ### Configuration
 
@@ -455,7 +457,7 @@ Patterns compile once into a `gitignore_ruleset_t` at `config_load` — whether 
 
 The grammar is gitignore's — `!` negation, directory-only patterns, anchoring, and `**` recursive globs (via `base/gitignore`) — but the program is *selection*, not exclusion: the last rule that reaches the path decides, where a rule reaches a path when it matches the path itself or any directory above it. A `!` stands wherever the user put it and nothing is final, so `[".ssh/", "!.ssh/*.pub"]` leaves the public keys plaintext while `["!.ssh/*.pub", ".ssh/"]` does not. `.dottaignore` reads the other program (an excluded directory is final), and `base/gitignore.h` states both.
 
-A file already stored as ciphertext is unaffected by a pattern change: priority 3 reads the committed bytes and keeps it encrypted.
+A file already stored encrypted is unaffected by a pattern change: priority 3 reads the profile's seal — its stamp, or its committed bytes — and keeps it encrypted.
 
 ### Decision priority
 
@@ -464,7 +466,7 @@ A file already stored as ciphertext is unaffected by a pattern change: priority 
 1. **Protected meta-files** (`.bootstrap`, `.dottaignore`, `.dotta/metadata.json`) — always plaintext. Explicit `--encrypt` on these files is rejected with a clear error.
 2. **Explicit `--encrypt`** on the command line.
 3. **Explicit `--no-encrypt`** on the command line.
-4. **Previous state in metadata.** A file previously encrypted stays encrypted on subsequent `update` so workflows like *add → modify → update* don't accidentally drop encryption.
+4. **The profile's seal.** A file the profile holds encrypted — its stamp in `.dotta/metadata.json` says so, or its committed bytes are ciphertext — stays encrypted on subsequent `add` and `update`, so workflows like *add → modify → update* don't accidentally drop encryption.
 5. **Auto-encrypt patterns**.
 6. **Default plaintext.**
 

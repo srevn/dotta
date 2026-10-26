@@ -162,21 +162,21 @@ error_t encryption_policy_should_encrypt(
     /* Priority 2: Explicit --no-encrypt keeps a path out of the auto-encrypt
      * patterns' reach — that is the whole of its job, and what its help says.
      *
-     * It is not a declassification verb. A blob that is already ciphertext is
-     * not a pattern's doing, and rewriting it as plaintext would put the secret
-     * into the branch, into its history, and into every clone that pulls it —
-     * with no way to take it back and nothing on screen to say it happened. The
-     * two facts together are a conflict, not a race for precedence, so the flag
-     * is refused here the way an --encrypt on a meta-file is refused above: the
+     * It is not a declassification verb. A file the profile holds sealed is not
+     * a pattern's doing, and storing it as plaintext would put the secret into
+     * the branch, into its history, and into every clone that pulls it — with
+     * no way to take it back and nothing on screen to say it happened. The two
+     * facts together are a conflict, not a race for precedence, so the flag is
+     * refused here the way an --encrypt on a meta-file is refused above: the
      * user is told which fact stood and what to do instead.
      *
-     * Declassifying is remove-then-add: with no prior blob there is no prior
-     * state, priority 3 has nothing to say, and the file is stored plaintext. */
+     * Declassifying is remove-then-add: with no prior blob there is no seal,
+     * priority 3 has nothing to say, and the file is stored plaintext. */
     if (request == ENCRYPTION_REQUEST_PLAINTEXT) {
         if (previously_encrypted) {
             return error_create(
-                ERR_VALIDATION, "Cannot store '%s' as plaintext: its committed content "
-                "is encrypted, and --no-encrypt does not decrypt content; a path "
+                ERR_VALIDATION, "Cannot store '%s' as plaintext: the profile holds it "
+                "encrypted, and --no-encrypt does not decrypt content; a path "
                 "removed from the profile and added again with --no-encrypt is "
                 "stored plaintext", storage_path
             );
@@ -188,10 +188,10 @@ error_t encryption_policy_should_encrypt(
 
     /* Priority 3: Maintain previous encryption state.
      *
-     * Source: byte truth, threaded in by the caller. The caller has already
-     * classified the relevant blob (or passed false when no prior blob exists)
-     * — policy reads it as a pure bool with no metadata side-channel, no I/O,
-     * no allocation. Important for workflows like:
+     * Source: the seal the profile holds at the name, asked by the caller — its
+     * stamp or its bytes, false where no blob stands (core/profiles.h
+     * profile_sealed) — and read here as a pure bool, with no I/O and no
+     * allocation. Important for workflows like:
      *   1. dotta add --encrypt file
      *   2. ... modify file on disk ...
      *   3. dotta update file  (should stay encrypted)

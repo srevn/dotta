@@ -2308,11 +2308,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The encryption decision, taken with the name and never with a source byte.
      * Its inputs are the config, the name this command chose, the request, and
-     * the blob the profile holds at that name in the tree its draft opened at —
-     * judged by its mode and its header, never by a claim, with no key and no
-     * source file (core/profiles.h profile_entry, infra/content.h content_classify)
-     * — so it is a decision and is made with the others, before any capture runs.
-     * The capture is told (add_capture).
+     * the seal the profile holds at that name in the tree its draft opened at —
+     * its stamp, or its blob's header, with no key and no source file
+     * (core/profiles.h profile_sealed) — so it is a decision and is made with
+     * the others, before any capture runs. The capture is told (add_capture).
      *
      * A regular file alone: a link's entry is its target and carries no seal
      * (core/policy.h), so the policy is never asked about one; and the capture
@@ -2320,32 +2319,20 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * then is refused by it, never stored under a verdict nobody reached.
      *
      * A file the profile holds is captured under --force alone (add_list), so a
-     * blob is met here only then; with none — a name new to the profile, or a
-     * gitlink, which places nothing — there are no prior bytes, and priorities
-     * 4 and 5 decide. A blob that cannot be read is an error, not "not encrypted":
-     * a sniff that defaulted would flip the policy silently. And a verdict that
-     * seals is refused here when this run can never seal — encryption turned
-     * off — rather than at a capture the others would already have preceded into
-     * the object database. */
+     * seal is met here only then; with no blob — a name new to the profile, or
+     * a gitlink, which places nothing — none is held, and priorities 4 and 5
+     * decide. A seal that cannot be read is the run's failure, never "not
+     * encrypted". And a verdict that seals is refused here when this run can
+     * never seal — encryption turned off — rather than at a capture the others
+     * would already have preceded into the object database. */
     for (size_t i = 0; i < walk.files.count; i++) {
         add_path_t *path = walk.files.entries[i];
         if (path->occupant == FS_OCCUPANT_SYMLINK) continue;
 
         const char *storage_path = path->claim.storage_path;
-        profile_held_t prior;
-        err = profile_entry(profile_draft_base(draft), storage_path, &prior);
+        bool sealed = false;
+        err = profile_sealed(profile_draft_base(draft), storage_path, &sealed);
         if (err) goto cleanup;
-        content_kind_t prior_kind = CONTENT_PLAINTEXT;
-        if (prior.kind == PROFILE_HELD_FILE) {
-            err = content_classify(repo, &prior.oid, prior.filemode, &prior_kind, NULL);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to classify the committed bytes of '%s'",
-                    storage_path
-                );
-                goto cleanup;
-            }
-        }
 
         /* Returned as they are. The policy's refusals are the user's to read —
          * they name the path, the fact that stood and the way on — and a wrap
@@ -2353,8 +2340,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * happened; the encryption switch's refusal names the path and its cause
          * the same way. */
         err = encryption_policy_should_encrypt(
-            config, storage_path, opts->encrypt_mode,
-            prior_kind != CONTENT_PLAINTEXT, &path->should_encrypt
+            config, storage_path, opts->encrypt_mode, sealed, &path->should_encrypt
         );
         if (err) goto cleanup;
 

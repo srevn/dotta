@@ -268,9 +268,9 @@ static const char *get_status_message_from_item(
     }
 
     /* Profile reassignment with no content/metadata divergence — apply's to
-     * acknowledge, so upstream's alone: the downstream filter admits a reassignment
-     * only beside a difference update commits, whose sentence answers above
-     * (should_show_item_for_direction). */
+     * acknowledge, so upstream's alone: downstream admits a reassignment only
+     * on a route whose sentence answers above — a capture, a failed look, bytes
+     * no base proves (should_show_item_for_direction). */
     if (workspace_reassigned(item->row, item->record, item->occupant)) {
         return "profile reassigned (acknowledged by apply)";
     }

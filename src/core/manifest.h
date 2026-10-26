@@ -102,16 +102,16 @@
  *
  *   - Readers: manifest_rows (every row standing, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
- *     manifest_mounts (the table the rows were placed by, lent), manifest_lookup
- *     (by filesystem path, O(1)), manifest_blob_above and manifest_active_beneath
- *     (the blob standing above a path, and whether a row stands beneath it),
- *     manifest_holder (the one row holding a name, or a refusal naming each),
- *     manifest_lookup_claim and manifest_lookup_storage (one profile's claim,
- *     at a path and by its name), manifest_name, manifest_claim_name,
- *     manifest_holds_name, manifest_holds_row and manifest_moved_place (one
- *     profile's own contribution, whatever stands); and manifest_diff, the
- *     per-profile delta between two views, in claims, that sync's Manifest block
- *     prints.
+ *     manifest_head (the commit each one's rows were read from), manifest_mounts
+ *     (the table the rows were placed by, lent), manifest_lookup (by filesystem
+ *     path, O(1)), manifest_blob_above and manifest_active_beneath (the blob
+ *     standing above a path, and whether a row stands beneath it), manifest_holder
+ *     (the one row holding a name, or a refusal naming each), manifest_lookup_claim
+ *     and manifest_lookup_storage (one profile's claim, at a path and by its
+ *     name), manifest_name, manifest_claim_name, manifest_holds_name,
+ *     manifest_holds_row and manifest_moved_place (one profile's own contribution,
+ *     whatever stands); and manifest_diff, the per-profile delta between two
+ *     views, in claims, that sync's Manifest block prints.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -351,14 +351,16 @@ typedef struct manifest manifest_t;
  * row and is recorded on the view (manifest_unbound); the health consumers surface
  * it, and the build stays total over importable content.
  *
- * A profile whose branch does not exist contributes no rows; the scope layer
- * already warns about the dead branch on every run, and the workspace reads that
- * profile's records as orphans. The unbound claim is the dead branch's sibling
- * at claim scale: this machine cannot place it, and the build says so as data,
- * not failure. Only those two questions are tolerant: a branch that exists but
- * cannot be loaded (corrupt object, I/O) still fails the build, as do a failed
- * lookup and metadata that will not parse — those stay retryable errors, never
- * silent omissions.
+ * Each profile is read at its branch's head, once: the commit whose tree its
+ * claims come from, its id kept beside them (manifest_head), so the rows and
+ * the head are one read of the ref. A profile whose branch does not exist
+ * contributes no rows; the scope layer already warns about the dead branch on
+ * every run, and the workspace reads that profile's records as orphans. The unbound
+ * claim is the dead branch's sibling at claim scale: this machine cannot place
+ * it, and the build says so as data, not failure. Only those two questions are
+ * tolerant: a branch that exists but cannot be loaded (corrupt object, I/O) still
+ * fails the build, as do a failed lookup and metadata that will not parse — those
+ * stay retryable errors, never silent omissions.
  *
  * Per profile, in order: the claims its walk shows (core/profiles.h profile_walk)
  * — the tree's blobs first, then the DIRECTORY items of its metadata.json — are
@@ -526,6 +528,27 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * @return Borrowed array of profile names, or NULL when count is 0
  */
 const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
+
+/**
+ * The commit a profile's rows were read from
+ *
+ * The head its branch named when the view was built: the build reads each enabled
+ * branch's commit once, opens its tree and keeps the commit's id beside the claims
+ * it read there (manifest_build), so the rows and this id are one read of the
+ * ref, and a branch another process moves after the build moves neither. NULL
+ * for a profile the view holds no contribution of — not enabled, or missing,
+ * its branch gone (manifest_missing) — and for one profile's view, built at a
+ * tree its caller holds, which names no commit (manifest_build_profile). A profile
+ * whose branch stands and claims nothing has a head and no row.
+ *
+ * Pure value return — no allocation, no error path. The id is the view's, valid
+ * for the arena's lifetime.
+ *
+ * @param manifest Manifest (NULL returns NULL)
+ * @param profile The profile (NULL returns NULL)
+ * @return Borrowed id, or NULL where the view holds none for the profile
+ */
+const git_oid *manifest_head(const manifest_t *manifest, const char *profile);
 
 /**
  * The table the rows were placed by

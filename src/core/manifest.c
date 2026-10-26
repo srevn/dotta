@@ -79,6 +79,7 @@
  */
 typedef struct {
     const char *profile;           /* Arena-backed; the same pointer every row of it carries */
+    git_oid head;                  /* The commit its claims were read from; zero for one profile's view */
     manifest_row_t **rows;         /* Every row each index keeps, in claim order (arena, exact) */
     size_t count;                  /* Rows in it */
     hashmap_t *explicit;           /* path → the explicit claim kept there (arena) */
@@ -920,9 +921,10 @@ static error_t manifest_note_claim(const profile_claim_t *claim, void *payload) 
  *
  * The per-profile step both builders run, and the whole of the within-profile
  * rule. The contribution is registered here — its arena-backed name (every row
- * of it borrows the pointer), its two indexes, and its slot in the view's parallel
- * arrays — so one function owns one profile's claims from the name to the settled
- * spine, and the builders hand over a profile.
+ * of it borrows the pointer), the commit its claims were read from, its two
+ * indexes, and its slot in the view's parallel arrays — so one function owns
+ * one profile's claims from the name to the settled spine, and the builders hand
+ * over a profile and its head.
  *
  * The profile's walk shows every claim the profile makes, decoded (core/profiles.h
  * profile_walk) — its blobs, then the directory claims its own tree does not
@@ -947,18 +949,22 @@ static error_t manifest_note_claim(const profile_claim_t *claim, void *payload) 
  *                 rows)
  * @param profile The profile (must not be NULL; its name is copied, and its sheet
  *                read through it)
+ * @param head The commit the profile's tree is the head of, its id copied
+ *             (manifest_head), or NULL for a tree its caller holds
  * @param arena Arena backing the contribution (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t manifest_contribute(
     manifest_t *manifest,
     profile_t *profile,
+    const git_oid *head,
     arena_t *arena
 ) {
     /* Register the contribution before anything can fail into it: the name is
      * arena-backed so the view never depends on the profile or on the state's
      * row cache, and the indexes are the arena's too, so a build that stops partway
-     * leaves nothing behind but the arena's bytes. */
+     * leaves nothing behind but the arena's bytes. The head is a value, zero
+     * where none was read. */
     contribution_t *c = &manifest->contributions[manifest->profile_count];
 
     *c = (contribution_t){
@@ -966,6 +972,7 @@ static error_t manifest_contribute(
         .explicit = hashmap_borrow(arena, 128),
         .derived = hashmap_borrow(arena, 32),
     };
+    if (head) git_oid_cpy(&c->head, head);
     manifest->profiles[manifest->profile_count++] = c->profile;
 
     /* The step's two lists, read only while it runs: every row this profile placed,
@@ -1522,28 +1529,41 @@ error_t manifest_build(
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         const char *name = enabled_profiles.entries[i].name;
 
-        /* The profile's tree, scoped to the iteration, or none where its branch
+        /* The profile's head, scoped to the iteration, or none where its branch
          * is gone — and "missing" is not "broken": missing is an observation —
          * the profile contributes nothing, is listed among the missing
          * (manifest_missing) and not among the view's profiles, and the workspace
          * reads its records as orphans — broken is an error that must propagate. */
-        git_tree *tree = NULL;
-        err = gitops_branch_tree(repo, name, &tree);
+        git_commit *head = NULL;
+        err = gitops_branch_commit(repo, name, &head);
         if (err) return err;
-        if (!tree) {
+        if (!head) {
             manifest_note_missing(manifest, arena_strdup(arena, name), arena);
             continue;
         }
 
-        /* The profile's claims: the profile at the tree just opened, its sheet
-         * read by the profile's walk from that tree, under the name whose claims
-         * they are. One view, many profiles. The name the step copies is what
-         * every row of it borrows, so the view never depends on the state's row
-         * cache, and the profile goes with the tree. */
+        /* The head's tree, in the words the profile's walk says of a tree it
+         * cannot read (core/profiles.h profile_walk): the view names the profile
+         * once, whichever read failed */
+        git_tree *tree = NULL;
+        int rc = git_commit_tree(&tree, head);
+        if (rc < 0) {
+            git_commit_free(head);
+            return error_git(rc, "Cannot read profile '%s'", name);
+        }
+
+        /* The profile's claims: the profile at the head's tree, its sheet read
+         * by the profile's walk from that tree, under the name whose claims they
+         * are, and the head's id kept beside them (manifest_head) — the rows
+         * and the head one read of the ref. One view, many profiles. The name
+         * the step copies is what every row of it borrows, so the view never
+         * depends on the state's row cache, and the profile, the tree and the
+         * head go with the iteration. */
         profile_t *profile = profile_open(name, tree);
-        err = manifest_contribute(manifest, profile, arena);
+        err = manifest_contribute(manifest, profile, git_commit_id(head), arena);
         profile_free(profile);
         git_tree_free(tree);
+        git_commit_free(head);
 
         if (err) return err;
     }
@@ -1579,8 +1599,8 @@ error_t manifest_build_profile(
 
     /* One contribution, settled and layered like any other, so one profile's
      * view answers manifest_lookup_claim and manifest_name exactly as an enabled
-     * view does. */
-    error_t err = manifest_contribute(manifest, profile, arena);
+     * view does — at a tree, which names no commit, so with no head. */
+    error_t err = manifest_contribute(manifest, profile, NULL, arena);
     if (err) return err;
 
     manifest_layer(manifest, arena);
@@ -1685,6 +1705,16 @@ static const contribution_t *manifest_contribution(
     }
 
     return NULL;
+}
+
+/**
+ * The commit a profile's rows were read from
+ */
+const git_oid *manifest_head(const manifest_t *manifest, const char *profile) {
+    if (!manifest) return NULL;
+
+    const contribution_t *c = manifest_contribution(manifest, profile);
+    return c && !git_oid_is_zero(&c->head) ? &c->head : NULL;
 }
 
 /**

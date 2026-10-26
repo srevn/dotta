@@ -410,10 +410,12 @@ error_t gitops_reference_tree(
  *
  * gitops_reference_commit of refs/heads/<name>, the name through the branch rule
  * (gitops_branch_refname) on the way: gitops_branch_tree's twin, for a reader
- * that asks the history behind the head. Readers: core/workspace.c
- * workspace_ask_departures (each owned file orphan's profile, whose branch gone
- * answers every name GONE) and cmds/sync.c sync_departure_counts (each profile
- * whose files a pull's view lost).
+ * that needs the head itself — the history behind it, or its id beside its tree.
+ * Readers: core/manifest.c manifest_build (each enabled profile, its claims read
+ * from the head's tree and the head's id kept beside them, a branch gone
+ * contributing nothing), core/workspace.c workspace_ask_departures (each owned
+ * file orphan's profile, whose branch gone answers every name GONE) and cmds/sync.c
+ * sync_departure_counts (each profile whose files a pull's view lost).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
@@ -429,9 +431,8 @@ error_t gitops_branch_commit(
  * The tree a branch names, or NULL where the branch does not stand
  *
  * gitops_reference_tree of refs/heads/<name>, the name through the branch rule
- * (gitops_branch_refname) on the way. Readers: core/manifest.c manifest_build
- * (a profile whose branch is gone contributes nothing), sys/bootstrap.c
- * bootstrap_exists, and gitops_load_branch_tree, which refuses the absence.
+ * (gitops_branch_refname) on the way. Readers: sys/bootstrap.c bootstrap_exists,
+ * and gitops_load_branch_tree, which refuses the absence.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)

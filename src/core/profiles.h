@@ -174,7 +174,8 @@ void profile_order(string_array_t *names);
  * both answers — add (open or create), enable's skip, remove's --force arm, the
  * enabled set resolved without a view (core/scope.c scope_resolve_enabled) —
  * asks gitops_branch_exists itself and reads the bool; the view's build reads
- * gitops_branch_tree, whose absence is its answer (core/manifest.c manifest_build).
+ * gitops_branch_commit, whose absence is its answer (core/manifest.c
+ * manifest_build).
  *
  * @param repo Repository (must not be NULL)
  * @param name Profile name (must not be NULL)
@@ -253,14 +254,14 @@ typedef struct profile profile_t;
  * the sheet is read through the repository the tree was read from. Reads nothing
  * — the sheet waits for the first question that needs it — so the open cannot fail.
  *
- * Readers: core/manifest.c manifest_build (each enabled head gitops_branch_tree
- * found), cmds/revert.c cmd_revert (its target commit's), cmds/diff.c
- * diff_commit_to_workspace (the commit's), cmds/export.c cmd_export, cmds/show.c
- * cmd_show and cmds/list.c list_file_history (the tree the verb selected),
- * cmds/list.c list_profiles and list_files (the tree of the head each listing
- * read, so what each prints is that commit's); profile_load, at the head it read;
- * and a profile's draft, at the tree its stage opened at — a head, or Git's empty
- * tree (profile_draft_open, profile_draft_orphan).
+ * Readers: core/manifest.c manifest_build (the tree of each enabled head
+ * gitops_branch_commit found), cmds/revert.c cmd_revert (its target commit's),
+ * cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c cmd_export,
+ * cmds/show.c cmd_show and cmds/list.c list_file_history (the tree the verb
+ * selected), cmds/list.c list_profiles and list_files (the tree of the head each
+ * listing read, so what each prints is that commit's); profile_load, at the head
+ * it read; and a profile's draft, at the tree its stage opened at — a head, or
+ * Git's empty tree (profile_draft_open, profile_draft_orphan).
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
@@ -277,8 +278,8 @@ profile_t *profile_open(const char *name, const git_tree *tree);
  * over them, the reference naming the branch. The code is the absence's alone —
  * a head that will not read is Git's error — so a reader for whom the absence
  * is an answer takes it off the refusal (cmds/profile.c profile_list, an enabled
- * row's no branch), or reads gitops_branch_tree and opens the profile at what
- * it finds (core/manifest.c manifest_build).
+ * row's no branch), or reads gitops_branch_commit and opens the profile at the
+ * tree of what it finds (core/manifest.c manifest_build).
  *
  * Readers: cmds/remove.c remove_overlaps and cmds/revert.c revert_select_profile,
  * which load every local profile; cmds/ignore.c ignore_test; the questions asked

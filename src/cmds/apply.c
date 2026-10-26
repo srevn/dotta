@@ -2803,9 +2803,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * loop reads of the flush's work is the record alone — the observation the
      * same flush made at a clean row with no record, or in a gone node's record's
      * place, or none where the observation could not be spelled — and a learning
-     * keeps the stamp, the node and the binding it read, so all three remain
-     * valid probes here; each writer points the item at the record it wrote, so
-     * the item holds what the store holds.
+     * keeps the stamp and the node it read, and the binding of a record dotta
+     * owns, the one binding asked here (a learning of the content moves only
+     * one dotta never owned onto the row), so all three remain valid probes here;
+     * each writer points the item at the record it wrote, so the item holds what
+     * the store holds.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -2871,9 +2873,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * (workspace_item_t's stat): the base's where the fast path matched
              * it, the look's triple where the slow path read — whatever the record
              * this write replaces, one the load could confirm nothing onto
-             * included: bound to another row. UNSET where the read met a second
-             * still open, and the next load's slow path confirms. The whole claim,
-             * which the clean look found disk standing on. */
+             * included: one dotta owns, bound to another row. UNSET where the
+             * read met a second still open, and the next load's slow path confirms.
+             * The whole claim, which the clean look found disk standing on. */
             err = workspace_anchor(
                 ws, item, item->stat, DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP, now
             );

@@ -239,13 +239,14 @@ typedef struct manifest_row {
  * Readers: add's anchor pass (cmds/add.c add_write_record) and update's capture
  * loop (cmds/update.c update_write_record), each asking whether the claim a capture
  * committed still stands at its path — whose the path is, the record's content
- * being the capture's own; the file analysis's content note (core/workspace.c
- * workspace_analyze_file); and the acknowledgement's predicate (core/workspace.h
+ * being the capture's own; and the acknowledgement's predicate (core/workspace.h
  * workspace_unacknowledged) — what apply's two loops over the clean items and
  * its record phase, of a directory fixed in place, ask before they move a record
- * onto the claim standing at its path. The let-go loops ask the other direction
- * — whether any row still stands at the path — and are not readers of this. NULL
- * is no claim.
+ * onto the claim standing at its path, and the file analysis's content note
+ * (core/workspace.c workspace_analyze_file) before it confirms the row's blob
+ * onto a record, which the learning binds to the row (core/workspace.c
+ * workspace_learning). The let-go loops ask the other direction — whether any
+ * row still stands at the path — and are not readers of this. NULL is no claim.
  */
 static inline bool manifest_is_claim(
     const manifest_row_t *row, const char *profile, const char *storage_path

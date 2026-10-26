@@ -913,11 +913,13 @@ static void workspace_analyze_claim(workspace_item_t *item) {
      * disk stood on. Where no record of this node stands that is every axis disk
      * stands on, learned onto the observation the same flush writes, so the first
      * load reads as every later one. As it comes, whichever row the record's
-     * binding names: a claim opens nothing, where the content's confirmation is
-     * bound to the row's binding because an encrypted blob opens under one
-     * (workspace_analyze_file). Onto the record of this node, or the observation
-     * the flush writes in its place: over a gone node's record whose place the
-     * observation does not take, the flush learns nothing (workspace_flush). */
+     * binding names, and that binding kept: a claim opens nothing, where a learning
+     * of the content writes the row's binding with it because an encrypted blob
+     * opens under one (workspace_learning) — moved by a claim, a base the record
+     * confirmed under another binding would be read under one it was never sealed
+     * at. Onto the record of this node, or the observation the flush writes in
+     * its place: over a gone node's record whose place the observation does not
+     * take, the flush learns nothing (workspace_flush). */
     item->confirmation |= moved & ~claims;
 }
 
@@ -1039,12 +1041,13 @@ static error_t workspace_compare_base(
  * — that apply acknowledges by rewriting the record (the adoption loop for a
  * clean row, the deployment itself for a stale one). Only an owned record
  * qualifies: an observed or confirmed record that dotta never deployed names
- * the row the path was first seen under, not a deployer, and apply adopts such
- * a path rather than acknowledging it. And across kinds only while the look finds
- * the record's own node standing — that is when disk holds what A deployed
- * (workspace_reassigned). No bit of this verdict says so: the route reads it
- * off the item's sources and look, and a clean reassignment is among the diverged
- * items by that reading alone (workspace_list).
+ * the row a load last confirmed its content under, or first saw the path under,
+ * never a deployer, and apply adopts such a path rather than acknowledging it.
+ * And across kinds only while the look finds the record's own node standing —
+ * that is when disk holds what A deployed (workspace_reassigned). No bit of this
+ * verdict says so: the route reads it off the item's sources and look, and a
+ * clean reassignment is among the diverged items by that reading alone
+ * (workspace_list).
  *
  * The blob bit, ENCRYPTION (workspace.h, divergence_type_t), is settled here
  * too, once per row, from the row and the config alone: row->encrypted is byte
@@ -1216,8 +1219,12 @@ static void workspace_analyze_file(
      * its own stat, which the record already holds. A note would buy nothing
      * and cost two things: the flush's transaction on every clean load, and —
      * where the deploy wrote the stat this very second — the stat itself, which
-     * a read in an open second demotes to none (core/state.h
-     * state_stat_from_read). */
+     * a read in an open second demotes to none (core/state.h state_stat_from_read).
+     * Nor does the binding move here: a record dotta never owned, bound to another
+     * row whose very blob it confirmed — a plaintext blob two profiles share,
+     * which opens under either — keeps that row's binding until a learning of
+     * the content or apply's adoption moves it, and an absence meanwhile reads
+     * undeployed, over another profile's record (classify_absent, stated). */
     if (base && state_stat_matches(base, &item->st)) {
         /* the look stands behind the stat ⟹ disk == the base's pair */
         disk_at_base = true;
@@ -1352,17 +1359,20 @@ static void workspace_analyze_file(
              * where the observation is never owned, and apply adopts it as it
              * adopts a row with no record (cmds/apply.c).
              *
-             * Onto a record of this row's kind only where it is bound to this
-             * row: an encrypted blob opens under one binding and no other, and
-             * a learning keeps the binding it read, so this is where a learned
-             * blob is kept one committed under the record's binding — the row's,
-             * which that binding names (core/state.h state_record_t): the store
-             * writes what it is handed; a row the binding does not name is one
-             * the record has yet to follow, which takes the slow path on every
-             * load until apply's acknowledgement moves the record onto it, the
+             * Onto a record of this row's kind too, whichever row its binding
+             * names, but one an acknowledgement owes this row (core/workspace.h
+             * workspace_unacknowledged). An encrypted blob opens under one binding
+             * and no other, so a learning of the content writes the binding it
+             * was confirmed under, the row's, with it (workspace_learning): a
+             * record bound to the row keeps its own, and one dotta never owned
+             * takes the row's — on such a record the binding's one work is its
+             * blob's, since no reassignment reads a record dotta never owned
+             * (core/workspace.h workspace_reassigned). A record dotta owns, bound
+             * to another row, is the reassignment or the rename an ownership
+             * event moves onto this row: no learning moves it, so it takes the
+             * slow path on every load until apply's acknowledgement does, the
              * stat above riding that ownership event. */
-            if (!record || record->kind != workspace_type_occupant(row->type) ||
-                manifest_is_claim(row, record->profile, record->storage_path)) {
+            if (!workspace_unacknowledged(row, record)) {
                 item->confirmation |= DIVERGENCE_CONTENT;
             }
         }
@@ -4399,13 +4409,20 @@ bool workspace_item_tags(
  * claim, on each axis named
  *
  * The content (DIVERGENCE_CONTENT) is what the load found disk to be, written
- * whole: the blob, with the stat the load distilled where its comparison stood
- * (workspace_item_t's blob_oid and stat); the mode (DIVERGENCE_MODE) and the
- * owner and group (DIVERGENCE_OWNERSHIP) are the row's claim. Every other column
- * is the one it is written onto — the node and the binding of the record handed
- * in, the stamp. The node needs no word of the row's: every learning is written
- * onto a record of the row's kind, since a record of another kind gives way to
- * the row's first observation before anything is learned onto it, or, where the
+ * whole — the blob, with the stat the load distilled where its comparison stood
+ * (workspace_item_t's blob_oid and stat) — under the row's binding, the one it
+ * was confirmed under, which the record takes with it. It is the one learning
+ * that writes a binding, the binding being what an encrypted blob opens under;
+ * a record whose binding names who deployed what — one dotta owns, bound to another
+ * row, which an acknowledgement owes the row — is never noted the content
+ * (workspace_analyze_file). The mode (DIVERGENCE_MODE) and the owner and group
+ * (DIVERGENCE_OWNERSHIP) are the row's claim, written under the binding the record
+ * holds: a base a confirmation left under another binding opens under that one
+ * alone. Every other column is the one it is written onto — the node and the
+ * stamp of the record handed in, and its binding wherever the content is not
+ * learned. The node needs no word of the row's: every learning is written onto
+ * a record of the row's kind, since a record of another kind gives way to the
+ * row's first observation before anything is learned onto it, or, where the
  * observation cannot be spelled or does not take its place, has nothing learned
  * onto it (workspace_flush), so the blob is confirmed as the node that record
  * already names. The content is noted only where the load found disk to be the
@@ -4423,6 +4440,8 @@ static state_record_t workspace_learning(
     const manifest_row_t *row = item->row;
 
     if (axes & DIVERGENCE_CONTENT) {
+        onto.storage_path = row->storage_path;
+        onto.profile = row->profile;
         onto.blob_oid = item->blob_oid;
         onto.stat = item->stat;
     }

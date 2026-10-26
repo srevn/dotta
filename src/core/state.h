@@ -198,8 +198,12 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation — a gone node's record's replacement among them —
  *     and at every ownership event (apply deploy, adoption, acknowledgement,
- *     add, update); a learning keeps the one it read. A storage name in the grammar
- *     and a profile never empty, each whole (schema-enforced).
+ *     add, update); a learning of the content writes the row's, which the content
+ *     is confirmed under — a record dotta never owned takes it, its claim kept,
+ *     and one dotta owns bound to another row is never noted the content
+ *     (core/workspace.h workspace_unacknowledged) — and every other learning
+ *     keeps the one it read. A storage name in the grammar and a profile never
+ *     empty, each whole (schema-enforced).
  *   - the content (kind, blob_oid, stat): the node the record describes — a regular
  *     file, a link or a directory, in a look's own words (fs_occupant_t) — and
  *     the blob dotta last verified it holds, with the stat of that moment. The
@@ -263,11 +267,12 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     record is built, since the store writes what it is handed: a first
  *     observation and apply's ownership events take the binding and the blob
  *     from one row, add's and update's from one capture — the name it committed
- *     under and the blob the stage wrote there — and a learning, which keeps
- *     the binding it read, learns a blob only where the row is that binding's
- *     claim (core/workspace.c workspace_analyze_file, the content's note) — or
- *     onto the row's first observation, whose binding is the row's
- *     (workspace_flush).
+ *     under and the blob the stage wrote there — and a learning of the content
+ *     from one row too, the binding written with the blob (core/workspace.c
+ *     workspace_learning): onto the row's first observation, a record bound to
+ *     the row, or one dotta never owned, and never onto one dotta owns bound to
+ *     another row, whose binding only an ownership event moves (core/workspace.c
+ *     workspace_analyze_file, the content's note).
  *
  * The binding and the claim are what an orphan (a record whose path the view
  * lacks) is measured against — the claim is a file orphan's reference on disk,

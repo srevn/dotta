@@ -1030,7 +1030,8 @@ static void update_print_preview(
     CHECK_NULL(manifest);
     CHECK_NULL(partition);
 
-    /* Display modified files section */
+    /* Display modified files section — the deployed files with a path bit:
+     * divergent content or metadata */
     if (partition->modified_files.count > 0) {
         output_list_t *list = output_list_create(
             out, "Modified files",
@@ -1048,7 +1049,7 @@ static void update_print_preview(
         output_list_free(list);
     }
 
-    /* Display new files section */
+    /* Display new files section — the untracked files from tracked directories */
     if (partition->new_files.count > 0) {
         output_list_t *list = output_list_create(
             out, "New files",
@@ -1124,7 +1125,8 @@ static void update_print_preview(
         output_list_free(list);
     }
 
-    /* Display modified directories section */
+    /* Display modified directories section — the deployed directories, whose
+     * capture is their claim */
     if (partition->modified_dirs.count > 0) {
         output_list_t *list = output_list_create(
             out, "Modified directories",
@@ -1142,7 +1144,8 @@ static void update_print_preview(
         output_list_free(list);
     }
 
-    /* Display encryption policy violations section */
+    /* Display encryption policy violations section — the deployed violators the
+     * commit seals, a path bit beside each or not */
     if (partition->unencrypted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Encryption policy violations",

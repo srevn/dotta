@@ -972,13 +972,13 @@ static void status_print_workspace(
                      * the deletion's key names the copies its removal reaches */
                     if ((item->divergence & ~(DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ==
                         DIVERGENCE_NONE) {
-                        hint = "changed here; 'dotta update' commits it, "
+                        hint = "changed locally; 'dotta update' commits it, "
                             "'dotta apply' restores it";
                     }
                     break;
 
                 case WORKSPACE_STATE_DELETED:
-                    hint = "gone here; 'dotta update' deletes it and every machine's "
+                    hint = "gone locally; 'dotta update' deletes it and every machine's "
                         "unchanged copy, 'dotta apply' puts it back";
                     break;
 
@@ -1055,7 +1055,7 @@ static void status_print_workspace(
                      * absence here, a reassignment or a violation beside it, is
                      * the header's */
                     if (item->record && workspace_stale(item->row, item->record)) {
-                        hint = "gone here, and changed in Git since dotta saw it; "
+                        hint = "gone locally, and changed in Git since dotta saw it; "
                             "'dotta apply' lands Git's";
                     }
                     break;

@@ -200,7 +200,12 @@ typedef enum {
  * not of a claim dotta never saw disk stand on, which the record cannot tell
  * apart from one Git moved once the first flush has written what the look found,
  * nor of a blob disk held when dotta first looked, which Git had moved past before
- * it, nor of an owner no host here can name (stated).
+ * it, nor of an owner no host here can name (stated). The frame's other side, a
+ * move of the user's, is "locally" on every screen, never "here": what a capture
+ * commits — "modified locally", "type changed locally", "<axes> changed locally"
+ * (workspace_route_t) — a deletion's "deleted locally" on diff's status line,
+ * and status's Uncommitted and Undeployed keys, "changed locally" and "gone
+ * locally" (cmds/status.c status_print_workspace).
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:

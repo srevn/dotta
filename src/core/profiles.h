@@ -763,9 +763,9 @@ error_t profile_find(
  * keeps decides beside every other removal and every line unread.
  *
  * The words on screen: an orphan's line says what took it (core/workspace.c
- * workspace_item_tags) — "deleted from p", "removed from p", "not in p's history",
+ * workspace_item_line) — "deleted from p", "removed from p", "not in p's history",
  * "p has no branch" — where HELD and UNVERIFIED add nothing to "from p", the
- * name its profile holds still and a history the tags call [unverified]; apply's
+ * name its profile holds still and a history the line calls [unverified]; apply's
  * preview counts the prunes deletions make, "deleted from their profiles"
  * (cmds/apply.c apply_print_cleanup_preview); a sync's Manifest counts the acts
  * (cmds/sync.c sync_departure_counts), "deleted", "removed" for every answer

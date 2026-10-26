@@ -659,24 +659,22 @@ output_list_t *output_list_create(
 );
 
 /**
- * Add item to list with tags
+ * Add a row: its tags in the row's colour, padded to the widest row's, then its
+ * content and its metadata
  *
- * Adds an item with multiple tags (e.g., ["modified", "mode"]). Tags will be
- * formatted as: [modified] [mode]
- *
- * Every string is copied into the list's arena; the caller keeps its inputs.
+ * The tags arrive as the row shows them ("[modified] [mode]"): the list prints
+ * them, it does not spell them. Every string is copied into the list's arena;
+ * the caller keeps its inputs.
  *
  * @param list List builder (must not be NULL)
- * @param tags Array of tag strings (must not be NULL if tag_count > 0)
- * @param tag_count Number of tags
+ * @param tags The row's tags, as it shows them (NULL treated as empty)
  * @param color Color for the tags
  * @param content Main content text (NULL treated as empty)
  * @param metadata Optional metadata shown dimmed in parentheses (NULL if none)
  */
 void output_list_add(
     output_list_t *list,
-    const char **tags,
-    size_t tag_count,
+    const char *tags,
     output_color_t color,
     const char *content,
     const char *metadata
@@ -690,12 +688,8 @@ void output_list_add(
  * shape rather than a boundary, and is written either way. An empty list asks
  * for nothing and writes nothing.
  *
- * Performs two-pass rendering:
- *   Pass 1: Calculate maximum tag width across all items Pass 2: Render all items
- *   with tags aligned to max width
- *
- * Does nothing if list is empty (count == 0). Respects output context verbosity
- * and color settings.
+ * Two passes: the widest row's tags, as they show, then every row, its tags padded
+ * to that width. Respects output context verbosity and color settings.
  *
  * @param list List builder (must not be NULL)
  */

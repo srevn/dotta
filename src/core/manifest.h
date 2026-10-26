@@ -292,8 +292,8 @@ static inline bool manifest_is_claim(
  * row neither vouches for a claim nor needs a voucher (core/workspace.c
  * workspace_pending); the untracked scan's word at a child, a rung being the
  * one claim that settles nothing about the path it stands at (core/workspace.c
- * workspace_scan); the tags' clean arm, where a rung nothing diverged on reads
- * [ancestor] (core/workspace.c workspace_item_tags); update's derive-scope slice,
+ * workspace_scan); the line's clean arm, where a rung nothing diverged on reads
+ * [ancestor] (core/workspace.c workspace_item_line); update's derive-scope slice,
  * a leaf's row and the claim each profile holds where the user's node squats
  * above it (cmds/update.c cmd_update); the two refusals of a second name for
  * one path, where a derived claim names nothing and so blocks nothing (cmds/add.c

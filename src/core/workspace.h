@@ -73,6 +73,7 @@
 #define DOTTA_WORKSPACE_H
 
 #include <git2.h>
+#include <limits.h>
 #include <string.h>
 #include <types.h>
 
@@ -88,15 +89,6 @@
 /* An owned file orphan's departure is its profile's history's answer
  * (core/profiles.h), read by pointer; it is named here and defined there. */
 typedef struct profile_departure profile_departure_t;
-
-/* The most tags one item's line carries — six, on a deployed item: [modified],
- * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that
- * changed, a look that failed and a look not taken end the measure, so the fault's
- * tag and [displaced] ride beside the last two alone, and [type] beside them
- * and [stale], where Git moved the kind too, and agreement's one tag — [clean],
- * or [ancestor] on a derived rung — stands alone (workspace_item_tags, whose
- * Tag Priority this counts; a tag added there is counted here). */
-#define WORKSPACE_ITEM_MAX_TAGS 6
 
 /**
  * Workspace state - where an item exists
@@ -180,18 +172,18 @@ typedef enum {
  * only beside an axis bit it attributes — by workspace_analyze_claim, and by
  * workspace_compare_ownership in the one return it makes of both — so no screen
  * shows it alone. Its readers: workspace_item_route (the CONFLICT and STALE arms),
- * workspace_item_tags ([stale]), cmds/apply.c cmd_apply (the count of what Git
+ * workspace_item_line ([stale]), cmds/apply.c cmd_apply (the count of what Git
  * moved) and core/cleanup.c cleanup_skip_reason (a known flag no orphan carries);
  * every other surface reads the route. A reader not on this list is a bug.
  *
  * The words on screen: MODE is the mode and OWNERSHIP the ownership wherever a
- * screen names a claim axis that differs — the tags (workspace_item_tags), which
+ * screen names a claim axis that differs — the tags (workspace_item_line), which
  * apply's fixed directories print too (cmds/apply.c apply_print_deploy_receipt),
  * diff's status line (cmds/diff.c get_status_message_from_item), and a skipped
  * orphan's label and legend (cmds/apply.c apply_print_cleanup_skips, cmds/status.c
  * status_print_workspace) — and a sentence that names both says "mode and
  * ownership", never "permissions", which is one word for two axes. STALE and
- * CLAIM_MOVED are one word: [stale] on a tag (workspace_item_tags), and "changed
+ * CLAIM_MOVED are one word: [stale] on a tag (workspace_item_line), and "changed
  * in Git" in a sentence — update's census (cmds/update.c cmd_update), apply's
  * count (cmds/apply.c cmd_apply), diff's status line (cmds/diff.c
  * get_status_message_from_item) — and "changed in Git and on disk" where the
@@ -333,7 +325,7 @@ typedef enum {
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
- * node a row lies beneath: deploy_reach), workspace.c workspace_item_tags (the
+ * node a row lies beneath: deploy_reach), workspace.c workspace_item_line (the
  * DEPLOYED arm's [displaced], beside which only what no look decides or disproves
  * rides, and the ORPHANED arm's rider), cmds/status.c status_print_workspace's
  * key for a displaced orphan, and cmds/diff.c get_status_message_from_item and
@@ -394,7 +386,7 @@ typedef enum {
  * skip a SHARED relocation unless --force and prune a BOUND one — the reason is
  * cleanup's and lives there (core/cleanup.h) — and the three screens that ask
  * only whether there is a relocation at all: the [relocated] tag
- * (workspace_item_tags), apply's prune split, status's [relocated] key. The
+ * (workspace_item_line), apply's prune split, status's [relocated] key. The
  * presence question is this field against NONE at every one of them.
  */
 typedef enum {
@@ -476,7 +468,7 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * UNVERIFIABLE arm), workspace_untouched, the orphan analysis's directory pass
  * (core/workspace.c workspace_analyze_orphans), core/cleanup.c cleanup_skip_reason
  * and cleanup_verdict, core/deploy.c deploy_needs_work and deploy_preflight;
- * and the screens: workspace_item_tags (the tag — [locked] / [unreadable] /
+ * and the screens: workspace_item_line (the tag — [locked] / [unreadable] /
  * [unverified], the same word on every arm — and the line's magenta beside it),
  * cmds/status.c status_print_workspace (the status line, Unverifiable's key and
  * Issues'), cmds/update.c update_partition and cmd_update's census, cmds/apply.c
@@ -645,7 +637,7 @@ typedef enum {
  * every other item, and on an owned file orphan whose profile's head would not
  * read: no history answered it. Readers: the orphan analysis's second loop, which
  * decides the verdict by it (workspace.c workspace_analyze_orphans), the line
- * that says it (workspace_item_tags' metadata), and apply's prune split, which
+ * that says it (workspace_item_line's metadata), and apply's prune split, which
  * counts the deletions (cmds/apply.c apply_print_cleanup_preview). A reader not
  * on this list is a bug.
  */
@@ -847,7 +839,7 @@ static inline compare_result_t workspace_compare_confirmed(
  *
  * Readers: the route table, with the item's — the diverged items list a clean
  * row that carries this through it (core/workspace.c workspace_list) — and the
- * tags' DEPLOYED and UNDEPLOYED arms (workspace_item_tags), with the item's;
+ * line's DEPLOYED and UNDEPLOYED arms (workspace_item_line), with the item's;
  * diff's filter, its "acknowledged by apply" line and its status colour
  * (cmds/diff.c), with the item's; apply's two acknowledgement loops — the writers
  * that move the record onto the row's profile — with the item's, and its pending
@@ -1067,7 +1059,7 @@ static inline bool workspace_untouched(const workspace_item_t *item) {
  * Readers: core/workspace.c workspace_analyze_file (git_moved — the three-way
  * frame's first question, whichever kind stands, and half the gate on its second),
  * classify_absent (an absence over what the view moved past deletes nothing it
- * holds) and workspace_item_tags (the [stale] that rides [undeployed]), with
+ * holds) and workspace_item_line (the [stale] that rides [undeployed]), with
  * cmds/status.c status_print_workspace's key for that line; workspace_pending
  * below (the record still disagrees with the view). A reader not on this list
  * is a bug.
@@ -1200,11 +1192,11 @@ typedef struct {
  *
  *   the diverged items' derivation CLEAN, the one arm a DEPLOYED item is left
  *                                  out on (workspace.c workspace_list)
- *   the tags                       CLEAN, the one arm rendered as agreement —
+ *   the line                       CLEAN, the one arm rendered as agreement —
  *                                  [clean], or [ancestor] on a derived rung;
  *                                  STALE and REASSIGNED, the colour's cyan, apply's
  *                                  work at no cost to the user (workspace.c
- *                                  workspace_item_tags)
+ *                                  workspace_item_line)
  *   status's section partition     every arm, one bucket each
  *   update's filter                CAPTURE accepted; every other arm refused
  *                                  and counted under its route, one slot per
@@ -1943,12 +1935,43 @@ workspace_items_t workspace_displaced_orphans(
     const workspace_item_t *item
 );
 
+/* The most tags one item's line carries — six, on a deployed item: [modified],
+ * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that
+ * changed, a look that failed and a look not taken end the measure, so the fault's
+ * tag and [displaced] ride beside the last two alone, and [type] beside them
+ * and [stale], where Git moved the kind too, and agreement's one tag — [clean],
+ * or [ancestor] on a derived rung — stands alone (workspace_item_line, whose
+ * Tag Priority this counts; a tag added there is counted here). Each takes sixteen
+ * bytes of the line's room: its word, its brackets and the space before it. */
+#define WORKSPACE_ITEM_MAX_TAGS 6
+
 /**
- * An item's tags: the words its line carries, their colour, and whose it is
+ * An item's line: its tags, their colour, where it stands and whose it is
  *
- * Translates workspace item state and divergence flags into presentation tags,
- * colors, and metadata strings for use with output_list builder. Provides
- * consistent item visualization across all commands.
+ * A value workspace_item_line makes whole, nothing in it borrowed. The tags are
+ * spelled as the line shows them, each bracketed, a space between — the one
+ * spelling of a tag string, which a list prints (base/output.h output_list_add)
+ * and status's legend keys (cmds/status.c status_legend_add).
+ */
+typedef struct {
+    char tags[WORKSPACE_ITEM_MAX_TAGS * 16];  /* "[modified] [stale]": the words, in Tag Priority */
+    output_color_t color;                     /* The tags' one colour */
+    char path[PATH_MAX + 1];                  /* Where it stands, a directory's with its slash */
+    char metadata[256];                       /* Whose it is: "from p", "p → q", "in p", … */
+} workspace_line_t;
+
+/**
+ * Make an item's line, from the item alone
+ *
+ * The one way an item is printed, so one item reads alike, in one colour, wherever
+ * it is listed. What a line says beyond the item reads the view, and is its
+ * caller's to compose onto the metadata: the blob standing over an overridden
+ * copy (cmds/status.c status_print_workspace), the claim that takes a deleted
+ * path's place (cmds/update.c update_print_preview).
+ *
+ * Readers: cmds/status.c status_print_manifest and status_print_workspace, every
+ * section's rows and the keys of the keyed ones; cmds/update.c update_print_preview
+ * and cmd_update's places not scanned. A reader not on this list is a bug.
  *
  * Clean (DEPLOYED, and the route CLEAN — workspace_item_route): one tag, the
  * only one that renders agreement, and only status's full listing hands such an
@@ -2030,6 +2053,11 @@ workspace_items_t workspace_displaced_orphans(
  *     (workspace_reassigned). A DELETED row carries neither: its record is the
  *     row's own profile's, and confirmed the content the view holds
  *
+ * The path is the item's filesystem path, a directory's with its trailing slash
+ * (include/types.h path_kind_suffix): the kind the claim names, never the
+ * occupant's, so a squatted directory keeps its slash and the tag names the
+ * squatter.
+ *
  * Metadata Format:
  *   - "from {profile}" - Standard source profile
  *   - "{old} → {new}" - A pending reassignment (workspace_reassigned), on a
@@ -2046,27 +2074,16 @@ workspace_items_t workspace_displaced_orphans(
  *     entry's release and a directory's, by what it holds, which the item cannot
  *     tell apart and the key names (cmds/status.c status_print_workspace)
  *
- * Thread Safety: Uses only stack variables and string literals. Safe for concurrent
- * calls with different items.
+ * The metadata's room is 256 bytes: a profile name past about 120 characters is
+ * cut on a reassignment's line, both names riding it, and past about 250 on any
+ * other.
+ *
+ * A pure function of the item.
  *
  * @param item Workspace item (must not be NULL)
- * @param tags_out Array to receive tag string pointers (WORKSPACE_ITEM_MAX_TAGS
- *                 slots)
- * @param tag_count_out Receives number of tags extracted (must not be NULL)
- * @param color_out Receives color for tags (must not be NULL)
- * @param metadata_buf Buffer for formatted metadata (must not be NULL)
- * @param metadata_size Size of metadata buffer (minimum 32 bytes, 256 recommended
- *                      for safety with long profile names)
- * @return true on success, false on error (invalid parameters)
+ * @return The item's line
  */
-bool workspace_item_tags(
-    const workspace_item_t *item,
-    const char **tags_out,
-    size_t *tag_count_out,
-    output_color_t *color_out,
-    char *metadata_buf,
-    size_t metadata_size
-);
+workspace_line_t workspace_item_line(const workspace_item_t *item);
 
 /**
  * The record of a node seen or put under a row: its key, binding and kind, and

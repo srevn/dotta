@@ -6,7 +6,6 @@
 
 #include <config.h>
 #include <git2.h>
-#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -1033,24 +1032,9 @@ static void update_print_preview(
 
         for (size_t i = 0; i < partition->modified_files.count; i++) {
             const workspace_item_t *item = partition->modified_files.entries[i];
+            const workspace_line_t line = workspace_item_line(item);
 
-            /* Extract tags using shared helper */
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char base_metadata[256];
-
-            if (!workspace_item_tags(
-                item, tags, &tag_count, &color,
-                base_metadata, sizeof(base_metadata)
-                )) {
-                continue;
-            }
-
-            output_list_add(
-                list, tags, tag_count, color,
-                item->filesystem_path, base_metadata
-            );
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1066,21 +1050,9 @@ static void update_print_preview(
 
         for (size_t i = 0; i < partition->new_files.count; i++) {
             const workspace_item_t *item = partition->new_files.entries[i];
+            const workspace_line_t line = workspace_item_line(item);
 
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color,
-                metadata, sizeof(metadata)
-                )) {
-                output_list_add(
-                    list, tags, tag_count, color,
-                    item->filesystem_path, metadata
-                );
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1112,17 +1084,7 @@ static void update_print_preview(
 
         for (size_t i = 0; i < partition->deleted.count; i++) {
             const workspace_item_t *item = partition->deleted.entries[i];
-
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[512];
-
-            if (!workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                continue;
-            }
+            const workspace_line_t line = workspace_item_line(item);
 
             /* The claim that stands in the path's place once this one leaves:
              * the highest other profile's there, explicit or derived, standing
@@ -1137,23 +1099,19 @@ static void update_print_preview(
                 other = manifest_lookup_claim(manifest, profiles[p], item->filesystem_path);
             }
 
-            /* A directory row reads as one by its trailing slash, as on every
-             * list, and the other claim is appended where there is one, as status's
-             * Overridden section appends the blob above a copy */
-            char path[PATH_MAX + 2];
-            snprintf(
-                path, sizeof(path), "%s%s", item->filesystem_path,
-                path_kind_suffix(item->item_kind)
-            );
+            /* The other claim composed onto the line's metadata where there is
+             * one, as status's Overridden section composes the blob above a copy */
+            char metadata[512];
             if (other) {
-                size_t used = strlen(metadata);
                 snprintf(
-                    metadata + used, sizeof(metadata) - used, ", %s's takes its place",
+                    metadata, sizeof(metadata), "%s, %s's takes its place", line.metadata,
                     other->profile
                 );
+            } else {
+                snprintf(metadata, sizeof(metadata), "%s", line.metadata);
             }
 
-            output_list_add(list, tags, tag_count, color, path, metadata);
+            output_list_add(list, line.tags, line.color, line.path, metadata);
         }
 
         output_list_render(list);
@@ -1169,22 +1127,9 @@ static void update_print_preview(
 
         for (size_t i = 0; i < partition->modified_dirs.count; i++) {
             const workspace_item_t *item = partition->modified_dirs.entries[i];
+            const workspace_line_t line = workspace_item_line(item);
 
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
-
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(list, tags, tag_count, color, path, metadata);
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1208,11 +1153,7 @@ static void update_print_preview(
             );
 
             /* Single tag for policy violation */
-            const char *tags[] = { "plaintext" };
-            output_list_add(
-                list, tags, 1, OUTPUT_COLOR_RED,
-                item->filesystem_path, metadata
-            );
+            output_list_add(list, "[plaintext]", OUTPUT_COLOR_RED, item->filesystem_path, metadata);
         }
 
         output_list_render(list);
@@ -1540,21 +1481,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
         for (size_t i = 0; i < partition.unscanned.count; i++) {
             const workspace_item_t *item = partition.unscanned.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(list, tags, tag_count, color, path, metadata);
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);

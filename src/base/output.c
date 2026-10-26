@@ -1285,7 +1285,7 @@ output_answer_t output_ask_destructive(output_t *ctx, const char *fmt, ...) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    const char *tags;      /* Bracketed and joined, "[a] [b]", the list's arena's */
+    const char *tags;      /* As the row shows them, "[a] [b]", the list's arena's */
     output_color_t color;  /* Color for tags */
     const char *content;   /* Content string, the list's arena's */
     const char *metadata;  /* Metadata string, the list's arena's (nullable) */
@@ -1319,39 +1319,18 @@ output_list_t *output_list_create(
 }
 
 void output_list_add(
-    output_list_t *list, const char **tags, size_t tag_count,
-    output_color_t color, const char *content,
+    output_list_t *list, const char *tags, output_color_t color, const char *content,
     const char *metadata
 ) {
     CHECK_NULL(list);
-    CHECK_ARG(tags != NULL || tag_count == 0, "tags cannot be NULL with a count");
 
     arena_t *arena = list->arena;
     list->items = arena_grow(
         arena, list->items, &list->capacity, list->count + 1, sizeof(*list->items)
     );
 
-    /* The tags as the row writes them, bracketed with a space between, joined
-     * once: a NULL tag is an empty one */
-    size_t len = 0;
-    for (size_t i = 0; i < tag_count; i++) {
-        len += (i > 0) + 1 + (tags[i] ? strlen(tags[i]) : 0) + 1;
-    }
-    char *joined = arena_alloc(arena, len + 1);
-    char *at = joined;
-    for (size_t i = 0; i < tag_count; i++) {
-        const char *tag = tags[i] ? tags[i] : "";
-        size_t n = strlen(tag);
-        if (i > 0) *at++ = ' ';
-        *at++ = '[';
-        memcpy(at, tag, n);
-        at += n;
-        *at++ = ']';
-    }
-    *at = '\0';
-
     list->items[list->count++] = (item_t){
-        .tags = joined,
+        .tags = arena_strdup(arena, tags ? tags : ""),
         .color = color,
         .content = arena_strdup(arena, content ? content : ""),
         .metadata = arena_strdup(arena, metadata),

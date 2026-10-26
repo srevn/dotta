@@ -1620,7 +1620,7 @@ static void apply_print_cleanup_preview(
          * "(no longer active)" would hide: a BOUND one by its own verdict, a
          * SHARED one under --force. A deleted one's profile's history says update
          * deleted it (workspace_item_t's departure), as status's line says it
-         * (core/workspace.c workspace_item_tags) — never a relocation, none being
+         * (core/workspace.c workspace_item_line) — never a relocation, none being
          * read of a name its profile lacks. The rest are no longer active: a
          * profile disabled, and under --force a copy whose history would not
          * read. */
@@ -1767,7 +1767,7 @@ static void apply_print_cleanup_preview(
      * stale key of a path a row stands on under another spelling; and a squatter
      * above the path, whose orphan the load never looked at (core/cleanup.c
      * cleanup_verdict's displaced arm) — and they are status's to say: its line
-     * names the first two, the item's own (core/workspace.c workspace_item_tags),
+     * names the first two, the item's own (core/workspace.c workspace_item_line),
      * and its keys the rest, where cleanup has no per-row reason for a release
      * the way cleanup_skip_reason answers for a skip. Hence the one thing true
      * of all five: nothing on disk was touched. A second half saying what dotta

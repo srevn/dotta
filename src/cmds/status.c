@@ -344,7 +344,7 @@ static void status_print_profiles(
  *
  * The window onto the view (--full): one line per active path, both kinds merged
  * in path order, tagged as its item says — [clean] or [ancestor] where nothing
- * diverged (workspace_item_tags) — with the owning profile ("from P", or "P →
+ * diverged (workspace_item_line) — with the owning profile ("from P", or "P →
  * Q" for a pending reassignment). The one listing that shows the whole view rather
  * than what diverged from it; printed whatever the workspace's cleanliness. Orphans
  * are records, not rows — the workspace's sections list them
@@ -388,28 +388,13 @@ static void status_print_manifest(
 
         if (!scope_accepts_profile(scope, item->profile)) continue;
 
-        const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-        size_t tag_count;
-        output_color_t color;
-        char metadata[256];
+        /* Every item its one line, a clean one too: what agreement reads as is
+         * the class's to say, and one that DID diverge keeps its own tags — absence
+         * and a squatter are read of both classes, and they already say the
+         * actionable thing. */
+        const workspace_line_t line = workspace_item_line(item);
 
-        /* Every item through the one renderer, a clean one too: what agreement
-         * reads as is the class's to say, and one that DID diverge keeps its
-         * own tags — absence and a squatter are read of both classes, and they
-         * already say the actionable thing. */
-        if (!workspace_item_tags(
-            item, tags, &tag_count, &color, metadata, sizeof(metadata)
-            )) {
-            continue;
-        }
-
-        char path[PATH_MAX + 2];
-        snprintf(
-            path, sizeof(path), "%s%s", item->filesystem_path,
-            path_kind_suffix(item->item_kind)
-        );
-
-        output_list_add(list, tags, tag_count, color, path, metadata);
+        output_list_add(list, line.tags, line.color, line.path, line.metadata);
     }
 
     output_list_render(list);
@@ -439,25 +424,15 @@ typedef struct {
  * Key a row's tags: once per tag string, the first row's hint kept
  *
  * @param legend The section's legend (must not be NULL)
- * @param tags The row's tags, as workspace_item_tags gave them
- * @param tag_count How many
+ * @param tags The row's tags, as its line shows them (core/workspace.h
+ *             workspace_line_t)
  * @param hint The section's hint for them (NULL: the header speaks for them)
  */
-static void status_legend_add(
-    status_legend_t *legend, const char *const *tags, size_t tag_count, const char *hint
-) {
+static void status_legend_add(status_legend_t *legend, const char *tags, const char *hint) {
     if (!hint) return;
 
-    /* The bracketing and spacing the list gives the row's tags, in room for any
-     * row's: six tags at most (WORKSPACE_ITEM_MAX_TAGS), a dozen letters each */
-    char key[WORKSPACE_ITEM_MAX_TAGS * 16] = "";
-    for (size_t t = 0; t < tag_count; t++) {
-        size_t used = strlen(key);
-        snprintf(key + used, sizeof(key) - used, "%s[%s]", t > 0 ? " " : "", tags[t]);
-    }
-
     for (size_t i = 0; i < legend->count; i++) {
-        if (strcmp(legend->keys[i].tags, key) == 0) {
+        if (strcmp(legend->keys[i].tags, tags) == 0) {
             return;
         }
     }
@@ -466,11 +441,11 @@ static void status_legend_add(
         legend->arena, legend->keys, &legend->capacity, legend->count + 1,
         sizeof(*legend->keys)
     );
-    legend->keys[legend->count].tags = arena_strdup(legend->arena, key);
+    legend->keys[legend->count].tags = arena_strdup(legend->arena, tags);
     legend->keys[legend->count].hint = hint;
     legend->count++;
 
-    size_t len = strlen(key);
+    size_t len = strlen(tags);
     if (len > legend->width) legend->width = len;
 }
 
@@ -792,23 +767,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < conflicts.count; i++) {
             const workspace_item_t *item = conflicts.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -837,23 +798,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < unconfirmed.count; i++) {
             const workspace_item_t *item = unconfirmed.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -873,23 +820,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < squatted.count; i++) {
             const workspace_item_t *item = squatted.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -920,23 +853,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < displaced.count; i++) {
             const workspace_item_t *item = displaced.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -964,24 +883,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < unverifiable.count; i++) {
             const workspace_item_t *item = unverifiable.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (!workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                continue;
-            }
-            snprintf(
-                path, sizeof(path), "%s%s", item->filesystem_path,
-                path_kind_suffix(item->item_kind)
-            );
-            output_list_add(
-                list, tags, tag_count, color, path, metadata
-            );
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             /* What the failed look was, then the way out of it: a key for the
              * locked rows, and the switch before it where encryption is off, a
@@ -1012,7 +916,7 @@ static void status_print_workspace(
                         "meets it prints why";
                     break;
             }
-            status_legend_add(&legend, tags, tag_count, hint);
+            status_legend_add(&legend, line.tags, hint);
         }
 
         output_list_render(list);
@@ -1040,24 +944,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < uncommitted.count; i++) {
             const workspace_item_t *item = uncommitted.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (!workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                continue;
-            }
-            snprintf(
-                path, sizeof(path), "%s%s", item->filesystem_path,
-                path_kind_suffix(item->item_kind)
-            );
-            output_list_add(
-                list, tags, tag_count, color, path, metadata
-            );
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             const char *hint = NULL;
 
@@ -1066,7 +955,7 @@ static void status_print_workspace(
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:
                     /* The capture route, whose every bit is a tag of its own
-                     * (workspace_item_route, workspace_item_tags): the claim
+                     * (workspace_item_route, workspace_item_line): the claim
                      * axes alone are [mode] and [ownership], a reassignment riding
                      * beside them or not. The key names what update commits and
                      * what apply restores, and no reach: a committed claim lands
@@ -1097,7 +986,7 @@ static void status_print_workspace(
                         false, "the uncommitted bucket holds DEPLOYED and DELETED alone"
                     );
             }
-            status_legend_add(&legend, tags, tag_count, hint);
+            status_legend_add(&legend, line.tags, hint);
         }
 
         output_list_render(list);
@@ -1116,23 +1005,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < reassigned.count; i++) {
             const workspace_item_t *item = reassigned.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1146,7 +1021,7 @@ static void status_print_workspace(
      * removed where Git moved past what dotta last saw there, whose absence deletes
      * nothing the view holds (core/workspace.c classify_absent), so it is here
      * and not among the deletions above, the [stale] its record gives it beside
-     * [undeployed] saying why (workspace_item_tags). Every other line is the
+     * [undeployed] saying why (workspace_item_line). Every other line is the
      * header's. */
     if (undeployed.count > 0) {
         output_list_t *list = output_list_create(
@@ -1157,24 +1032,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < undeployed.count; i++) {
             const workspace_item_t *item = undeployed.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (!workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                continue;
-            }
-            snprintf(
-                path, sizeof(path), "%s%s", item->filesystem_path,
-                path_kind_suffix(item->item_kind)
-            );
-            output_list_add(
-                list, tags, tag_count, color, path, metadata
-            );
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             const char *hint = NULL;
 
@@ -1182,10 +1042,10 @@ static void status_print_workspace(
              * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_UNDEPLOYED:
-                    /* The [stale] its record gives it, read as the tags read it
-                     * (core/workspace.h workspace_stale); every other absence
-                     * here, a reassignment or a violation beside it, is the
-                     * header's */
+                    /* The [stale] its record gives it, read as the item's line
+                     * reads it (core/workspace.h workspace_stale); every other
+                     * absence here, a reassignment or a violation beside it, is
+                     * the header's */
                     if (item->record && workspace_stale(item->row, item->record)) {
                         hint = "gone here, and changed in Git since dotta saw it; "
                             "'dotta apply' lands Git's";
@@ -1209,7 +1069,7 @@ static void status_print_workspace(
                         false, "the undeployed bucket holds DEPLOYED and UNDEPLOYED alone"
                     );
             }
-            status_legend_add(&legend, tags, tag_count, hint);
+            status_legend_add(&legend, line.tags, hint);
         }
 
         output_list_render(list);
@@ -1234,23 +1094,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < new_files.count; i++) {
             const workspace_item_t *item = new_files.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
-            }
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1269,8 +1115,8 @@ static void status_print_workspace(
      * that hides it reads Clean over the copy). Its blob is the one each line
      * names, found by the call the orphan analysis made the copy's state by
      * (core/manifest.h manifest_blob_above), the profile's own or another's,
-     * read off the view, since the tags read the item alone — and the metadata,
-     * carrying its path, is sized for one. */
+     * read off the view, since the item's line reads the item alone, and composed
+     * onto its metadata in a buffer sized for the path. */
     if (overridden.count > 0) {
         output_list_t *list = output_list_create(
             out, "Overridden copies",
@@ -1280,38 +1126,22 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < overridden.count; i++) {
             const workspace_item_t *item = overridden.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
+            const workspace_line_t line = workspace_item_line(item);
+            const manifest_row_t *above = manifest_blob_above(manifest, item->filesystem_path);
             char metadata[256 + PATH_MAX];
-            char path[PATH_MAX + 2];
 
-            if (workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                const manifest_row_t *above = manifest_blob_above(
-                    manifest, item->filesystem_path
-                );
-                size_t used = strlen(metadata);
-                if (strcmp(above->profile, item->profile) == 0) {
-                    snprintf(
-                        metadata + used, sizeof(metadata) - used, ", beneath its own %s",
-                        above->filesystem_path
-                    );
-                } else {
-                    snprintf(
-                        metadata + used, sizeof(metadata) - used, ", beneath %s's %s",
-                        above->profile, above->filesystem_path
-                    );
-                }
+            if (strcmp(above->profile, item->profile) == 0) {
                 snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
+                    metadata, sizeof(metadata), "%s, beneath its own %s", line.metadata,
+                    above->filesystem_path
                 );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
+            } else {
+                snprintf(
+                    metadata, sizeof(metadata), "%s, beneath %s's %s", line.metadata,
+                    above->profile, above->filesystem_path
                 );
             }
+            output_list_add(list, line.tags, line.color, line.path, metadata);
         }
 
         output_list_render(list);
@@ -1341,24 +1171,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < orphaned.count; i++) {
             const workspace_item_t *item = orphaned.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (!workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                continue;
-            }
-            snprintf(
-                path, sizeof(path), "%s%s", item->filesystem_path,
-                path_kind_suffix(item->item_kind)
-            );
-            output_list_add(
-                list, tags, tag_count, color, path, metadata
-            );
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             const char *hint = NULL;
 
@@ -1375,9 +1190,9 @@ static void status_print_workspace(
                          * directory shares [unreadable] and [unverified], and
                          * no flag lifts its skip, so neither names --force;
                          * [locked] is a file's alone. Read before the relocation,
-                         * as the tags rank them. --force is named with the path
-                         * it lifts the skip at, here as on every screen naming
-                         * it (the Conflicts header above says why). */
+                         * as the item's line ranks them. --force is named with
+                         * the path it lifts the skip at, here as on every screen
+                         * naming it (the Conflicts header above says why). */
                         switch (item->fault) {
                             case WORKSPACE_FAULT_LOCKED:
                                 hint = config->encryption_enabled
@@ -1471,7 +1286,7 @@ static void status_print_workspace(
                         false, "the orphaned bucket holds ORPHANED and OBSTRUCTING alone"
                     );
             }
-            status_legend_add(&legend, tags, tag_count, hint);
+            status_legend_add(&legend, line.tags, hint);
         }
 
         output_list_render(list);
@@ -1495,24 +1310,9 @@ static void status_print_workspace(
 
         for (size_t i = 0; i < released.count; i++) {
             const workspace_item_t *item = released.entries[i];
-            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-            size_t tag_count;
-            output_color_t color;
-            char metadata[256];
-            char path[PATH_MAX + 2];
+            const workspace_line_t line = workspace_item_line(item);
 
-            if (!workspace_item_tags(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                continue;
-            }
-            snprintf(
-                path, sizeof(path), "%s%s", item->filesystem_path,
-                path_kind_suffix(item->item_kind)
-            );
-            output_list_add(
-                list, tags, tag_count, color, path, metadata
-            );
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             const char *hint = NULL;
 
@@ -1533,7 +1333,7 @@ static void status_print_workspace(
                 case WORKSPACE_STATE_RELEASED:
                     /* A line names what let it go wherever the item can say —
                      * what its profile's history kept it for, or that dotta never
-                     * deployed it (core/workspace.c workspace_item_tags) — so
+                     * deployed it (core/workspace.c workspace_item_line) — so
                      * the bare [released] key, a file's and a directory's, points
                      * at the line, and names the two causes of a line that names
                      * none: a row standing on the record's entry under another
@@ -1562,7 +1362,7 @@ static void status_print_workspace(
                         false, "the released bucket holds ORPHANED and RELEASED alone"
                     );
             }
-            status_legend_add(&legend, tags, tag_count, hint);
+            status_legend_add(&legend, line.tags, hint);
         }
 
         output_list_render(list);

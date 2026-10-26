@@ -795,7 +795,7 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * of a tracked file the work tree lacks, unasked (lib/git/unpack-trees.c
  * verify_uptodate_1). Each is UNDEPLOYED, never a removal for update to commit,
  * and where the view moved past what the record describes — another kind, or
- * other bytes — [stale] rides its line (workspace_item_tags). The claim is not
+ * other bytes — [stale] rides its line (workspace_item_line). The claim is not
  * asked: a claim Git moved beside the user's deletion is the deletion's, its
  * move kept in Git's history.
  *
@@ -4136,40 +4136,40 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
 }
 
 /**
- * An item's tags: the words its line carries, their colour, and whose it is
+ * A tag on the line, after the ones before it, as the line shows it: bracketed,
+ * a space before every one but the first — the one spelling of a tag string.
+ * The line's room is the count's (WORKSPACE_ITEM_MAX_TAGS), so a tag past it is
+ * the count's bug.
  */
-bool workspace_item_tags(
-    const workspace_item_t *item,
-    const char **tags_out,
-    size_t *tag_count_out,
-    output_color_t *color_out,
-    char *metadata_buf,
-    size_t metadata_size
-) {
-    /* Initialize all outputs defensively before validation */
-    if (tag_count_out) {
-        *tag_count_out = 0;
-    }
-    if (color_out) {
-        *color_out = OUTPUT_COLOR_RESET;
-    }
-    if (metadata_buf && metadata_size > 0) {
-        metadata_buf[0] = '\0';
-    }
+static void workspace_line_add(workspace_line_t *line, const char *tag) {
+    const size_t used = strlen(line->tags);
+    const int written = snprintf(
+        line->tags + used, sizeof(line->tags) - used, "%s[%s]", used > 0 ? " " : "", tag
+    );
 
-    /* Validate required parameters */
-    if (!item || !tags_out || !tag_count_out || !color_out ||
-        !metadata_buf || metadata_size < 32) {
-        return false;
-    }
+    CHECK_ARG(
+        written >= 0 && (size_t) written < sizeof(line->tags) - used,
+        "a line's tags fit the room WORKSPACE_ITEM_MAX_TAGS counts"
+    );
+}
 
-    size_t tag_count = 0;
+/**
+ * Make an item's line, from the item alone
+ */
+workspace_line_t workspace_item_line(const workspace_item_t *item) {
+    CHECK_NULL(item);
+
+    /* Zeroed whole, so a field an arm leaves reads empty, never garbage */
+    workspace_line_t line = { 0 };
+
+    snprintf(
+        line.path, sizeof(line.path), "%s%s", item->filesystem_path,
+        path_kind_suffix(item->item_kind)
+    );
 
     switch (item->state) {
         case WORKSPACE_STATE_UNDEPLOYED:
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = "undeployed";
-            }
+            workspace_line_add(&line, "undeployed");
 
             /* Git moved past what dotta last saw at the path — another kind of
              * node, or bytes it confirmed (workspace_stale) — so the absence
@@ -4177,9 +4177,7 @@ bool workspace_item_tags(
              * the record, as [reassigned] is below, and apply-side work, the
              * arm's own colour */
             if (item->record && workspace_stale(item->row, item->record)) {
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "stale";
-                }
+                workspace_line_add(&line, "stale");
             }
 
             /* An encryption-policy violation is the one divergence bit that still
@@ -4188,9 +4186,7 @@ bool workspace_item_tags(
              * last screen before it lands. The DELETED arm stays bare: a deletion
              * resolves the violation rather than carrying it out. */
             if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "unencrypted";
-                }
+                workspace_line_add(&line, "unencrypted");
             }
 
             /* A pending reassignment rides an undeployed path: absence over another
@@ -4199,34 +4195,30 @@ bool workspace_item_tags(
              * apply's landing from the new owner is what acknowledges it, the
              * same pair the DEPLOYED arm prints. */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "reassigned";
-                }
+                workspace_line_add(&line, "reassigned");
                 snprintf(
-                    metadata_buf, metadata_size, "%s → %s",
+                    line.metadata, sizeof(line.metadata), "%s → %s",
                     item->record->profile, item->profile
                 );
             } else {
-                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+                snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
             }
 
             /* The arm's colour, once its words are written: apply's work, cyan,
              * the colour of work that costs the user nothing — save where the
              * blob it lands is a violation, whose plaintext is a cost: magenta */
-            *color_out = (item->divergence & DIVERGENCE_ENCRYPTION) ? OUTPUT_COLOR_MAGENTA
+            line.color = (item->divergence & DIVERGENCE_ENCRYPTION) ? OUTPUT_COLOR_MAGENTA
                                                                      : OUTPUT_COLOR_CYAN;
             break;
 
         case WORKSPACE_STATE_DELETED:
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = "deleted";
-            }
-            *color_out = OUTPUT_COLOR_RED;
+            workspace_line_add(&line, "deleted");
+            line.color = OUTPUT_COLOR_RED;
 
             /* No reassignment and no [stale] ride a deletion: its record is the
              * row's own profile's, and confirmed the content the view holds
              * (classify_absent) */
-            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
             break;
 
         case WORKSPACE_STATE_DEPLOYED: {
@@ -4246,18 +4238,14 @@ bool workspace_item_tags(
                  * (workspace_displaced_t), and neither word could be honest of
                  * it. */
                 if (manifest_is_derived(item->row)) {
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "ancestor";
-                    }
-                    *color_out = OUTPUT_COLOR_DIM;
+                    workspace_line_add(&line, "ancestor");
+                    line.color = OUTPUT_COLOR_DIM;
                 } else {
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "clean";
-                    }
-                    *color_out = OUTPUT_COLOR_GREEN;
+                    workspace_line_add(&line, "clean");
+                    line.color = OUTPUT_COLOR_GREEN;
                 }
 
-                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+                snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
                 break;
             }
 
@@ -4270,19 +4258,13 @@ bool workspace_item_tags(
                  * or disproves still rides below: the blob's verdict, and the
                  * reassignment — which a look ends across kinds, and none was
                  * taken here. */
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "displaced";
-                }
+                workspace_line_add(&line, "displaced");
             } else {
                 /* The primary tag, the content's axis: another kind, else other bytes */
                 if (item->divergence & DIVERGENCE_TYPE) {
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "type";
-                    }
+                    workspace_line_add(&line, "type");
                 } else if (item->divergence & DIVERGENCE_CONTENT) {
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "modified";
-                    }
+                    workspace_line_add(&line, "modified");
                 }
 
                 if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
@@ -4291,9 +4273,7 @@ bool workspace_item_tags(
                      * beside it say what differs, not who moved each, since apply
                      * converges them alike, and the route says whose the row is
                      * (workspace_item_route). */
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "stale";
-                    }
+                    workspace_line_add(&line, "stale");
                 }
 
                 /* Secondary tags: the claim axes that differ — never beside [type],
@@ -4301,15 +4281,11 @@ bool workspace_item_tags(
                  * the claim is asked (workspace_analyze_file,
                  * workspace_analyze_directory) */
                 if (item->divergence & DIVERGENCE_MODE) {
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "mode";
-                    }
+                    workspace_line_add(&line, "mode");
                 }
 
                 if (item->divergence & DIVERGENCE_OWNERSHIP) {
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "ownership";
-                    }
+                    workspace_line_add(&line, "ownership");
                 }
             }
 
@@ -4318,9 +4294,7 @@ bool workspace_item_tags(
              * once the squatter goes, so this may be the last screen before it
              * lands, as on an UNDEPLOYED row. */
             if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "unencrypted";
-                }
+                workspace_line_add(&line, "unencrypted");
             }
 
             /* The failed look, worded by whose remedy it is (workspace_fault_t)
@@ -4330,19 +4304,17 @@ bool workspace_item_tags(
              * refuses it, apply skips it at preflight, cleanup skips the
              * orphan). */
             if (item->fault != WORKSPACE_FAULT_NONE) {
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    switch (item->fault) {
-                        case WORKSPACE_FAULT_LOCKED:
-                            tags_out[tag_count++] = "locked";
-                            break;
-                        case WORKSPACE_FAULT_UNREADABLE:
-                            tags_out[tag_count++] = "unreadable";
-                            break;
-                        case WORKSPACE_FAULT_NONE:
-                        case WORKSPACE_FAULT_UNVERIFIED:
-                            tags_out[tag_count++] = "unverified";
-                            break;
-                    }
+                switch (item->fault) {
+                    case WORKSPACE_FAULT_LOCKED:
+                        workspace_line_add(&line, "locked");
+                        break;
+                    case WORKSPACE_FAULT_UNREADABLE:
+                        workspace_line_add(&line, "unreadable");
+                        break;
+                    case WORKSPACE_FAULT_NONE:
+                    case WORKSPACE_FAULT_UNVERIFIED:
+                        workspace_line_add(&line, "unverified");
+                        break;
                 }
             }
 
@@ -4351,19 +4323,14 @@ bool workspace_item_tags(
              * against the item's look — workspace_reassigned), added after the
              * divergence tags as secondary information */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "reassigned";
-                }
+                workspace_line_add(&line, "reassigned");
 
                 snprintf(
-                    metadata_buf, metadata_size, "%s → %s",
+                    line.metadata, sizeof(line.metadata), "%s → %s",
                     item->record->profile, item->profile
                 );
             } else {
-                snprintf(
-                    metadata_buf, metadata_size, "from %s",
-                    item->profile
-                );
+                snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
             }
 
             /* The line's one colour, ranked once its words are written: the first
@@ -4374,25 +4341,25 @@ bool workspace_item_tags(
              * failed leaves none (divergence_type_t) */
             if (item->divergence & DIVERGENCE_TYPE) {
                 /* Another kind stands where the row's belongs: the most severe */
-                *color_out = OUTPUT_COLOR_RED;
+                line.color = OUTPUT_COLOR_RED;
             } else if ((item->divergence & DIVERGENCE_ENCRYPTION) ||
                 item->fault != WORKSPACE_FAULT_NONE) {
                 /* The blob's violation, whose plaintext the row's landing writes
                  * — a cost, which the cyan of apply's work below would hide, as
                  * the UNDEPLOYED arm's magenta says — or a look that failed,
                  * magenta on every arm that names one */
-                *color_out = OUTPUT_COLOR_MAGENTA;
+                line.color = OUTPUT_COLOR_MAGENTA;
             } else if (route == WORKSPACE_ROUTE_STALE || route == WORKSPACE_ROUTE_REASSIGNED) {
                 /* Apply's work at no cost to the user: Git's move disk has not
                  * followed, its claims riding or not — none of the user's bytes
                  * is overwritten, the same cyan as [undeployed] — or a pending
                  * reassignment, which apply acknowledges in the record alone */
-                *color_out = OUTPUT_COLOR_CYAN;
+                line.color = OUTPUT_COLOR_CYAN;
             } else {
                 /* The user's move, or a decision owed — an edit, the user's own
                  * claim, bytes no base proves — and [displaced], whose squatter's
                  * own row carries the path's severity */
-                *color_out = OUTPUT_COLOR_YELLOW;
+                line.color = OUTPUT_COLOR_YELLOW;
             }
             break;
         }
@@ -4408,11 +4375,11 @@ bool workspace_item_tags(
              * alone. The skip each bit's arm names is an orphan's, cleanup's;
              * and the landing that clears a copy or replaces a node asks --force
              * for every bit but the claim's (core/deploy.h deploy_clearance). */
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = item->state == WORKSPACE_STATE_ORPHANED
+            workspace_line_add(
+                &line, item->state == WORKSPACE_STATE_ORPHANED
                     ? "orphaned" : item->state == WORKSPACE_STATE_OVERRIDDEN
-                    ? "overridden" : "obstructing";
-            }
+                    ? "overridden" : "obstructing"
+            );
 
             /* Determine color and secondary tags based on divergence */
             if (item->occupant == FS_OCCUPANT_NONE) {
@@ -4422,10 +4389,8 @@ bool workspace_item_tags(
                  * arms because an absent orphan carries DIVERGENCE_NONE by
                  * construction, so they would only report it clean and promise
                  * a prune. */
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "absent";
-                }
-                *color_out = OUTPUT_COLOR_CYAN;
+                workspace_line_add(&line, "absent");
+                line.color = OUTPUT_COLOR_CYAN;
 
             } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
                 /* A squatter stands above the path, so nothing there was looked
@@ -4436,10 +4401,8 @@ bool workspace_item_tags(
                  * not make — cleanup_verdict releases it and the path stays.
                  * Ranked as that verdict ranks it, after absence and before the
                  * bits, and coloured as a release is. */
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "displaced";
-                }
-                *color_out = OUTPUT_COLOR_MAGENTA;
+                workspace_line_add(&line, "displaced");
+                line.color = OUTPUT_COLOR_MAGENTA;
 
             } else if (item->fault != WORKSPACE_FAULT_NONE) {
                 /* The failed look, worded by whose remedy it is (workspace_fault_t)
@@ -4447,30 +4410,26 @@ bool workspace_item_tags(
                  * Conservative: an orphan's skip (CLEANUP_SKIP_UNVERIFIED, ranked
                  * first there as it is here — one item, one name), and a node's
                  * landing under --force alone. */
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    switch (item->fault) {
-                        case WORKSPACE_FAULT_LOCKED:
-                            tags_out[tag_count++] = "locked";
-                            break;
-                        case WORKSPACE_FAULT_UNREADABLE:
-                            tags_out[tag_count++] = "unreadable";
-                            break;
-                        case WORKSPACE_FAULT_NONE:
-                        case WORKSPACE_FAULT_UNVERIFIED:
-                            tags_out[tag_count++] = "unverified";
-                            break;
-                    }
+                switch (item->fault) {
+                    case WORKSPACE_FAULT_LOCKED:
+                        workspace_line_add(&line, "locked");
+                        break;
+                    case WORKSPACE_FAULT_UNREADABLE:
+                        workspace_line_add(&line, "unreadable");
+                        break;
+                    case WORKSPACE_FAULT_NONE:
+                    case WORKSPACE_FAULT_UNVERIFIED:
+                        workspace_line_add(&line, "unverified");
+                        break;
                 }
-                *color_out = OUTPUT_COLOR_MAGENTA;
+                line.color = OUTPUT_COLOR_MAGENTA;
 
             } else if (item->divergence & DIVERGENCE_CONTENT) {
                 /* Content divergence - blocking issue: an orphan's skip
                  * (cleanup_skip_reason: MODIFIED), and a node's landing under
                  * --force alone. */
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "modified";
-                }
-                *color_out = OUTPUT_COLOR_RED;
+                workspace_line_add(&line, "modified");
+                line.color = OUTPUT_COLOR_RED;
 
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 /* The claim alone — the mode, the ownership, or both — left the
@@ -4478,16 +4437,12 @@ bool workspace_item_tags(
                  * an orphan's skip (cleanup_skip_reason: CLAIM_CHANGED), where
                  * a node's landing goes unasked, a claim being no edit. */
                 if (item->divergence & DIVERGENCE_MODE) {
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "mode";
-                    }
+                    workspace_line_add(&line, "mode");
                 }
                 if (item->divergence & DIVERGENCE_OWNERSHIP) {
-                    if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                        tags_out[tag_count++] = "ownership";
-                    }
+                    workspace_line_add(&line, "ownership");
                 }
-                *color_out = OUTPUT_COLOR_YELLOW;
+                line.color = OUTPUT_COLOR_YELLOW;
 
             } else {
                 /* No divergence: nothing moved from what dotta last confirmed —
@@ -4495,7 +4450,7 @@ bool workspace_item_tags(
                  * measure. RED, a removal coming: cleanup prunes a clean orphan,
                  * the landing beneath a node replaces it, and the landing above
                  * a copy clears it. */
-                *color_out = OUTPUT_COLOR_RED;
+                line.color = OUTPUT_COLOR_RED;
             }
 
             /* The relocation, ridden as a secondary tag beside the divergence
@@ -4509,33 +4464,29 @@ bool workspace_item_tags(
              * directory and of an owned file its profile still holds alone
              * (workspace_analyze_orphans). */
             if (item->relocation != WORKSPACE_RELOCATION_NONE) {
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "relocated";
-                }
+                workspace_line_add(&line, "relocated");
             }
 
             /* Whose copy it is, and where its profile's history says update deleted
              * it, that act (workspace_item_t's departure). The history's other
              * answers here add nothing to the line: a name its profile holds
              * still is that profile's, and a history that would not read is the
-             * tags' [unverified]; an overridden copy and a node are decided before
-             * any history is asked. What stands over an overridden one is the
-             * view's to name, and this reads the item alone: the caller adds it
-             * (cmds/status.c status_print_workspace). */
+             * line's [unverified]; an overridden copy and a node are decided
+             * before any history is asked. What stands over an overridden one
+             * is the view's to name, and this reads the item alone: the caller
+             * adds it (cmds/status.c status_print_workspace). */
             if (item->departure && item->departure->kind == PROFILE_DEPARTURE_DELETED) {
-                snprintf(metadata_buf, metadata_size, "deleted from %s", item->profile);
+                snprintf(line.metadata, sizeof(line.metadata), "deleted from %s", item->profile);
             } else {
-                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+                snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
             }
             break;
         }
 
         case WORKSPACE_STATE_UNTRACKED:
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = "new";
-            }
-            *color_out = OUTPUT_COLOR_CYAN;
-            snprintf(metadata_buf, metadata_size, "in %s", item->profile);
+            workspace_line_add(&line, "new");
+            line.color = OUTPUT_COLOR_CYAN;
+            snprintf(line.metadata, sizeof(line.metadata), "in %s", item->profile);
             break;
 
         case WORKSPACE_STATE_UNSCANNED:
@@ -4544,22 +4495,20 @@ bool workspace_item_tags(
              * arms print, so one failure has one name wherever it is listed —
              * and "in", the scan's word, beside the join's "from" where both
              * stand at one path. Never LOCKED: the scan reads no content. */
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                switch (item->fault) {
-                    case WORKSPACE_FAULT_LOCKED:
-                        tags_out[tag_count++] = "locked";
-                        break;
-                    case WORKSPACE_FAULT_UNREADABLE:
-                        tags_out[tag_count++] = "unreadable";
-                        break;
-                    case WORKSPACE_FAULT_NONE:
-                    case WORKSPACE_FAULT_UNVERIFIED:
-                        tags_out[tag_count++] = "unverified";
-                        break;
-                }
+            switch (item->fault) {
+                case WORKSPACE_FAULT_LOCKED:
+                    workspace_line_add(&line, "locked");
+                    break;
+                case WORKSPACE_FAULT_UNREADABLE:
+                    workspace_line_add(&line, "unreadable");
+                    break;
+                case WORKSPACE_FAULT_NONE:
+                case WORKSPACE_FAULT_UNVERIFIED:
+                    workspace_line_add(&line, "unverified");
+                    break;
             }
-            *color_out = OUTPUT_COLOR_MAGENTA;
-            snprintf(metadata_buf, metadata_size, "in %s", item->profile);
+            line.color = OUTPUT_COLOR_MAGENTA;
+            snprintf(line.metadata, sizeof(line.metadata), "in %s", item->profile);
             break;
 
         case WORKSPACE_STATE_RELEASED:
@@ -4570,18 +4519,14 @@ bool workspace_item_tags(
              * removes. The path is left on disk, the record retires. Always
              * present: the orphan analysis decides presence first, so an absent
              * record never reaches this state. */
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = "released";
-            }
-            *color_out = OUTPUT_COLOR_MAGENTA;
+            workspace_line_add(&line, "released");
+            line.color = OUTPUT_COLOR_MAGENTA;
 
             if (item->divergence & DIVERGENCE_TYPE) {
                 /* The third reason, named: the look found a node of another kind
                  * than the one the record describes, which is no node of dotta's
                  * (workspace_analyze_orphans). */
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "type";
-                }
+                workspace_line_add(&line, "type");
             }
 
             /* Whose it is, and what let it go wherever the item can say: a file's
@@ -4595,13 +4540,22 @@ bool workspace_item_tags(
             if (item->departure) {
                 switch (item->departure->kind) {
                     case PROFILE_DEPARTURE_REMOVED:
-                        snprintf(metadata_buf, metadata_size, "removed from %s", item->profile);
+                        snprintf(
+                            line.metadata, sizeof(line.metadata), "removed from %s",
+                            item->profile
+                        );
                         break;
                     case PROFILE_DEPARTURE_NEVER_HELD:
-                        snprintf(metadata_buf, metadata_size, "not in %s's history", item->profile);
+                        snprintf(
+                            line.metadata, sizeof(line.metadata), "not in %s's history",
+                            item->profile
+                        );
                         break;
                     case PROFILE_DEPARTURE_GONE:
-                        snprintf(metadata_buf, metadata_size, "%s has no branch", item->profile);
+                        snprintf(
+                            line.metadata, sizeof(line.metadata), "%s has no branch",
+                            item->profile
+                        );
                         break;
                     case PROFILE_DEPARTURE_HELD:
                     case PROFILE_DEPARTURE_DELETED:
@@ -4611,16 +4565,17 @@ bool workspace_item_tags(
                         CHECK_ARG(false, "a released file's history keeps its copies");
                 }
             } else if (item->record->deployed_at == 0) {
-                snprintf(metadata_buf, metadata_size, "from %s, never deployed", item->profile);
+                snprintf(
+                    line.metadata, sizeof(line.metadata), "from %s, never deployed",
+                    item->profile
+                );
             } else {
-                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+                snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
             }
             break;
     }
 
-    *tag_count_out = tag_count;
-
-    return true;
+    return line;
 }
 
 /**

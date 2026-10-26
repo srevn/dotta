@@ -329,14 +329,14 @@ typedef enum {
  * DEPLOYED arm's [displaced], beside which only what no look decides or disproves
  * rides, and the ORPHANED arm's rider), cmds/status.c status_print_workspace's
  * key for a displaced orphan, and cmds/diff.c get_status_message_from_item and
- * show_file_diff_from_workspace (the colour ladder and the content gate),
- * should_show_item_for_direction beside them; cmds/update.c cmd_update (the named
- * derivation's leaves, climbed beneath the user's squatter at a rung alone, the
- * one squatter the climb's retire answers for — but at a lost blob's place);
- * and core/deploy.c check_ancestry, off the squatted directory itself — a caller
- * that needs the squatter, which no item carries, is lent it whole, the claim
- * this class is copied from (workspace_squatted_ancestor), so apply's remedy
- * and status's section cannot name two claimants for one squatter.
+ * show_file_diff_from_workspace (the content gate), should_show_item_for_direction
+ * beside them; cmds/update.c cmd_update (the named derivation's leaves, climbed
+ * beneath the user's squatter at a rung alone, the one squatter the climb's retire
+ * answers for — but at a lost blob's place); and core/deploy.c check_ancestry,
+ * off the squatted directory itself — a caller that needs the squatter, which
+ * no item carries, is lent it whole, the claim this class is copied from
+ * (workspace_squatted_ancestor), so apply's remedy and status's section cannot
+ * name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -474,7 +474,7 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * Issues'), cmds/update.c update_partition and cmd_update's census, cmds/apply.c
  * apply_fault_label, apply_consent_label and the sudo and key closers of
  * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's filter,
- * status line, colour and count (should_show_item_for_direction,
+ * status line, content gate and count (should_show_item_for_direction,
  * get_status_message_from_item, show_file_diff_from_workspace,
  * present_diffs_for_direction). A reader not on this list is a bug.
  */
@@ -840,19 +840,18 @@ static inline compare_result_t workspace_compare_confirmed(
  * Readers: the route table, with the item's — the diverged items list a clean
  * row that carries this through it (core/workspace.c workspace_list) — and the
  * line's DEPLOYED and UNDEPLOYED arms (workspace_item_line), with the item's;
- * diff's filter, its "acknowledged by apply" line and its status colour
- * (cmds/diff.c), with the item's; apply's two acknowledgement loops — the writers
- * that move the record onto the row's profile — with the item's, and its pending
- * reassignments off the verdicts and its record phase, with the verdict's
- * (cmds/apply.c cmd_apply, apply_write_record); and the record's owed work, with
- * none, which asks it of the record against a view with no workspace at all,
- * workspace_stale answering first across kinds (workspace_pending below). A
- * record's WRITER asks the whole binding — profile and storage path both — of
- * the record dotta owns of the row's own node, which is workspace_unacknowledged
- * below; this is the half the screens name and the receipts count. Not
- * manifest_diff_stats_t's `reassigned`, which counts one transition's own delta
- * between two views; this is the record against the view, standing from whenever
- * it began.
+ * diff's filter and its "acknowledged by apply" line (cmds/diff.c), with the
+ * item's; apply's two acknowledgement loops — the writers that move the record
+ * onto the row's profile — with the item's, and its pending reassignments off
+ * the verdicts and its record phase, with the verdict's (cmds/apply.c cmd_apply,
+ * apply_write_record); and the record's owed work, with none, which asks it of
+ * the record against a view with no workspace at all, workspace_stale answering
+ * first across kinds (workspace_pending below). A record's WRITER asks the whole
+ * binding — profile and storage path both — of the record dotta owns of the row's
+ * own node, which is workspace_unacknowledged below; this is the half the screens
+ * name and the receipts count. Not manifest_diff_stats_t's `reassigned`, which
+ * counts one transition's own delta between two views; this is the record against
+ * the view, standing from whenever it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,
@@ -1971,7 +1970,9 @@ typedef struct {
  *
  * Readers: cmds/status.c status_print_manifest and status_print_workspace, every
  * section's rows and the keys of the keyed ones; cmds/update.c update_print_preview
- * and cmd_update's places not scanned. A reader not on this list is a bug.
+ * and cmd_update's places not scanned; cmds/diff.c show_file_diff_from_workspace,
+ * the colour alone, which its status line wears beside a sentence of diff's own.
+ * A reader not on this list is a bug.
  *
  * Clean (DEPLOYED, and the route CLEAN — workspace_item_route): one tag, the
  * only one that renders agreement, and only status's full listing hands such an

@@ -328,28 +328,12 @@ static void show_file_diff_from_workspace(
     /* Get status message from workspace item (no re-analysis needed) */
     const char *status_msg = get_status_message_from_item(item, direction);
 
-    /* Determine status color */
-    output_color_t status_color = OUTPUT_COLOR_YELLOW;
-    if (item->state == WORKSPACE_STATE_DELETED ||
-        item->state == WORKSPACE_STATE_UNDEPLOYED) {
-        status_color = OUTPUT_COLOR_RED;
-    } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-        status_color = OUTPUT_COLOR_YELLOW;  /* nothing here was looked at */
-    } else if (item->fault != WORKSPACE_FAULT_NONE) {
-        status_color = OUTPUT_COLOR_MAGENTA; /* status's colour for the failed look */
-    } else if (item->divergence & DIVERGENCE_TYPE) {
-        status_color = OUTPUT_COLOR_RED;
-    } else if (workspace_reassigned(item->row, item->record, item->occupant) &&
-        (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
-        /* A pure reassignment. The blob bit, ENCRYPTION, does not demote it: it
-         * is about how Git stores the blob, not a difference between Git and
-         * disk. */
-        status_color = OUTPUT_COLOR_CYAN;
-    }
-
-    /* Show status */
+    /* Show status: the direction's own sentence, in the colour the item's line
+     * wears wherever it is listed (core/workspace.h workspace_item_line) — one
+     * item, one colour. So a violation's magenta reaches a sentence that names
+     * another difference beside it, which status's line names too (stated). */
     output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
-    output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
+    output_colored(out, OUTPUT_NORMAL, workspace_item_line(item).color, "%s\n", status_msg);
 
     /* For missing files and failed looks, no content diff to show: an unverified
      * row has no bytes the analysis could compare, and reading them here would

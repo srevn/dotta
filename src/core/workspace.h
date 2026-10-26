@@ -1209,8 +1209,11 @@ typedef struct {
  *   apply's skip label             CONFLICT, STALE, KIND, UNCONFIRMED, CAPTURE:
  *                                  a TYPE or a CONTENT skip's at its row's own
  *                                  path (cmds/apply.c apply_route_label)
- *   apply's disk-wins closer       CAPTURE: update's verb where every CONTENT
- *                                  skip reads it, add --force's otherwise
+ *   apply's disk-wins closer       CAPTURE, CONFLICT, UNCONFIRMED: update's verb
+ *                                  where every consent skip at its row's own
+ *                                  path that names one reads CAPTURE, add --force's
+ *                                  where any reads either of the other two
+ *                                  (cmds/apply.c apply_print_deploy_skips)
  *   diff's status line             every arm, both directions: the row's line,
  *                                  or none where the direction lists nothing
  *

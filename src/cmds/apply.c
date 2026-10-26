@@ -169,7 +169,7 @@ static const char *apply_route_label(const workspace_item_t *item) {
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each a way out one of its rows has, gated by what is actually present — the
- * reasons, the routes the CONTENT rows read, the claim that holds a named squatter
+ * reasons, the routes the consent rows read, the claim that holds a named squatter
  * (the fate-borne ancestry), and the read a line names: a conflict-only run is
  * not told to fix paths by hand, a squatter is told of a wider scope only where
  * a tracked claim holds it and of the re-derivation only where a derived one
@@ -196,17 +196,20 @@ static const char *apply_route_label(const workspace_item_t *item) {
  * directions, each at a path — a bare --force lifts every consent skip of the
  * run, the edited copies other machines' deletions left among them — and names
  * its cost the way cleanup's does: --force keeps Git's and discards what stands
- * there, and a CONTENT skip adds the disk-wins verb — gated on CONTENT and not
- * on the class, because update refuses a retyped row (cmds/update.c
- * update_partition's kind refusal). One line closes that family, its verb true
- * of every CONTENT row the block holds: 'dotta update <path>' where each is the
- * user's own edit over a base (the route's CAPTURE), else 'dotta add --force
- * <profile> <path>', which re-captures what disk holds whoever moved it
- * (cmds/add.h) — the verb a conflict and bytes no base proves need, update refusing
- * both. '-e' is how to ignore a skip, not how to remedy one. The block sits between
- * the deploy preview and cleanup's, so each engine tells its story the same way
- * — what it will do, then what it will not and why. No total-count line: the
- * exit error's message is the count's one home.
+ * there, and a consent skip at a row's own path adds the disk-wins verb its route
+ * has, a kind's as an edit's — none where the copy cannot commit the kind standing
+ * (KIND) or Git alone moved (STALE), where keeping disk is no capture. One line
+ * closes that family, its verb true of every row it names: 'dotta update <path>'
+ * where each is the user's own over a base (the route's CAPTURE: an edit, or a
+ * link where the row holds a file or the reverse, which the copy commits as the
+ * new kind), else 'dotta add --force <profile> <path>', which re-captures what
+ * disk holds whoever moved it (cmds/add.h) — the verb a conflict and bytes no
+ * base proves need, update refusing both — save a kind both sides moved across
+ * file and directory, which add refuses too, naming remove (stated). '-e' is
+ * how to ignore a skip, not how to remedy one. The block sits between the deploy
+ * preview and cleanup's, so each engine tells its story the same way — what it
+ * will do, then what it will not and why. No total-count line: the exit error's
+ * message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -430,19 +433,21 @@ static void apply_print_deploy_skips(
     /* The remedies, one line per family, each printed once: the consent line
      * when any skip is --force's to lift (the class the exit contract reads,
      * deploy_skip_needs_force), naming its cost; the disk-wins direction only
-     * when a CONTENT skip is present — 'dotta update' refuses a retyped row
-     * (cmds/update.c update_partition's kind refusal), so a TYPE-only block must
-     * not be told to use it — its verb the one every CONTENT row takes: add
-     * --force's where any is not the capture's (workspace_item_route), and update's
-     * only where that scan ran out, its loop guarded as the sudo line's is; a
-     * named squatter's second way out, by the claim that holds it (ancestry) —
-     * a wider scope plans a tracked ancestor, and a derived claim is never planned,
-     * so its way out is the named re-derivation, whose own preview names what
-     * the re-capture would commit, where a squatter nothing claims has none:
-     * its row names it, and the hand is all there is. Last, UNREADABLE's closing,
-     * a clearance's stop's among them, its line naming the path it could not
-     * read — an unreadable path is not "in the way", and a fix-or-widen instruction
-     * would misname a refusal to judge what could not be seen. */
+     * where a consent skip's route has a verb that keeps what disk holds, a kind's
+     * as an edit's — none where the copy cannot commit the kind (KIND), Git alone
+     * moved (STALE), or the row lies beneath a squatter, whose own line carries
+     * the remedy, and none at dotta's node, which no row routes — its verb the
+     * one every such row takes: add --force's where any is both sides' or bytes
+     * no base proves (workspace_item_route), and update's only where that scan
+     * ran out, its loop guarded as the sudo line's is; a named squatter's second
+     * way out, by the claim that holds it (ancestry) — a wider scope plans a
+     * tracked ancestor, and a derived claim is never planned, so its way out is
+     * the named re-derivation, whose own preview names what the re-capture would
+     * commit, where a squatter nothing claims has none: its row names it, and
+     * the hand is all there is. Last, UNREADABLE's closing, a clearance's stop's
+     * among them, its line naming the path it could not read — an unreadable
+     * path is not "in the way", and a fix-or-widen instruction would misname a
+     * refusal to judge what could not be seen. */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
@@ -455,8 +460,11 @@ static void apply_print_deploy_skips(
     }
     size_t c = 0;
     for (; c < verdicts->skipped.count; c++) {
-        if (verdicts->skipped.entries[c].reason == DEPLOY_SKIP_CONTENT &&
-            workspace_item_route(verdicts->skipped.entries[c].item) != WORKSPACE_ROUTE_CAPTURE) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[c];
+
+        if (deploy_skip_needs_force(s->reason) && s->item->row &&
+            (workspace_item_route(s->item) == WORKSPACE_ROUTE_CONFLICT ||
+            workspace_item_route(s->item) == WORKSPACE_ROUTE_UNCONFIRMED)) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  To keep what is on disk instead: 'dotta add --force <profile> <path>'"
@@ -465,7 +473,10 @@ static void apply_print_deploy_skips(
         }
     }
     for (size_t i = 0; c == verdicts->skipped.count && i < verdicts->skipped.count; i++) {
-        if (verdicts->skipped.entries[i].reason == DEPLOY_SKIP_CONTENT) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
+
+        if (deploy_skip_needs_force(s->reason) && s->item->row &&
+            workspace_item_route(s->item) == WORKSPACE_ROUTE_CAPTURE) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  To keep what is on disk instead: 'dotta update <path>'"

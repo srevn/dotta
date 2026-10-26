@@ -3110,7 +3110,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Everything the plans withheld, said once — above the exit below, so a run
      * whose only work was withheld still reports it, and above the prompt, so
      * consent is given with the full picture — and counted by the block that
-     * says it: the nothing-to-do line must not call a workspace clean when its
+     * says it: the nothing-to-do line must not claim no work was there when its
      * only work was withheld. ("Withheld" is the plan-time word — the user's
      * own flags, -e, --skip-existing and --keep-orphans; "skipped" is preflight's,
      * a fate the run decided.) */
@@ -3151,7 +3151,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * past the checkpoint, so there is nothing left to save. */
     if (deploy_plan_is_empty(deploy_plan) && cleanup_plan_is_empty(cleanup_plan)) {
         /* A run whose clean reassignments were said above has told its whole
-         * story; any other says why nothing else happens. */
+         * story; any other says why nothing else happens, in what the plans
+         * compared — the rows and the record, in scope where a filter narrowed
+         * them — and never that all is clean: that is status's word, over a scan
+         * apply never runs, a new file being update's. */
         if (clean_reassignment_count == 0) {
             output_gap(out, OUTPUT_NORMAL);
             if (withheld > 0) {
@@ -3159,9 +3162,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * claiming the work was never there. */
                 output_info(out, OUTPUT_NORMAL, "Nothing left to deploy");
             } else if (scope_filters_profiles(scope) || scope_filters_paths(scope)) {
-                output_info(out, OUTPUT_NORMAL, "Nothing to deploy (no pending work in scope)");
+                output_info(out, OUTPUT_NORMAL, "Nothing to deploy in scope");
             } else {
-                output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
+                output_info(out, OUTPUT_NORMAL, "Nothing to deploy");
             }
         }
 

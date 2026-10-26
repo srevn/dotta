@@ -124,9 +124,9 @@ static const char *diff_status_line(
             /* A look that failed: no bit was settled, so no verb's act is true
              * of the path — apply skips the row at preflight, update in its census.
              * Listed both ways, its fault a difference nobody has ruled out:
-             * hiding it called the tree in sync over a file the user had just
-             * edited. Worded by whose remedy the failure is (workspace_fault_t),
-             * the three words status tags the same row with */
+             * hiding it said no difference over a file the user had just edited.
+             * Worded by whose remedy the failure is (workspace_fault_t), the
+             * three words status tags the same row with */
             switch (item->fault) {
                 case WORKSPACE_FAULT_LOCKED:
                     return direction == DIFF_UPSTREAM
@@ -405,7 +405,11 @@ static void diff_print_item(
  * The line decides (diff_status_line): a row is listed where its direction says
  * something of it, and the line heads its entry — the settled verdict, and the
  * body its divergence draws, read through the run's content cache — or, under
- * --name-only, the row is its path alone.
+ * --name-only, the row is its path alone. A listing that names no row says so
+ * itself, in what it compared: the rows, in scope wherever a filter narrowed
+ * them — never the new files update -n lists, nor the orphans apply -n removes,
+ * which diff reads neither of (diff_workspace) — and under --name-only nothing,
+ * its names being the whole answer.
  *
  * @param diverged Diverged items from workspace (borrowed slice)
  * @param cache Content cache for blob access (must not be NULL)
@@ -413,9 +417,8 @@ static void diff_print_item(
  * @param scope Operation scope (profile + path dimensions; diff has no excludes)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
- * @return How many rows it listed
  */
-static size_t diff_print_direction(
+static void diff_print_direction(
     workspace_items_t diverged,
     content_cache_t *cache,
     diff_direction_t direction,
@@ -467,7 +470,14 @@ static size_t diff_print_direction(
         listed++;
     }
 
-    return listed;
+    if (listed == 0 && !opts->name_only) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            scope_filters_profiles(scope) || scope_filters_paths(scope)
+                ? "No differences in scope"
+                : "No differences"
+        );
+    }
 }
 
 /**
@@ -631,7 +641,10 @@ static int diff_print_line_cb(
  * passed over by its type, the test core/manifest.h leaves to a reader that wants
  * files: its claim goes uncompared, as every claim does here (stated), where
  * the workspace arm lists it. Each row carries the profile whose claim it is,
- * the commit's, and its blob opens under the row's own binding.
+ * the commit's, and its blob opens under the row's own binding. A comparison
+ * that names no row says so itself, as the workspace arm's listing does: in scope
+ * under a filter, which passed over every row outside it, else of the whole;
+ * under --name-only nothing, its names being the whole answer.
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)
@@ -639,7 +652,6 @@ static int diff_print_line_cb(
  * @param opts Command options (must not be NULL)
  * @param cache Shared content cache (the run's, must not be NULL)
  * @param out Output context (must not be NULL)
- * @param diff_count Output: number of diffs shown (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t diff_print_view(
@@ -647,16 +659,14 @@ static error_t diff_print_view(
     const pathspec_t *path_filter,
     const cmd_diff_options_t *opts,
     content_cache_t *cache,
-    output_t *out,
-    size_t *diff_count
+    output_t *out
 ) {
     CHECK_NULL(view);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
     CHECK_NULL(out);
-    CHECK_NULL(diff_count);
 
-    *diff_count = 0;
+    size_t listed = 0;
 
     /* The comparison opens a block of its own: a name-only listing is one, paid
      * by its first name, and each entry of the full form one more, asking its
@@ -693,7 +703,7 @@ static error_t diff_print_view(
             struct stat st;
             if (fs_lstat(filesystem_path, &st) != 0) {
                 output_print(out, OUTPUT_NORMAL, "%s\n", filesystem_path);
-                (*diff_count)++;
+                listed++;
                 continue;
             }
 
@@ -713,7 +723,7 @@ static error_t diff_print_view(
 
             if (result != CMP_EQUAL) {
                 output_print(out, OUTPUT_NORMAL, "%s\n", filesystem_path);
-                (*diff_count)++;
+                listed++;
             }
             continue;
         }
@@ -777,10 +787,19 @@ static error_t diff_print_view(
                 output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
             }
 
-            (*diff_count)++;
+            listed++;
         }
 
         compare_diff_deinit(&diff);
+    }
+
+    if (listed == 0 && !opts->name_only) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            path_filter
+                ? "No differences in scope"
+                : "No differences between commit and workspace"
+        );
     }
 
     return NULL;
@@ -1001,25 +1020,9 @@ static error_t diff_commit_to_workspace(
         goto cleanup;
     }
 
-    /* Step 6: Compare the commit's view against the current filesystem */
-    size_t diff_count = 0;
-    err = diff_print_view(
-        historical, path_filter, opts, cache, out, &diff_count
-    );
-    if (err) goto cleanup;
-
-    /* Under a filter the comparison passed over every row outside it, so an empty
-     * one claims the scope, in the workspace arm's words; else the whole */
-    if (diff_count == 0 && !opts->name_only) {
-        output_gap(out, OUTPUT_NORMAL);
-        if (path_filter) {
-            output_info(out, OUTPUT_NORMAL, "No differences in scope");
-        } else {
-            output_info(
-                out, OUTPUT_NORMAL, "No differences between commit and workspace"
-            );
-        }
-    }
+    /* Step 6: Compare the commit's view against the current filesystem, the
+     * comparison saying its own empty line */
+    err = diff_print_view(historical, path_filter, opts, cache, out);
 
 cleanup:
     git_tree_free(tree);
@@ -1249,7 +1252,8 @@ cleanup:
  * nothing can diff ends the diff at its answers, no workspace loaded
  * (diff_validate_filter). Otherwise the workspace is loaded over the same view,
  * its learning flushed, and the diverged items presented per direction under
- * the scope — the analysis settled every verdict, and nothing here re-reads one.
+ * the scope, each listing saying its own empty line (diff_print_direction) —
+ * the analysis settled every verdict, and nothing here re-reads one.
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, the borrowed
  *            state handle, the shared blob-content cache, and the view over the
@@ -1280,8 +1284,9 @@ static error_t diff_workspace(
      * the answers are the whole report, and no workspace is loaded. */
     if (!diff_validate_filter(scope_paths(scope), manifest, "active path", out)) return NULL;
 
-    /* Step 2: Load the workspace. Orphans have no reader here, and the untracked
-     * scan is update's. */
+    /* Step 2: Load the workspace over the rows alone. What apply would remove
+     * is apply -n's to preview, and the new files update -n's, so no orphan is
+     * analyzed and no scan is run. */
     workspace_options_t ws_opts = {
         .analyze_orphans   = false,
         .analyze_untracked = false
@@ -1304,62 +1309,20 @@ static error_t diff_workspace(
     /* Step 3: Get pre-analyzed divergence from workspace */
     workspace_items_t diverged = workspace_diverged(ws);
 
-    /* Step 4: The listings, by direction. A row the analysis could not look at
-     * is listed by its status line, which names its class, so no screen is "in
-     * sync" over it. */
+    /* Step 4: The listings, by direction, each saying its own empty line. A row
+     * the analysis could not look at is listed by its status line, which names
+     * its class, so no listing is empty over it. */
     if (opts->direction == DIFF_BOTH) {
-        /* Show both directions with headers: the upstream section first */
+        /* Both directions under their headers, the upstream section first */
         output_section(out, OUTPUT_NORMAL, "Upstream (repository → filesystem)");
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change");
-        output_gap(out, OUTPUT_NORMAL);
+        diff_print_direction(diverged, cache, DIFF_UPSTREAM, scope, opts, out);
 
-        const size_t upstream_count = diff_print_direction(
-            diverged, cache, DIFF_UPSTREAM, scope, opts, out
-        );
-
-        if (upstream_count == 0 && !opts->name_only) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(out, OUTPUT_NORMAL, "No upstream differences");
-        }
-
-        /* Downstream section */
         output_section(out, OUTPUT_NORMAL, "Downstream (filesystem → repository)");
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit");
-        output_gap(out, OUTPUT_NORMAL);
-
-        const size_t downstream_count = diff_print_direction(
-            diverged, cache, DIFF_DOWNSTREAM, scope, opts, out
-        );
-
-        if (downstream_count == 0 && !opts->name_only) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(out, OUTPUT_NORMAL, "No downstream differences");
-        }
+        diff_print_direction(diverged, cache, DIFF_DOWNSTREAM, scope, opts, out);
     } else {
-        const size_t count = diff_print_direction(
-            diverged, cache, opts->direction, scope, opts, out
-        );
-
-        /* An empty screen says what the verb it previews says of its own empty
-         * run. Upstream, apply's: under a filter the scope the screen showed
-         * and nothing past it — every path was loaded and analyzed, only those
-         * in scope presented — else the repository (cmd_apply). Downstream,
-         * update's, which names no whole to qualify. */
-        if (count == 0 && !opts->name_only) {
-            output_gap(out, OUTPUT_NORMAL);
-            if (opts->direction == DIFF_UPSTREAM) {
-                if (scope_filters_profiles(scope) || scope_filters_paths(scope)) {
-                    output_info(out, OUTPUT_NORMAL, "No differences in scope");
-                } else {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "No differences (repository and filesystem in sync)"
-                    );
-                }
-            } else {
-                output_info(out, OUTPUT_NORMAL, "No local changes to commit");
-            }
-        }
+        diff_print_direction(diverged, cache, opts->direction, scope, opts, out);
     }
 
     return NULL;

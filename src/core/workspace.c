@@ -4381,7 +4381,8 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
                     ? "overridden" : "obstructing"
             );
 
-            /* Determine color and secondary tags based on divergence */
+            /* The ladder: absence, the squatter, the failed look, then the bits
+             * — each rung its tag and its colour */
             if (item->occupant == FS_OCCUPANT_NONE) {
                 /* Gone from disk already: apply reclaims the row and removes
                  * nothing. Cyan, the receipt's colour for a reclaim — no action
@@ -4425,7 +4426,7 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
                 line.color = OUTPUT_COLOR_MAGENTA;
 
             } else if (item->divergence & DIVERGENCE_CONTENT) {
-                /* Content divergence - blocking issue: an orphan's skip
+                /* The bytes moved since dotta confirmed them: an orphan's skip
                  * (cleanup_skip_reason: MODIFIED), and a node's landing under
                  * --force alone. */
                 workspace_line_add(&line, "modified");

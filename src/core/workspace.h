@@ -1970,9 +1970,7 @@ typedef struct {
  *
  * Readers: cmds/status.c status_print_manifest and status_print_workspace, every
  * section's rows and the keys of the keyed ones; cmds/update.c update_print_preview
- * and cmd_update's places not scanned; cmds/diff.c show_file_diff_from_workspace,
- * the colour alone, which its status line wears beside a sentence of diff's own.
- * A reader not on this list is a bug.
+ * and cmd_update's places not scanned. A reader not on this list is a bug.
  *
  * Clean (DEPLOYED, and the route CLEAN — workspace_item_route): one tag, the
  * only one that renders agreement, and only status's full listing hands such an

@@ -328,12 +328,10 @@ static void show_file_diff_from_workspace(
     /* Get status message from workspace item (no re-analysis needed) */
     const char *status_msg = get_status_message_from_item(item, direction);
 
-    /* Show status: the direction's own sentence, in the colour the item's line
-     * wears wherever it is listed (core/workspace.h workspace_item_line) — one
-     * item, one colour. So a violation's magenta reaches a sentence that names
-     * another difference beside it, which status's line names too (stated). */
-    output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
-    output_colored(out, OUTPUT_NORMAL, workspace_item_line(item).color, "%s\n", status_msg);
+    /* The direction's own sentence. An item's colour is its line's, worn on the
+     * lists beside the tags it is ranked from (core/workspace.h
+     * workspace_item_line) */
+    output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  %s\n", status_msg);
 
     /* For missing files and failed looks, no content diff to show: an unverified
      * row has no bytes the analysis could compare, and reading them here would
@@ -758,7 +756,6 @@ static error_t compare_tree_files_to_filesystem(
          * absence is generated and dropped here: the status line says it in this
          * loop's words. */
         const char *status_msg = NULL;
-        output_color_t status_color = OUTPUT_COLOR_RED;
 
         switch (diff.status) {
             case CMP_EQUAL:
@@ -771,7 +768,6 @@ static error_t compare_tree_files_to_filesystem(
                 break;
             case CMP_DIFFERENT:
                 status_msg = "modified locally since commit";
-                status_color = OUTPUT_COLOR_YELLOW;
                 break;
         }
 
@@ -788,8 +784,7 @@ static error_t compare_tree_files_to_filesystem(
                 storage_path
             );
 
-            output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
-            output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
+            output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  %s\n", status_msg);
 
             /* A difference of bytes or of kind has a text — the hunk, or both
              * kinds off the renderer's look, as the workspace arm draws them */

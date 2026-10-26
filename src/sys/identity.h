@@ -92,14 +92,15 @@
  * otherwise — consistent, and stated.
  *
  * A run that holds no root says so where a refusal its identity met is reported
- * (cmds/add, cmds/update's tail and census, apply's two preview blocks, status's
- * [unreadable] key): the remedy is named — sudo — offered and never promised,
- * since a policy may deny root as well (a MAC rule, an export that squashes root),
- * and never rendered. The invocation is the user's own and needs no spelling
- * back to them, and what sudo does to their environment on the way is sudo's to
- * document, not dotta's. privileged is the whole of what a reader needs there —
- * status's own notes name the remedy once more in the help, where there is no
- * run in hand to read.
+ * (cmds/update.c cmd_update's census, cmds/apply.c apply_print_deploy_skips,
+ * apply_print_cleanup_skips and apply_print_cleanup_refused, cmds/status.c
+ * status_print_workspace's [unreadable] key): the remedy is named — sudo — offered
+ * and never promised, since a policy may deny root as well (a MAC rule, an export
+ * that squashes root), and never rendered. The invocation is the user's own and
+ * needs no spelling back to them, and what sudo does to their environment on
+ * the way is sudo's to document, not dotta's. privileged is the whole of what a
+ * reader needs there — status's own notes name the remedy once more in the help,
+ * where there is no run in hand to read.
  *
  * Readers
  * -------

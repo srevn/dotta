@@ -1368,9 +1368,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * (workspace_fault_t), because one sentence over the three is how a locked
          * path came to be told to fix its permissions. The key's rows name the
          * verb that unlocks them, and the switch first where encryption is off;
-         * the unreadable ones name permissions, and root where the run holds
-         * none; the rest have no remedy to name and point at the listing that
-         * names each path. */
+         * the unreadable ones the permissions that refused the read, and root,
+         * offered, where the run holds none — never a fix by hand for a path
+         * dotta could not read, nor -e, which ignores a skip and remedies nothing;
+         * the rest have no remedy to name and point at the listing that names
+         * each path. */
         const size_t *faults = partition.faults;
 
         if (faults[WORKSPACE_FAULT_LOCKED] > 0) {
@@ -1386,7 +1388,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         if (faults[WORKSPACE_FAULT_UNREADABLE] > 0) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "%zu path%s skipped: cannot be read — fix permissions, or exclude with -e",
+                "%zu path%s skipped: cannot be read — permissions refused the read",
                 faults[WORKSPACE_FAULT_UNREADABLE],
                 faults[WORKSPACE_FAULT_UNREADABLE] == 1 ? "" : "s"
             );

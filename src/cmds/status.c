@@ -1844,8 +1844,8 @@ const args_command_t spec_status = {
     .notes        =
         "Ownership:\n"
         "  Ownership is compared like mode, without privileges. A path whose\n"
-        "  permissions refuse the read is reported as [unreadable]; run the\n"
-        "  command under sudo to verify it.\n"
+        "  permissions refuse the read is reported as [unreadable]; sudo may\n"
+        "  lift it.\n"
         "\n"
         "Remote State Indicators:\n"
         "  =    up-to-date with remote\n"

@@ -469,6 +469,23 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * only a file row can be LOCKED: a directory seals no content, so every fault
  * it can carry comes from an errno, and the scan reads no content at all.
  *
+ * The words on screen: a tag says the class on every arm (workspace_item_line),
+ * and a sentence says it "locked", "cannot be read" or "could not be verified"
+ * — diff's status line (cmds/diff.c diff_status_line), update's census
+ * (cmds/update.c cmd_update) and, of the last two, status's Issues key
+ * (cmds/status.c status_print_workspace) — where apply's label says "locked",
+ * "unreadable" or "cannot verify" (cmds/apply.c apply_fault_label). Status's
+ * Unverifiable key says the cause instead: "encrypted, and no key opened it",
+ * as the Issues key does of a sealed orphan, or "permissions refused the read",
+ * which update's census says after its word. The remedy is the class's:
+ *   LOCKED       the key, 'dotta key set', the switch first where encryption is
+ *                off — status's keys, update's census, apply's key closers
+ *   UNREADABLE   root, offered and never promised, to a run that holds none
+ *                (sys/identity.h): "sudo may lift it" on status's Unverifiable
+ *                key and in its help (cmds/status.c spec_status), and "Run under
+ *                sudo to <its act> them" closing update's census and apply's
+ *                two skip blocks
+ *
  * Readers — the engines, which ask it against NONE: workspace_item_route (the
  * UNVERIFIABLE arm), workspace_untouched, the orphan analysis's directory pass
  * (core/workspace.c workspace_analyze_orphans), core/cleanup.c cleanup_skip_reason

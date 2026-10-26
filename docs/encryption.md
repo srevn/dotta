@@ -157,7 +157,7 @@ Unverifiable paths (1 item) (dotta could not verify these paths)
 | Tag | Meaning | Remedy |
 |---|---|---|
 | `[locked]` | File is encrypted, but no valid key is currently cached (or encryption is disabled over a sealed file). | Run `dotta key set` to authenticate. |
-| `[unreadable]` | Filesystem permissions prevented reading the file. | Run under `sudo` or adjust permissions. |
+| `[unreadable]` | Filesystem permissions refused the read. | Run under `sudo`, which may lift it. |
 | `[unverified]` | A held key did not open this blob, or nothing ever could: a tampered file, a foreign epoch, an unsupported version, or an I/O error. | Run the verb that touches it (`dotta show`, `dotta export`) to view the cause. |
 
 A wrong passphrase reads `[locked]`, not `[unverified]`. It leaves the run holding no key at all — one fact for every encrypted row, and one `dotta key set` settles them — where `[unverified]` is a key in hand that this one blob refuses, which is the blob's own problem.

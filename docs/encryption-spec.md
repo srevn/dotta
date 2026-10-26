@@ -547,7 +547,7 @@ Failed looks in divergence analysis are classified into three fault classes base
 | Fault | Root code | CLI Tag | Remedy |
 |---|---|---|---|
 | `WORKSPACE_FAULT_LOCKED` | `ERR_LOCKED` | `[locked]` | Run `dotta key set` |
-| `WORKSPACE_FAULT_UNREADABLE` | `ERR_PERMISSION` | `[unreadable]` | Run under `sudo` or fix permissions |
+| `WORKSPACE_FAULT_UNREADABLE` | `ERR_PERMISSION` | `[unreadable]` | Run under `sudo`, which may lift it |
 | `WORKSPACE_FAULT_UNVERIFIED` | anything else | `[unverified]` | Inspect with `dotta show <path>` |
 
 The workspace item holds only the enum (`item->fault`). Display printers generate concise, consistent status lines and legends without borrowing error strings across architectural layers.

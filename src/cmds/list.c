@@ -294,7 +294,7 @@ static error_t list_profiles(
         /* Verbose: what the profile holds, in the column measured for it */
         if (lines && lines[i].counts[0] != '\0') {
             output_print(
-                out, OUTPUT_VERBOSE, " %-*s %*s",
+                out, OUTPUT_VERBOSE, "  %-*s  %*s",
                 (int) max_counts_len, lines[i].counts,
                 (int) max_size_len, lines[i].size
             );

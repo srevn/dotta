@@ -192,10 +192,13 @@ typedef struct {
  * by kind (a directory's modification is a claim recapture, not a content commit),
  * deleted deliberately does not (a deleted directory is a deletion), and the
  * deployed files split by what diverged (core/workspace.h divergence_type_t): a
- * path bit is a modification, the blob bit, ENCRYPTION, a policy violation. A
- * file with both kinds of bit is in both; a violator with nothing changed on
- * disk only among the violations — it is committed for the re-store, not for a
- * modification. So every accepted item has a fate, and a file may have two.
+ * path bit is a modification, the blob bit, ENCRYPTION, a policy violation the
+ * commit seals. A file with both kinds of bit is in both; a violator with nothing
+ * changed on disk only among the violations — it is committed for the re-store,
+ * not for a modification; and one a link stands over only among the modifications
+ * — its capture commits the link's target, never sealed (update_capture), which
+ * resolves the violation by removing the plaintext, as a deletion's commit does.
+ * So every accepted item has a fate, and a file may have two.
  *
  * The lists are slices one classification fills (core/workspace.h
  * workspace_buckets_t), each in the diverged items' order, in the arena the
@@ -222,7 +225,7 @@ typedef struct {
     workspace_items_t new_files;             /* UNTRACKED files from tracked directories */
     workspace_items_t deleted;               /* DELETED paths, both kinds */
     workspace_items_t modified_dirs;         /* DEPLOYED directories: claim capture */
-    workspace_items_t unencrypted;           /* DEPLOYED policy violators (a path bit beside it or alone) */
+    workspace_items_t unencrypted;           /* DEPLOYED violators the commit seals (a path bit beside it or alone) */
 
     workspace_items_t excluded;              /* In scope, spared by -e — traced, never touched */
     workspace_items_t unscanned;             /* In scope, where the scan could not look — listed, never taken */
@@ -316,15 +319,19 @@ static void update_partition(
 
                 /* The capture's fate: a directory's is its claim; a file's is
                  * what diverged — a path bit a modification, the ENCRYPTION bit
-                 * a violation, so a file with both is both, and a violator nothing
-                 * changed on disk only a violation */
+                 * a violation the commit seals, so a file with both is both,
+                 * and a violator nothing changed on disk only a violation. A
+                 * link standing over a violator is captured as its target, never
+                 * sealed (update_capture): a modification alone, whose commit
+                 * removes the plaintext as a deletion's does */
                 if (item->item_kind == PATH_KIND_DIRECTORY) {
                     workspace_buckets_add(buckets, item, &partition->modified_dirs);
                 } else {
                     if ((item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE) {
                         workspace_buckets_add(buckets, item, &partition->modified_files);
                     }
-                    if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                    if ((item->divergence & DIVERGENCE_ENCRYPTION) &&
+                        item->occupant != FS_OCCUPANT_SYMLINK) {
                         workspace_buckets_add(buckets, item, &partition->unencrypted);
                     }
                 }

@@ -350,18 +350,16 @@ static void status_print_profiles(
  * are records, not rows — the workspace's sections list them
  * (status_print_workspace). Scoped by the CLI filter like every other section.
  *
+ * @param out Output context (must not be NULL)
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param scope Operation scope (must not be NULL; its filter dimension drives
  *              display)
- * @param out Output context (must not be NULL)
  */
 static void status_print_manifest(
+    output_t *out,
     const workspace_t *ws,
-    const scope_t *scope,
-    output_t *out
+    const scope_t *scope
 ) {
-    if (!ws || !out) return;
-
     output_list_t *list = output_list_create(
         out, "Manifest",
         "every active path; [clean] where nothing diverged, [ancestor] where "
@@ -506,23 +504,21 @@ static void status_print_legend(output_t *out, const status_legend_t *legend) {
  * speaks for the filtered profiles alone, so a clean one never reads Dirty for
  * another's divergence, and what the filter hides is counted beneath the sections.
  *
+ * @param out Output context (must not be NULL)
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param manifest The view the workspace was loaded over (must not be NULL; an
  *                 overridden copy's line names what stands over it, off the view)
  * @param scope Operation scope (must not be NULL; its filter dimension drives
  *              display)
  * @param config Configuration (must not be NULL; its switch words the key's remedy)
- * @param out Output context (must not be NULL)
  */
 static void status_print_workspace(
+    output_t *out,
     const workspace_t *ws,
     const manifest_t *manifest,
     const scope_t *scope,
-    const config_t *config,
-    output_t *out
+    const config_t *config
 ) {
-    if (!ws || !out) return;
-
     /* The diverged items, read by the status line's fold and by the sections */
     workspace_items_t diverged = workspace_diverged(ws);
 
@@ -1917,7 +1913,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* The whole view, on request — before the status line and the sections that
      * name only what diverged from it */
     if (opts->show_local && opts->full) {
-        status_print_manifest(ws, scope, out);
+        status_print_manifest(out, ws, scope);
     }
 
     /* The workspace status (with profile filtering for Coherent Scope)
@@ -1928,7 +1924,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
      * `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
-        status_print_workspace(ws, manifest, scope, config, out);
+        status_print_workspace(out, ws, manifest, scope, config);
     }
 
     /* Show remote sync status (if requested): no remote configured is no section,

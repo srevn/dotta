@@ -579,17 +579,19 @@ static void apply_print_deploy_skips(
  * planned path, and the receipt names the ones it created.
  *
  * Dotta's nodes the run replaces (deploy_preflight_t's replaces) are the third
- * destructive count, after the directories': each removed on the way to the first
- * row beneath it that lands, a directory put in its place, yellow as a replaced
- * directory is. The copies the file rows' landings clear (deploy_preflight_t's
- * clears) are the fourth: each removed with its row, yellow too, and listed in
- * the order the run removes them, each row's deepest first. For each, one the
- * landing's table answers --force's for (core/deploy.h deploy_clearance) — one
- * dotta never confirmed, or one changed since — is removed under --force alone,
- * so the line beneath counts those — the forced run's counterweight, as the files'
- * overwrites are — and the glyph carries the same split at verbose. Every node
- * replaced has a deployable row beneath it, and every copy cleared its row above,
- * so neither stands in an otherwise empty preview.
+ * destructive count, after the directories', named by their state's word as status
+ * lists them — obstructing files, a link among them: each removed on the way to
+ * the first row beneath it that lands, a directory put in its place, yellow as
+ * a replaced directory is. The copies the file rows' landings clear
+ * (deploy_preflight_t's clears) are the fourth — overridden copies, either kind:
+ * each removed with its row, yellow too, and listed in the order the run removes
+ * them, each row's deepest first. For each, one the landing's table answers
+ * --force's for (core/deploy.h deploy_clearance) — one dotta never confirmed,
+ * or one changed since — is removed under --force alone, so the line beneath
+ * counts those — the forced run's counterweight, as the files' overwrites are —
+ * and the glyph carries the same split at verbose. Every node replaced has a
+ * deployable row beneath it, and every copy cleared its row above, so neither
+ * stands in an otherwise empty preview.
  *
  * The warnings close the preview. A warning is an anomaly preflight met while
  * deciding — an ownership it could not resolve — on a row the run will deploy:
@@ -755,7 +757,7 @@ static void apply_print_deploy_preview(
 
     if (nodes->count > 0) {
         output_print(
-            out, OUTPUT_NORMAL, "  {yellow}%zu{reset} orphaned file%s will be replaced by %s\n",
+            out, OUTPUT_NORMAL, "  {yellow}%zu{reset} obstructing file%s will be replaced by %s\n",
             nodes->count, nodes->count == 1 ? "" : "s",
             nodes->count == 1 ? "a directory" : "directories"
         );
@@ -789,8 +791,8 @@ static void apply_print_deploy_preview(
 
     if (copies->count > 0) {
         output_print(
-            out, OUTPUT_NORMAL, "  {yellow}%zu{reset} orphaned path%s will be cleared\n",
-            copies->count, copies->count == 1 ? "" : "s"
+            out, OUTPUT_NORMAL, "  {yellow}%zu{reset} overridden cop%s will be cleared\n",
+            copies->count, copies->count == 1 ? "y" : "ies"
         );
 
         size_t discards = 0;
@@ -1028,15 +1030,16 @@ static size_t apply_print_withheld(
  *   removal). Created and fixed count tracked rows alone, and say so; a replace
  *   can count a rung promoted over dotta's own copy (core/deploy.h
  *   deploy_plan_build), and says "directories"
- * - replaced orphaned files and cleared orphaned paths: the receipt's replaced
- *   and cleared, each read off its own list as the preview reads the preflight's
- *   — dotta's nodes the run's acts replaced with directories on their way, what
- *   the preview promised of them (deploy_preflight_t's replaces) less a replace
- *   that stopped, which the failed rows beneath it name; and the copies the file
- *   rows' landings cleared, what the preview promised of them (deploy_preflight_t's
- *   clears) less the ones a refused removal left, which its row's failure names.
- *   Yellow, a removal; the directory each node left is a parent no row claims,
- *   so the listing names the node alone
+ * - replaced obstructing files and cleared overridden copies, in their states'
+ *   words as status lists them: the receipt's replaced and cleared, each read
+ *   off its own list as the preview reads the preflight's — dotta's nodes the
+ *   run's acts replaced with directories on their way, what the preview promised
+ *   of them (deploy_preflight_t's replaces) less a replace that stopped, which
+ *   the failed rows beneath it name; and the copies the file rows' landings
+ *   cleared, what the preview promised of them (deploy_preflight_t's clears)
+ *   less the ones a refused removal left, which its row's failure names. Yellow,
+ *   a removal; the directory each node left is a parent no row claims, so the
+ *   listing names the node alone
  * - ancestors: Directories the run created on the way to a planned path, outside
  *   the plan — either class, since a claimed rung is created at its claim whether
  *   the profile tracks it or only passes through it. Verbose only — the preview
@@ -1215,7 +1218,7 @@ static void apply_print_deploy_receipt(
     }
 
     if (receipt->replaced.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Replaced orphaned files");
+        output_section(out, OUTPUT_VERBOSE, "Replaced obstructing files");
         for (size_t i = 0; i < receipt->replaced.count; i++) {
             output_print(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
@@ -1225,7 +1228,7 @@ static void apply_print_deploy_receipt(
     }
 
     if (receipt->cleared.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Cleared orphaned paths");
+        output_section(out, OUTPUT_VERBOSE, "Cleared overridden copies");
         for (size_t i = 0; i < receipt->cleared.count; i++) {
             const workspace_item_t *copy = receipt->cleared.entries[i];
 
@@ -1288,7 +1291,7 @@ static void apply_print_deploy_receipt(
 
         if (receipt->replaced.count > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} orphaned file%s with %s\n",
+                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} obstructing file%s with %s\n",
                 receipt->replaced.count, receipt->replaced.count == 1 ? "" : "s",
                 receipt->replaced.count == 1 ? "a directory" : "directories"
             );
@@ -1296,8 +1299,8 @@ static void apply_print_deploy_receipt(
 
         if (receipt->cleared.count > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "Cleared {yellow}%zu{reset} orphaned path%s\n",
-                receipt->cleared.count, receipt->cleared.count == 1 ? "" : "s"
+                out, OUTPUT_NORMAL, "Cleared {yellow}%zu{reset} overridden cop%s\n",
+                receipt->cleared.count, receipt->cleared.count == 1 ? "y" : "ies"
             );
         }
     }
@@ -2706,8 +2709,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
     if (deploy_plan->nodes.count > 0) {
         output_print(
-            out, OUTPUT_VERBOSE, "  %zu orphaned file%s in the way of the paths beneath\n",
-            deploy_plan->nodes.count, deploy_plan->nodes.count == 1 ? "" : "s"
+            out, OUTPUT_VERBOSE, "  %zu %s replacing\n",
+            deploy_plan->nodes.count,
+            deploy_plan->nodes.count == 1 ? "obstructing file needs" : "obstructing files need"
         );
     }
 
@@ -3297,8 +3301,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         size_t prune_dir_count = cleanup_verdicts->prunable_dirs.count;
 
         /* Compose the prompt from the non-zero parts — "Deploy 2 files, converge
-         * 1 directory, replace 1 orphaned file and prune 3 orphaned files?". No
-         * part means no act of the run touches the disk — a release, a reclaim,
+         * 1 directory, replace 1 obstructing file and prune 3 orphaned files?".
+         * No part means no act of the run touches the disk — a release, a reclaim,
          * a row skipped — so nothing there is lost, and no consent is owed, where
          * the pre-apply hook above fired all the same: the question weighs the
          * disk, the hooks bracket the run. The three destructive deploy verbs
@@ -3330,14 +3334,14 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
         if (replace_count > 0) {
             snprintf(
-                parts[part_count++], sizeof(parts[0]), "replace %zu orphaned file%s",
+                parts[part_count++], sizeof(parts[0]), "replace %zu obstructing file%s",
                 replace_count, replace_count == 1 ? "" : "s"
             );
         }
         if (clear_count > 0) {
             snprintf(
-                parts[part_count++], sizeof(parts[0]), "clear %zu orphaned path%s",
-                clear_count, clear_count == 1 ? "" : "s"
+                parts[part_count++], sizeof(parts[0]), "clear %zu overridden cop%s",
+                clear_count, clear_count == 1 ? "y" : "ies"
             );
         }
         if (prune_file_count > 0) {

@@ -291,7 +291,8 @@ static void show_provenance(output_t *out, const git_commit *commit) {
  * own noun. A directory claim the sheet alone holds — a tracked directory the
  * profile holds no blob beneath — is refused as the directory it is, because
  * the profile does hold it and "not found" would be the wrong word. Only a name
- * neither document holds is not found.
+ * neither document holds is not found, in the one sentence every verb says of
+ * it (core/profiles.h profile_held_kind_t).
  *
  * The blob's header is the claim the profile makes there (core/profiles.h
  * profile_find), read tolerantly: a sheet that will not load costs the header
@@ -344,7 +345,10 @@ static error_t show_file(
             );
 
         case PROFILE_HELD_NOTHING:
-            return error_create(ERR_NOT_FOUND, "File '%s' not found", storage_path);
+            return error_create(
+                ERR_NOT_FOUND, "'%s' not found in profile '%s'", storage_path,
+                profile_name(profile)
+            );
     }
 
     CHECK_ARG(false, "a held kind no enumerator names");

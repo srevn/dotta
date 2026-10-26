@@ -596,6 +596,19 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target);
  * by its noun, while a file captured from the disk at its name takes its place,
  * as Git's own add does (profile_capture_file); NOTHING is neither document holding
  * the name.
+ *
+ * The words on screen: NOTHING is "'<x>' not found in profile '<p>'", <x> the
+ * name or the path the verb asked, and " at commit <c>" after it where the verb
+ * names a commit it does not caption — show's, the name it asked, its commit
+ * captioned above (cmds/show.c show_file); revert's, in the key the user named
+ * (cmds/revert.c revert_target_claim); export's name arm (cmds/export.c
+ * export_collect_storage). The same absence asked another way is the same sentence:
+ * a path the profile's view places nothing at (revert_target_claim; cmds/export.c
+ * export_collect_filesystem, which adds why where some of the profile's claims
+ * stand nowhere here), and an argument as typed that reaches no claim of the
+ * profile's (cmds/remove.c remove_resolve). A DIRECTORY or a SUBMODULE each verb
+ * refuses by its noun in its own words, and list reads NOTHING as a deleted file
+ * whose history it searches (cmds/list.c list_file_history).
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */

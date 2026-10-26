@@ -452,9 +452,10 @@ static bool remove_contradicted(
  * and the overlap analysis and the record read the NULL as the fact it is.
  *
  * Every argument takes a claim or refuses the removal, naming itself — in the
- * reader's words where it is no spelling of a path, else as not found — whatever
- * --force says: the flag answers the questions a removal asks, never an absence.
- * So the claims taken are never none, the arguments never being none
+ * reader's words where it is no spelling of a path, else as not found, in the
+ * one sentence every verb says of it (core/profiles.h profile_held_kind_t) —
+ * whatever --force says: the flag answers the questions a removal asks, never
+ * an absence. So the claims taken are never none, the arguments never being none
  * (remove_post_parse).
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
@@ -562,7 +563,7 @@ static error_t remove_resolve(
 
         if (matches_found == 0) {
             return error_create(
-                ERR_NOT_FOUND, "Path '%s' not found in profile '%s'",
+                ERR_NOT_FOUND, "'%s' not found in profile '%s'",
                 opts->paths[i], opts->profile
             );
         }

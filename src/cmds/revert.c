@@ -444,19 +444,14 @@ static error_t revert_target_claim(
             break;
     }
 
-    /* Nothing, in the key the user named. A row found above is held in one document
-     * or the other and cannot reach here; if it ever did, this block is honest
-     * for it too. */
-    if (arg->key == PATH_KEY_FILESYSTEM) {
-        return error_create(
-            ERR_NOT_FOUND, "Profile '%s' held nothing at '%s' at commit %s",
-            profile_name(target_profile), arg->filesystem_path, commit
-        );
-    }
-
+    /* Nothing, in the key the user named, in the one sentence every verb says
+     * of what a profile holds nothing at (core/profiles.h profile_held_kind_t).
+     * A row found above is held in one document or the other and cannot reach
+     * here; if it ever did, this sentence is honest for it too. */
     return error_create(
-        ERR_NOT_FOUND, "File '%s' not found at commit %s in profile '%s'",
-        arg->storage_path, commit, profile_name(target_profile)
+        ERR_NOT_FOUND, "'%s' not found in profile '%s' at commit %s",
+        arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path,
+        profile_name(target_profile), commit
     );
 }
 

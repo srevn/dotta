@@ -511,8 +511,10 @@ static error_t export_collect_storage(
      * the whole arm's question asked here too, and the sheet answers it first:
      * a claim only the sheet can hold is one its failure leaves unread, so where
      * it would not load that failure is the answer, never "not found". Otherwise
-     * what stands at the name says which: nothing at all is not found, and a
-     * subtree holding no blob or a gitlink is nothing the profile claims there */
+     * what stands at the name says which: nothing at all is not found, in the
+     * one sentence every verb says of it (core/profiles.h profile_held_kind_t),
+     * and a subtree holding no blob or a gitlink is nothing the profile claims
+     * there */
     if (!root && list->count == 1) {
         err = profile_load_sheet(profile);
         if (err) return err;
@@ -666,22 +668,24 @@ static error_t export_collect_filesystem(
         entry_list_append(list, arena, &e);
     }
 
-    /* A copy with nothing in it — no row at the path and none beneath. A claim
-     * this machine cannot place stands nowhere and is no row — the likely cause
-     * when a profile answers nothing at all, export's own case being the profile
-     * this machine does not deploy: the reason the fact then completes, its storage
-     * path the one key that names such a claim. */
+    /* A copy with nothing in it — no row at the path and none beneath — is not
+     * found, in the one sentence every verb says of what a profile holds nothing
+     * at (core/profiles.h profile_held_kind_t). A claim this machine cannot place
+     * stands nowhere and is no row — the likely cause when a profile answers
+     * nothing at all, export's own case being the profile this machine does not
+     * deploy: the reason the fact then completes, its storage path the one key
+     * that names such a claim. */
     if (!at && list->count == 1) {
         if (manifest_unbound(view).count > 0) {
             return error_create(
-                ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'; some of its "
+                ERR_NOT_FOUND, "'%s' not found in profile '%s'%s; some of the profile's "
                 "paths have no target on this machine, and only their storage paths "
-                "name them", profile_name(profile), commit_suffix, filesystem_path
+                "name them", filesystem_path, profile_name(profile), commit_suffix
             );
         }
         return error_create(
-            ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'",
-            profile_name(profile), commit_suffix, filesystem_path
+            ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
+            filesystem_path, profile_name(profile), commit_suffix
         );
     }
 

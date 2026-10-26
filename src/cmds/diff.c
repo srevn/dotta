@@ -260,16 +260,17 @@ static const char *get_status_message_from_item(
     }
 
     /* A policy-violating blob: how Git stores the content, not a difference between
-     * Git and disk. Downstream-only in practice — the upstream filter leaves
-     * the lone bit out. */
-    if (item->divergence & DIVERGENCE_ENCRYPTION) {
-        return direction == DIFF_UPSTREAM
-                ? "stored plaintext where policy asks encryption"
-                : "stored plaintext (would be encrypted by update)";
+     * Git and disk — update's to re-store, which no apply touches, so downstream's
+     * alone: upstream, a violator the filter admits for its reassignment alone
+     * reads the reassignment's sentence below. */
+    if (direction == DIFF_DOWNSTREAM && (item->divergence & DIVERGENCE_ENCRYPTION)) {
+        return "stored plaintext (would be encrypted by update)";
     }
 
-    /* Profile reassignment with no content/metadata divergence. Only reachable
-     * via UPSTREAM (DOWNSTREAM filtered by should_show_item_for_direction). */
+    /* Profile reassignment with no content/metadata divergence — apply's to
+     * acknowledge, so upstream's alone: the downstream filter admits a reassignment
+     * only beside a difference update commits, whose sentence answers above
+     * (should_show_item_for_direction). */
     if (workspace_reassigned(item->row, item->record, item->occupant)) {
         return "profile reassigned (acknowledged by apply)";
     }

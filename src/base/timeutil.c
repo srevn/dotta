@@ -19,7 +19,9 @@ void timeutil_relative(
 
     /* Each unit counts the whole units elapsed and names them in the number they
      * agree with: 90 s is one minute, never two, and 3,599 s is 59 minutes, never
-     * the 60 the next unit starts at. */
+     * the 60 the next unit starts at. Each count is held in a type it fits: the
+     * next unit bounds every count but the years', and a time far enough past —
+     * a forged commit's — has more years than an int holds. */
     if (elapsed < 0) {
         snprintf(
             buf, buf_size, "in the future"
@@ -61,9 +63,9 @@ void timeutil_relative(
             months, months == 1 ? "" : "s"
         );
     } else {
-        int years = (int) (elapsed / 31536000);
+        long long years = (long long) (elapsed / 31536000);
         snprintf(
-            buf, buf_size, "%d year%s ago",
+            buf, buf_size, "%lld year%s ago",
             years, years == 1 ? "" : "s"
         );
     }

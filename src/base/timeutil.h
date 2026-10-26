@@ -16,7 +16,8 @@
  * The time elapsed since `timestamp`, in the largest unit it has reached — seconds,
  * minutes, hours, days, weeks, months of 30 days, years of 365 — counted in whole
  * units and named in the number it agrees with: "1 second ago", "59 minutes ago",
- * "2 weeks ago", "1 year ago". A timestamp past now reads "in the future".
+ * "2 weeks ago", "1 year ago". A timestamp past now reads "in the future", and
+ * every timestamp reads as one, however far past.
  *
  * @param timestamp Unix timestamp to format
  * @param buf Output buffer

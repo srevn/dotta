@@ -40,52 +40,6 @@
 #define LIST_MIN_NAME_ALIGN 12
 
 /**
- * Print upstream state indicator
- *
- * Prints a colored upstream tracking indicator (e.g., [=], [↑3], [↕2+1]) directly
- * to the output stream via the output_colored API.
- */
-static void print_upstream_state(
-    output_t *out,
-    const upstream_info_t *info
-) {
-    const char *symbol = upstream_state_symbol(info->state);
-    output_color_t color = upstream_state_color(info->state);
-    char label[32];
-
-    switch (info->state) {
-        case UPSTREAM_LOCAL_AHEAD:
-            snprintf(
-                label, sizeof(label), "[%s%zu]",
-                symbol, info->ahead
-            );
-            break;
-        case UPSTREAM_REMOTE_AHEAD:
-            snprintf(
-                label, sizeof(label), "[%s%zu]",
-                symbol, info->behind
-            );
-            break;
-        case UPSTREAM_DIVERGED:
-            snprintf(
-                label, sizeof(label), "[%s%zu+%zu]",
-                symbol, info->ahead, info->behind
-            );
-            break;
-        case UPSTREAM_UP_TO_DATE:
-        case UPSTREAM_NO_REMOTE:
-        case UPSTREAM_NO_LOCAL:
-            snprintf(
-                label, sizeof(label), "[%s]",
-                symbol
-            );
-            break;
-    }
-
-    output_colored(out, OUTPUT_NORMAL, color, "  %s", label);
-}
-
-/**
  * One verbose profile line's facts
  *
  * Read off the branch's head before anything prints: what it holds and what that
@@ -161,8 +115,10 @@ static error_t list_size_claim(const profile_claim_t *claim, void *payload) {
 /**
  * List profiles - Level 1
  *
- * Default: Just profile names Verbose: Add stats (file count, size, last commit)
- * Remote:  Add tracking indicators
+ * Default: the names, the enabled ones starred. Verbose: what each holds, what
+ * that weighs, and its last commit. Remote: each one's remote sync status, in
+ * the row and under the title status's remote section prints (cmds/status.c
+ * status_print_remote) — the glyph beside its phrase, so no legend keys it.
  */
 static error_t list_profiles(
     const dotta_ctx_t *ctx,
@@ -303,8 +259,15 @@ static error_t list_profiles(
         }
     }
 
-    /* Print header */
-    output_section(out, OUTPUT_NORMAL, "Profiles");
+    /* The header: where the rows say each state, the title status's remote section
+     * gives the same rows, naming the remote (cmds/status.c status_print_remote) */
+    if (show_remote) {
+        output_section(
+            out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote_name
+        );
+    } else {
+        output_section(out, OUTPUT_NORMAL, "Profiles");
+    }
 
     /* List profiles */
     for (size_t i = 0; i < profiles.count; i++) {
@@ -356,38 +319,27 @@ static error_t list_profiles(
             );
         }
 
-        /* Remote: Add tracking state — none where the analysis fails, its error
-         * dropped, one per such branch */
+        /* Remote: where the profile stands, as status's compact row says it —
+         * the glyph beside its phrase (sys/upstream.h), or the analysis's failure
+         * in its place, its error dropped once said, one per such branch */
         if (show_remote) {
             upstream_info_t info;
             err = upstream_analyze_profile(repo, remote_name, profile, &info);
-            if (!err) {
-                print_upstream_state(out, &info);
+            if (err) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  {red}(✗ %s){reset}", error_line(err)
+                );
+            } else {
+                char phrase[UPSTREAM_PHRASE_MAX];
+                upstream_state_phrase(&info, phrase, sizeof(phrase));
+                output_print(
+                    out, OUTPUT_NORMAL, "  {dim}(%s %s){reset}",
+                    upstream_state_symbol(info.state), phrase
+                );
             }
         }
 
         output_endline(out, OUTPUT_NORMAL);
-    }
-
-    /* Print remote legend if shown */
-    if (show_remote) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_print(
-            out, OUTPUT_NORMAL,
-            "Remote tracking (from %s):\n",
-            remote_name
-        );
-        output_print(
-            out, OUTPUT_NORMAL,
-            "  {green}[=]{reset} up-to-date  "
-            "  {yellow}[↑n]{reset} ahead  "
-            "  {yellow}[↓n]{reset} behind\n"
-        );
-        output_print(
-            out, OUTPUT_NORMAL,
-            "  {red}[↕n+m]{reset} diverged  "
-            " {cyan}[•]{reset}  no remote branch\n"
-        );
     }
 
     return NULL;
@@ -1129,7 +1081,7 @@ static const args_opt_t list_opts[] = {
     ARGS_FLAG(
         "remote",
         cmd_list_options_t,remote,
-        "Show remote tracking state (Level 1 only)"
+        "Show remote sync status (Level 1 only)"
     ),
     ARGS_FLAG_SET(
         "v verbose",
@@ -1161,18 +1113,11 @@ const args_command_t spec_list = {
         "Verbose Mode Details:\n"
         "  Level 1    File count, total size, and last commit per profile.\n"
         "  Level 2    File sizes and per-file last commits.\n"
-        "  Level 3    Full commit messages instead of oneline format.\n"
-        "\n"
-        "Remote State Indicators (with --remote):\n"
-        "  [=]      up-to-date\n"
-        "  [↑n]     n commits ahead\n"
-        "  [↓n]     n commits behind\n"
-        "  [↕n+m]   diverged (n ahead, m behind)\n"
-        "  [•]      no remote branch\n",
+        "  Level 3    Full commit messages instead of oneline format.\n",
     .examples    =
         "  %s list                           # L1 profiles: names only\n"
         "  %s list -v                        # L1 profiles: stats + last commit\n"
-        "  %s list --remote                  # L1 profiles: remote tracking state\n"
+        "  %s list --remote                  # L1 profiles: remote sync status\n"
         "  %s list -v --remote               # L1 profiles: full details + remote\n"
         "  %s list global                    # L2 files: paths only\n"
         "  %s list global -v                 # L2 files: sizes + commits\n"

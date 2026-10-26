@@ -1512,7 +1512,8 @@ static void status_print_remote(
         transfer_context_free(xfer);
     }
 
-    /* Display remote sync status section */
+    /* The remote sync status section, under the title list's remote listing takes
+     * too (cmds/list.c list_profiles) */
     output_section(out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote_name);
 
     /* Analyze and display each profile's sync state */
@@ -1627,7 +1628,8 @@ static void status_print_remote(
                 git_commit_free(remote_commit);
             }
         } else {
-            /* Compact mode: single line matching enabled profiles format */
+            /* Compact mode: single line matching enabled profiles format, the
+             * frame list's remote rows take too (cmds/list.c list_profiles) */
             output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
             output_print(out, OUTPUT_NORMAL, "  {dim}(%s %s){reset}\n", symbol, phrase);
         }
@@ -1845,15 +1847,7 @@ const args_command_t spec_status = {
         "Ownership:\n"
         "  Ownership is compared like mode, without privileges. A path whose\n"
         "  permissions refuse the read is reported as [unreadable]; sudo may\n"
-        "  lift it.\n"
-        "\n"
-        "Remote State Indicators:\n"
-        "  =    up-to-date\n"
-        "  ↑ n  n commits ahead\n"
-        "  ↓ n  n commits behind\n"
-        "  ↕    diverged\n"
-        "  •    no remote branch\n"
-        "  ?    no local branch\n",
+        "  lift it.\n",
     .examples     =
         "  %s status                         # Local + remote\n"
         "  %s status --local                 # Filesystem only\n"

@@ -75,7 +75,7 @@ error_t upstream_analyze_profile(
  * path in agreement on what each state looks like.
  *
  * Readers: cmds/status.c status_print_remote; cmds/sync.c sync_print_lead;
- * cmds/profile.c profile_fetch; cmds/list.c print_upstream_state.
+ * cmds/profile.c profile_fetch; cmds/list.c list_profiles.
  */
 const char *upstream_state_symbol(upstream_state_t state);
 
@@ -102,21 +102,17 @@ output_color_t upstream_state_color(upstream_state_t state);
  * behind)", "no remote branch", "no local branch": the phrase, not its frame —
  * each reader sets the glyph and the colour beside it (upstream_state_symbol,
  * upstream_state_color) and the frame its screen gives a state, so the rows of
- * status, sync and profile fetch say a state alike.
+ * status, list, sync and profile fetch say a state alike.
  *
  * The words on screen: a state named alone, without its counts — status's Sync
- * summary counting the branches in each state (cmds/status.c status_print_remote),
- * list's legend keying its badges (cmds/list.c list_profiles) — takes the phrase's
- * word for it: up-to-date, ahead, behind, diverged, no remote branch, no local
- * branch. The helps' keys say the phrase itself, each count named by the letter
- * its glyph carries — "n commits ahead", list's "diverged (n ahead, m behind)"
- * — and no act: what sync does with a branch ahead, behind or diverged is its
- * strategy's (cmds/sync.c sync_verdict), so a key naming one would be false under
- * another, and the keys beside them name none either, a key a state (cmds/status.c
- * spec_status, cmds/list.c spec_list).
+ * summary counting the branches in each state (cmds/status.c status_print_remote)
+ * — takes the phrase's word for it: up-to-date, ahead, behind, diverged, no remote
+ * branch, no local branch. No key decodes the glyph, on a screen or in a help:
+ * every row that prints one prints the phrase beside it.
  *
- * Readers: cmds/status.c status_print_remote, cmds/sync.c sync_print_state,
- * cmds/profile.c profile_fetch.
+ * Readers: cmds/status.c status_print_remote, cmds/list.c list_profiles, whose
+ * rows take status's compact frame, cmds/sync.c sync_print_state, cmds/profile.c
+ * profile_fetch.
  *
  * @param info The state and its counts (must not be NULL)
  * @param buffer Output buffer for the phrase (must not be NULL)

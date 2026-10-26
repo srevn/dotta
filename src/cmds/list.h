@@ -39,7 +39,7 @@ typedef struct {
     const char *profile;     /* Profile name (for LIST_FILES or LIST_FILE_HISTORY) */
     const char *file_path;   /* File path (for LIST_FILE_HISTORY) */
     int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
-    bool remote;             /* Show remote tracking state */
+    bool remote;             /* Show remote sync status */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */
     char **positional_args;

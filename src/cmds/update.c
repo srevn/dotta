@@ -1108,17 +1108,16 @@ static void update_print_preview(
 
             /* The other claim composed onto the line's metadata where there is
              * one, as status's Overridden section composes the blob above a copy */
-            char metadata[512];
             if (other) {
+                char metadata[512];
                 snprintf(
                     metadata, sizeof(metadata), "%s, %s's takes its place", line.metadata,
                     other->profile
                 );
+                output_list_add(list, line.tags, line.color, line.path, metadata);
             } else {
-                snprintf(metadata, sizeof(metadata), "%s", line.metadata);
+                output_list_add(list, line.tags, line.color, line.path, line.metadata);
             }
-
-            output_list_add(list, line.tags, line.color, line.path, metadata);
         }
 
         output_list_render(list);

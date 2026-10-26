@@ -1152,15 +1152,9 @@ static void update_print_preview(
 
         for (size_t i = 0; i < partition->unencrypted.count; i++) {
             const workspace_item_t *item = partition->unencrypted.entries[i];
+            const workspace_line_t line = workspace_item_line(item);
 
-            char metadata[512];
-            snprintf(
-                metadata, sizeof(metadata), "from %s, will be encrypted",
-                item->profile
-            );
-
-            /* Single tag for policy violation */
-            output_list_add(list, "[plaintext]", OUTPUT_COLOR_RED, item->filesystem_path, metadata);
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);

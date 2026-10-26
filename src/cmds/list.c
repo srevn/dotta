@@ -744,17 +744,11 @@ static error_t list_file_history(
     err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) return err;
 
-    if (name) {
-        /* The profile named must be here before anything is read under it. Of
-         * the two keys, a name the user typed is Git's key already, so the
-         * pre-check below is what decides whether the profile holds it; a path
-         * is the profile's to name, at its head (below). */
+    if (opts->profile) {
+        /* The profile named must be here before anything is read under it; what
+         * it calls the argument is read at its head (below) */
         err = profile_require(repo, name);
         if (err) return err;
-
-        if (arg.key == PATH_KEY_STORAGE) {
-            storage_path = arg.storage_path;
-        }
     } else {
         /* The owner is the view's: the enabled set at HEAD, precedence resolved,
          * which holds the set it was built from. The view is the arena's. */
@@ -806,15 +800,22 @@ static error_t list_file_history(
     /* The profile at the head's tree, held beside it */
     profile_t *profile = profile_open(name, tree);
 
-    /* A path under a named profile, named by the profile's own view of that head
-     * (core/manifest.h manifest_claim_name) */
-    if (opts->profile && arg.key == PATH_KEY_FILESYSTEM) {
-        manifest_t *view = NULL;
-        err = manifest_build_profile(profile, mounts, ctx->arena, &view);
-        if (!err) {
-            storage_path = manifest_claim_name(
-                ctx->arena, view, name, arg.filesystem_path
-            );
+    /* A profile named: the two keys, and each names its own read. A name the
+     * user typed is Git's key already, so the pre-check below is what decides
+     * whether the profile holds it; a path is the profile's to name. */
+    if (opts->profile) {
+        if (arg.key == PATH_KEY_STORAGE) {
+            storage_path = arg.storage_path;
+        } else {
+            /* The profile's own view of that head, strict about its sheet, names
+             * the path: the claim it holds there, else the name one would take */
+            manifest_t *view = NULL;
+            err = manifest_build_profile(profile, mounts, ctx->arena, &view);
+            if (!err) {
+                storage_path = manifest_claim_name(
+                    ctx->arena, view, name, arg.filesystem_path
+                );
+            }
         }
     }
 

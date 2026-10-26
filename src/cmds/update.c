@@ -1472,8 +1472,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * that found nothing to add still says where it could not look: this may be
      * the one screen that has them — status scans only where the config asks,
      * and this run may have scanned on its own flag. Each line is the item's
-     * tags and path, as status lists it; add meets each cause again and prints
-     * it. */
+     * own (core/workspace.h workspace_item_line), as status lists it; add meets
+     * each cause again and prints it. */
     if (partition.unscanned.count > 0) {
         output_list_t *list = output_list_create(
             out, "Not scanned for new files",

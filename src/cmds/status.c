@@ -597,8 +597,8 @@ static void status_print_workspace(
 
                     case WORKSPACE_ROUTE_CLEAN:
                         /* None: a diverged item has something to say
-                         * (workspace_diverged); the line reads the sections, so
-                         * one filed nowhere would not count */
+                         * (workspace_diverged); the status line reads the sections,
+                         * so one filed nowhere would not count */
                         break;
                 }
                 break;
@@ -662,18 +662,18 @@ static void status_print_workspace(
 
     /* The status line, one fold whatever the filter: the items of the sections
      * that ask the disk or the user something, and those of them dotta could
-     * not verify. Three sections are listed and leave the line as they find it:
-     * an overridden copy, whose work is the landing of the row standing over
-     * it, which the line counts where it shows that row (stated: a filter that
-     * hides the row reads Clean over the copy); and what apply settles in the
-     * record alone, nothing on disk changing — a pure reassignment, a release,
-     * a reclaim. A scope is Clean iff the line counts none. Invalid is reserved
-     * for what the analysis could not establish: an item carrying a fault (an
-     * unreadable path, a comparison that could not run, a history that would
-     * not read) is one no verb resolves by default — apply skips it and the user
-     * must look. Anything else counted is Dirty: work that touches the disk or
-     * waits on the user, not an invalid workspace. With no filter every item is
-     * in scope and none is hidden. */
+     * not verify. Three sections are listed and leave the status line as they
+     * find it: an overridden copy, whose work is the landing of the row standing
+     * over it, which the status line counts where it shows that row (stated: a
+     * filter that hides the row reads Clean over the copy); and what apply settles
+     * in the record alone, nothing on disk changing — a pure reassignment, a
+     * release, a reclaim. A scope is Clean iff the status line counts none. Invalid
+     * is reserved for what the analysis could not establish: an item carrying a
+     * fault (an unreadable path, a comparison that could not run, a history that
+     * would not read) is one no verb resolves by default — apply skips it and
+     * the user must look. Anything else counted is Dirty: work that touches the
+     * disk or waits on the user, not an invalid workspace. With no filter every
+     * item is in scope and none is hidden. */
     const workspace_items_t *counted[] = {
         &conflicts,  &unconfirmed, &squatted, &displaced, &unverifiable, &uncommitted,
         &undeployed, &new_files,   &orphaned,
@@ -691,7 +691,7 @@ static void status_print_workspace(
 
     output_section(out, OUTPUT_NORMAL, "Workspace status");
 
-    /* The line: the fold's decision, in the same words filtered or not */
+    /* The status line: the fold's decision, in the same words filtered or not */
     if (shown == 0) {
         /* Active paths the filter reaches, both kinds — what stands aligned at
          * a path is not a question about which kind stands there. With no filter
@@ -996,7 +996,7 @@ static void status_print_workspace(
 
     /* Section 7: Profile reassignments — a clean row whose record names another
      * profile, which apply acknowledges at its checkpoint in the record alone:
-     * listed, and the line leaves it as it finds it */
+     * listed, and the status line leaves it as it finds it */
     if (reassigned.count > 0) {
         output_list_t *list = output_list_create(
             out, "Profile reassignments",
@@ -1110,13 +1110,13 @@ static void status_print_workspace(
      * dotta confirmed — unasked — or one it never did — --force's — and an
      * [unreadable] one a read that failed — --force's — or a look — no flag's.
      * So it says what holds of every line: the landing clears the copy, or apply's
-     * skip names what keeps it. The line counts none, a copy's work being its
-     * row's, which the line counts where it shows that row (stated: a filter
-     * that hides it reads Clean over the copy). Its blob is the one each line
-     * names, found by the call the orphan analysis made the copy's state by
-     * (core/manifest.h manifest_blob_above), the profile's own or another's,
-     * read off the view, since the item's line reads the item alone, and composed
-     * onto its metadata in a buffer sized for the path. */
+     * skip names what keeps it. The status line counts none, a copy's work being
+     * its row's, which the status line counts where it shows that row (stated:
+     * a filter that hides it reads Clean over the copy). Its blob is the one
+     * each line names, found by the call the orphan analysis made the copy's
+     * state by (core/manifest.h manifest_blob_above), the profile's own or
+     * another's, read off the view, since the item's line reads the item alone,
+     * and composed onto its metadata in a buffer sized for the path. */
     if (overridden.count > 0) {
         output_list_t *list = output_list_create(
             out, "Overridden copies",
@@ -1181,7 +1181,7 @@ static void status_print_workspace(
              * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_ORPHANED:
-                    /* The tags' ladder past absence and a squatter, which the
+                    /* The line's ladder past absence and a squatter, which the
                      * section switch lists apart (section 12): the failed look
                      * or the bits, and the relocation beside them */
                     if (item->fault != WORKSPACE_FAULT_NONE) {
@@ -1299,8 +1299,8 @@ static void status_print_workspace(
      * retires each record and touches nothing on disk, which is what the header
      * says of every line; a line says why where the item can, and the key the
      * rest, by the tags each line shows, the Issues key's shape. Last, since
-     * nothing here asks the user anything, and the line leaves it as it finds
-     * it. */
+     * nothing here asks the user anything, and the status line leaves it as it
+     * finds it. */
     if (released.count > 0) {
         output_list_t *list = output_list_create(
             out, "Released paths",
@@ -1320,7 +1320,7 @@ static void status_print_workspace(
              * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_ORPHANED:
-                    /* The tags' ladder: absence, then a squatter above — the
+                    /* The line's ladder: absence, then a squatter above — the
                      * two an orphan is let go for here (cleanup_verdict) */
                     if (item->occupant == FS_OCCUPANT_NONE) {
                         hint = "already gone from disk; apply reclaims it";
@@ -1376,7 +1376,7 @@ static void status_print_workspace(
     /* The diverged items the filter hides, counted. Where a section printed —
      * the filter hid fewer than all, and every item in scope is listed in one —
      * the note is set apart from the last of them, whose last line it would read
-     * as; under the bare line it is that line's own. */
+     * as; under the bare status line it is that line's own. */
     if (hidden > 0) {
         if (diverged.count > hidden) output_gap(out, OUTPUT_NORMAL);
         output_print(

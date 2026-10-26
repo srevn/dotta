@@ -328,15 +328,14 @@ typedef enum {
  * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
  * node a row lies beneath: deploy_reach), workspace.c workspace_item_line (the
  * DEPLOYED arm's [displaced], beside which only what no look decides or disproves
- * rides, and the ORPHANED arm's rider), cmds/status.c status_print_workspace's
- * key for a displaced orphan, and cmds/diff.c diff_status_line and diff_print_item
- * (the content gate), should_show_item_for_direction beside them; cmds/update.c
- * cmd_update (the named derivation's leaves, climbed beneath the user's squatter
- * at a rung alone, the one squatter the climb's retire answers for — but at a
- * lost blob's place); and core/deploy.c check_ancestry, off the squatted directory
- * itself — a caller that needs the squatter, which no item carries, is lent it
- * whole, the claim this class is copied from (workspace_squatted_ancestor), so
- * apply's remedy and status's section cannot name two claimants for one squatter.
+ * rides, and the ORPHANED arm's rider), and cmds/status.c status_print_workspace's
+ * key for a displaced orphan; cmds/update.c cmd_update (the named derivation's
+ * leaves, climbed beneath the user's squatter at a rung alone, the one squatter
+ * the climb's retire answers for — but at a lost blob's place); and core/deploy.c
+ * check_ancestry, off the squatted directory itself — a caller that needs the
+ * squatter, which no item carries, is lent it whole, the claim this class is
+ * copied from (workspace_squatted_ancestor), so apply's remedy and status's section
+ * cannot name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -473,9 +472,8 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * cmds/status.c status_print_workspace (the status line, Unverifiable's key and
  * Issues'), cmds/update.c update_partition and cmd_update's census, cmds/apply.c
  * apply_fault_label, apply_consent_label and the sudo and key closers of
- * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's filter,
- * status line, content gate and count (should_show_item_for_direction,
- * diff_status_line, diff_print_item, diff_print_direction). A reader not on this
+ * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's status
+ * line and count (diff_status_line, diff_print_direction). A reader not on this
  * list is a bug.
  */
 typedef enum {
@@ -840,7 +838,7 @@ static inline compare_result_t workspace_compare_confirmed(
  * Readers: the route table, with the item's — the diverged items list a clean
  * row that carries this through it (core/workspace.c workspace_list) — and the
  * line's DEPLOYED and UNDEPLOYED arms (workspace_item_line), with the item's;
- * diff's filter and its "acknowledged by apply" line (cmds/diff.c), with the
+ * diff's "acknowledged by apply" line (cmds/diff.c diff_status_line), with the
  * item's; apply's two acknowledgement loops — the writers that move the record
  * onto the row's profile — with the item's, and its pending reassignments off
  * the verdicts and its record phase, with the verdict's (cmds/apply.c cmd_apply,
@@ -1186,7 +1184,7 @@ typedef struct {
  * The partition of WORKSPACE_STATE_DEPLOYED items that every surface routing a
  * deployed item reads, so no two surfaces can route one item two ways — the shape
  * cleanup_verdict gives the orphan side. One producer (workspace_item_route)
- * and eight readers, each named with the arm it reads; a reader not on this list
+ * and seven readers, each named with the arm it reads; a reader not on this list
  * is a bug:
  *
  *   the diverged items' derivation CLEAN, the one arm a DEPLOYED item is left
@@ -1206,8 +1204,8 @@ typedef struct {
  *   apply's CONTENT skip label     CONFLICT, UNCONFIRMED
  *   apply's disk-wins closer       CAPTURE: update's verb where every CONTENT
  *                                  skip reads it, add --force's otherwise
- *   diff's status line             CONFLICT, UNCONFIRMED
- *   diff's downstream direction    CAPTURE, UNVERIFIABLE, UNCONFIRMED
+ *   diff's status line             every arm, both directions: the row's line,
+ *                                  or none where the direction lists nothing
  *
  * The route is the first arm its ladder reaches (workspace_item_route), so a
  * multi-bit divergence routes under the reason the ladder meets first: the

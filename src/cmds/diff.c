@@ -30,337 +30,313 @@
 #include "sys/gitops.h"
 
 /**
- * Determine if workspace item should be shown for the given direction
+ * The line a direction says of a row, or NULL where it lists nothing there
  *
- * Direction semantics:
- * - UPSTREAM: Show items where repository would change filesystem (undeployed
- *   files, files where Git differs from filesystem, profile reassignments that
- *   apply would acknowledge)
- * - DOWNSTREAM: Show items where filesystem would change repository (modified
- *   files, deleted files that exist in Git)
+ * What differs, then the act of the verb the direction previews or that verb's
+ * refusal: the "# Status:" line heading the row's entry, and the listing's one
+ * decision — a direction lists a row where it has a line for it, and only there,
+ * so no row is listed without a line and no line is said of a row no direction
+ * lists. Upstream previews apply at the rows: every row it lands, restores,
+ * converges or acknowledges, and every one it skips for --force or for a look
+ * that failed. Downstream previews update: every row it commits, and two it
+ * refuses, which a listing that left them out would call "no local changes" over
+ * a difference — a failed look, bytes no base proves. Read off the row's state
+ * and, deployed, its route (core/workspace.h workspace_item_route), each switch
+ * exhaustive, so an arm either gains is a build error here.
  *
- * @param item Workspace item (must not be NULL)
- * @param direction Diff direction
- * @return true if item should be shown
- */
-static bool should_show_item_for_direction(
-    const workspace_item_t *item,
-    diff_direction_t direction
-) {
-    /* DIFF_BOTH is always decomposed into two explicit calls by the caller before
-     * reaching this function, and post_parse resolves an unset one: a direction
-     * is one of the two. */
-    CHECK_ARG(
-        direction == DIFF_UPSTREAM || direction == DIFF_DOWNSTREAM,
-        "a diff item is shown for one direction, never both or none"
-    );
-
-    if (direction == DIFF_UPSTREAM) {
-        /* Upstream: What differs that apply could act on? A comparison question,
-         * not a verb route, so the bits are read directly. Show: undeployed,
-         * deleted (apply would restore), content/mode/type differs, stale (Git's
-         * side differs from what dotta last saw or left — the bytes, or a claim,
-         * which rides its axis bit; apply would bring it), or profile reassignment
-         * (apply acknowledges reassignment). TYPE rides along — replacing the
-         * occupant is apply's (--force for the kinds the copy cannot commit),
-         * and status's Conflicts remedy sends the user here to compare, so hiding
-         * it answered that remedy with silence. A failed look is shown too, its
-         * fault a difference nobody has ruled out: hiding it reported the tree
-         * in sync over a file the user had just edited. A row beneath a squatter
-         * is shown on the same ground and carries no bit to be shown by: nothing
-         * there was looked at (core/workspace.h workspace_displaced_t), apply
-         * writes it fresh once the squatter is replaced, and the status line
-         * says so. ENCRYPTION alone stays out: how Git stores the blob is no
-         * difference between Git and disk, and apply deploying it changes
-         * nothing. */
-        if (item->state == WORKSPACE_STATE_UNDEPLOYED ||
-            item->state == WORKSPACE_STATE_DELETED) {
-            return true;
-        }
-        if (item->state != WORKSPACE_STATE_DEPLOYED) return false;
-        return item->displaced != WORKSPACE_DISPLACED_NONE ||
-               item->fault != WORKSPACE_FAULT_NONE ||
-               (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
-               DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE)) ||
-               workspace_reassigned(item->row, item->record, item->occupant);
-    }
-
-    /* Downstream: What would update do? The route answers verbatim
-     * (workspace_item_route — the same table update's filter reads), so this
-     * cannot promise a commit update refuses (STALE, CONFLICT, KIND, UNCONFIRMED)
-     * or hide one it would take (a TYPE the copy can commit over a base,
-     * ENCRYPTION, OWNERSHIP). Two refusals are shown, a failed look and bytes
-     * no base proves: the row's status says update skips it, where a listing
-     * that left either out would say "no local changes" over a file nobody could
-     * read, or over bytes that differ. A conflict's and a kind's local edit are
-     * left out, so a workspace holding only those reads "no local changes" here
-     * (stated). */
-    if (item->state == WORKSPACE_STATE_DELETED) return true;
-    if (item->state != WORKSPACE_STATE_DEPLOYED) return false;
-    workspace_route_t route = workspace_item_route(item);
-    return route == WORKSPACE_ROUTE_CAPTURE ||
-           route == WORKSPACE_ROUTE_UNVERIFIABLE ||
-           route == WORKSPACE_ROUTE_UNCONFIRMED;
-}
-
-/**
- * Get status message from workspace item and direction
- *
- * Determines the appropriate status message based on item's state, divergence
- * flags, and diff direction.
- *
- * @param item Workspace item (must not be NULL)
- * @param direction Diff direction
- * @return Status message string
+ * @param item One of the diverged items, a row of the view's (must not be NULL)
+ * @param direction The direction asking: one of the two
+ * @return The line, or NULL
  */
 static const char *diff_status_line(
     const workspace_item_t *item,
     diff_direction_t direction
 ) {
-    /* Handle state-based messages first */
-    if (item->state == WORKSPACE_STATE_UNDEPLOYED) {
-        return direction == DIFF_UPSTREAM
-                ? "not deployed (would be created by apply)"
-                : "new in repository (not deployed yet)";
-    }
+    /* --all asks each direction in turn, and post_parse resolves an unset one:
+     * a direction is one of the two */
+    CHECK_ARG(
+        direction == DIFF_UPSTREAM || direction == DIFF_DOWNSTREAM,
+        "a diff item is shown for one direction, never both or none"
+    );
 
-    if (item->state == WORKSPACE_STATE_DELETED) {
-        return direction == DIFF_UPSTREAM
-                ? "deleted locally (would be put back by apply)"
-                : "deleted locally (would be committed by update)";
-    }
+    switch (item->state) {
+        case WORKSPACE_STATE_UNDEPLOYED:
+            /* Apply's to create, and nothing stands to differ */
+            return direction == DIFF_UPSTREAM
+                   ? "not deployed (would be created by apply)"
+                   : NULL;
 
-    /* Beneath a squatted directory: nothing there was looked at, so no sentence
-     * below is true of the path and it carries no bit for one to be read off,
-     * and the way there is the squatter's own route — the route's four arms,
-     * said in a comparison's own words, dotta's own copy in its own state's.
-     * The predicate opens the line, as it does on every screen that speaks of
-     * such a path (core/workspace.h workspace_displaced_t). Total over the classes,
-     * so a class added there is a build error here and never an admitted item
-     * without a sentence. Upstream only in practice: the downstream filter admits
-     * none of the squatter's routes. */
-    switch (item->displaced) {
-        case WORKSPACE_DISPLACED_TRACKED:
-            return "not looked at, beneath a squatted directory "
-                   "(apply --force <dir> replaces it, then writes this fresh)";
-        case WORKSPACE_DISPLACED_DERIVED:
-            return "not looked at, beneath a squatted directory "
-                   "('dotta update <dir>' re-derives the way there)";
-        case WORKSPACE_DISPLACED_STALE:
-            return "not looked at, beneath a squatted directory changed in Git "
-                   "(apply replaces it, then writes this fresh)";
-        case WORKSPACE_DISPLACED_CONFLICT:
-            return "not looked at, beneath a squatted directory changed in Git and "
-                   "on disk (apply --force <dir> replaces it, then writes this fresh)";
-        case WORKSPACE_DISPLACED_RECORD:
-        case WORKSPACE_DISPLACED_NONE:
-            /* A record's memory displaces no view row (the reach rule), and the
-             * rest were looked at: the sentences below are theirs */
+        case WORKSPACE_STATE_DELETED:
+            return direction == DIFF_UPSTREAM
+                   ? "deleted locally (would be put back by apply)"
+                   : "deleted locally (would be committed by update)";
+
+        case WORKSPACE_STATE_DEPLOYED:
+            /* Which verb resolves it is the route's, below */
             break;
+
+        case WORKSPACE_STATE_ORPHANED:
+        case WORKSPACE_STATE_UNTRACKED:
+        case WORKSPACE_STATE_UNSCANNED:
+        case WORKSPACE_STATE_RELEASED:
+        case WORKSPACE_STATE_OVERRIDDEN:
+        case WORKSPACE_STATE_OBSTRUCTING:
+            /* No row: diff loads no orphan and runs no scan (diff_workspace) */
+            CHECK_ARG(false, "a diff lists the view's rows alone");
     }
 
-    /* A look that failed: no bit below was settled, so neither verb's sentence
-     * is true of the path — apply skips the row at preflight, update in its census.
-     * Ranked where the route ranks it, above every settled bit, and worded by
-     * whose remedy the failure is (workspace_fault_t) — the three words status
-     * tags the same row with. */
-    switch (item->fault) {
-        case WORKSPACE_FAULT_LOCKED:
+    switch (workspace_item_route(item)) {
+        case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+            /* Beneath a squatted directory, this arm and the three after it:
+             * nothing there was looked at, so the path carries no bit to be read
+             * off, and the way there is the squatter's own route — the route's
+             * four arms, said in a comparison's own words, dotta's own copy in
+             * its own state's. The predicate opens the line, as it does on every
+             * screen that speaks of such a path (core/workspace.h
+             * workspace_displaced_t). Apply writes the row fresh once the squatter
+             * goes; downstream lists none, no look having found a difference */
             return direction == DIFF_UPSTREAM
-                    ? "locked (apply skips it)"
-                    : "locked (update skips it)";
+                   ? "not looked at, beneath a squatted directory "
+                   "(apply --force <dir> replaces it, then writes this fresh)"
+                   : NULL;
 
-        case WORKSPACE_FAULT_UNREADABLE:
+        case WORKSPACE_ROUTE_DISPLACED_DERIVED:
             return direction == DIFF_UPSTREAM
-                    ? "cannot be read (apply skips it)"
-                    : "cannot be read (update skips it)";
+                   ? "not looked at, beneath a squatted directory "
+                   "('dotta update <dir>' re-derives the way there)"
+                   : NULL;
 
-        case WORKSPACE_FAULT_UNVERIFIED:
+        case WORKSPACE_ROUTE_DISPLACED_STALE:
             return direction == DIFF_UPSTREAM
-                    ? "could not be verified (apply skips it)"
-                    : "could not be verified (update skips it)";
+                   ? "not looked at, beneath a squatted directory changed in Git "
+                   "(apply replaces it, then writes this fresh)"
+                   : NULL;
 
-        case WORKSPACE_FAULT_NONE:
-            /* Every look stood: the sentences below are theirs */
+        case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
+            return direction == DIFF_UPSTREAM
+                   ? "not looked at, beneath a squatted directory changed in Git and "
+                   "on disk (apply --force <dir> replaces it, then writes this fresh)"
+                   : NULL;
+
+        case WORKSPACE_ROUTE_UNVERIFIABLE:
+            /* A look that failed: no bit was settled, so no verb's act is true
+             * of the path — apply skips the row at preflight, update in its census.
+             * Listed both ways, its fault a difference nobody has ruled out:
+             * hiding it called the tree in sync over a file the user had just
+             * edited. Worded by whose remedy the failure is (workspace_fault_t),
+             * the three words status tags the same row with */
+            switch (item->fault) {
+                case WORKSPACE_FAULT_LOCKED:
+                    return direction == DIFF_UPSTREAM
+                           ? "locked (apply skips it)"
+                           : "locked (update skips it)";
+
+                case WORKSPACE_FAULT_UNREADABLE:
+                    return direction == DIFF_UPSTREAM
+                           ? "cannot be read (apply skips it)"
+                           : "cannot be read (update skips it)";
+
+                case WORKSPACE_FAULT_UNVERIFIED:
+                    return direction == DIFF_UPSTREAM
+                           ? "could not be verified (apply skips it)"
+                           : "could not be verified (update skips it)";
+
+                case WORKSPACE_FAULT_NONE:
+                    CHECK_ARG(false, "an unverifiable item carries its fault");
+            }
             break;
+
+        case WORKSPACE_ROUTE_CONFLICT:
+            /* Both sides moved: the user's bytes or kind beside a move Git made,
+             * to the bytes, the kind or a claim — in the frame's words
+             * (core/workspace.h divergence_type_t), as apply's skip label and
+             * update's census say it. Its --force is qualified as status's
+             * Conflicts header qualifies it: a directory in a blob row's way
+             * goes only with all it holds (core/deploy.c check_clearance).
+             * Downstream leaves out the edit update refuses here (stated) */
+            return direction == DIFF_UPSTREAM
+                   ? "changed in Git and on disk (apply --force <path> keeps Git's, "
+                   "a directory only if all dotta's)"
+                   : NULL;
+
+        case WORKSPACE_ROUTE_STALE:
+            /* Git moved and disk did not follow: no local difference, the claims
+             * riding apply's — a claim is never an edit (core/deploy.h
+             * deploy_content_conflicts) */
+            if (direction == DIFF_DOWNSTREAM) return NULL;
+
+            /* Past what dotta last saw — the bytes, or the kind */
+            if (item->divergence & DIVERGENCE_STALE) {
+                return "changed in Git (would be deployed by apply)";
+            }
+
+            /* A claim Git brings alone, which carries no bytes to name: the axes
+             * apply changes, in the words status tags the same row with
+             * (core/workspace.h divergence_type_t) — both, where both differ,
+             * and the ownership where the mode does not, CLAIM_MOVED riding only
+             * an axis it attributes */
+            if ((item->divergence & DIVERGENCE_MODE) &&
+                (item->divergence & DIVERGENCE_OWNERSHIP)) {
+                return "mode and ownership would change on apply";
+            }
+            if (item->divergence & DIVERGENCE_MODE) {
+                return "mode would change on apply";
+            }
+            return "ownership would change on apply";
+
+        case WORKSPACE_ROUTE_KIND:
+            /* Another kind the user put there, Git having moved nothing past
+             * it: --force's to replace, a directory only with all it holds. Listed
+             * upstream because status's Conflicts remedy sends the user here to
+             * compare, and hiding it answered that remedy with silence; downstream
+             * leaves out the kind update refuses (stated) */
+            return direction == DIFF_UPSTREAM
+                   ? "type would change on apply --force <path> (a directory only if "
+                   "all dotta's)"
+                   : NULL;
+
+        case WORKSPACE_ROUTE_KIND_DERIVED:
+            /* The same kind at a rung dotta only passes through, which no plan
+             * holds */
+            return direction == DIFF_UPSTREAM
+                   ? "type would change on apply --force <path> (a directory only if "
+                   "all dotta's)"
+                   : NULL;
+
+        case WORKSPACE_ROUTE_UNCONFIRMED:
+            /* Bytes no base proves: disk is not the row's, and dotta holds no
+             * confirmation of what stands there, nor, where it could be asked,
+             * did the row's own branch hold disk's bytes at the name
+             * (core/workspace.c workspace_ask_bases), so no capture's sentence
+             * is true of it — apply overwrites it only under --force, and update
+             * skips it. Both directions, in the words status's Unconfirmed header
+             * and update's census say it; its --force unqualified, as that header's
+             * is: a file row with a file or a link standing */
+            return direction == DIFF_UPSTREAM
+                   ? "not confirmed by dotta (apply --force <path> keeps Git's)"
+                   : "not confirmed by dotta (update skips it)";
+
+        case WORKSPACE_ROUTE_CAPTURE:
+            /* The user's own, over a base: update's to commit. TYPE never rides
+             * beside CONTENT or a claim bit — each analysis ends its measure at
+             * another kind — so the word is picked by the bit, the kind first */
+            if (item->divergence & DIVERGENCE_TYPE) {
+                return direction == DIFF_UPSTREAM
+                       ? "type would change on apply --force <path> (a directory only if "
+                       "all dotta's)"
+                       : "type changed locally";
+            }
+            if (item->divergence & DIVERGENCE_CONTENT) {
+                return direction == DIFF_UPSTREAM
+                       ? "would be overwritten by apply"
+                       : "modified locally (would be committed by update)";
+            }
+
+            /* A claim alone, named by the axes it differs on in the words status
+             * tags the same row with (core/workspace.h divergence_type_t) — both,
+             * where both differ */
+            if ((item->divergence & DIVERGENCE_MODE) &&
+                (item->divergence & DIVERGENCE_OWNERSHIP)) {
+                return direction == DIFF_UPSTREAM
+                       ? "mode and ownership would change on apply"
+                       : "mode and ownership changed locally";
+            }
+            if (item->divergence & DIVERGENCE_MODE) {
+                return direction == DIFF_UPSTREAM
+                       ? "mode would change on apply"
+                       : "mode changed locally";
+            }
+            if (item->divergence & DIVERGENCE_OWNERSHIP) {
+                return direction == DIFF_UPSTREAM
+                       ? "ownership would change on apply"
+                       : "ownership changed locally";
+            }
+
+            /* The blob's policy alone: how Git stores the content, not a difference
+             * between Git and disk — update's to re-store, which no apply touches,
+             * so upstream says only the reassignment riding, below */
+            if (direction == DIFF_DOWNSTREAM) {
+                return "stored plaintext (would be encrypted by update)";
+            }
+            break;
+
+        case WORKSPACE_ROUTE_REASSIGNED:
+            /* The reassignment alone, below */
+            break;
+
+        case WORKSPACE_ROUTE_CLEAN:
+            CHECK_ARG(false, "a diverged item routes somewhere (workspace_diverged)");
     }
 
-    /* Two routes take sentences of their own, ahead of the bits' below, which
-     * would misstate them (workspace_item_route) */
-    const workspace_route_t route = workspace_item_route(item);
-
-    /* Both sides moved — the route's CONFLICT: the user's bytes or kind beside
-     * a move Git made, to the bytes, the kind or a claim. In the frame's words
-     * (core/workspace.h divergence_type_t), as apply's skip label and update's
-     * census say it, and ahead of the kind's own sentence, which a kind both
-     * sides moved would otherwise take. Upstream only in practice: the downstream
-     * filter admits neither this nor the STALE arm below. Its --force is qualified
-     * as status's Conflicts header qualifies it: a directory in a blob row's
-     * way goes only with all it holds (core/deploy.c check_clearance). */
-    if (route == WORKSPACE_ROUTE_CONFLICT) {
-        return "changed in Git and on disk (apply --force <path> keeps Git's, a directory "
-               "only if all dotta's)";
-    }
-
-    /* Bytes no base proves — the route's UNCONFIRMED: disk is not the row's,
-     * and dotta holds no confirmation of what stands there, nor, where it could
-     * be asked, did the row's own branch hold disk's bytes at the name
-     * (core/workspace.c workspace_ask_bases), so neither the kind's sentence
-     * below nor the bytes' is true of it — apply overwrites it only under --force,
-     * and update skips it. Both directions, in the words status's Unconfirmed
-     * header and update's census say it; its --force unqualified, as that header's
-     * is: a file row with a file or a link standing. */
-    if (route == WORKSPACE_ROUTE_UNCONFIRMED) {
-        return direction == DIFF_UPSTREAM
-                ? "not confirmed by dotta (apply --force <path> keeps Git's)"
-                : "not confirmed by dotta (update skips it)";
-    }
-
-    /* Handle divergence-based messages for deployed items: a kind the user changed,
-     * Git having moved nothing past it — --force's to replace, as the route's
-     * KIND arm has it, and a directory only with all it holds */
-    if (item->divergence & DIVERGENCE_TYPE) {
-        return direction == DIFF_UPSTREAM
-                ? "type would change on apply --force <path> (a directory only if all dotta's)"
-                : "type changed locally";
-    }
-
-    /* Git moved past what dotta last saw — the bytes, or the kind — and disk
-     * did not follow. A claim Git moved alone keeps its axis sentence below:
-     * upstream, that sentence is what apply does, and there are no bytes to
-     * name. */
-    if (item->divergence & DIVERGENCE_STALE) return "changed in Git (would be deployed by apply)";
-
-    if (item->divergence & DIVERGENCE_CONTENT) {
-        return direction == DIFF_UPSTREAM
-                ? "would be overwritten by apply"
-                : "modified locally (would be committed by update)";
-    }
-
-    /* A claim alone, named by the axes it differs on in the words status tags
-     * the same row with (core/workspace.h divergence_type_t) — both, where both
-     * differ. */
-    if ((item->divergence & DIVERGENCE_MODE) &&
-        (item->divergence & DIVERGENCE_OWNERSHIP)) {
-        return direction == DIFF_UPSTREAM
-                ? "mode and ownership would change on apply"
-                : "mode and ownership changed locally";
-    }
-
-    if (item->divergence & DIVERGENCE_MODE) {
-        return direction == DIFF_UPSTREAM
-                ? "mode would change on apply"
-                : "mode changed locally";
-    }
-
-    if (item->divergence & DIVERGENCE_OWNERSHIP) {
-        return direction == DIFF_UPSTREAM
-                ? "ownership would change on apply"
-                : "ownership changed locally";
-    }
-
-    /* A policy-violating blob: how Git stores the content, not a difference between
-     * Git and disk — update's to re-store, which no apply touches, so downstream's
-     * alone: upstream, a violator the filter admits for its reassignment alone
-     * reads the reassignment's sentence below. */
-    if (direction == DIFF_DOWNSTREAM && (item->divergence & DIVERGENCE_ENCRYPTION)) {
-        return "stored plaintext (would be encrypted by update)";
-    }
-
-    /* Profile reassignment with no content/metadata divergence — apply's to
-     * acknowledge, so upstream's alone: downstream admits a reassignment only
-     * on a route whose sentence answers above — a capture, a failed look, bytes
-     * no base proves (should_show_item_for_direction). */
-    if (workspace_reassigned(item->row, item->record, item->occupant)) {
-        return "profile reassigned (acknowledged by apply)";
-    }
-
-    /* Every item the direction filter admits has a sentence above
-     * (should_show_item_for_direction) */
-    CHECK_ARG(false, "an admitted item has a status message");
+    /* The reassignment apply acknowledges, upstream's alone: the route's own,
+     * and the one a capture carries whose one divergence is the blob's policy */
+    return direction == DIFF_UPSTREAM &&
+           workspace_reassigned(item->row, item->record, item->occupant)
+           ? "profile reassigned (acknowledged by apply)"
+           : NULL;
 }
 
 /**
- * Show diff for a single file using workspace data
+ * Print a listed row's entry: its names, its line, and the body it draws
  *
- * Formats and displays the divergence the workspace analysis settled; nothing
- * is re-analyzed. The item's row is the path's view row — blob, storage path,
- * profile; non-NULL for every state the direction filter passes (untracked and
- * orphaned items were filtered there). A read the render makes and fails is the
- * row's: its cause is said in the row's block, and the diff goes on.
+ * Says what the workspace analysis settled; nothing is re-analyzed. The item's
+ * row is the path's view row — blob, storage path, profile — which every item
+ * diff lists carries (diff_status_line). A read the render makes and fails is
+ * the row's: its cause is said in the row's block, and the diff goes on.
  *
- * @param item Workspace item with divergence info (must not be NULL)
+ * @param item A listed item (must not be NULL)
+ * @param line Its status line for the direction listing it (must not be NULL)
  * @param cache Content cache (must not be NULL)
- * @param direction Diff direction
- * @param opts Command options (must not be NULL)
+ * @param direction The direction listing it
  * @param out Output context (must not be NULL)
  */
 static void diff_print_item(
     const workspace_item_t *item,
+    const char *line,
     content_cache_t *cache,
     diff_direction_t direction,
-    const cmd_diff_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(item);
+    CHECK_NULL(line);
     CHECK_NULL(cache);
-    CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    const manifest_row_t *file = item->row;
+    const manifest_row_t *row = item->row;
 
-    /* Name-only output */
-    if (opts->name_only) {
-        output_print(out, OUTPUT_NORMAL, "%s\n", item->filesystem_path);
-        return;
-    }
-
-    /* Show file header */
+    /* The header, off the row */
     output_print(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-        file->profile
+        row->profile
     );
     output_print(
         out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-        file->storage_path
+        row->storage_path
     );
-
-    /* Get status message from workspace item (no re-analysis needed) */
-    const char *status_msg = diff_status_line(item, direction);
 
     /* The direction's own sentence. An item's colour is its line's, worn on the
      * lists beside the tags it is ranked from (core/workspace.h
      * workspace_item_line) */
-    output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  %s\n", status_msg);
-
-    /* For missing files and failed looks, no content diff to show: an unverified
-     * row has no bytes the analysis could compare, and reading them here would
-     * fail the way the look did. */
-    if (item->state == WORKSPACE_STATE_DELETED ||
-        item->state == WORKSPACE_STATE_UNDEPLOYED ||
-        item->fault != WORKSPACE_FAULT_NONE) {
-        return;
-    }
-
-    /* Beneath a squatter: there are no bytes of this path's to compare — Git's
-     * blob against the squatter's target's file would be a diff of two unrelated
-     * things, and nothing here is overwritten (apply --force replaces the squatter
-     * and writes the row fresh). */
-    if (item->displaced != WORKSPACE_DISPLACED_NONE) return;
+    output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  %s\n", line);
 
     /* Only a difference of bytes or of kind has something to render: the copy's
      * own edit, the blob or the kind Git moved past, which disk still holds, or
      * the user's own kind. A claim, whoever moved it (CLAIM_MOVED is no byte),
      * a reassignment and how Git stores the blob differ in nothing a hunk could
-     * show, and a sealed blob is opened for none of them. */
+     * show, and a sealed blob is opened for none of them. The bits are the whole
+     * gate: no path bit survives absence or a failed look (core/workspace.h
+     * divergence_type_t), whose bytes a read here would fail to reach as the
+     * look did, nor stands beneath a squatter (workspace_displaced_t), where
+     * Git's blob against the squatter's target's file would be a diff of two
+     * unrelated things. */
     if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE | DIVERGENCE_TYPE))) {
         return;
     }
 
-    git_filemode_t mode = gitops_type_filemode(file->type);
+    git_filemode_t mode = gitops_type_filemode(row->type);
     file_diff_t diff = { 0 };
 
-    if (item->occupant != workspace_type_occupant(file->type)) {
+    if (item->occupant != workspace_type_occupant(row->type)) {
         /* Another kind than the row's stands — the user's (TYPE), the node dotta
          * last saw there with Git having moved the path's kind past it (STALE),
          * or the user's beside a move of Git's (both: the conflict, whose line
@@ -382,11 +358,11 @@ static void diff_print_item(
          * for the run (base/error.h). */
         const buffer_t *content = NULL;
         error_t err = content_cache_get_from_blob_oid(
-            cache, &file->blob_oid, mode, file->storage_path, file->profile, &content
+            cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
         );
         if (!err) {
             err = compare_generate_diff(
-                content, item->filesystem_path, file->storage_path, mode,
+                content, item->filesystem_path, row->storage_path, mode,
                 direction == DIFF_UPSTREAM ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM, &diff
             );
         }
@@ -411,11 +387,12 @@ static void diff_print_item(
 }
 
 /**
- * Present diffs for a specific direction using workspace analysis
+ * List one direction: every diverged row in scope it has a line for
  *
- * Filters the items the analysis found diverged by kind, the scope and the
- * direction, and shows each one that passes: its settled verdict, and the bytes
- * its hunk draws, read through the run's content cache.
+ * The line decides (diff_status_line): a row is listed where its direction says
+ * something of it, and the line heads its entry — the settled verdict, and the
+ * body its divergence draws, read through the run's content cache — or, under
+ * --name-only, the row is its path alone.
  *
  * @param diverged Diverged items from workspace (borrowed slice)
  * @param cache Content cache for blob access (must not be NULL)
@@ -423,7 +400,7 @@ static void diff_print_item(
  * @param scope Operation scope (profile + path dimensions; diff has no excludes)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
- * @param diff_count Output: number of diffs shown (must not be NULL)
+ * @param diff_count Output: number of rows listed (must not be NULL)
  * @param unverified Output: how many of them were rows the analysis could not
  *                   look at; shown by their status line, no hunk (must not be NULL)
  */
@@ -455,29 +432,30 @@ static void diff_print_direction(
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
-        /* Filter 1: Only process FILES (skip directories) */
+        /* Only process FILES (skip directories) */
         if (item->item_kind != PATH_KIND_FILE) continue;
 
-        /* Filter 2: Check the path filter (user-specified paths) */
+        /* The path filter (user-specified paths) */
         if (!scope_accepts_path(
             scope, item->filesystem_path, item->storage_path, PATH_KIND_FILE
             )) {
             continue;
         }
 
-        /* Filter 3: Direction-based filtering */
-        if (!should_show_item_for_direction(item, direction)) continue;
-
-        /* Filter 4: Profile filter (CLI filtering) */
+        /* The profile filter (CLI filtering) */
         if (!scope_accepts_profile(scope, item->profile)) continue;
 
-        /* Each entry is a block; a name-only listing's names are one */
-        if (!opts->name_only) {
-            output_gap(out, OUTPUT_NORMAL);
-        }
+        /* The direction's line, or nothing to list */
+        const char *line = diff_status_line(item, direction);
+        if (!line) continue;
 
-        /* Show the diff (content already analyzed by workspace) */
-        diff_print_item(item, cache, direction, opts, out);
+        /* Each entry is a block; a name-only listing's names are one */
+        if (opts->name_only) {
+            output_print(out, OUTPUT_NORMAL, "%s\n", item->filesystem_path);
+        } else {
+            output_gap(out, OUTPUT_NORMAL);
+            diff_print_item(item, line, cache, direction, out);
+        }
 
         (*diff_count)++;
 

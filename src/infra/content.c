@@ -717,6 +717,46 @@ error_t content_capture_link(const char *filesystem_path, content_capture_t *out
     return NULL;
 }
 
+error_t content_capture_oid(
+    content_cache_t *cache,
+    const char *filesystem_path,
+    git_filemode_t mode,
+    const char *storage_path,
+    const char *profile,
+    bool encrypted,
+    git_oid *out
+) {
+    CHECK_NULL(cache);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile);
+    CHECK_NULL(out);
+
+    /* The entry the copy becomes, as add and update capture it: a link's target,
+     * or a file's bytes sealed as the name's entry is, under the cache's key */
+    content_capture_t capture;
+    error_t err = NULL;
+    if (mode == GIT_FILEMODE_LINK) {
+        err = content_capture_link(filesystem_path, &capture);
+    } else {
+        err = content_capture_file(
+            filesystem_path, storage_path, profile, cache->keymgr, encrypted, &capture
+        );
+    }
+    if (err) return err;
+
+    /* Its id, hashed and written nowhere. An empty copy's bytes carry no pointer,
+     * which hashes as the empty blob: no data at no length is a blob's
+     * (lib/libgit2/src/libgit2/odb.c git_odb__hashobj) */
+    int rc = git_odb_hash(out, capture.bytes.data, capture.bytes.size, GIT_OBJECT_BLOB);
+    content_capture_free(&capture);
+    if (rc < 0) {
+        return error_git(rc, "Cannot identify '%s'", filesystem_path);
+    }
+
+    return NULL;
+}
+
 void content_capture_free(content_capture_t *capture) {
     if (!capture) return;
 

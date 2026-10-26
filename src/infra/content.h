@@ -51,11 +51,12 @@
  *
  * Three functions make an entry: content_capture_file and content_capture_link,
  * a path on disk as the entry it becomes; content_rebind, a sealed blob's content
- * under a second name. A link's capture holds no crypto at all and is here for
- * content's own rule — a link's bytes are its target and never a seal, whatever
- * they begin with — the same rule the classifier and the cache's key spell on
- * the read side; a capture's `encrypted` false for a link is that rule stated
- * as a value.
+ * under a second name — and content_capture_oid answers the id the first two's
+ * entry would have at a name, making none. A link's capture holds no crypto at
+ * all and is here for content's own rule — a link's bytes are its target and
+ * never a seal, whatever they begin with — the same rule the classifier and the
+ * cache's key spell on the read side; a capture's `encrypted` false for a link
+ * is that rule stated as a value.
  *
  * The plaintext a seal consumes never leaves this module: the encrypt runs inside
  * the capture and the plaintext is wiped there, whichever way the seal went.
@@ -696,6 +697,47 @@ error_t content_capture_file(
 error_t content_capture_link(
     const char *filesystem_path,
     content_capture_t *out
+);
+
+/**
+ * The id a disk copy would have as the entry it becomes at a name — nothing written
+ *
+ * The capture's entry (content_capture_file, content_capture_link, by `mode`):
+ * a link's target as read, never sealed; a regular file's bytes through one
+ * descriptor, sealed under (profile, storage path) where `encrypted` says the
+ * name's entry is, with the key the cache's reads borrow (content_cache_create)
+ * — deterministically (crypto/cipher.h), so under the run's key a copy holds a
+ * sealed entry's plaintext iff its seal is that entry. Then the id Git gives
+ * those bytes as a blob (git_odb_hash): the entry a capture of this copy in that
+ * encoding puts at that name. Nothing enters the store, and the bytes end here,
+ * wiped (content_capture_free). The cache's memo is untouched: the cache lends
+ * its key, as it does content_compare_blob_to_disk.
+ *
+ * The look is the caller's, as the pair's is (infra/compare.h): the capture's
+ * own refuses what is not the kind `mode` names, and is handed back nowhere.
+ *
+ * @param cache The run's content cache, for its key (must not be NULL)
+ * @param filesystem_path The copy (must not be NULL; a link is never followed)
+ * @param mode The entry's filemode: GIT_FILEMODE_LINK, or either blob filemode
+ * @param storage_path The name the seal binds (must not be NULL)
+ * @param profile The profile whose pair the seal derives (must not be NULL)
+ * @param encrypted Whether the name's entry is sealed, as its claim's stamp says
+ *                  (core/metadata.h metadata_item_t); ignored for a link
+ * @param out The id (must not be NULL; set on success)
+ * @return Error or NULL on success
+ *
+ * Errors: the capture's refusal, unwrapped — content_capture_file's, a seal's
+ * with no key in reach among them, or content_capture_link's, by `mode` — or
+ * ERR_GIT, bytes that would not hash.
+ */
+error_t content_capture_oid(
+    content_cache_t *cache,
+    const char *filesystem_path,
+    git_filemode_t mode,
+    const char *storage_path,
+    const char *profile,
+    bool encrypted,
+    git_oid *out
 );
 
 /**

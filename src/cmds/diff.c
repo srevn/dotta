@@ -113,7 +113,7 @@ static bool should_show_item_for_direction(
  * @param direction Diff direction
  * @return Status message string
  */
-static const char *get_status_message_from_item(
+static const char *diff_status_line(
     const workspace_item_t *item,
     diff_direction_t direction
 ) {
@@ -295,7 +295,7 @@ static const char *get_status_message_from_item(
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
  */
-static void show_file_diff_from_workspace(
+static void diff_print_item(
     const workspace_item_t *item,
     content_cache_t *cache,
     diff_direction_t direction,
@@ -326,7 +326,7 @@ static void show_file_diff_from_workspace(
     );
 
     /* Get status message from workspace item (no re-analysis needed) */
-    const char *status_msg = get_status_message_from_item(item, direction);
+    const char *status_msg = diff_status_line(item, direction);
 
     /* The direction's own sentence. An item's colour is its line's, worn on the
      * lists beside the tags it is ranked from (core/workspace.h
@@ -427,7 +427,7 @@ static void show_file_diff_from_workspace(
  * @param unverified Output: how many of them were rows the analysis could not
  *                   look at; shown by their status line, no hunk (must not be NULL)
  */
-static void present_diffs_for_direction(
+static void diff_print_direction(
     workspace_items_t diverged,
     content_cache_t *cache,
     diff_direction_t direction,
@@ -477,7 +477,7 @@ static void present_diffs_for_direction(
         }
 
         /* Show the diff (content already analyzed by workspace) */
-        show_file_diff_from_workspace(item, cache, direction, opts, out);
+        diff_print_item(item, cache, direction, opts, out);
 
         (*diff_count)++;
 
@@ -490,7 +490,7 @@ static void present_diffs_for_direction(
 /**
  * Print commit header with metadata, a block of its own
  */
-static void print_commit_header(
+static void diff_print_commit(
     output_t *out,
     const git_commit *commit,
     const char *profile
@@ -549,7 +549,7 @@ static void print_commit_header(
 /**
  * Print diff statistics
  */
-static error_t print_diff_stats(output_t *out, git_diff *diff) {
+static error_t diff_print_stats(output_t *out, git_diff *diff) {
     CHECK_NULL(out);
     CHECK_NULL(diff);
 
@@ -591,7 +591,7 @@ static error_t print_diff_stats(output_t *out, git_diff *diff) {
 /**
  * Print one line of a patch (git_diff_print's GIT_DIFF_FORMAT_PATCH)
  */
-static int print_diff_line_cb(
+static int diff_print_line_cb(
     const git_diff_delta *delta,
     const git_diff_hunk *hunk,
     const git_diff_line *line,
@@ -658,7 +658,7 @@ static int print_diff_line_cb(
  * @param diff_count Output: number of diffs shown (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t compare_tree_files_to_filesystem(
+static error_t diff_print_view(
     const manifest_t *view,
     const pathspec_t *path_filter,
     const cmd_diff_options_t *opts,
@@ -839,7 +839,7 @@ static error_t compare_tree_files_to_filesystem(
  *         can diff, and the answers are the whole report; true otherwise, and
  *         always under no filter
  */
-static bool validate_filter_paths(
+static bool diff_validate_filter(
     const pathspec_t *path_filter,
     const manifest_t *view,
     const char *what,
@@ -999,7 +999,7 @@ static error_t diff_commit_to_workspace(
         oid_str
     );
 
-    print_commit_header(out, commit, name);
+    diff_print_commit(out, commit, name);
 
     /* Step 3: Get tree from THE HISTORICAL COMMIT (not HEAD!) — from the commit
      * in hand, the OID helper beside it being a second lookup of what is here. */
@@ -1029,13 +1029,13 @@ static error_t diff_commit_to_workspace(
      * anything is compared, as the workspace arm answers it over its own. Where
      * no entry reaches content, nothing can diff, and the answers are the whole
      * report. */
-    if (!validate_filter_paths(path_filter, historical, "path of the commit", out)) {
+    if (!diff_validate_filter(path_filter, historical, "path of the commit", out)) {
         goto cleanup;
     }
 
     /* Step 6: Compare the commit's view against the current filesystem */
     size_t diff_count = 0;
-    err = compare_tree_files_to_filesystem(
+    err = diff_print_view(
         historical, path_filter, opts, cache, out, &diff_count
     );
     if (err) goto cleanup;
@@ -1061,7 +1061,8 @@ cleanup:
 }
 
 /**
- * The selection of a commit range: what select_delta reads and what it leaves
+ * The selection of a commit range: what diff_select_delta_cb reads and what it
+ * leaves
  *
  * The filter, and what a delta's path is resolved through — the profile the range
  * belongs to and this machine's table, under which a past tree's names are placed
@@ -1073,7 +1074,7 @@ typedef struct {
     const mount_table_t *mounts;
     const char *profile;
     arena_t *arena;                 /* the paths' lifetime: the command's */
-} delta_select_t;
+} diff_selection_t;
 
 /**
  * Select one delta of a commit range under the path filter
@@ -1101,17 +1102,17 @@ typedef struct {
  * @param diff     The diff so far (unread)
  * @param delta    The delta about to be inserted
  * @param matched  libgit2's own pathspec match (none is set; unread)
- * @param payload  The selection (delta_select_t)
+ * @param payload  The selection (diff_selection_t)
  * @return 0 to keep the delta, 1 to drop it
  */
-static int select_delta(
+static int diff_select_delta_cb(
     const git_diff *diff, const git_diff_delta *delta, const char *matched,
     void *payload
 ) {
     (void) diff;
     (void) matched;
 
-    delta_select_t *sel = payload;
+    diff_selection_t *sel = payload;
     const char *path = delta->new_file.path;
 
     if (!label_prefixes(path)) return 1;
@@ -1130,9 +1131,9 @@ static int select_delta(
  * profile holding both, in the enabled set narrowed to the profiles -p names
  * where it names any, as the workspace arm looks for its one. The path filter
  * is derived from scope_paths (raw CLI positional args, never narrowed) and applied
- * delta by delta as the diff is generated (select_delta, each delta by both its
- * names under this machine's table), so the diff printed — names, stats, patch
- * — is the selection and nothing else.
+ * delta by delta as the diff is generated (diff_select_delta_cb, each delta by
+ * both its names under this machine's table), so the diff printed — names, stats,
+ * patch — is the selection and nothing else.
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, the command arena and the output)
@@ -1196,7 +1197,7 @@ static error_t diff_commits(
     );
 
     /* Print second commit header (the "new" one) */
-    print_commit_header(out, commit2, profile);
+    diff_print_commit(out, commit2, profile);
 
     /* Get trees from the two commits in hand — the OID helper beside this one
      * would look each of them up a second time (the workspace arm above reads
@@ -1216,14 +1217,14 @@ static error_t diff_commits(
     /* Generate the diff, the filter selecting each delta on its way in. The
      * selection is borrowed for the call: libgit2 reads the payload only while
      * generating. */
-    delta_select_t selection = {
+    diff_selection_t selection = {
         .filter = path_filter, .mounts = mounts, .profile = profile,
         .arena  = arena
     };
     git_diff_options diff_opts;
     git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
     if (path_filter) {
-        diff_opts.notify_cb = select_delta;
+        diff_opts.notify_cb = diff_select_delta_cb;
         diff_opts.payload = &selection;
     }
 
@@ -1251,12 +1252,12 @@ static error_t diff_commits(
         }
     } else {
         /* Full diff: statistics followed by patch */
-        err = print_diff_stats(out, diff);
+        err = diff_print_stats(out, diff);
         if (err) goto cleanup;
 
         output_gap(out, OUTPUT_NORMAL);
 
-        rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
+        rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, diff_print_line_cb, out);
         if (rc < 0) {
             err = error_git(rc, "Cannot print the diff");
             goto cleanup;
@@ -1278,7 +1279,7 @@ cleanup:
  *
  * The filter's coverage is answered over the view first, and a filter under which
  * nothing can diff ends the diff at its answers, no workspace loaded
- * (validate_filter_paths). Otherwise the workspace is loaded over the same view,
+ * (diff_validate_filter). Otherwise the workspace is loaded over the same view,
  * its learning flushed, and the diverged items presented per direction under
  * the scope — the analysis settled every verdict, and nothing here re-reads one.
  *
@@ -1309,7 +1310,7 @@ static error_t diff_workspace(
     /* Step 1: The filter's coverage over the view — the one the workspace joins,
      * and all the question needs. Where no entry reaches content, nothing can
      * diff, the answers are the whole report, and no workspace is loaded. */
-    if (!validate_filter_paths(scope_paths(scope), manifest, "active path", out)) return NULL;
+    if (!diff_validate_filter(scope_paths(scope), manifest, "active path", out)) return NULL;
 
     /* Step 2: Load the workspace. Orphans have no reader here, and the untracked
      * scan is update's. */
@@ -1350,7 +1351,7 @@ static error_t diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change");
         output_gap(out, OUTPUT_NORMAL);
 
-        present_diffs_for_direction(
+        diff_print_direction(
             diverged, cache, DIFF_UPSTREAM, scope, opts, out,
             &upstream_count, &unverified
         );
@@ -1372,7 +1373,7 @@ static error_t diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit");
         output_gap(out, OUTPUT_NORMAL);
 
-        present_diffs_for_direction(
+        diff_print_direction(
             diverged, cache, DIFF_DOWNSTREAM, scope, opts, out,
             &downstream_count, &unverified
         );
@@ -1392,7 +1393,7 @@ static error_t diff_workspace(
         total_diff_count = upstream_count + downstream_count;
     } else {
         size_t unverified = 0;
-        present_diffs_for_direction(
+        diff_print_direction(
             diverged, cache, opts->direction, scope, opts, out,
             &total_diff_count, &unverified
         );

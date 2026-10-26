@@ -356,7 +356,7 @@ static error_t show_file(
  * Colorizes additions (green), deletions (red), and headers (cyan). Matches the
  * diff command's output style.
  */
-static int print_diff_line_cb(
+static int show_print_line_cb(
     const git_diff_delta *delta,
     const git_diff_hunk *hunk,
     const git_diff_line *line,
@@ -522,7 +522,7 @@ static error_t show_commit(
 
     /* Print the diff with color */
     rc = git_diff_print(
-        diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out
+        diff, GIT_DIFF_FORMAT_PATCH, show_print_line_cb, out
     );
     if (rc < 0) {
         err = error_git(rc, "Cannot print the diff");

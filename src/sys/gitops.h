@@ -533,9 +533,9 @@ error_t gitops_tree_walk(
  * profile_decode_blob). A type no enumerator names is a caller's bug, and dies.
  *
  * Readers: core/workspace.c workspace_analyze_file, core/deploy.c deploy_file,
- * cmds/diff.c show_file_diff_from_workspace and compare_tree_files_to_filesystem,
- * and cmds/show.c show_print_blob (a decoded claim's type, which the profile
- * read off one of a blob's three filemodes).
+ * cmds/diff.c diff_print_item and diff_print_view, and cmds/show.c show_print_blob
+ * (a decoded claim's type, which the profile read off one of a blob's three
+ * filemodes).
  *
  * @param type Path type
  * @return Its filemode

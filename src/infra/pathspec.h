@@ -23,7 +23,7 @@
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *
  * The pathspec is opaque. The compiled entries are read in insertion order by
- * the coverage answers (cmds/diff.c validate_filter_paths), which ask each entry
+ * the coverage answers (cmds/diff.c diff_validate_filter), which ask each entry
  * alone whether it matches a subject (pathspec_entry_matches_at).
  */
 
@@ -158,7 +158,7 @@ size_t pathspec_count(const pathspec_t *spec);
 pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i);
 
 /**
- * The entry alone, for coverage attribution (cmds/diff.c validate_filter_paths):
+ * The entry alone, for coverage attribution (cmds/diff.c diff_validate_filter):
  * an exact entry by equality or ancestry in its vocabulary; a rule by whether
  * it matches the subject of its vocabulary at any rung — either polarity, so a
  * negation that excluded something is not reported as matching nothing. `kind`

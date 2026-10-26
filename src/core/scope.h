@@ -346,8 +346,8 @@ const string_array_t *scope_profiles(const scope_t *s);
  *
  * Consumers that read the filter itself — diff (a commit range selected delta
  * by delta, a commit's view compared under it, the coverage answers over the
- * compiled entries: cmds/diff.c select_delta, compare_tree_files_to_filesystem,
- * validate_filter_paths) and apply's count line (cmds/apply.c cmd_apply) — use
+ * compiled entries: cmds/diff.c diff_select_delta_cb, diff_print_view,
+ * diff_validate_filter) and apply's count line (cmds/apply.c cmd_apply) — use
  * this with the pathspec accessors (pathspec_count / pathspec_entry_at /
  * pathspec_entry_matches_at). Per-iteration path-vs-filter checks should use
  * scope_accepts_path instead.

@@ -294,7 +294,7 @@ static void hook_print_output(
     /* The hook's bytes are a payload, written as they are — its colours among
      * them, as git passes a hook's output on (base/output.h output_write) — and
      * its last line ended only where the payload left it open, as a patch's line
-     * is (cmds/diff.c print_diff_line_cb): a line the hook ended is ended once */
+     * is (cmds/diff.c diff_print_line_cb): a line the hook ended is ended once */
     output_print(out, level, "Hook output:\n");
     output_write(out, level, OUTPUT_COLOR_RESET, result->output, result->output_len);
     if (result->output[result->output_len - 1] != '\n') output_endline(out, level);

@@ -166,7 +166,7 @@ label_split_t label_split(const char *s);
  * (core/profiles.c profile_put_machinery), and the changes a draft's commit names,
  * which pass dotta's own files by (profile_changes); the refspec completion
  * (cmds/completion.c refspec_emit), diff's delta selection (cmds/diff.c
- * select_delta) and sync's of a tree diff's deletions (cmds/sync.c
+ * diff_select_delta_cb) and sync's of a tree diff's deletions (cmds/sync.c
  * sync_disagreements), the rule compiler (infra/pathspec.c compile_rule), the
  * resolver's storage arm and the question its neighbour asks of a positional
  * whose slot is undecided (infra/path.c path_input_resolve,

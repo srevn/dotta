@@ -55,8 +55,8 @@
  * and workspace_analyze_orphans mark the path (the item's fault, never fatal to
  * the load); the second question the first of them asks — ours against the base
  * — reads a failure as "not at base", the conservative answer; cmds/diff.c
- * show_file_diff_from_workspace says it in the row's block and goes on;
- * compare_tree_files_to_filesystem fails the run.
+ * diff_print_item says it in the row's block and goes on; diff_print_view fails
+ * the run.
  *
  * One verdict in the tree is reached from no look at all: core/workspace.h
  * workspace_compare_confirmed judges a row against a pair dotta already found
@@ -174,8 +174,8 @@ typedef enum {
  *
  * The struct is the caller's — a stack local, cleared by compare_generate_diff
  * once its arguments are accepted, or filled whole by a caller that holds a verdict
- * of its own and the text for it (cmds/diff.c show_file_diff_from_workspace, a
- * kind off the load's look) — and one thing in it is owned: `diff_text`, which
+ * of its own and the text for it (cmds/diff.c diff_print_item, a kind off the
+ * load's look) — and one thing in it is owned: `diff_text`, which
  * compare_diff_deinit frees and resets. NULL there is a copy that matches; every
  * other verdict has a text, which a caller holding its own words for that verdict
  * may ignore.
@@ -242,8 +242,8 @@ void compare_diff_deinit(file_diff_t *diff);
  * was reached.
  *
  * Readers: compare_generate_diff (its own look's CMP_TYPE_DIFF), cmds/diff.c
- * show_file_diff_from_workspace (the load's look, where a row's kind is not what
- * stands and no blob is read). A reader not on this list is a bug.
+ * diff_print_item (the load's look, where a row's kind is not what stands and
+ * no blob is read). A reader not on this list is a bug.
  *
  * @param mode The mode the reference expects: a blob's two spellings or a link
  * @param st The look that found another kind standing (must not be NULL)

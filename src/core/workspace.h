@@ -180,26 +180,26 @@ typedef enum {
  * The words on screen: MODE is the mode and OWNERSHIP the ownership wherever a
  * screen names a claim axis that differs — the tags (workspace_item_line), which
  * apply's fixed directories print too (cmds/apply.c apply_print_deploy_receipt),
- * diff's status line (cmds/diff.c get_status_message_from_item), and a skipped
- * orphan's label and legend (cmds/apply.c apply_print_cleanup_skips, cmds/status.c
+ * diff's status line (cmds/diff.c diff_status_line), and a skipped orphan's label
+ * and legend (cmds/apply.c apply_print_cleanup_skips, cmds/status.c
  * status_print_workspace) — and a sentence that names both says "mode and
  * ownership", never "permissions", which is one word for two axes. STALE and
  * CLAIM_MOVED are one word: [stale] on a tag (workspace_item_line), and "changed
  * in Git" in a sentence — update's census (cmds/update.c cmd_update), apply's
- * count (cmds/apply.c cmd_apply), diff's status line (cmds/diff.c
- * get_status_message_from_item) — and "changed in Git and on disk" where the
- * route reads both sides moved (CONFLICT, workspace_item_route): update's census,
- * apply's skip label (cmds/apply.c apply_print_deploy_skips), diff's status line
- * and status's Conflicts header (cmds/status.c status_print_workspace). The words
- * are the three-way frame's: Git's side differs from what dotta last saw or left
- * at the path — the record, save the mode of a directory a run could not narrow
- * back (core/deploy.h deploy_working_mode, stated), or a first look where none
- * stands: its claim, or a blob the row's own branch held, which it found disk
- * at. Read as "a commit moved it" they are true of a move of Git's alone, and
- * not of a claim dotta never saw disk stand on, which the record cannot tell
- * apart from one Git moved once the first flush has written what the look found,
- * nor of a blob disk held when dotta first looked, which Git had moved past before
- * it, nor of an owner no host here can name (stated).
+ * count (cmds/apply.c cmd_apply), diff's status line (cmds/diff.c diff_status_line)
+ * — and "changed in Git and on disk" where the route reads both sides moved
+ * (CONFLICT, workspace_item_route): update's census, apply's skip label
+ * (cmds/apply.c apply_print_deploy_skips), diff's status line and status's
+ * Conflicts header (cmds/status.c status_print_workspace). The words are the
+ * three-way frame's: Git's side differs from what dotta last saw or left at the
+ * path — the record, save the mode of a directory a run could not narrow back
+ * (core/deploy.h deploy_working_mode, stated), or a first look where none stands:
+ * its claim, or a blob the row's own branch held, which it found disk at. Read
+ * as "a commit moved it" they are true of a move of Git's alone, and not of a
+ * claim dotta never saw disk stand on, which the record cannot tell apart from
+ * one Git moved once the first flush has written what the look found, nor of a
+ * blob disk held when dotta first looked, which Git had moved past before it,
+ * nor of an owner no host here can name (stated).
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -318,26 +318,25 @@ typedef enum {
  * opens "not looked at", the predicate its neighbours spell "locked", "cannot
  * be read" and "could not be verified". The three that name the squatter say
  * "beneath a squatted directory" (cmds/update.c cmd_update's four census lines,
- * cmds/diff.c get_status_message_from_item, cmds/status.c status_print_workspace's
- * key for a displaced orphan), and where the squatter is dotta's own copy the
- * first two add its state in the squatter's own words — "changed in Git", "changed
- * in Git and on disk"; the Displaced paths header, where the word is grounded,
- * spells the squatter out instead.
+ * cmds/diff.c diff_status_line, cmds/status.c status_print_workspace's key for
+ * a displaced orphan), and where the squatter is dotta's own copy the first two
+ * add its state in the squatter's own words — "changed in Git", "changed in Git
+ * and on disk"; the Displaced paths header, where the word is grounded, spells
+ * the squatter out instead.
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
  * node a row lies beneath: deploy_reach), workspace.c workspace_item_line (the
  * DEPLOYED arm's [displaced], beside which only what no look decides or disproves
  * rides, and the ORPHANED arm's rider), cmds/status.c status_print_workspace's
- * key for a displaced orphan, and cmds/diff.c get_status_message_from_item and
- * show_file_diff_from_workspace (the content gate), should_show_item_for_direction
- * beside them; cmds/update.c cmd_update (the named derivation's leaves, climbed
- * beneath the user's squatter at a rung alone, the one squatter the climb's retire
- * answers for — but at a lost blob's place); and core/deploy.c check_ancestry,
- * off the squatted directory itself — a caller that needs the squatter, which
- * no item carries, is lent it whole, the claim this class is copied from
- * (workspace_squatted_ancestor), so apply's remedy and status's section cannot
- * name two claimants for one squatter.
+ * key for a displaced orphan, and cmds/diff.c diff_status_line and diff_print_item
+ * (the content gate), should_show_item_for_direction beside them; cmds/update.c
+ * cmd_update (the named derivation's leaves, climbed beneath the user's squatter
+ * at a rung alone, the one squatter the climb's retire answers for — but at a
+ * lost blob's place); and core/deploy.c check_ancestry, off the squatted directory
+ * itself — a caller that needs the squatter, which no item carries, is lent it
+ * whole, the claim this class is copied from (workspace_squatted_ancestor), so
+ * apply's remedy and status's section cannot name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -476,8 +475,8 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * apply_fault_label, apply_consent_label and the sudo and key closers of
  * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's filter,
  * status line, content gate and count (should_show_item_for_direction,
- * get_status_message_from_item, show_file_diff_from_workspace,
- * present_diffs_for_direction). A reader not on this list is a bug.
+ * diff_status_line, diff_print_item, diff_print_direction). A reader not on this
+ * list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
@@ -563,9 +562,9 @@ typedef enum {
  * identity, deploy reads its owner where it would converge a directory in place
  * (core/deploy.c deploy_preflight's fix arm, through holdable), apply's FOREIGN
  * sentence says whose it is (cmds/apply.c apply_print_deploy_skips), and diff's
- * kind line what stands, off its type bits (cmds/diff.c
- * show_file_diff_from_workspace) — where a narrowed look would have to synthesize
- * one back for each. A scan item's is the scan's own lstat, where it answered.
+ * kind line what stands, off its type bits (cmds/diff.c diff_print_item) — where
+ * a narrowed look would have to synthesize one back for each. A scan item's is
+ * the scan's own lstat, where it answered.
  *
  * The identity is the source's strings, lent read-only: the row's for an active
  * item, the record's for an orphan, a scan item's own copies (profile: the view's
@@ -723,9 +722,9 @@ typedef struct {
  * where one is) and workspace_analyze_claim (the record of this node, whose claim
  * the row's is measured from — every axis unreconciled where none stands);
  * core/deploy.c occupant_conflicts (what stands at a planned path, against the
- * node its row lands); cmds/diff.c show_file_diff_from_workspace (another kind
- * standing, drawn by both kinds off the load's look, no blob read). A reader
- * not on this list is a bug.
+ * node its row lands); cmds/diff.c diff_print_item (another kind standing, drawn
+ * by both kinds off the load's look, no blob read). A reader not on this list
+ * is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {

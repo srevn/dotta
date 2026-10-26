@@ -450,8 +450,8 @@ error_t compare_generate_diff(
 
     /* The text, by the verdict: a line where there is nothing to render, the
      * diff where there is, nothing at all for a copy that matches. A caller holding
-     * its own words for a verdict drops the line (cmds/diff.c
-     * compare_tree_files_to_filesystem, for CMP_MISSING and CMP_TYPE_DIFF). */
+     * its own words for a verdict drops the line (cmds/diff.c diff_print_view,
+     * for CMP_MISSING and CMP_TYPE_DIFF). */
     switch (out->status) {
         case CMP_EQUAL:
             break;

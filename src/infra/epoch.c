@@ -423,8 +423,7 @@ static error_t epoch_probe_remote(
 }
 
 error_t epoch_fetch(
-    git_repository *repo, const char *remote_name, transfer_context_t *xfer,
-    kdf_epoch_t *out
+    git_repository *repo, const char *remote_name, transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -532,12 +531,6 @@ error_t epoch_fetch(
     err = gitops_write_reference(repo, EPOCH_REF, &advertised, NULL, reflog_msg);
     if (err) {
         return error_wrap(err, "Cannot adopt the epoch remote '%s' advertises", remote_name);
-    }
-
-    /* Hand over exactly what the validation proved, and only once the ref carries
-     * it — the caller never re-reads the ref it just watched move. */
-    if (out != NULL) {
-        *out = fetched;
     }
 
     return NULL;

@@ -108,10 +108,11 @@ const args_command_t *const *dotta_registry(void) {
  *
  * State opens before crypto, so a run that holds the store's write lock reads
  * the repository's epoch inside it. Nothing depends on that today — the one command
- * that moves `refs/dotta/epoch` mid-run takes no lock (`cmds/sync`) — but it is
- * the order any repair of that window would need, and it is why a command whose
- * write intent its user decides declares the mode here rather than promoting a
- * READ handle after the epoch has been copied.
+ * that moves `refs/dotta/epoch` mid-run takes no lock and declares no crypto
+ * (`cmds/sync`), so no handle of its own run is bound to the epoch it moves —
+ * but it is the order any repair of that window would need, and it is why a command
+ * whose write intent its user decides declares the mode here rather than promoting
+ * a READ handle after the epoch has been copied.
  *
  * The first open that fails returns its own error — it names the resource and,
  * for the epoch and the view, the repair — and the run stays partially open for

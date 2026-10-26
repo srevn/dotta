@@ -104,7 +104,7 @@ Dotta treats the master key not as an unchecked derivation cache, but as **the r
 ### Command Reach (`CACHED` vs `OBTAIN`)
 
 Commands declare how far they may reach for a passphrase:
-- **Reporting commands** (`dotta status`, `dotta sync`, `dotta key status`, `dotta key clear`) operate in `CACHED` mode. They read only what earlier commands left in the cache. They **never prompt**, never read environment variables, and never create a session file. If the cache is cold, encrypted files are reported as `[locked]`.
+- **Reporting commands** (`dotta status`, `dotta key status`, `dotta key clear`) operate in `CACHED` mode. They read only what earlier commands left in the cache. They **never prompt**, never read environment variables, and never create a session file. If the cache is cold, encrypted files are reported as `[locked]`.
 - **Content operations** (`dotta apply`, `dotta add`, `dotta update`, `dotta diff`, `dotta show`, `dotta export`, `dotta revert`, `dotta key set`) operate in `OBTAIN` mode. If the cache is cold, they will check `DOTTA_ENCRYPTION_PASSPHRASE` or prompt interactively.
 
 ### Session Caching
@@ -218,7 +218,7 @@ Minting a new one would seal them away permanently. Restore the ref instead:
 or copy it from a machine that still has this repository.
 ```
 
-That refusal is the safety net for the accident this procedure resembles — a deleted, lost or unreadable epoch ref, where the remedy is to restore it, not to mint. `dotta sync` prints the same finding and the same remedy when it meets that state against a divergent remote, and refuses to replace the ref for you. The refspec is forced (`+`) because an epoch commit is an orphan: over a ref that is present but damaged, a plain fetch is rejected as non-fast-forward and restores nothing. `dotta remove` needs no key and works either way. Naming a `--strength` that an existing epoch does not match is refused rather than silently ignored, and an existing valid epoch is always preserved.
+That refusal is the safety net for the accident this procedure resembles — a deleted, lost or unreadable epoch ref, where the remedy is to restore it, not to mint. `dotta sync` meets that state against a divergent remote too: a ref that is gone it replaces with the remote's epoch, which restores it where the remote holds this repository's; over one that cannot be read it prints the same finding and the same remedy, and refuses to replace the ref for you. The refspec is forced (`+`) because an epoch commit is an orphan: over a ref that is present but damaged, a plain fetch is rejected as non-fast-forward and restores nothing. `dotta remove` needs no key and works either way. Naming a `--strength` that an existing epoch does not match is refused rather than silently ignored, and an existing valid epoch is always preserved.
 
 ## Security Properties
 

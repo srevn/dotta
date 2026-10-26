@@ -12,10 +12,10 @@
  * of one repository share one — deliberately, since a master is a function of
  * (passphrase, epoch) and there is only one of it to cache. So a file outlives
  * any single keymgr's interest in it: a repository that adopts another epoch
- * leaves its old file to whoever is still on that epoch (crypto/keymgr.h,
- * `keymgr_rekey`). A file is only ever read under the epoch that named it. Owned
- * entirely by this module; keymgr orchestrates save/load/clear and never touches
- * the format.
+ * leaves its old file to whoever is still on that epoch (cmds/sync.c
+ * sync_reconcile_epoch). A file is only ever read under the epoch that named
+ * it. Owned entirely by this module; keymgr orchestrates save/load/clear and
+ * never touches the format.
  *
  * File format (113 bytes; little-endian; the offsets are session.c's):
  *

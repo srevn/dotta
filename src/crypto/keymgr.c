@@ -67,9 +67,8 @@
  */
 struct keymgr {
     /* The repository's epoch and its public fingerprint — set together at create
-     * time and by `keymgr_rekey`, never otherwise. The fingerprint is stamped
-     * into every blob this keymgr encrypts and checked against every blob it is
-     * asked to decrypt. */
+     * time, never otherwise. The fingerprint is stamped into every blob this
+     * keymgr encrypts and checked against every blob it is asked to decrypt. */
     kdf_epoch_t epoch;
     uint8_t epoch_fp[KDF_EPOCH_FP_SIZE];
 
@@ -163,15 +162,6 @@ static void install_slot(keymgr *km, keymgr_proof_t *proof, time_t expires_at) {
 }
 
 /**
- * Bind the keymgr to an epoch: the copy, and the fingerprint every blob is stamped
- * with and checked against. The one writer of both fields.
- */
-static void bind_epoch(keymgr *km, const kdf_epoch_t *epoch) {
-    km->epoch = *epoch;
-    kdf_epoch_fingerprint(&km->epoch, km->epoch_fp);
-}
-
-/**
  * Record the ladder's refusal for the run — the first one stands, since a standing
  * one is returned before the ladder is asked again; a later one replaces it only
  * through `keymgr_set`, which clears it first — and hand it back to the asker
@@ -204,7 +194,8 @@ error_t keymgr_create(
     km->reach = reach;
     km->source = source;
     km->repo = repo;
-    bind_epoch(km, epoch);
+    km->epoch = *epoch;
+    kdf_epoch_fingerprint(&km->epoch, km->epoch_fp);
 
     *out = km;
     return NULL;
@@ -734,25 +725,6 @@ bool keymgr_clear(keymgr *km) {
 
     evict_slot(km);
     return session_clear(&km->epoch);
-}
-
-void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch) {
-    if (!km || !epoch) return;
-
-    /* What this keymgr holds under the old epoch goes: the master, which derives
-     * from it, and the refusal, which was about its ciphertext — the new one is
-     * asked afresh. The old epoch's session file is not one of those things. It
-     * is named by the epoch and shared by every checkout on it (crypto/session.h),
-     * and this keymgr has just stopped being one of them. The one caller that
-     * can reach here holding a key is sync's adopt — its two siblings replace a
-     * ref that yields no epoch, which fails the dispatch load before any keymgr
-     * exists — and an adopt is taken only when no ciphertext in the repository
-     * was keyed by the epoch replaced, so there is nothing left here that file's
-     * master could open. After the re-binding, `session_load` resolves the new
-     * epoch's path and the old file is out of reach anyway. */
-    evict_slot(km);
-    km->refusal = NULL;
-    bind_epoch(km, epoch);
 }
 
 const kdf_epoch_t *keymgr_epoch(const keymgr *km) {

@@ -158,7 +158,7 @@ The epoch structure guarantees that every input to key derivation except the pas
 | Operation                       | Where                                          |
 |---------------------------------|------------------------------------------------|
 | Minted                          | `dotta init --strength <preset>` via `epoch_init` |
-| Loaded & Validated              | `main.c::open_crypto_for_mode` via `epoch_load` |
+| Loaded & Validated              | `main.c::open_run` via `epoch_load` |
 | Fetched & Reconciled            | `dotta clone` and `dotta sync` via `epoch_fetch` / `epoch_resolve` |
 | Inspected (raw)                 | `dotta git show refs/dotta/epoch:salt`, `dotta git show refs/dotta/epoch:params` |
 | Inspected (CLI)                 | `dotta key status -v` (prints MiB, passes, and preset name) |
@@ -173,7 +173,7 @@ The epoch structure guarantees that every input to key derivation except the pas
 | `UNREACHABLE` | transport failure | skip, best-effort |
 | `ESTABLISH` | remote has none, the local ref yields an epoch | push the ref |
 | `NO_LOCAL_EPOCH` | remote has none, the local ref yields none | nothing to publish |
-| `ADOPT` | divergent, and nothing here depends on the bytes at the local ref | fetch, then `keymgr_rekey` |
+| `ADOPT` | divergent, and nothing here depends on the bytes at the local ref | fetch |
 | `CONFLICT` | divergent, the local epoch keys reachable ciphertext | warn; plaintext profiles still sync |
 | `DAMAGED` | divergent, the local ref yields no epoch over ciphertext it may key | warn with the restore remedy; no git op |
 
@@ -365,7 +365,7 @@ mac = crypto_mac_oneshot(cache_key, CRYPTO_DOMAIN_SESSION_MAC,
                          /*data=*/&cache[0..81], /*data_len=*/81);
 ```
 
-The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It detects file corruption or tampering. Because the file name and MAC key are both bound to the epoch, a file is only ever read under the epoch that named it: repositories with distinct epochs never contest a file, and checkouts sharing an epoch share the one master it caches. `keymgr_rekey` (sync's `ADOPT`) therefore leaves the old epoch's file in place — it belongs to that epoch, not to the checkout that has just stopped holding it. Verification is constant-time via `crypto_verify32`.
+The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It detects file corruption or tampering. Because the file name and MAC key are both bound to the epoch, a file is only ever read under the epoch that named it: repositories with distinct epochs never contest a file, and checkouts sharing an epoch share the one master it caches. Sync's `ADOPT` therefore leaves the old epoch's file in place — it belongs to that epoch, not to the checkout that has just stopped holding it. Verification is constant-time via `crypto_verify32`.
 
 ## Encryption workflow
 
@@ -532,12 +532,12 @@ A master that opens nothing is wiped and never kept. Tampered or relocated blobs
 
 1. **Verified before kept**: A fresh master key is never stored in the in-memory slot or session file until it has opened a witness (or, in an empty repository with no ciphertext, confirmed twice or supplied via `DOTTA_ENCRYPTION_PASSPHRASE`).
 2. **Failure does not evict**: A cached master that fails to decrypt a blob stays cached. Tampered or corrupted blobs do not cost the user a verified key; the row is reported as `[unverified]`.
-3. **Refusal stands for the process**: If passphrase acquisition fails (no passphrase in reach, prompt aborted, a passphrase that opens nothing, or 3 wrong attempts at a TTY), the code and the top line of that refusal are recorded on `km->refusal`. The asker that met it receives the error itself, causes and all — the chain describes an event that happened once — while every later resolve re-issues the recorded line, which is the one sentence true of the whole run. The refusal therefore names no row: `infra/content` wraps it with the path of the row that asked, and what varies in its wording is only how much there was to open, since against a single ciphertext a miss is undecidable. `dotta key set` and `keymgr_rekey` clear a standing refusal; `dotta key clear` does not.
+3. **Refusal stands for the process**: If passphrase acquisition fails (no passphrase in reach, prompt aborted, a passphrase that opens nothing, or 3 wrong attempts at a TTY), the code and the top line of that refusal are recorded on `km->refusal`. The asker that met it receives the error itself, causes and all — the chain describes an event that happened once — while every later resolve re-issues the recorded line, which is the one sentence true of the whole run. The refusal therefore names no row: `infra/content` wraps it with the path of the row that asked, and what varies in its wording is only how much there was to open, since against a single ciphertext a miss is undecidable. `dotta key set` clears a standing refusal; `dotta key clear` does not.
 
 ### Command Reach (`keymgr_reach_t`)
 
 Commands declare how far keymgr may reach:
-- `KEYMGR_REACH_CACHED`: Used by reporting commands (`status`, `sync`, `key status`, `key clear`). Reads only the in-memory slot and on-disk session file. Returns `ERR_LOCKED` immediately on a cold cache without prompting or reading environment variables.
+- `KEYMGR_REACH_CACHED`: Used by reporting commands (`status`, `key status`, `key clear`). Reads only the in-memory slot and on-disk session file. Returns `ERR_LOCKED` immediately on a cold cache without prompting or reading environment variables.
 - `KEYMGR_REACH_OBTAIN`: Used by content commands (`apply`, `add`, `update`, `diff`, `show`, `export`, `revert`, `key set`). Permitted to read `DOTTA_ENCRYPTION_PASSPHRASE` and prompt interactively.
 
 ### Fault Classification (`core/workspace.h`)
@@ -684,7 +684,7 @@ Validation is performed at the boundary where parameters enter the system:
 | Memory-hard derivation & Epoch | `src/crypto/kdf` | `kdf_epoch_t`, `kdf_epoch_fingerprint`, `kdf_master_key`, `kdf_siv_subkeys`, `kdf_validate_params`, `kdf_params_store/load`, `kdf_presets` |
 | Keyed-BLAKE2b chokepoint | `src/crypto/mac` | `crypto_mac_init/absorb/final/oneshot`, `crypto_domain_t` |
 | SIV encrypt/decrypt + format | `src/crypto/cipher` | `cipher_encrypt`, `cipher_decrypt`, `cipher_read_header` |
-| Unlock proof & key manager | `src/crypto/keymgr` | `keymgr_create`, `keymgr_encrypt`, `keymgr_decrypt`, `keymgr_set`, `keymgr_clear`, `keymgr_cached`, `keymgr_epoch`, `keymgr_rekey`, `keymgr_witness`, `keymgr_free` |
+| Unlock proof & key manager | `src/crypto/keymgr` | `keymgr_create`, `keymgr_encrypt`, `keymgr_decrypt`, `keymgr_set`, `keymgr_clear`, `keymgr_cached`, `keymgr_epoch`, `keymgr_witness`, `keymgr_free` |
 | On-disk epoch session cache | `src/crypto/session` | `session_save`, `session_load`, `session_clear` |
 | Repository epoch lifecycle & census | `src/infra/epoch` | `epoch_init`, `epoch_load`, `epoch_push`, `epoch_fetch`, `epoch_resolve`, `epoch_find_ciphertext`, `epoch_walk` |
 | Content abstraction & cache | `src/infra/content` | `content_cache_*`, `content_classify*`, `content_capture_file`, `content_capture_link` |

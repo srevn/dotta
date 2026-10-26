@@ -21,7 +21,6 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "crypto/keymgr.h"
 #include "infra/commit.h"
 #include "infra/epoch.h"
 #include "infra/label.h"
@@ -1356,10 +1355,10 @@ static void sync_print_epoch_conflict(output_t *out) {
  * refspec (epoch.h), forced and naming the one ref, from the remote this sync
  * reached, on the condition the refspec's comment states.
  *
- * Reached with encryption off alone: while it is on, the dispatch refuses a ref
- * that yields no epoch before any command runs (main.c open_run), naming the
- * same restore and, beside it, encryption.enabled = false — the one way a run
- * arrives here.
+ * Reached with encryption on or off: sync declares no crypto, so its dispatch
+ * reads no epoch, where a command that reads ciphertext is refused over a ref
+ * that yields none (main.c open_run), naming the same restore with no remote to
+ * name.
  */
 static void sync_print_epoch_damaged(output_t *out, const char *remote_name) {
     output_gap(out, OUTPUT_NORMAL);
@@ -1404,7 +1403,6 @@ static void sync_reconcile_epoch(
     const cmd_sync_options_t *opts
 ) {
     git_repository *repo = ctx->run.repo;
-    keymgr *keymgr = ctx->run.keymgr;
     output_t *out = ctx->out;
 
     epoch_reconcile_t decision;
@@ -1515,9 +1513,8 @@ static void sync_reconcile_epoch(
                 return;
             }
 
-            kdf_epoch_t fetched;
             const transfer_stats_t mark = transfer_stats(xfer);
-            err = epoch_fetch(repo, remote_name, xfer, &fetched);
+            err = epoch_fetch(repo, remote_name, xfer);
             if (err) {
                 /* Every failure of the fetch names its act and leaves the local
                  * ref standing — one it could not adopt was judged before it
@@ -1539,16 +1536,9 @@ static void sync_reconcile_epoch(
             sync_print_wire(out, transfer_stats_since(xfer, mark).received);
             output_endline(out, OUTPUT_VERBOSE);
 
-            /* The run's crypto handles were bound to the epoch at dispatch; the
-             * fetch moved that authority mid-command, so re-bind — the same duty
-             * sync discharges for Git by rebuilding the manifest after the pulls.
-             * NULL-safe, and on two of the three findings that is what it is: a
-             * local ref yielding no epoch fails the dispatch load, so a run that
-             * reaches them has encryption off and no keymgr to re-bind. What
-             * the old epoch's session file holds is not this run's to remove:
+            /* What the old epoch's session file holds is not this run's to remove:
              * the file is named by the epoch, and a checkout still on that epoch
-             * is the one entitled to read it. */
-            keymgr_rekey(keymgr, &fetched);
+             * is the one entitled to read it (crypto/session.h). */
             return;
         }
     }
@@ -2156,7 +2146,6 @@ const args_command_t spec_sync = {
     .payload      = &(const dotta_needs_t){
         .repo     = DOTTA_REPO_OPEN,
         .state    = DOTTA_STATE_READ,
-        .crypto   = DOTTA_CRYPTO_CACHED,
         .manifest = true,
     },
     .dispatch     = sync_dispatch,

@@ -252,13 +252,13 @@ typedef enum dotta_verbosity {
  * declared strength (`dotta_crypto_mode_t`): how far the keymgr may reach for a
  * passphrase. CACHED reads what earlier runs left — the session file — and never
  * asks: it never prompts, never reads DOTTA_ENCRYPTION_PASSPHRASE, never writes
- * the file. The commands that report declare it (status, sync, key status, key
- * clear), so a look at an encrypted row with cold caches fails as ERR_LOCKED
- * and the row reads as unverifiable. OBTAIN may read the environment and prompt;
- * the commands the user asked to do something with the content declare it (add,
- * update, apply, diff, show, export, revert, key set). A fresh master an OBTAIN
- * run derives is verified against the repository's own ciphertext before it is
- * kept — the keymgr finds one through the witness source it is created with
+ * the file. The commands that report declare it (status, key status, key clear),
+ * so a look at an encrypted row with cold caches fails as ERR_LOCKED and the
+ * row reads as unverifiable. OBTAIN may read the environment and prompt; the
+ * commands the user asked to do something with the content declare it (add, update,
+ * apply, diff, show, export, revert, key set). A fresh master an OBTAIN run derives
+ * is verified against the repository's own ciphertext before it is kept — the
+ * keymgr finds one through the witness source it is created with
  * (`epoch_find_ciphertext`) — and `key set` is the verb that verifies against
  * the repository rather than against what an earlier run left. Requires `repo`.
  * Both handles are borrowed by the handler; the dispatcher tears them down LIFO

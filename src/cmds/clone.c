@@ -333,7 +333,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * is not a dotta repository: refuse before any local materialization below
      * (the record, the local branches, the baseline). The ref also carries the
      * repository's epoch; without it, every encrypted blob is undecryptable. */
-    err = epoch_fetch(repo, "origin", xfer, NULL);
+    err = epoch_fetch(repo, "origin", xfer);
     if (error_code(err) == ERR_NOT_FOUND) {
         /* Split the diagnostic: an empty remote holds nothing to clone, and a
          * ref-bearing one is not dotta's until a machine that holds the repository

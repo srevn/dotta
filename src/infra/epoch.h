@@ -247,15 +247,9 @@ error_t epoch_push(
  * this boundary's — `cmd_sync`'s adopt path gates it on the ciphertext census,
  * `cmd_clone` reaches a repository that has no epoch at all.
  *
- * On success the validated epoch is copied to `*out` when requested — the boundary
- * hands over exactly what it proved, so the adopting caller (`cmd_sync`, which
- * feeds it to `keymgr_rekey`) never re-reads the ref it just watched move. Clone
- * has no crypto handles yet and passes NULL.
- *
  * @param repo        Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL, e.g. "origin")
  * @param xfer        Transfer context for credentials / progress
- * @param out         Optional: the validated epoch (can be NULL)
  * @return Error or NULL on success; ERR_NOT_FOUND if the remote lacks the ref;
  *         ERR_CRYPTO if the fetched epoch could not be proved (the local ref
  *         untouched)
@@ -263,8 +257,7 @@ error_t epoch_push(
 error_t epoch_fetch(
     git_repository *repo,
     const char *remote_name,
-    transfer_context_t *xfer,
-    kdf_epoch_t *out
+    transfer_context_t *xfer
 );
 
 /**

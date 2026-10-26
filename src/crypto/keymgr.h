@@ -41,8 +41,8 @@
  * all, without asking again, so a workspace of N encrypted rows costs one prompt
  * and one file probe, not N. Retries only at a terminal (KEYMGR_ATTEMPTS, misses
  * of any kind); over a pipe, one line; from the environment, none. `key set` is
- * the one ask that clears a standing refusal; a rekey clears it too (the sources
- * are now about another epoch); `key clear` does not (it is about the caches).
+ * the one ask that clears a standing refusal; `key clear` does not (it is about
+ * the caches).
  *
  * The slot and the file. The in-memory slot is the process memo of the master:
  * once resolved, every later operation of the run reads it, under every
@@ -219,8 +219,9 @@ typedef error_t (*keymgr_witness_source_fn)(
  *
  * Copies the epoch and computes its fingerprint (`kdf_epoch_fingerprint`), which
  * is stamped into every blob this keymgr encrypts and checked against every blob
- * it is asked to decrypt. The epoch follows `refs/dotta/epoch`; the one command
- * that moves that ref mid-run (sync's adopt) re-binds via `keymgr_rekey`.
+ * it is asked to decrypt. The epoch is the one `refs/dotta/epoch` held when the
+ * dispatch read it, for the keymgr's life: the one command that moves that ref
+ * mid-run (sync's adopt) holds no keymgr.
  *
  * The source is where a fresh master finds ciphertext to open — the dispatcher
  * passes `epoch_find_ciphertext` with the run's repository. The keymgr calls it
@@ -383,31 +384,9 @@ bool keymgr_witness(
 bool keymgr_clear(keymgr *km);
 
 /**
- * Re-bind the key manager to a new epoch.
- *
- * For the one code path that moves `refs/dotta/epoch` mid-command — sync's adopt.
- * The create-time copy goes stale the moment the ref moves, so the command that
- * moved it re-establishes the binding, the same duty sync discharges for Git by
- * rebuilding the manifest after its pulls. Evicts the in-memory master (it derives
- * from the old epoch), clears a standing refusal (the sources are now about another
- * epoch), and recomputes the fingerprint.
- *
- * The old epoch's session file stays where it is. It is named by that epoch and
- * shared by every checkout still on it (crypto/session.h), and this keymgr has
- * just stopped being one of them; an adopt is taken only when no local ciphertext
- * depended on the epoch replaced, so nothing here could open what that file holds.
- * From the re-binding on, the file tier reads the new epoch's path.
- *
- * @param km    Key manager (NULL-safe — encryption-disabled runs have none)
- * @param epoch The newly adopted epoch (non-NULL; copied)
- */
-void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch);
-
-/**
  * The epoch this key manager is bound to.
  *
- * `dotta key status` prints its pair. Borrowed; valid for the keymgr's lifetime
- * and until the next `keymgr_rekey`.
+ * `dotta key status` prints its pair. Borrowed; valid for the keymgr's lifetime.
  *
  * @param km Key manager (non-NULL)
  * @return The epoch

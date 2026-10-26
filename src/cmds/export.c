@@ -1169,7 +1169,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     git_tree *tree = NULL;
     profile_t *profile = NULL;
     export_entry_list_t list = { 0 };
-    char commit_suffix[16] = "";
+    char commit_suffix[24] = "";
 
     /* Export is local-only: no network IO, ever. The explicit porcelain for making
      * a profile local already exists, and the refusal names it. */
@@ -1195,9 +1195,11 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             goto cleanup;
         }
 
+        /* The commit as every screen of export names it — the dry run, the receipt,
+         * each refusal — in revert's words for the commit it read */
         char oid_str[8];
         git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
-        snprintf(commit_suffix, sizeof(commit_suffix), " @ %s", oid_str);
+        snprintf(commit_suffix, sizeof(commit_suffix), " at commit %s", oid_str);
     } else {
         err = gitops_load_branch_tree(repo, opts->profile, &tree);
         if (err) goto cleanup;

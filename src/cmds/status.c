@@ -35,11 +35,12 @@
  *              name, the thing never printed without the where
  * @param scope The profiles the block lists — the filter's under -p, else the
  *              enabled set's (must not be NULL)
- * @param ws Workspace the view and the record come from: the per-profile
- *           last-deployed timestamp and the verbose per-profile counts are folded
- *           from its items (NULL when no workspace was loaded — it lends none
- *           then, and the header is names alone)
- * @param view The view whose health the block annotates (must not be NULL)
+ * @param ws Workspace the record comes from: the per-profile last-deployed
+ *           timestamp is folded from its items (NULL when no workspace was loaded
+ *           — it lends none then)
+ * @param view The view the block reads in every run: the verbose per-profile
+ *             counts are its rows, and its health the annotations (must not be
+ *             NULL)
  */
 static void status_print_profiles(
     output_t *out,
@@ -67,8 +68,10 @@ static void status_print_profiles(
     /* Show enabled profiles */
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
-    /* What a profile contributes to this machine is its active paths of both
-     * kinds — each item's own kind says which, and its record when it deployed */
+    /* What a profile contributes to this machine is its rows of both kinds —
+     * the view's, which every run holds, each row's own type saying which — and
+     * when it last deployed them is its record's, which a loaded workspace lends */
+    manifest_rows_t rows = manifest_rows(view);
     workspace_items_t active = workspace_active(ws);
 
     /* Whether each repair has a line to stand under. The question is about the
@@ -92,24 +95,16 @@ static void status_print_profiles(
             output_print(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
         }
 
-        /* One walk of the view per profile: the latest of its own ownership events
-         * among the rows it owns now — the honest set for an enabled-profiles
-         * header — and the verbose per-kind counts. A record another profile's
-         * deployment left at one of those rows is that profile's event, a
-         * reassignment apply has yet to acknowledge (core/workspace.h
-         * workspace_reassigned), and dates this one nothing. */
+        /* One walk of the active items per profile: the latest of its own ownership
+         * events among the rows it owns now — the honest set for an
+         * enabled-profiles header. A record another profile's deployment left
+         * at one of those rows is that profile's event, a reassignment apply
+         * has yet to acknowledge (core/workspace.h workspace_reassigned), and
+         * dates this one nothing. */
         time_t profile_deploy_time = 0;
-        size_t file_count = 0;
-        size_t dir_count = 0;
         for (size_t j = 0; j < active.count; j++) {
             const workspace_item_t *item = active.entries[j];
             if (strcmp(item->profile, profile) != 0) continue;
-
-            /* A directory the profile tracks, as what it holds is counted
-             * (core/profiles.h profile_counts_t): a derived row is the way to a
-             * tracked path, never a directory of the profile's own */
-            if (item->item_kind == PATH_KIND_FILE) file_count++;
-            else if (!manifest_is_derived(item->row)) dir_count++;
 
             if (item->record && strcmp(item->record->profile, profile) == 0 &&
                 item->record->deployed_at > profile_deploy_time) {
@@ -179,8 +174,21 @@ static void status_print_profiles(
             );
         }
 
-        /* In verbose mode, name what this profile contributes */
+        /* In verbose mode, name what this profile contributes: one walk of the
+         * view, each kind counted as what the profile holds is (core/profiles.h
+         * profile_counts_t) — a derived row is the way to a tracked path, never
+         * a directory of the profile's own */
         if (output_is_verbose(out)) {
+            size_t file_count = 0;
+            size_t dir_count = 0;
+            for (size_t j = 0; j < rows.count; j++) {
+                const manifest_row_t *row = rows.entries[j];
+                if (strcmp(row->profile, profile) != 0) continue;
+
+                if (path_type_kind(row->type) == PATH_KIND_FILE) file_count++;
+                else if (!manifest_is_derived(row)) dir_count++;
+            }
+
             char counts[64];
             output_format_counts(file_count, dir_count, counts, sizeof(counts));
             output_print(out, OUTPUT_NORMAL, "\n    %s", counts);

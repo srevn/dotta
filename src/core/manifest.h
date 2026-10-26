@@ -515,27 +515,30 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * Every enabled profile whose branch existed at build, lowest precedence first
  * — the set the rows came from, as the enabled set reads once the branches that
  * are gone (and contributed nothing) are left out; for one profile's view, its
- * one profile.
+ * one profile. Lent whole, the set's one list: a reader borrows it rather than
+ * copy it, so the view and whatever reads its set answer one instant's question
+ * with one list.
  *
- * Readers: the scope, whose enabled set this is (core/scope.c scope_build); the
- * untracked scan's registration (core/workspace.c workspace_analyze_untracked),
- * where a later profile's tracked directory takes a directory an earlier one
- * stands at, the index's own rule read from the same order; add's ancestry refusal,
- * which asks every profile but the capturing one for its claim at a link
- * (cmds/add.c add_refuse_ancestry); update's named derivation, which asks every
- * profile for an explicit claim where the user's node squats above a leaf
- * (cmds/update.c cmd_update); and update's preview, which asks every profile
- * but the deleting one, the highest first, for its claim where a deletion leaves
- * a path (cmds/update.c update_print_preview).
+ * Readers: the scope, which borrows it as its enabled set and lends it on
+ * (core/scope.c scope_build, core/scope.h scope_enabled); the untracked scan's
+ * registration (core/workspace.c workspace_analyze_untracked), where a later
+ * profile's tracked directory takes a directory an earlier one stands at, the
+ * index's own rule read from the same order; add's ancestry refusal, which asks
+ * every profile but the capturing one for its claim at a link (cmds/add.c
+ * add_refuse_ancestry); update's named derivation, which asks every profile for
+ * an explicit claim where the user's node squats above a leaf (cmds/update.c
+ * cmd_update); and update's preview, which asks every profile but the deleting
+ * one, the highest first, for its claim where a deletion leaves a path
+ * (cmds/update.c update_print_preview).
  *
- * Pure value return — no allocation, no error path. The names are the arena's,
- * the same pointers the rows carry, valid for the arena's lifetime.
+ * Pure value return — no allocation, no error path. The set and its names are
+ * the arena's, each name the same pointer its rows carry, valid for the arena's
+ * lifetime.
  *
- * @param manifest Manifest (NULL yields count 0)
- * @param count Receives the number of profiles (must not be NULL)
- * @return Borrowed array of profile names, or NULL when count is 0
+ * @param manifest Manifest (NULL answers an empty set)
+ * @return Borrowed set, never NULL
  */
-const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
+const string_array_t *manifest_profiles(const manifest_t *manifest);
 
 /**
  * The commit a profile's rows were read from

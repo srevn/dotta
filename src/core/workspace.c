@@ -3201,14 +3201,13 @@ static error_t workspace_analyze_untracked(
     const workspace_item_t **roots = arena_calloc(ws->arena, ws->dir_count, sizeof(*roots));
     size_t root_count = 0;
 
-    size_t profile_count = 0;
-    const char *const *profiles = manifest_profiles(ws->manifest, &profile_count);
+    const string_array_t *profiles = manifest_profiles(ws->manifest);
 
-    for (size_t p = 0; p < profile_count; p++) {
+    for (size_t p = 0; p < profiles->count; p++) {
         for (size_t i = 0; i < ws->dir_count; i++) {
             const workspace_item_t *item = ws->active[i];
 
-            if (!item->row->tracked || strcmp(item->profile, profiles[p]) != 0) continue;
+            if (!item->row->tracked || strcmp(item->profile, profiles->entries[p]) != 0) continue;
             if (item->occupant != FS_OCCUPANT_DIRECTORY) continue;
 
             const workspace_item_t **root = workspace_find_root(roots, root_count, &item->st);

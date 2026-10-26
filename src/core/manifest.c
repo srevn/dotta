@@ -114,12 +114,12 @@ typedef struct {
  */
 struct manifest {
     /* The contributions, one per profile the build walks, in precedence order,
-     * and their names beside them: profiles[i] names contributions[i], one array
-     * the public projection of the other, kept because manifest_profiles owes a
-     * contiguous array of names. */
+     * and their names beside them: profiles.entries[i] names contributions[i],
+     * and its count is both arrays'. One array is the public projection of the
+     * other, kept because manifest_profiles lends the set as one list — the names'
+     * one copy, which each contribution and its rows point at. */
     contribution_t *contributions;               /* Arena; one per profile */
-    const char **profiles;                       /* Arena; their names, the rows' own pointers */
-    size_t profile_count;                        /* Both arrays' count */
+    string_array_t profiles;                     /* Arena; their names, the rows' own pointers */
 
     /* Precedence over the settled contributions: the index, one row standing
      * per path — a claim, or the layer's rung — and the spine cut once from it
@@ -960,20 +960,23 @@ static error_t manifest_contribute(
     const git_oid *head,
     arena_t *arena
 ) {
-    /* Register the contribution before anything can fail into it: the name is
-     * arena-backed so the view never depends on the profile or on the state's
-     * row cache, and the indexes are the arena's too, so a build that stops partway
-     * leaves nothing behind but the arena's bytes. The head is a value, zero
-     * where none was read. */
-    contribution_t *c = &manifest->contributions[manifest->profile_count];
+    /* Register the contribution before anything can fail into it: its name joins
+     * the view's set at the slot the contribution takes, copied into the arena
+     * (base/array.h string_array_push), and that copy is the one the contribution
+     * and its rows carry, so the view never depends on the profile or on the
+     * state's row cache. The indexes are the arena's too, so a build that stops
+     * partway leaves nothing behind but the arena's bytes. The head is a value,
+     * zero where none was read. */
+    const size_t i = manifest->profiles.count;
+    string_array_push(&manifest->profiles, profile_name(profile));
 
+    contribution_t *c = &manifest->contributions[i];
     *c = (contribution_t){
-        .profile = arena_strdup(arena, profile_name(profile)),
+        .profile = manifest->profiles.entries[i],
         .explicit = hashmap_borrow(arena, 128),
         .derived = hashmap_borrow(arena, 32),
     };
     if (head) git_oid_cpy(&c->head, head);
-    manifest->profiles[manifest->profile_count++] = c->profile;
 
     /* The step's two lists, read only while it runs: every row this profile placed,
      * in claim order, and the rows that met a path it had already named, which
@@ -1315,7 +1318,7 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
     ptr_array_init(&rungs, arena, 0);
 
     /* The explicit claims, highest precedence first */
-    for (size_t i = manifest->profile_count; i-- > 0;) {
+    for (size_t i = manifest->profiles.count; i-- > 0;) {
         contribution_t *c = &manifest->contributions[i];
 
         manifest_row_t **order = arena_calloc(frame, c->count, sizeof(*order));
@@ -1370,7 +1373,7 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
 
     /* The derived claims, lowest precedence first: a row fills a path no row
      * holds and no standing blob stands above */
-    for (size_t i = 0; i < manifest->profile_count; i++) {
+    for (size_t i = 0; i < manifest->profiles.count; i++) {
         const contribution_t *c = &manifest->contributions[i];
         for (size_t j = 0; j < c->count; j++) {
             manifest_row_t *row = c->rows[j];
@@ -1397,7 +1400,7 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
     if (standing == 0) return;
 
     manifest->rows = arena_calloc(arena, standing, sizeof(*manifest->rows));
-    for (size_t i = 0; i < manifest->profile_count; i++) {
+    for (size_t i = 0; i < manifest->profiles.count; i++) {
         const contribution_t *c = &manifest->contributions[i];
         for (size_t j = 0; j < c->count; j++) {
             manifest_row_t *row = c->rows[j];
@@ -1435,10 +1438,8 @@ static manifest_t *manifest_allocate(
         manifest->contributions = arena_calloc(
             arena, profile_capacity, sizeof(*manifest->contributions)
         );
-        manifest->profiles = arena_calloc(
-            arena, profile_capacity, sizeof(*manifest->profiles)
-        );
     }
+    string_array_init(&manifest->profiles, arena, profile_capacity);
 
     manifest->index = hashmap_borrow(arena, index_capacity);
 
@@ -1625,14 +1626,14 @@ manifest_rows_t manifest_rows(const manifest_t *manifest) {
 
 /**
  * The profiles the view was built from, in precedence order
+ *
+ * No view answers the zeroed set, which reads as empty (base/array.h).
  */
-const char *const *manifest_profiles(const manifest_t *manifest, size_t *count) {
-    if (!manifest) {
-        *count = 0;
-        return NULL;
-    }
-    *count = manifest->profile_count;
-    return manifest->profiles;
+const string_array_t *manifest_profiles(const manifest_t *manifest) {
+    static const string_array_t empty = { 0 };
+
+    if (!manifest) return &empty;
+    return &manifest->profiles;
 }
 
 /**
@@ -1698,7 +1699,7 @@ static const contribution_t *manifest_contribution(
 ) {
     if (!profile) return NULL;
 
-    for (size_t i = 0; i < manifest->profile_count; i++) {
+    for (size_t i = 0; i < manifest->profiles.count; i++) {
         if (strcmp(manifest->contributions[i].profile, profile) == 0) {
             return &manifest->contributions[i];
         }

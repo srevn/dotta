@@ -20,19 +20,20 @@
 /**
  * Internal scope representation.
  *
- * A value of the arena scope_build is handed, as everything it holds is: the
- * two name lists, the path filter and the exclude layer. `profiles` points at
- * one of the two lists — the filter when -p was given, else the enabled set —
- * set once during build. The excludes are the -e layer core/ignore compiles
- * (ignore_excludes_compile) — the rules add's builder takes as its top layer,
- * asked alone here (scope_is_excluded).
+ * A value of the arena scope_build is handed, as everything it holds is but the
+ * enabled set, which is the view's own, borrowed: the filter's names, the path
+ * filter and the exclude layer. `profiles` points at one of the two lists — the
+ * filter when -p was given, else the enabled set — set once during build. The
+ * excludes are the -e layer core/ignore compiles (ignore_excludes_compile) —
+ * the rules add's builder takes as its top layer, asked alone here
+ * (scope_is_excluded).
  */
 struct scope {
-    string_array_t enabled;             /* Persistent enabled set; may be empty */
+    const string_array_t *enabled;      /* Persistent enabled set, the view's; may be empty */
     string_array_t filter;              /* CLI filter: every name -p gave, each enabled; empty without -p */
     const gitignore_ruleset_t *excludes_ruleset; /* The -e layer; NULL when no excludes */
     pathspec_t *paths;                  /* CLI path filter; NULL when no positional args */
-    const string_array_t *profiles;     /* &filter when -p was given, else &enabled */
+    const string_array_t *profiles;     /* &filter when -p was given, else enabled */
 };
 
 /* -------------------------------------------------------------------- */
@@ -53,17 +54,12 @@ error_t scope_build(
      * a refusal below leaves only the arena's bytes behind */
     scope_t *s = arena_calloc(arena, 1, sizeof(*s));
 
-    /* 1. The enabled set: the view's profiles — the enabled rows whose branch
-     *    the build found (core/manifest.h manifest_profiles) — so the scope and
-     *    the view answer one instant's question once. May be empty: an empty
-     *    scope is not an error ("Empty-enabled policy", scope.h). */
-    size_t count = 0;
-    const char *const *names = manifest_profiles(view, &count);
-    string_array_init(&s->enabled, arena, count);
-    for (size_t i = 0; i < count; i++) {
-        string_array_push(&s->enabled, names[i]);
-    }
-    s->profiles = &s->enabled;
+    /* 1. The enabled set: the view's own — the enabled rows whose branch the
+     *    build found (core/manifest.h manifest_profiles) — borrowed, so the scope
+     *    and the view answer one instant's question with one list. May be empty:
+     *    an empty scope is not an error ("Empty-enabled policy", scope.h). */
+    s->enabled = manifest_profiles(view);
+    s->profiles = s->enabled;
 
     /* 2. The CLI filter: every name must be enabled here. That is the one question
      *    — the view read the branches on the way in, so a name in the enabled
@@ -77,7 +73,7 @@ error_t scope_build(
 
         for (size_t i = 0; i < in->profile_count; i++) {
             const char *name = in->profiles[i];
-            if (!string_array_contains(&s->enabled, name)) {
+            if (!string_array_contains(s->enabled, name)) {
                 error_t err = profile_require(repo, name);
                 if (err) return err;
                 return error_create(ERR_INVALID_ARG, "Profile '%s' is not enabled", name);
@@ -320,7 +316,7 @@ error_t scope_resolve_range(
 /* -------------------------------------------------------------------- */
 
 const string_array_t *scope_enabled(const scope_t *s) {
-    return &s->enabled;
+    return s->enabled;
 }
 
 const string_array_t *scope_profiles(const scope_t *s) {

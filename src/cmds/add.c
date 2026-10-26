@@ -961,11 +961,10 @@ static error_t add_refuse_ancestry(
         const manifest_row_t *held = state_enabled(ctx->run.state, walk->profile)
             ? manifest_lookup_claim(walk->view, walk->profile, link) : NULL;
         const manifest_row_t *other = NULL;
-        size_t profile_count = 0;
-        const char *const *profiles = manifest_profiles(enabled->manifest, &profile_count);
-        for (size_t i = 0; i < profile_count && !other; i++) {
-            if (strcmp(profiles[i], walk->profile) == 0) continue;
-            other = manifest_lookup_claim(enabled->manifest, profiles[i], link);
+        const string_array_t *profiles = manifest_profiles(enabled->manifest);
+        for (size_t i = 0; i < profiles->count && !other; i++) {
+            if (strcmp(profiles->entries[i], walk->profile) == 0) continue;
+            other = manifest_lookup_claim(enabled->manifest, profiles->entries[i], link);
         }
 
         /* Whose node the link is: dotta's where it keeps a record of the link —

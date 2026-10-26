@@ -1087,8 +1087,7 @@ static void update_print_preview(
 
         /* The view's profiles, lowest precedence first, each asked below for
          * its claim at a deleted path */
-        size_t profile_count = 0;
-        const char *const *profiles = manifest_profiles(manifest, &profile_count);
+        const string_array_t *profiles = manifest_profiles(manifest);
 
         for (size_t i = 0; i < partition->deleted.count; i++) {
             const workspace_item_t *item = partition->deleted.entries[i];
@@ -1102,9 +1101,11 @@ static void update_print_preview(
              * is named all the same (stated, as cmds/remove.c remove_overlaps
              * states it of its claimants). */
             const manifest_row_t *other = NULL;
-            for (size_t p = profile_count; p-- > 0 && !other;) {
-                if (strcmp(profiles[p], item->profile) == 0) continue;
-                other = manifest_lookup_claim(manifest, profiles[p], item->filesystem_path);
+            for (size_t p = profiles->count; p-- > 0 && !other;) {
+                if (strcmp(profiles->entries[p], item->profile) == 0) continue;
+                other = manifest_lookup_claim(
+                    manifest, profiles->entries[p], item->filesystem_path
+                );
             }
 
             /* The other claim composed onto the line's metadata where there is
@@ -1556,17 +1557,16 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 const workspace_squatted_t *above = workspace_squatted_ancestor(
                     ws, item->filesystem_path
                 );
-                size_t profile_count = 0;
-                const char *const *profiles = manifest_profiles(manifest, &profile_count);
+                const string_array_t *profiles = manifest_profiles(manifest);
 
                 size_t p = 0;
-                for (; p < profile_count; p++) {
+                for (; p < profiles->count; p++) {
                     const manifest_row_t *held = manifest_lookup_claim(
-                        manifest, profiles[p], above->filesystem_path
+                        manifest, profiles->entries[p], above->filesystem_path
                     );
                     if (held && !manifest_is_derived(held)) break;
                 }
-                if (p < profile_count) {
+                if (p < profiles->count) {
                     refused_leaves++;
                     continue;
                 }

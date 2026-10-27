@@ -817,7 +817,7 @@ static error_t ignore_test(
                 out, OUTPUT_NORMAL, "  Reason: %s", ignore_verdict_describe(ctx->arena, &verdict)
             );
         } else {
-            output_success(out, OUTPUT_NORMAL, "%sNOT IGNORED", who);
+            output_print(out, OUTPUT_NORMAL, "{green}✓{reset} %sNOT IGNORED\n", who);
             continue;
         }
 

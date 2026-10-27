@@ -45,7 +45,9 @@
  * The one fetch has run (gitops_fetch_remote): every branch the remote has stands
  * under refs/remotes/<remote>. Each chosen name becomes a local branch at that
  * commit; a name the remote does not have is warned about by name and skipped,
- * so a `-p` typo costs one profile and not the clone.
+ * so a `-p` typo costs one profile and not the clone. The warnings are one block,
+ * beneath whatever stood: its boundary is asked here, and paid by the first of
+ * them or, where none prints, by the line the caller says next.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (typically "origin")
@@ -68,6 +70,7 @@ static void land_profiles(
     CHECK_NULL(out);
     CHECK_NULL(landed);
 
+    output_gap(out, OUTPUT_NORMAL);
     for (size_t i = 0; i < count; i++) {
         const char *profile = profiles[i];
 
@@ -85,51 +88,6 @@ static void land_profiles(
 
         string_array_push(landed, profile);
     }
-}
-
-/**
- * Make every remote branch local (hub mode)
- *
- * @param repo Repository
- * @param remote_name Remote name
- * @param out Output context
- * @param arena Arena the listing the names are read from lives in
- * @param landed The caller's array the profile names made local are pushed onto
- *        (left as it was on a failure)
- * @return Error or NULL on success
- */
-static error_t land_all_profiles(
-    git_repository *repo,
-    const char *remote_name,
-    output_t *out,
-    arena_t *arena,
-    string_array_t *landed
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-    CHECK_NULL(arena);
-    CHECK_NULL(landed);
-
-    output_section(out, OUTPUT_NORMAL, "Fetching all remote profiles");
-
-    /* Every branch the one fetch brought */
-    string_array_t all_branches;
-    error_t err = gitops_list_remote_tracking(
-        repo, remote_name, arena, &all_branches
-    );
-    if (err) return err;
-
-    /* Create local branches */
-    land_profiles(
-        repo, remote_name, all_branches.entries, all_branches.count, out, landed
-    );
-
-    output_success(
-        out, OUTPUT_NORMAL, "Fetched %zu profile%s",
-        landed->count, landed->count == 1 ? "" : "s"
-    );
-
-    return NULL;
 }
 
 /**
@@ -383,8 +341,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     if (opts->profiles && opts->profile_count > 0) {
         /* Explicit profile management */
-        output_section(out, OUTPUT_NORMAL, "Fetching specified profiles");
-
         land_profiles(
             repo, "origin", opts->profiles, opts->profile_count, out, &fetched_profiles
         );
@@ -396,24 +352,36 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 opts->profile_count == 1 ? "" : "s"
             );
         } else {
-            output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
+            output_info(out, OUTPUT_NORMAL, "No profiles were fetched");
         }
 
     } else if (opts->all_profiles) {
-        /* Hub mode: every remote profile made local. A listing that fails ends
-         * the clone, and the all-or-nothing rule rolls the store back (cleanup):
-         * read as "fetched nothing", it handed the rest of the run an answer it
-         * never got. */
-        err = land_all_profiles(repo, "origin", out, ctx->arena, &fetched_profiles);
+        /* Hub mode: every branch the one fetch brought, made local. A listing
+         * that fails ends the clone, and the all-or-nothing rule rolls the store
+         * back (cleanup): read as "fetched nothing", it handed the rest of the
+         * run an answer it never got. */
+        string_array_t remote_branches;
+        err = gitops_list_remote_tracking(repo, "origin", ctx->arena, &remote_branches);
         if (err) goto cleanup;
+
+        land_profiles(
+            repo, "origin", remote_branches.entries, remote_branches.count, out,
+            &fetched_profiles
+        );
 
         /* Every fetched profile, seeded in the convention's order: the remote's
          * listing has none of its own, and initialize_state enables in the order
          * this list has. Named profiles (-p) keep the order typed; detection
          * sorts its own answer. */
         profile_order(&fetched_profiles);
-        if (fetched_profiles.count == 0) {
-            output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
+
+        if (fetched_profiles.count > 0) {
+            output_success(
+                out, OUTPUT_NORMAL, "Fetched %zu profile%s",
+                fetched_profiles.count, fetched_profiles.count == 1 ? "" : "s"
+            );
+        } else {
+            output_info(out, OUTPUT_NORMAL, "No profiles were fetched");
         }
 
     } else {
@@ -436,7 +404,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             for (size_t i = 0; i < detected_profiles.count; i++) {
                 output_info(out, OUTPUT_NORMAL, "  • %s", detected_profiles.entries[i]);
             }
-            output_gap(out, OUTPUT_NORMAL);
 
             /* Make the detected profiles local */
             land_profiles(
@@ -450,7 +417,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     fetched_profiles.count, fetched_profiles.count == 1 ? "" : "s"
                 );
             } else {
-                output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
+                output_info(out, OUTPUT_NORMAL, "No profiles were fetched");
             }
 
         } else {

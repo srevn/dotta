@@ -989,18 +989,12 @@ void output_hint(
     line_t line;
     output_start(&line, ctx, ctx->stream);
 
-    /* Preserve leading whitespace (printed uncolored for indentation) */
-    const char *p = fmt;
-    while (*p == ' ' || *p == '\t') p++;
-    output_bytes(&line, fmt, (size_t) (p - fmt));
-
-    /* Dim wraps the entire hint: prefix + body */
-    output_style(&line, OUTPUT_COLOR_DIM);
-    output_bytes(&line, "Hint: ", 6);
+    /* Dim wraps the entire hint, prefix and body: the line closes it */
+    output_appendf(&line, "{dim}Hint: ");
 
     va_list args;
     va_start(args, fmt);
-    output_walk(&line, p, &args);
+    output_walk(&line, fmt, &args);
     va_end(args);
 
     output_bytes(&line, "\n", 1);

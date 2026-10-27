@@ -251,8 +251,7 @@ static void bootstrap_list(
     /* How to create one, where a profile has none */
     if (missing > 0) {
         output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
-        output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta bootstrap <profile> --edit' to create one");
     }
 }
 
@@ -291,8 +290,7 @@ static error_t bootstrap_run(
                 : "No bootstrap scripts found in enabled profiles"
         );
         output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
-        output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta bootstrap <profile> --edit' to create one");
 
         return NULL;
     }

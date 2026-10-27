@@ -237,9 +237,10 @@ static void key_status(const dotta_ctx_t *ctx) {
         );
 
         output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "To enable encryption, add to config file:");
-        output_hintline(out, OUTPUT_NORMAL, "  [encryption]");
-        output_hintline(out, OUTPUT_NORMAL, "  enabled = true");
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Set encryption.enabled = true in the config file to enable encryption"
+        );
 
         return;
     }

@@ -225,18 +225,16 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         output_warning(
             out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
         );
-        output_hint(out, OUTPUT_NORMAL, "To use the one just created, either:");
-        output_hintline(out, OUTPUT_NORMAL, "  export DOTTA_REPO_DIR=%s", path);
-        output_hintline(
-            out, OUTPUT_NORMAL, "  or set repo_dir under [core] in the config file"
+        output_hint(
+            out, OUTPUT_NORMAL, "Run 'export DOTTA_REPO_DIR=%s', or set core.repo_dir in "
+            "the config file, to use the one just created", path
         );
     }
 
     /* The one step a new store needs: a capture, whose files are already in place,
      * so no apply follows it on this machine */
     output_gap(out, OUTPUT_NORMAL);
-    output_hintline(out, OUTPUT_NORMAL, "Next steps:");
-    output_hintline(out, OUTPUT_NORMAL, "  Create profile: dotta add --profile global ~/.bashrc");
+    output_hint(out, OUTPUT_NORMAL, "Run 'dotta add global ~/.bashrc' to create a profile");
 
 cleanup:
     if (repo) git_repository_free(repo);

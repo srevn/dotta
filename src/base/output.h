@@ -350,22 +350,20 @@ void output_info(
 ) __attribute__((format(printf, 3, 4)));
 
 /**
- * Print hint message (always dimmed when colors enabled)
+ * Print hint message: the remedy, one line, dimmed whole
  *
- * Automatically adds "Hint: " prefix and applies DIM styling to the entire message.
- * Supports printf-style formatting. Leading whitespace is preserved for indentation
- * support.
+ * The next step a run calls for, said in one sentence ("Run 'dotta …' to …") at
+ * the margin: "Hint: " opens the line, as "Warning: " opens a warning's, and
+ * DIM spans the prefix and the body. A format's own leading whitespace lands
+ * after the prefix, as it does after every prefix the layer writes.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
  * @param fmt Printf-style format string
  *
- * Examples:
+ * Example:
  *   output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files");
  *   → "Hint: Run 'dotta apply' to deploy files" (entire line dimmed)
- *
- *   output_hint(out, OUTPUT_NORMAL, "  Run 'dotta profile fetch %s' first", name);
- *   → "  Hint: Run 'dotta profile fetch foo' first" (dimmed, indented)
  */
 void output_hint(
     output_t *ctx,
@@ -375,21 +373,22 @@ void output_hint(
 ) __attribute__((format(printf, 3, 4)));
 
 /**
- * Print hint continuation line (no "Hint:" prefix, but still dimmed)
+ * Print a dimmed line: a hint's voice with no "Hint: ", for what reads beside a
+ * block without being its remedy
  *
- * For multi-line hints where only the first line has "Hint:" prefix. Still applies
- * DIM color and respects verbosity. Use for continuation lines. Leading whitespace
- * is preserved for indentation.
+ * The format as it is written, its leading whitespace included, ended and dimmed
+ * whole. A remedy is one line of its own (output_hint); this one is a key beneath
+ * the list it keys (cmds/status.c status_print_legend, status_print_profiles'
+ * repairs), or the cause a warning gives beneath it (cmds/revert.c cmd_revert's
+ * "Reconstructed from the commit …").
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
  * @param fmt Printf-style format string
  *
  * Example:
- *   output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
- *   output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap --profile <profile> --edit");
- *   → Output: "Hint: Create a bootstrap script with:" (dimmed)
- *   "  dotta bootstrap --profile <profile> --edit" (dimmed)
+ *   output_hintline(out, OUTPUT_NORMAL, "  %-*s - %s", width, tags, meaning);
+ *   → "  [unreadable] - permissions refused the read" (dimmed)
  */
 void output_hintline(
     output_t *ctx,

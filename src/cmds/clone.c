@@ -466,7 +466,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     output_info(out, OUTPUT_NORMAL, "  • %s", remote_branches.entries[i]);
                 }
                 output_gap(out, OUTPUT_NORMAL);
-                output_info(
+                output_hint(
                     out, OUTPUT_NORMAL,
                     "Run 'dotta profile fetch <name>', then 'dotta profile enable <name>'"
                 );
@@ -565,8 +565,8 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                  * not output a level gates (base/output.h output_ask) and a
                  * configured quiet never declined it. The scripts are an extra
                  * the clone stands without, so no answer leaves them unrun as a
-                 * decline does, and says so with no way on: the Next steps below
-                 * name 'dotta bootstrap' wherever a script was left unrun
+                 * decline does, and says so with no way on: the hint below names
+                 * 'dotta bootstrap' wherever a script was left unrun
                  * (bootstrap_owed). */
                 switch (output_ask(out, false, "Execute bootstrap scripts?")) {
                     case OUTPUT_ANSWER_YES:
@@ -627,28 +627,34 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         output_warning(
             out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
         );
-        output_hint(out, OUTPUT_NORMAL, "To use the one just cloned, either:");
-        output_hintline(out, OUTPUT_NORMAL, "  export DOTTA_REPO_DIR=%s", local_path);
-        output_hintline(
-            out, OUTPUT_NORMAL, "  or set repo_dir under [core] in the config file"
+        output_hint(
+            out, OUTPUT_NORMAL, "Run 'export DOTTA_REPO_DIR=%s', or set core.repo_dir in "
+            "the config file, to use the one just cloned", local_path
         );
     }
 
-    /* The steps that hold, and only those: the scripts a run did not finish —
-     * declined, or stopped at a failure, which `dotta bootstrap` runs again once
-     * its reason is fixed (cmds/clone.h) — and the apply that lands what the
-     * clone enabled, a clone writing no file of its own */
+    /* The steps that hold, and only those, in the one line they make: the scripts
+     * a run did not finish — declined, or stopped at a failure, which `dotta
+     * bootstrap` runs again once its reason is fixed (cmds/clone.h) — and the
+     * apply that lands what the clone enabled, a clone writing no file of its
+     * own */
     const bool bootstrap_owed =
         bootstrap_found.count > 0 && (!run_bootstrap || bootstrap.stopped);
-    if (bootstrap_owed || to_enable.count > 0) {
+    if (bootstrap_owed && to_enable.count > 0) {
         output_gap(out, OUTPUT_NORMAL);
-        output_hintline(out, OUTPUT_NORMAL, "Next steps:");
-        if (bootstrap_owed) {
-            output_hintline(out, OUTPUT_NORMAL, "  Run bootstrap:  dotta bootstrap");
-        }
-        if (to_enable.count > 0) {
-            output_hintline(out, OUTPUT_NORMAL, "  Apply profiles: dotta apply");
-        }
+        output_hint(
+            out, OUTPUT_NORMAL, "Run 'dotta bootstrap', then 'dotta apply' to bring the "
+            "workspace in line with the enabled profiles"
+        );
+    } else if (bootstrap_owed) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta bootstrap' to run the bootstrap scripts");
+    } else if (to_enable.count > 0) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
+        );
     }
 
 cleanup:

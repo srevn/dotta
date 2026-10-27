@@ -41,6 +41,13 @@ static bool show_binary(const unsigned char *data, size_t size) {
 /**
  * Write blob bytes to stdout with a trailing newline ensured
  *
+ * The one payload written past the output layer (base/output.h "Layout and data"),
+ * because a failed write is the run's error and output_write returns nothing.
+ * It is right by an order its caller keeps: the claim's header lands above it
+ * through the output, so the report stands on stdout, its stream, before these
+ * bytes; and the last line they leave open is ended here, so the report's position,
+ * a line standing, is true after them.
+ *
  * Terminal display normalization — byte-faithful extraction lives in `dotta
  * export`, not here. Flushes before returning so buffered IO failures (ENOSPC,
  * closed pipe with SIGPIPE ignored) surface as a non-zero exit instead of vanishing

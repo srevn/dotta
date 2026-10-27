@@ -142,7 +142,7 @@ dotta list global -v             # With sizes and per-file commits
 
 # Level 3: File commit history
 dotta list global home/.bashrc
-dotta list global home/.bashrc -v  # Full commit messages
+dotta list global home/.bashrc -v  # Each commit's full id, date and title
 ```
 
 ## Showing File Content

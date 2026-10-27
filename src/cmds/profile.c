@@ -33,7 +33,8 @@
 /**
  * Profile list subcommand
  *
- * Shows enabled vs available profiles with clear visual distinction.
+ * Shows enabled vs available profiles with clear visual distinction, and closes
+ * on the total: the profiles listed and the enabled among them.
  */
 static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
     CHECK_NULL(ctx);
@@ -121,11 +122,7 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
             output_endline(out, OUTPUT_NORMAL);
         }
     } else {
-        /* Enable takes only a profile whose branch is here: the ones listed below */
         output_info(out, OUTPUT_NORMAL, "No enabled profiles");
-        if (available.count > 0) {
-            output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
-        }
     }
 
     /* Print available (disabled) profiles, marking the ones that need a target:
@@ -173,7 +170,9 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
     }
 
     /* The remote's profiles not fetched here, if asked, under the title a clone
-     * that detects none gives them too (cmds/clone.c cmd_clone) */
+     * that detects none gives them too (cmds/clone.c cmd_clone): none where the
+     * remote could not be asked, or holds nothing this machine lacks */
+    string_array_t remote_only = { 0 };
     if (opts->show_remote) {
         error_t remote_err = gitops_resolve_default_remote(
             repo, ctx->arena, &remote_name, &remote_url
@@ -206,7 +205,6 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(remote_err));
             } else if (remote_branches.count > 0) {
                 /* Filter out branches that already exist locally */
-                string_array_t remote_only;
                 string_array_init(&remote_only, ctx->arena, remote_branches.count);
                 for (size_t ri = 0; ri < remote_branches.count; ri++) {
                     if (!string_array_contains(&profiles, remote_branches.entries[ri])) {
@@ -224,6 +222,30 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
                 }
             }
         }
+    }
+
+    /* Print summary: every profile listed here and the enabled among them, as
+     * list counts its own (cmds/list.c list_profiles), and the remote's not fetched
+     * where --remote listed any — nothing where nothing is listed, the sentence
+     * in the enabled profiles' place being the report whole */
+    size_t total = enabled_profiles.count + available.count;
+    if (remote_only.count > 0) {
+        output_summary(
+            out, OUTPUT_NORMAL, "Total: %zu profile%s, %zu enabled, %zu not fetched",
+            total, total == 1 ? "" : "s", enabled_profiles.count, remote_only.count
+        );
+    } else if (total > 0) {
+        output_summary(
+            out, OUTPUT_NORMAL, "Total: %zu profile%s, %zu enabled",
+            total, total == 1 ? "" : "s", enabled_profiles.count
+        );
+    }
+
+    /* The remedy beneath it, where no profile is enabled and one here could be:
+     * enable takes only a profile whose branch is here, the ones listed above */
+    if (enabled_profiles.count == 0 && available.count > 0) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
     }
 
 cleanup:

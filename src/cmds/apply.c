@@ -1018,14 +1018,14 @@ static size_t apply_print_withheld(
 /**
  * Print deploy's receipt
  *
- * Handles all output for the receipt. The deploy layer only collects outcomes;
- * this function handles all presentation — the run's receipt, per-item sections
- * at verbose and summary counts at normal. Every number is the same fold the
- * preview takes over the verdicts (apply_print_deploy_preview), taken here over
- * the verdicts the run carried out — so the receipt restates the preview by
- * construction, adding nothing of its own.
+ * The deploy layer only collects outcomes; this function and the summary's
+ * (apply_print_deploy_summary) handle all presentation — the run's receipt here,
+ * per-item sections at verbose and the failures at every level, and the counts
+ * there. Every number is the same fold the preview takes over the verdicts
+ * (apply_print_deploy_preview), taken over the verdicts the run carried out —
+ * so the receipt restates the preview by construction, adding nothing of its own.
  *
- * Categories (each semantically distinct):
+ * Categories (each semantically distinct), the sections' and the counts' alike:
  * - deployed: Files written to disk (green)
  * - created / fixed / replaced: the plan's directories, by what the verdict said
  *   stood at the path — one line each, so the squatter a replace cleared is named
@@ -1067,13 +1067,13 @@ static size_t apply_print_withheld(
  * Work the run skipped is not here: the plan decided it, apply_print_withheld
  * reports it, and it must be said even on runs that never execute. A failure IS
  * here — one line per row that did not land, its cause beside it (the receipt's
- * failed bucket), at every verbosity and last, after what did land: a receipt
- * that omits what went wrong is not a receipt, and no run-level error will name
- * it (cleanup's receipt ends on its failures the same way). So is a directory
- * the run held at a working mode and could not narrow back (the receipt's held),
- * after the failed rows: the mode it was left at, the one it owed, and the refusal
- * that kept it wide. No total-count line: the exit error's message is the count's
- * one home, as for the skip block.
+ * failed bucket), at every verbosity, after what did land and above the run's
+ * summary: a receipt that omits what went wrong is not a receipt, and no run-level
+ * error will name it (cleanup's receipt ends on its failures the same way). So
+ * is a directory the run held at a working mode and could not narrow back (the
+ * receipt's held), after the failed rows: the mode it was left at, the one it
+ * owed, and the refusal that kept it wide. No total-count line: the exit error's
+ * message is the count's one home, as for the skip block.
  *
  * Adoption (ownership stamping for pre-existing matching files) is an apply-level
  * concern and its summary is printed by cmd_apply directly.
@@ -1258,53 +1258,6 @@ static void apply_print_deploy_receipt(
         }
     }
 
-    /* Non-verbose: summary counts only, each an act the run did, in the summary's
-     * one block whichever prints first */
-    if (!output_is_verbose(out)) {
-        if (receipt->deployed.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s",
-                receipt->deployed.count, receipt->deployed.count == 1 ? "" : "s"
-            );
-        }
-
-        if (created > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Created {green}%zu{reset} tracked director%s",
-                created, created == 1 ? "y" : "ies"
-            );
-        }
-
-        if (fixed > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Fixed {green}%zu{reset} tracked director%s",
-                fixed, fixed == 1 ? "y" : "ies"
-            );
-        }
-
-        if (replaced > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} director%s",
-                replaced, replaced == 1 ? "y" : "ies"
-            );
-        }
-
-        if (receipt->replaced.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} obstructing file%s with %s",
-                receipt->replaced.count, receipt->replaced.count == 1 ? "" : "s",
-                receipt->replaced.count == 1 ? "a directory" : "directories"
-            );
-        }
-
-        if (receipt->cleared.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Cleared {yellow}%zu{reset} overridden cop%s",
-                receipt->cleared.count, receipt->cleared.count == 1 ? "y" : "ies"
-            );
-        }
-    }
-
     /* The rows that did not land — both kinds, verdict order, a directory by
      * its slash, each with its cause. At every verbosity, and after what landed
      * (the header carries the rationale); capped the way the skip block is. The
@@ -1356,26 +1309,111 @@ static void apply_print_deploy_receipt(
 }
 
 /**
+ * Print deploy's lines of the run's summary: each act the run carried out, counted
+ * — or, where preflight skipped every row the plan held, that nothing was deployed
+ *
+ * A line per category of the receipt (apply_print_deploy_receipt) that holds
+ * any, in the order its sections print, each an act the run did, in the summary's
+ * one block whichever prints first. At every level: the verbose sections, and
+ * the failures at every level, stand above it, so the run ends on its counts
+ * however much it listed. A run whose verdicts are none beside a skip is one
+ * whose every pending row was skipped (core/deploy.h deploy_preflight_t: the
+ * verdicts and the skips partition the plan's pending rows), decided off the
+ * verdicts, never off what printed; the skip block above it names each, and its
+ * remedy. A plan that held no row — a run of cleanup's alone — says nothing here.
+ *
+ * @param out Output context (must not be NULL)
+ * @param verdicts Preflight's decisions (must not be NULL)
+ * @param receipt What the run carried out: the empty one where it carried out
+ *                nothing (must not be NULL)
+ */
+static void apply_print_deploy_summary(
+    output_t *out,
+    const deploy_preflight_t *verdicts,
+    const deploy_receipt_t *receipt
+) {
+    if (verdicts->files.count + verdicts->directories.count == 0 &&
+        verdicts->skipped.count > 0) {
+        output_summary(out, OUTPUT_NORMAL, "Nothing was deployed");
+        return;
+    }
+
+    /* The verbs, folded off the carried-out fates as the receipt folds them */
+    size_t created = 0; size_t fixed = 0; size_t replaced = 0;
+
+    for (size_t i = 0; i < receipt->converged.count; i++) {
+        switch (deploy_convergence(receipt->converged.entries[i].verdict->occupant)) {
+            case DEPLOY_CONVERGE_CREATE:  created++; break;
+            case DEPLOY_CONVERGE_FIX:     fixed++; break;
+            case DEPLOY_CONVERGE_REPLACE: replaced++; break;
+        }
+    }
+
+    if (receipt->deployed.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s",
+            receipt->deployed.count, receipt->deployed.count == 1 ? "" : "s"
+        );
+    }
+
+    if (created > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Created {green}%zu{reset} tracked director%s",
+            created, created == 1 ? "y" : "ies"
+        );
+    }
+
+    if (fixed > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Fixed {green}%zu{reset} tracked director%s",
+            fixed, fixed == 1 ? "y" : "ies"
+        );
+    }
+
+    if (replaced > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} director%s",
+            replaced, replaced == 1 ? "y" : "ies"
+        );
+    }
+
+    if (receipt->replaced.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} obstructing file%s with %s",
+            receipt->replaced.count, receipt->replaced.count == 1 ? "" : "s",
+            receipt->replaced.count == 1 ? "a directory" : "directories"
+        );
+    }
+
+    if (receipt->cleared.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Cleared {yellow}%zu{reset} overridden cop%s",
+            receipt->cleared.count, receipt->cleared.count == 1 ? "y" : "ies"
+        );
+    }
+}
+
+/**
  * Print cleanup's receipt
  *
- * The run's receipt: per-item sections at verbose, summary counts at normal,
- * the failures at both. Every number is a bucket size, read off two objects because
- * the run's story is held by two: the verdicts hold what cleanup decided and
- * never acted on — released, skipped or refused at preflight, gone at load —
- * and the receipt what execute found and did — pruned, gone by the time it looked,
- * refused, failed (cleanup_receipt_t). Each read names its source; this adds
- * nothing of its own.
+ * The run's receipt: per-item sections at verbose and the failures at every level,
+ * its counts the summary's (apply_print_cleanup_summary). Every number is a bucket
+ * size, read off two objects because the run's story is held by two: the verdicts
+ * hold what cleanup decided and never acted on — released, skipped or refused
+ * at preflight, gone at load — and the receipt what execute found and did — pruned,
+ * gone by the time it looked, refused, failed (cleanup_receipt_t). Each read
+ * names its source; this adds nothing of its own.
  *
  * A receipt reports effects. That is why this one re-tells a fate deploy's does
  * not: a deploy skip has no effect at all — nothing written, no record moved —
  * and the preview is its one home, where a cleanup release is an effect (the
  * record retires) and belongs here too. A second telling says the same thing in
- * the same order as the first, so the sections (kind-major) and the summary
- * (fate-major) both take the preview's order — pruned, released, skipped, then
- * what was already gone — and close on the failures: one section at every
- * verbosity, both kinds in act order, each row with its cause, the shape of
- * deploy's "Failed deployments". Where a section has more than one source — the
- * skipped files and directories (skipped for a reason or refused at preflight,
+ * the same order as the first, so the sections (kind-major) and the summary's
+ * counts (fate-major) both take the preview's order — pruned, released, skipped,
+ * then what was already gone — and the sections close on the failures: one section
+ * at every verbosity, both kinds in act order, each row with its cause, the shape
+ * of deploy's "Failed deployments". Where a section has more than one source —
+ * the skipped files and directories (skipped for a reason or refused at preflight,
  * and a directory refused at removal), the reclaimed paths (gone at load, gone
  * by the time the run looked) — the verdicts' rows print first, so a run that
  * had both names each once.
@@ -1500,87 +1538,6 @@ static void apply_print_cleanup_receipt(
         }
     }
 
-    /* Non-verbose: summary counts only, in the summary's one block — deploy's
-     * counts above it, where it has any, among its lines: the acts the run did,
-     * and what it did not do said plainly */
-    if (!output_is_verbose(out)) {
-        if (receipt->pruned_files.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s",
-                receipt->pruned_files.count,
-                receipt->pruned_files.count == 1 ? "" : "s"
-            );
-        }
-
-        if (receipt->pruned_dirs.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s",
-                receipt->pruned_dirs.count,
-                receipt->pruned_dirs.count == 1 ? "y" : "ies"
-            );
-        }
-
-        if (verdicts->released_files.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management",
-                verdicts->released_files.count,
-                verdicts->released_files.count == 1 ? "" : "s"
-            );
-        }
-
-        if (verdicts->released_dirs.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} director%s from management",
-                verdicts->released_dirs.count,
-                verdicts->released_dirs.count == 1 ? "y" : "ies"
-            );
-        }
-
-        /* No reason here: the preview's skipped-files block named these files,
-         * their reasons and the --force override, its refused-prunes block the
-         * ones the parent refuses and the sudo line, and both always print —
-         * including on the run that reports this line. */
-        size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
-
-        if (skipped_files > 0) {
-            output_summary(
-                out, OUTPUT_NORMAL, "Skipped {yellow}%zu{reset} orphaned file%s",
-                skipped_files, skipped_files == 1 ? "" : "s"
-            );
-        }
-
-        /* Nor here: a directory is skipped because something the run skips is
-         * still in it, because the workspace could not verify it, because its
-         * home moved, because its parent refuses the run, or because its turn
-         * found it retyped, unreachable or not empty. Nor a pointer at --verbose,
-         * which names them as it names every count's paths. */
-        size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
-            receipt->skipped_dirs.count;
-
-        if (skipped_dirs > 0) {
-            output_summary(
-                out, OUTPUT_NORMAL, "Skipped {yellow}%zu{reset} orphaned director%s",
-                skipped_dirs, skipped_dirs == 1 ? "y" : "ies"
-            );
-        }
-
-        /* Orphans already gone from the filesystem when the run loaded, and the
-         * ones gone by the time the run looked. Reported separately from "Pruned"
-         * — no removal happened or was needed — and named for the paths, not
-         * for the record rows that retire behind them: what the user has here
-         * is a path that is already gone. */
-        size_t reclaimed = verdicts->absent_files.count + verdicts->absent_dirs.count +
-            receipt->reclaimed_files.count + receipt->reclaimed_dirs.count;
-
-        if (reclaimed > 0) {
-            output_success(
-                out, OUTPUT_NORMAL,
-                "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)",
-                reclaimed, reclaimed == 1 ? "" : "s"
-            );
-        }
-    }
-
     /* The items the run could not remove — both kinds, act order, a directory
      * by its slash, each with its cause. At every verbosity, and after what went
      * (the header carries the rationale); capped the way deploy's failed section
@@ -1603,6 +1560,104 @@ static void apply_print_cleanup_receipt(
                 out, OUTPUT_QUIET, "  ... and %zu more\n", receipt->failed.count - LIST_LIMIT
             );
         }
+    }
+}
+
+/**
+ * Print cleanup's lines of the run's summary: what it did, and what it did not
+ * do, counted
+ *
+ * The receipt's fates (apply_print_cleanup_receipt), a line each that holds any,
+ * in the preview's order — pruned, released, skipped, then what was already gone
+ * — each read off the object that holds it, in the summary's one block: deploy's
+ * lines above it, where it has any. The acts the run did carry their mark, and
+ * what it did not do is said plainly. At every level: the verbose sections, and
+ * the failures at every level, stand above it.
+ *
+ * @param out Output context (must not be NULL)
+ * @param verdicts Preflight's decisions (must not be NULL)
+ * @param receipt What execute found and did: the empty one where nothing ran
+ *                (must not be NULL)
+ */
+static void apply_print_cleanup_summary(
+    output_t *out,
+    const cleanup_preflight_t *verdicts,
+    const cleanup_receipt_t *receipt
+) {
+    if (receipt->pruned_files.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s",
+            receipt->pruned_files.count,
+            receipt->pruned_files.count == 1 ? "" : "s"
+        );
+    }
+
+    if (receipt->pruned_dirs.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s",
+            receipt->pruned_dirs.count,
+            receipt->pruned_dirs.count == 1 ? "y" : "ies"
+        );
+    }
+
+    if (verdicts->released_files.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management",
+            verdicts->released_files.count,
+            verdicts->released_files.count == 1 ? "" : "s"
+        );
+    }
+
+    if (verdicts->released_dirs.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} director%s from management",
+            verdicts->released_dirs.count,
+            verdicts->released_dirs.count == 1 ? "y" : "ies"
+        );
+    }
+
+    /* No reason here: the preview's skipped-files block named these files, their
+     * reasons and the --force override, its refused-prunes block the ones the
+     * parent refuses and the sudo line, and both always print — including on
+     * the run that reports this line. */
+    size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
+
+    if (skipped_files > 0) {
+        output_summary(
+            out, OUTPUT_NORMAL, "Skipped {yellow}%zu{reset} orphaned file%s",
+            skipped_files, skipped_files == 1 ? "" : "s"
+        );
+    }
+
+    /* Nor here: a directory is skipped because something the run skips is still
+     * in it, because the workspace could not verify it, because its home moved,
+     * because its parent refuses the run, or because its turn found it retyped,
+     * unreachable or not empty. Nor a pointer at --verbose, which names them as
+     * it names every count's paths. */
+    size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
+        receipt->skipped_dirs.count;
+
+    if (skipped_dirs > 0) {
+        output_summary(
+            out, OUTPUT_NORMAL, "Skipped {yellow}%zu{reset} orphaned director%s",
+            skipped_dirs, skipped_dirs == 1 ? "y" : "ies"
+        );
+    }
+
+    /* Orphans already gone from the filesystem when the run loaded, and the ones
+     * gone by the time the run looked. Reported separately from "Pruned" — no
+     * removal happened or was needed — and named for the paths, not for the record
+     * rows that retire behind them: what the user has here is a path that is
+     * already gone. */
+    size_t reclaimed = verdicts->absent_files.count + verdicts->absent_dirs.count +
+        receipt->reclaimed_files.count + receipt->reclaimed_dirs.count;
+
+    if (reclaimed > 0) {
+        output_success(
+            out, OUTPUT_NORMAL,
+            "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)",
+            reclaimed, reclaimed == 1 ? "" : "s"
+        );
     }
 }
 
@@ -3421,9 +3476,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         /* Carry the verdicts out (files-only, directories-only, or mixed — one
          * call). Reporting reads the result: outcomes, never plan counts. The
          * gate is verdict truth, not plan truth — a plan whose every row was
-         * skipped carries no work — and a run with none says nothing of it here:
-         * the preview already did, by the Deployment block it never printed and
-         * the skip block that emptied it. */
+         * skipped carries no work — and a run with none acts on nothing here:
+         * the preview named each skip by the block that emptied it, and the summary
+         * says nothing was deployed (apply_print_deploy_summary). */
         if (deploy_verdicts->files.count + deploy_verdicts->directories.count > 0) {
             output_gap(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Executing deployment plan...\n");
@@ -3449,9 +3504,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         deploy_release(ctx->arena, deploy_receipt);
 
         /* The receipts, once every act is done, in the order the previews printed
-         * them, their counts one summary: the empty one says nothing */
+         * them, and beneath them all the run's summary, their counts one block
+         * at every level: the empty receipt says nothing */
         apply_print_deploy_receipt(out, deploy_receipt);
         apply_print_cleanup_receipt(out, cleanup_verdicts, cleanup_receipt);
+        apply_print_deploy_summary(out, deploy_verdicts, deploy_receipt);
+        apply_print_cleanup_summary(out, cleanup_verdicts, cleanup_receipt);
 
         /* The record of what the run did — the orphans it settled, the paths it
          * wrote — whole or not at all (apply_write_record). A record the store

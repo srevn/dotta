@@ -2019,22 +2019,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     sync_print_summary(out, remote_name, &rows);
     sync_print_remedies(out, ctx->arena, &rows);
 
-    /* The hint states a fact about the record, not about this sync: the record
-     * owes apply work against the view the Git phase produced (core/workspace.h
-     * workspace_pending), whatever began it — this pull, an earlier one reviewed
-     * with status instead of apply, a scope change, a revert — and whatever the
-     * work is, so its words name apply's aim and no outcome. The block is a delta
-     * and prints once; the hint prints for as long as the work stands, and a
-     * pull that moved only the way to a claim — a derived directory's mode —
-     * moves neither. None where no view after was built to ask. */
-    if (after && workspace_pending(after, records, record_count)) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
-        );
-    }
-
     /* Post-sync fires once the report is done — the receipt, the manifest block,
      * the summary and its hints; a failed build was warned above and is not a
      * reason to skip it. Nor is a profile that failed: the pushes and pulls that

@@ -183,7 +183,8 @@ cleanup:
 /**
  * Show bootstrap script content.
  *
- * Reads the script from Git and writes its bytes to `out`.
+ * Reads the script from Git and writes its bytes to `out`, its last line ended
+ * where the script left it open.
  */
 static error_t bootstrap_show(
     git_repository *repo, const char *profile, output_t *out
@@ -203,12 +204,12 @@ static error_t bootstrap_show(
     git_tree_free(tree);
     if (err) return err;
 
-    /* Display content: a payload, the script's bytes as they are */
+    /* A payload, the script's bytes as they are, its last line ended only where
+     * the script left it open, as a hook's output is (utils/hooks.c
+     * hook_print_output): an empty script writes nothing, not a lone newline */
     if (content.size > 0) {
-        output_write(
-            out, OUTPUT_NORMAL, OUTPUT_COLOR_RESET,
-            (const char *) content.data, content.size
-        );
+        output_write(out, OUTPUT_NORMAL, OUTPUT_COLOR_RESET, content.data, content.size);
+        if (content.data[content.size - 1] != '\n') output_endline(out, OUTPUT_NORMAL);
     }
 
     buffer_deinit(&content);

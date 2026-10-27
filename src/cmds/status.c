@@ -28,11 +28,13 @@
 #include "sys/upstream.h"
 
 /**
- * Print the enabled profiles and the last deployment of each
+ * Print the enabled profiles and the last deployment of each — or, where no profile
+ * is enabled, the sentence that says so in the section's place
  *
  * @param out Output context (must not be NULL)
- * @param state The enabled rows: the binding printed beside a bound profile's
- *              name, the thing never printed without the where
+ * @param state The enabled rows: whether the section stands, and the binding
+ *              printed beside a bound profile's name, the thing never printed
+ *              without the where
  * @param scope The profiles the block lists — the filter's under -p, else the
  *              enabled set's (must not be NULL)
  * @param ws Workspace the record comes from: the per-profile last-deployed
@@ -49,6 +51,16 @@ static void status_print_profiles(
     const workspace_t *ws,
     const manifest_t *view
 ) {
+    /* No profile enabled: the sentence profile list says over the same rows, in
+     * the section's place (cmds/profile.c profile_list). Asked of the state's
+     * rows, never the scope's: the scope holds the enabled profiles whose branch
+     * is here (core/scope.h scope_enabled), and one whose branch is gone is a
+     * row of the section all the same, "(no branch)" */
+    if (state_profiles(state).count == 0) {
+        output_info(out, OUTPUT_NORMAL, "No enabled profiles");
+        return;
+    }
+
     const string_array_t *profiles = scope_profiles(scope);
 
     /* The view's health, annotated onto the block. The claims the build could

@@ -181,7 +181,7 @@ remove's report is printed — a deletion's push to its remote among it
 ### `pre-update`
 
 **When:** Before committing filesystem changes back to profiles: after update's
-preview and its new-files question, before `-i`'s question
+preview and its new-files question
 **Use For:** Validating changes, checking for conflicts, creating checkpoints
 
 **Example Use Cases:**

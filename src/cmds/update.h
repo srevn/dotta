@@ -31,7 +31,6 @@ typedef struct {
     char **exclude_patterns;        /* Exclude patterns (glob) - read-only */
     size_t exclude_count;           /* Number of exclude patterns */
     bool dry_run;                   /* Don't commit, just show changes */
-    bool interactive;               /* Prompt for confirmation */
     int verbosity;                  /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool include_new;               /* Include new files from tracked directories */
     bool only_new;                  /* Only process new files (ignore modified) */

@@ -443,12 +443,13 @@ static error_t update_profile(
          * (update_capture). So the walk looks again at those two and edits only
          * where it finds what the load found: anything else — a node standing
          * again, a directory gone or of another kind, a look that now fails —
-         * is a change since the preview (a hook, -i's question, an editor racing
-         * the run), skipped and said, and the next load reads what stands there.
-         * An lstat, never a stat: a link in a directory's place is another kind,
-         * so no target's attributes reach the claim, which is captured off this
-         * look. What changes after it, the commit cannot see (stated): one edit's
-         * window, where the load's look alone would leave the run's. */
+         * is a change since the preview (a hook, the new files' question, an
+         * editor racing the run), skipped and said, and the next load reads what
+         * stands there. An lstat, never a stat: a link in a directory's place
+         * is another kind, so no target's attributes reach the claim, which is
+         * captured off this look. What changes after it, the commit cannot see
+         * (stated): one edit's window, where the load's look alone would leave
+         * the run's. */
         struct stat st;
         if ((item->state == WORKSPACE_STATE_DELETED || item->item_kind == PATH_KIND_DIRECTORY) &&
             fs_lstat_occupant(item->filesystem_path, &st) != item->occupant) {
@@ -1646,11 +1647,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* The pre-update hook, over the decided run — the nothing-exit and the
-     * narrowing above it, a run left with nothing to do firing none — and before
-     * -i's consent; a dry run's too, told so (DOTTA_DRY_RUN=1). The preview's
-     * verdicts predate it, but the drafts open after it (update_execute) and
-     * the capture stores execute-time bytes: a commit it makes to a profile is
-     * the update's parent, and a candidate it edits is committed as it wrote it. */
+     * narrowing above it, a run left with nothing to do firing none; a dry run's
+     * too, told so (DOTTA_DRY_RUN=1). The preview's verdicts predate it, but
+     * the drafts open after it (update_execute) and the capture stores execute-time
+     * bytes: a commit it makes to a profile is the update's parent, and a candidate
+     * it edits is committed as it wrote it. */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_UPDATE,
         .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
@@ -1668,24 +1669,6 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         output_gap(out, OUTPUT_NORMAL);
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         return NULL;
-    }
-
-    /* -i asked to be asked: the consent, after the hook. Declined is the user's
-     * word, and no answer refuses the run, since nobody declined — naming no
-     * way on, since the asking is the flag the user typed */
-    if (opts->interactive) {
-        switch (output_ask(out, false, "Update these items?")) {
-            case OUTPUT_ANSWER_YES:
-                break;
-            case OUTPUT_ANSWER_NO:
-                output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Cancelled");
-                return NULL;
-            case OUTPUT_ANSWER_NONE:
-                return error_create(
-                    ERR_VALIDATION, "Cannot update without a confirmation, and none was read"
-                );
-        }
     }
 
     /* Execute profile updates, in enabled-set order. Filtered to operation scope.
@@ -1892,11 +1875,6 @@ static const args_opt_t update_opts[] = {
         "n dry-run",
         cmd_update_options_t,dry_run,
         "Preview without committing"
-    ),
-    ARGS_FLAG(
-        "i interactive",
-        cmd_update_options_t,interactive,
-        "Prompt for confirmation before committing"
     ),
     ARGS_FLAG_SET(
         "v verbose",

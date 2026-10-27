@@ -119,7 +119,9 @@ static error_t list_size_claim(const profile_claim_t *claim, void *payload) {
  * Default: the names, the enabled ones starred. Verbose: what each holds, what
  * that weighs, and its last commit. Remote: each one's remote sync status, in
  * the row and under the title status's remote section prints (cmds/status.c
- * status_print_remote) — the glyph beside its phrase, so no legend keys it.
+ * status_print_remote) — the glyph beside its phrase, so no legend keys it. Every
+ * mode closes on the total: the profiles, the enabled among them, and at verbose
+ * what they weigh.
  */
 static error_t list_profiles(
     const dotta_ctx_t *ctx,
@@ -185,10 +187,13 @@ static error_t list_profiles(
      * than again at render time; a profile that cannot be read is warned about
      * and left with empty phrases, in the words the other screen of this file
      * uses for the count's refusal: what failed is the line's account of what
-     * the profile holds, however far down the read it failed. */
+     * the profile holds, however far down the read it failed. The sizes that
+     * read are summed for the total, short by a profile that did not, as the
+     * file listing's total is short by a row it could not size (list_files). */
     list_line_t *lines = NULL;
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
+    size_t total_size = 0;
     if (verbose) {
         lines = arena_calloc(ctx->arena, profiles.count, sizeof(*lines));
 
@@ -248,6 +253,7 @@ static error_t list_profiles(
                 lines[i].counts, sizeof(lines[i].counts)
             );
             output_format_size(size.total, lines[i].size, sizeof(lines[i].size));
+            total_size += size.total;
 
             size_t len = strlen(lines[i].counts);
             if (len > max_counts_len) {
@@ -270,12 +276,14 @@ static error_t list_profiles(
         output_section(out, OUTPUT_NORMAL, "Profiles");
     }
 
-    /* List profiles */
+    /* List profiles, counting the enabled ones for the total */
+    size_t enabled = 0;
     for (size_t i = 0; i < profiles.count; i++) {
         const char *profile = profiles.entries[i];
 
         bool is_enabled = state_enabled(state, profile);
         const char *indicator = is_enabled ? "* " : "  ";
+        if (is_enabled) enabled++;
 
         /* Simple mode: Just name with enabled indicator */
         if (!verbose && !show_remote) {
@@ -341,6 +349,22 @@ static error_t list_profiles(
         }
 
         output_endline(out, OUTPUT_NORMAL);
+    }
+
+    /* Print summary: the file listing's shape (list_files), the profiles counted
+     * and the enabled among them, and at verbose what they weigh */
+    if (verbose) {
+        char size_str[32];
+        output_format_size(total_size, size_str, sizeof(size_str));
+        output_summary(
+            out, OUTPUT_VERBOSE, "Total: %zu profile%s, %zu enabled, %s",
+            profiles.count, profiles.count == 1 ? "" : "s", enabled, size_str
+        );
+    } else {
+        output_summary(
+            out, OUTPUT_NORMAL, "Total: %zu profile%s, %zu enabled",
+            profiles.count, profiles.count == 1 ? "" : "s", enabled
+        );
     }
 
     return NULL;
@@ -693,7 +717,8 @@ cleanup:
 /**
  * List file history - Level 3
  *
- * Default: Oneline format (hash, summary, time) Verbose: Full commit format
+ * Default: Oneline format (hash, summary, time) Verbose: Full commit format.
+ * Both close on the total: the commits listed.
  */
 static error_t list_file_history(
     const dotta_ctx_t *ctx,
@@ -915,6 +940,13 @@ static error_t list_file_history(
             );
         }
     }
+
+    /* Print summary: the commits listed, at every level, as the file listing
+     * counts its rows (list_files) */
+    output_summary(
+        out, OUTPUT_NORMAL, "Total: %zu commit%s",
+        history.count, history.count == 1 ? "" : "s"
+    );
 
     return NULL;
 }

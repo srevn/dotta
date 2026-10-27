@@ -1329,6 +1329,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         print_dry_run(
             out, &list, counts, dest_display, opts->profile, commit_suffix
         );
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was exported");
         goto cleanup;
     }
 

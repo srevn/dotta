@@ -353,7 +353,9 @@ static error_t bootstrap_run(
         );
     }
 
-    if (!opts->dry_run) {
+    if (opts->dry_run) {
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was run");
+    } else {
         output_success(out, OUTPUT_NORMAL, "Bootstrap complete");
     }
 

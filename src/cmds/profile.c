@@ -694,9 +694,9 @@ static error_t profile_enable(
         return error_create(ERR_INVALID_ARG, "No profiles were enabled");
     }
 
-    /* Dry-run: preview what a live run would do, skip every state mutation. It
-     * changes the enabled set nowhere, so it leaves apply nothing to do, and
-     * names no next step. */
+    /* Dry-run: preview what a live run would do, skip every state mutation, and
+     * end on the act it did not do. It changes the enabled set nowhere, so it
+     * leaves apply nothing to do, and names no next step. */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
@@ -718,6 +718,7 @@ static error_t profile_enable(
                 retarget
             );
         }
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was enabled");
         return NULL;
     }
 
@@ -894,9 +895,9 @@ static error_t profile_disable(
      * back at state_free */
     if (to_disable_validated.count == 0) return NULL;
 
-    /* Dry-run: preview what a live run would do, skip every state mutation. It
-     * changes the enabled set nowhere, so it leaves apply nothing to do, and
-     * names no next step. */
+    /* Dry-run: preview what a live run would do, skip every state mutation, and
+     * end on the act it did not do. It changes the enabled set nowhere, so it
+     * leaves apply nothing to do, and names no next step. */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
         output_info(
@@ -910,6 +911,7 @@ static error_t profile_disable(
             }
             output_endline(out, OUTPUT_NORMAL);
         }
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was disabled");
         return NULL;
     }
 

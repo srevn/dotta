@@ -903,38 +903,43 @@ static void sync_print_withheld(output_t *out, const sync_row_t *row) {
 }
 
 /**
- * Print the remedies the rows call for, closing the table: one line a family,
- * said once however many rows call for it
+ * Print the remedies the rows call for, beneath the run's summary in both tenses:
+ * one hint a family, said once however many rows call for it
  *
  * One family: a divergence warn leaves — no failure, no act, and no word of the
  * user's that withheld one; under any other strategy a divergence has its act,
- * or its row says the word that kept it. The line names the flag and the key,
+ * or its row says the word that kept it. The hint names the flag and the key,
  * and the strategies that resolve by their words (utils/config.h
- * config_strategies), warn left out; what each does is --help's and completion's.
+ * config_strategies), warn left out, joined in `arena`; what each does is --help's
+ * and completion's.
  */
-static void sync_print_remedies(output_t *out, const sync_rows_t *rows) {
+static void sync_print_remedies(output_t *out, arena_t *arena, const sync_rows_t *rows) {
     for (size_t i = 0; i < rows->count; i++) {
         const sync_row_t *row = &rows->entries[i];
 
         if (!row->error && row->upstream.state == UPSTREAM_DIVERGED &&
             row->verdict == SYNC_VERDICT_NONE && row->withheld == SYNC_VERDICT_NONE) {
-            output_print(
-                out, OUTPUT_NORMAL,
-                "  Use --diverged=<strategy> or set diverged_strategy in config: "
-            );
-
             /* Every strategy but warn's, in the vocabulary's order: ", " between
              * two, " or " before the last */
             size_t left = CONFIG_STRATEGY_COUNT - 1;
+            const char *strategies = "";
             const char *sep = "";
             for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
                 if (s == SYNC_STRATEGY_WARN) continue;
 
-                output_print(out, OUTPUT_NORMAL, "%s%s", sep, config_strategies[s].name);
+                strategies = arena_str_format(
+                    arena, "%s%s%s", strategies, sep, config_strategies[s].name
+                );
                 left--;
                 sep = left == 1 ? " or " : ", ";
             }
-            output_endline(out, OUTPUT_NORMAL);
+
+            output_gap(out, OUTPUT_NORMAL);
+            output_hint(
+                out, OUTPUT_NORMAL, "Run 'dotta sync --diverged=<strategy>', or set "
+                "diverged_strategy in the config file, to resolve a divergence: %s",
+                strategies
+            );
             return;
         }
     }
@@ -948,8 +953,7 @@ static void sync_print_remedies(output_t *out, const sync_rows_t *rows) {
  * The receipt's sibling (sync_print_receipt), in the future tense, each row in
  * the line both print: its lead, its clause, what the user's word withheld. A
  * row the run does not act on says where it stands, as the receipt says it
- * (sync_print_state); one it acts on, the act and what it discards. The remedies
- * its rows call for close it (sync_print_remedies).
+ * (sync_print_state); one it acts on, the act and what it discards.
  */
 static void sync_print_preview(
     output_t *out,
@@ -1019,8 +1023,6 @@ static void sync_print_preview(
         sync_print_withheld(out, row);
         output_endline(out, OUTPUT_NORMAL);
     }
-
-    sync_print_remedies(out, rows);
 }
 
 /**
@@ -1127,8 +1129,7 @@ static void sync_print_disagreements(output_t *out, const sync_row_t *row) {
  * it (sync_print_state) — a row the run stopped before among them, the run's
  * error beneath saying why; and a failure by its cause, beside where it left
  * the branch. Beneath a resolution that landed, the names its two sides took
- * one deleting and one removing (sync_print_disagreements). The remedies its
- * rows call for close it (sync_print_remedies).
+ * one deleting and one removing (sync_print_disagreements).
  */
 static void sync_print_receipt(
     output_t *out,
@@ -1185,8 +1186,45 @@ static void sync_print_receipt(
         output_endline(out, OUTPUT_NORMAL);
         sync_print_disagreements(out, row);
     }
+}
 
-    sync_print_remedies(out, rows);
+/**
+ * Print the run's summary: how many profiles an act carried out whole, or where
+ * none did, whether there was anything to sync
+ *
+ * Read off the rows the receipt printed, beneath it and what it did to the view.
+ * A row is up to date where its lead says so (sync_print_lead): the analysis
+ * read it so, or its act found its work done. Nothing to sync is said only where
+ * every row is, so the line never claims there was no work where a word of the
+ * user's withheld it, warn left it, or a failure kept it: there, nothing was
+ * synced.
+ */
+static void sync_print_summary(
+    output_t *out, const char *remote_name, const sync_rows_t *rows
+) {
+    size_t synced = 0;
+    size_t up_to_date = 0;
+    for (size_t i = 0; i < rows->count; i++) {
+        const sync_row_t *row = &rows->entries[i];
+
+        if (row->outcome == SYNC_OUTCOME_DONE) {
+            synced++;
+        } else if (!row->error && (row->outcome == SYNC_OUTCOME_UP_TO_DATE ||
+            row->upstream.state == UPSTREAM_UP_TO_DATE)) {
+            up_to_date++;
+        }
+    }
+
+    if (synced > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Synced %zu profile%s with '{cyan}%s{reset}'",
+            synced, synced == 1 ? "" : "s", remote_name
+        );
+    } else if (up_to_date == rows->count) {
+        output_summary(out, OUTPUT_NORMAL, "Nothing to sync");
+    } else {
+        output_summary(out, OUTPUT_NORMAL, "Nothing was synced");
+    }
 }
 
 /**
@@ -1730,6 +1768,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * answer, not a profile it found no work for. */
     if (opts->dry_run) {
         output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was pulled or pushed");
+        sync_print_remedies(out, ctx->arena, &rows);
         err = sync_failure(ctx->arena, &rows);
         goto cleanup;
     }
@@ -1794,13 +1833,14 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * claim the profile's own tree contradicts; the health notices after the
      * block are their signal. */
     const string_array_t *enabled = scope_enabled(scope);
+    state_record_t *records = NULL;
+    size_t record_count = 0;
 
     err = manifest_build(repo, state, ctx->arena, &after);
     if (err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
     } else {
-        state_record_t *records = NULL;
-        size_t record_count = 0;
         err = state_records(state, ctx->arena, &records, &record_count);
         if (err) goto cleanup;
 
@@ -1972,28 +2012,34 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             );
         }
 
-        /* The hint states a fact about the record, not about this sync: the record
-         * owes apply work against the view the Git phase produced (core/workspace.h
-         * workspace_pending), whatever began it — this pull, an earlier one
-         * reviewed with status instead of apply, a scope change, a revert — and
-         * whatever the work is, so its words name apply's aim and no outcome.
-         * The block is a delta and prints once; the hint prints for as long as
-         * the work stands, and a pull that moved only the way to a claim — a
-         * derived directory's mode — moves neither. */
-        if (workspace_pending(after, records, record_count)) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
-            );
-        }
     }
 
-    /* Post-sync fires once the report is done — the receipt, the manifest block
-     * and its hint; a failed build was warned above and is not a reason to skip
-     * it. Nor is a profile that failed: the pushes and pulls that did land are
-     * real, and the hook's subject is the world sync leaves behind, not what
-     * sync returns. */
+    /* The run's summary, beneath the receipt and what it did to the view, then
+     * the remedies its rows call for */
+    sync_print_summary(out, remote_name, &rows);
+    sync_print_remedies(out, ctx->arena, &rows);
+
+    /* The hint states a fact about the record, not about this sync: the record
+     * owes apply work against the view the Git phase produced (core/workspace.h
+     * workspace_pending), whatever began it — this pull, an earlier one reviewed
+     * with status instead of apply, a scope change, a revert — and whatever the
+     * work is, so its words name apply's aim and no outcome. The block is a delta
+     * and prints once; the hint prints for as long as the work stands, and a
+     * pull that moved only the way to a claim — a derived directory's mode —
+     * moves neither. None where no view after was built to ask. */
+    if (after && workspace_pending(after, records, record_count)) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
+        );
+    }
+
+    /* Post-sync fires once the report is done — the receipt, the manifest block,
+     * the summary and its hints; a failed build was warned above and is not a
+     * reason to skip it. Nor is a profile that failed: the pushes and pulls that
+     * did land are real, and the hook's subject is the world sync leaves behind,
+     * not what sync returns. */
     hook_fire_post(config, out, &hook_inv);
 
     /* The report is printed; the return value is what the caller reads. */

@@ -218,8 +218,9 @@ static error_t bootstrap_show(
 /**
  * List bootstrap scripts across profiles.
  *
- * For each profile: green ✓ with path if the script exists, red ✗ otherwise.
- * Closes with a hint about how to create one.
+ * For each profile of the selection, which is never empty (cmd_bootstrap): green
+ * ✓ with path if the script exists, red ✗ otherwise. Closes with a hint about
+ * how to create one, where a profile has none.
  */
 static void bootstrap_list(
     git_repository *repo, const string_array_t *profiles, output_t *out
@@ -229,6 +230,7 @@ static void bootstrap_list(
 
     output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
+    size_t missing = 0;
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
         if (bootstrap_exists(repo, profile)) {
@@ -241,12 +243,16 @@ static void bootstrap_list(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %-15s (no bootstrap script)\n",
                 profile
             );
+            missing++;
         }
     }
 
-    output_gap(out, OUTPUT_NORMAL);
-    output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
-    output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
+    /* How to create one, where a profile has none */
+    if (missing > 0) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
+        output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
+    }
 }
 
 /**
@@ -372,7 +378,9 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
 
     /* The selection, its shape settled by the line (bootstrap_post_parse) and
      * read by name alone — a script is asked of a profile's name, never of its
-     * tree. */
+     * tree. Each arm holds a profile or ends the run saying why, so every mode
+     * reads one at least: a listing's title stands over a row, and a run's hint
+     * names an --edit a profile here takes (bootstrap_list, bootstrap_run). */
     string_array_t profiles;
     if (opts->profile_count > 0) {
         /* Explicit profiles: each must be here — a script asked for by a name
@@ -391,6 +399,16 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
         err = gitops_list_branches(repo, ctx->arena, &profiles);
         if (err) return err;
         profile_order(&profiles);
+
+        /* None here: no script to list or run, said as the enabled set's absence
+         * is below — a failure the run goes past, exit 0 — in the words list
+         * says of a store that holds no profile (cmds/list.c list_profiles),
+         * never under a title over no row, or beside a hint naming an --edit no
+         * profile takes */
+        if (profiles.count == 0) {
+            output_warning(out, OUTPUT_NORMAL, "No profiles found");
+            return NULL;
+        }
     } else {
         /* Use enabled profiles from state */
         err = scope_resolve_enabled(repo, state, ctx->arena, &profiles);

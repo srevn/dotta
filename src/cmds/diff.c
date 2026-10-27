@@ -471,7 +471,7 @@ static void diff_print_direction(
     }
 
     if (listed == 0 && !opts->name_only) {
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL,
             scope_filters_profiles(scope) || scope_filters_paths(scope)
                 ? "No differences in scope"
@@ -793,7 +793,7 @@ static error_t diff_print_view(
     }
 
     if (listed == 0 && !opts->name_only) {
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL,
             path_filter
                 ? "No differences in scope"

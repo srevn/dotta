@@ -147,9 +147,9 @@ static error_t initialize_state(
 
     /* The names enabled, when there are any: a run that enabled nothing said
      * why per profile above, and has no list to print. The state is a phase of
-     * its own, its receipt a block apart from the fetch's. */
+     * its own, its line the fetch's summary's next where nothing stands between
+     * them. */
     if (profiles->count > 0) {
-        output_gap(out, OUTPUT_NORMAL);
         output_success(
             out, OUTPUT_NORMAL, "Initialized enabled profiles: %s",
             string_array_join(arena, profiles, ", ")
@@ -352,7 +352,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 opts->profile_count == 1 ? "" : "s"
             );
         } else {
-            output_info(out, OUTPUT_NORMAL, "No profiles were fetched");
+            output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
         }
 
     } else if (opts->all_profiles) {
@@ -381,7 +381,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 fetched_profiles.count, fetched_profiles.count == 1 ? "" : "s"
             );
         } else {
-            output_info(out, OUTPUT_NORMAL, "No profiles were fetched");
+            output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
         }
 
     } else {
@@ -417,7 +417,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     fetched_profiles.count, fetched_profiles.count == 1 ? "" : "s"
                 );
             } else {
-                output_info(out, OUTPUT_NORMAL, "No profiles were fetched");
+                output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
             }
 
         } else {
@@ -542,8 +542,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     case OUTPUT_ANSWER_NO:
                         break;
                     case OUTPUT_ANSWER_NONE:
-                        output_gap(out, OUTPUT_NORMAL);
-                        output_info(
+                        output_summary(
                             out, OUTPUT_NORMAL, "Bootstrap scripts not run: no answer was read"
                         );
                         break;
@@ -568,7 +567,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
 
     /* Success - print messages before cleanup */
-    output_gap(out, OUTPUT_NORMAL);
     output_success(out, OUTPUT_NORMAL, "Dotta repository cloned successfully");
 
     /* Non-fatal — the clone itself succeeded, and the exit code is the clone's.

@@ -2301,8 +2301,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * one takes nothing; the dispatcher's rollback ends a transaction nothing
      * wrote in. */
     if (walk.files.count == 0 && walk.directories.count == 0) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Nothing new to add to profile '%s'", opts->profile);
+        output_summary(out, OUTPUT_NORMAL, "Nothing new to add to profile '%s'", opts->profile);
         goto cleanup;                                    /* err is NULL */
     }
 
@@ -2394,8 +2393,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     if (opts->dry_run) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;                                    /* err is NULL */
     }
 
@@ -2608,15 +2606,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * standing, both kinds in one phrase: the directories were captured as surely
      * as the files were. One that landed names its files on the ✓ line and its
      * directories beneath them, or on a ✓ line of their own when they are all
-     * it took. Whichever arm, the receipt is a block of its own, beneath the
-     * trace. */
-    output_gap(out, OUTPUT_NORMAL);
+     * it took. Whichever arm, the receipt is the run's summary, a block of its
+     * own beneath the trace. */
     if (!committed) {
         char counts[64];
         output_format_counts(
             walk.files.count, walk.directories.count, counts, sizeof(counts)
         );
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL,
             "Nothing changed in profile '%s' (%s already as captured)",
             opts->profile, counts

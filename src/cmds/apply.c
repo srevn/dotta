@@ -1095,10 +1095,6 @@ static void apply_print_deploy_receipt(
         }
     }
 
-    /* The receipt is a block: the previews above it close with nothing, and at
-     * NORMAL the summary below is the first line it has. */
-    output_gap(out, OUTPUT_NORMAL);
-
     /* Verbose mode: show individual items per outcome */
     if (receipt->deployed.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Deployed files");
@@ -1262,47 +1258,48 @@ static void apply_print_deploy_receipt(
         }
     }
 
-    /* Non-verbose: summary counts only. */
+    /* Non-verbose: summary counts only, each an act the run did, in the summary's
+     * one block whichever prints first */
     if (!output_is_verbose(out)) {
         if (receipt->deployed.count > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s",
                 receipt->deployed.count, receipt->deployed.count == 1 ? "" : "s"
             );
         }
 
         if (created > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Created {green}%zu{reset} tracked director%s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Created {green}%zu{reset} tracked director%s",
                 created, created == 1 ? "y" : "ies"
             );
         }
 
         if (fixed > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Fixed {green}%zu{reset} tracked director%s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Fixed {green}%zu{reset} tracked director%s",
                 fixed, fixed == 1 ? "y" : "ies"
             );
         }
 
         if (replaced > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} director%s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} director%s",
                 replaced, replaced == 1 ? "y" : "ies"
             );
         }
 
         if (receipt->replaced.count > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} obstructing file%s with %s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} obstructing file%s with %s",
                 receipt->replaced.count, receipt->replaced.count == 1 ? "" : "s",
                 receipt->replaced.count == 1 ? "a directory" : "directories"
             );
         }
 
         if (receipt->cleared.count > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Cleared {yellow}%zu{reset} overridden cop%s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Cleared {yellow}%zu{reset} overridden cop%s",
                 receipt->cleared.count, receipt->cleared.count == 1 ? "y" : "ies"
             );
         }
@@ -1388,9 +1385,6 @@ static void apply_print_cleanup_receipt(
     const cleanup_preflight_t *verdicts,
     const cleanup_receipt_t *receipt
 ) {
-    /* The receipt is a block, the same way deploy's is. */
-    output_gap(out, OUTPUT_NORMAL);
-
     /* Verbose mode: show individual items per outcome */
     if (receipt->pruned_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned files");
@@ -1506,35 +1500,37 @@ static void apply_print_cleanup_receipt(
         }
     }
 
-    /* Non-verbose: summary counts only. */
+    /* Non-verbose: summary counts only, in the summary's one block — deploy's
+     * counts above it, where it has any, among its lines: the acts the run did,
+     * and what it did not do said plainly */
     if (!output_is_verbose(out)) {
         if (receipt->pruned_files.count > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s",
                 receipt->pruned_files.count,
                 receipt->pruned_files.count == 1 ? "" : "s"
             );
         }
 
         if (receipt->pruned_dirs.count > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s",
                 receipt->pruned_dirs.count,
                 receipt->pruned_dirs.count == 1 ? "y" : "ies"
             );
         }
 
         if (verdicts->released_files.count > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management",
                 verdicts->released_files.count,
                 verdicts->released_files.count == 1 ? "" : "s"
             );
         }
 
         if (verdicts->released_dirs.count > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} director%s from management\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} director%s from management",
                 verdicts->released_dirs.count,
                 verdicts->released_dirs.count == 1 ? "y" : "ies"
             );
@@ -1547,8 +1543,8 @@ static void apply_print_cleanup_receipt(
         size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
 
         if (skipped_files > 0) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Skipped %zu orphaned file%s",
+            output_summary(
+                out, OUTPUT_NORMAL, "Skipped {yellow}%zu{reset} orphaned file%s",
                 skipped_files, skipped_files == 1 ? "" : "s"
             );
         }
@@ -1562,8 +1558,8 @@ static void apply_print_cleanup_receipt(
             receipt->skipped_dirs.count;
 
         if (skipped_dirs > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s",
+            output_summary(
+                out, OUTPUT_NORMAL, "Skipped {yellow}%zu{reset} orphaned director%s",
                 skipped_dirs, skipped_dirs == 1 ? "y" : "ies"
             );
         }
@@ -1577,9 +1573,9 @@ static void apply_print_cleanup_receipt(
             receipt->reclaimed_files.count + receipt->reclaimed_dirs.count;
 
         if (reclaimed > 0) {
-            output_print(
+            output_success(
                 out, OUTPUT_NORMAL,
-                "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)\n",
+                "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)",
                 reclaimed, reclaimed == 1 ? "" : "s"
             );
         }
@@ -3123,17 +3119,17 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * writes them. */
     if (clean_reassignment_count > 0) {
         apply_print_reassignments(out, clean_reassignments, clean_reassignment_count);
-        output_gap(out, OUTPUT_NORMAL);
         if (opts->dry_run) {
+            output_gap(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL,
                 "Would acknowledge %zu profile reassignment%s",
                 clean_reassignment_count, clean_reassignment_count == 1 ? "" : "s"
             );
         } else {
-            output_print(
+            output_success(
                 out, OUTPUT_NORMAL,
-                "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
+                "Acknowledged {cyan}%zu{reset} profile reassignment%s",
                 clean_reassignment_count, clean_reassignment_count == 1 ? "" : "s"
             );
         }
@@ -3154,15 +3150,14 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * them — and never that all is clean: that is status's word, over a scan
          * apply never runs, a new file being update's. */
         if (clean_reassignment_count == 0) {
-            output_gap(out, OUTPUT_NORMAL);
             if (withheld > 0) {
                 /* The report above named what and why; this only has to avoid
                  * claiming the work was never there. */
-                output_info(out, OUTPUT_NORMAL, "Nothing left to deploy");
+                output_summary(out, OUTPUT_NORMAL, "Nothing left to deploy");
             } else if (scope_filters_profiles(scope) || scope_filters_paths(scope)) {
-                output_info(out, OUTPUT_NORMAL, "Nothing to deploy in scope");
+                output_summary(out, OUTPUT_NORMAL, "Nothing to deploy in scope");
             } else {
-                output_info(out, OUTPUT_NORMAL, "Nothing to deploy");
+                output_summary(out, OUTPUT_NORMAL, "Nothing to deploy");
             }
         }
 
@@ -3387,8 +3382,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 case OUTPUT_ANSWER_YES:
                     break;
                 case OUTPUT_ANSWER_NO:
-                    output_gap(out, OUTPUT_NORMAL);
-                    output_info(out, OUTPUT_NORMAL, "Cancelled");
+                    output_summary(out, OUTPUT_NORMAL, "Cancelled");
                     return NULL;  /* Not an error - user cancelled */
                 case OUTPUT_ANSWER_NONE:
                     return error_create(
@@ -3422,8 +3416,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 pending_reassignment_count, pending_reassignment_count == 1 ? "" : "s"
             );
         }
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was applied");
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was applied");
     } else {
         /* Carry the verdicts out (files-only, directories-only, or mixed — one
          * call). Reporting reads the result: outcomes, never plan counts. The
@@ -3456,7 +3449,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         deploy_release(ctx->arena, deploy_receipt);
 
         /* The receipts, once every act is done, in the order the previews printed
-         * them: the empty one says nothing */
+         * them, their counts one summary: the empty one says nothing */
         apply_print_deploy_receipt(out, deploy_receipt);
         apply_print_cleanup_receipt(out, cleanup_verdicts, cleanup_receipt);
 
@@ -3468,7 +3461,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * the run, and what the run wrote on disk the next apply reads back.
          * One that landed says the pending reassignments it acknowledged, both
          * kinds, rewritten behind the run's own writes (deployed files; converged
-         * directories) — the clean ones were said where they were written. */
+         * directories), a line of the receipts' summary — the clean ones were
+         * said where they were written. */
         size_t acknowledged_count = 0;
         error_t record_err = apply_write_record(
             ctx, ws, cleanup_verdicts, cleanup_receipt, deploy_receipt, now, &acknowledged_count
@@ -3477,9 +3471,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
         } else if (acknowledged_count > 0) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_print(
-                out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
+            output_success(
+                out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s",
                 acknowledged_count, acknowledged_count == 1 ? "" : "s"
             );
         }

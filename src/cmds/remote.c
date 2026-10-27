@@ -27,7 +27,7 @@ static error_t remote_list(
     if (rc < 0) return error_git(rc, "Cannot list the remotes");
 
     if (remotes.count == 0) {
-        output_info(out, OUTPUT_NORMAL, "No remotes configured");
+        output_summary(out, OUTPUT_NORMAL, "No remotes configured");
         git_strarray_dispose(&remotes);
         return NULL;
     }

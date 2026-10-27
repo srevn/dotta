@@ -155,7 +155,7 @@ static error_t bootstrap_edit(
             profile
         );
     } else {
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL,
             "No changes made to bootstrap script"
         );
@@ -282,7 +282,7 @@ static error_t bootstrap_run(
 
     if (found.count == 0) {
         /* The set searched, as the line selected it */
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL, opts->profile_count > 0
                 ? "No bootstrap scripts found in the named profiles"
                 : opts->all_profiles
@@ -313,8 +313,7 @@ static error_t bootstrap_run(
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
-                output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Cancelled");
+                output_summary(out, OUTPUT_NORMAL, "Cancelled");
                 return NULL;
             case OUTPUT_ANSWER_NONE:
                 return error_create(
@@ -355,7 +354,6 @@ static error_t bootstrap_run(
     }
 
     if (!opts->dry_run) {
-        output_gap(out, OUTPUT_NORMAL);
         output_success(out, OUTPUT_NORMAL, "Bootstrap complete");
     }
 

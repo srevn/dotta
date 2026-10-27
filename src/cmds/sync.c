@@ -1729,8 +1729,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * profile the analysis could not read is a question the dry run failed to
      * answer, not a profile it found no work for. */
     if (opts->dry_run) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was pulled or pushed");
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was pulled or pushed");
         err = sync_failure(ctx->arena, &rows);
         goto cleanup;
     }
@@ -1744,8 +1743,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
-                output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Cancelled");
+                output_summary(out, OUTPUT_NORMAL, "Cancelled");
                 goto cleanup;  /* err is NULL: a cancel is not a failure */
             case OUTPUT_ANSWER_NONE:
                 err = sync_refusal(ctx->arena, &rows, discarding, "and none was read");

@@ -327,7 +327,7 @@ static error_t ignore_edit(
             out, OUTPUT_NORMAL, "Updated %s .dottaignore", dottaignore->layer
         );
     } else {
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL, "No changes to %s .dottaignore", dottaignore->layer
         );
     }
@@ -381,7 +381,7 @@ static error_t ignore_modify(
      * uses "%s .dottaignore" so it composes naturally for both layers: "No baseline
      * .dottaignore exists" / "No profile 'foo' .dottaignore exists". */
     if (text.size == 0 && add_count == 0) {
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL, "No %s .dottaignore exists",
             dottaignore->layer
         );
@@ -401,16 +401,16 @@ static error_t ignore_modify(
     /* Nothing actually changed — report why and stop. */
     if (added == 0 && removed == 0) {
         if (add_count > 0 && remove_count > 0) {
-            output_info(
+            output_summary(
                 out, OUTPUT_NORMAL,
                 "No changes: all patterns already exist or not found"
             );
         } else if (add_count > 0) {
-            output_info(
+            output_summary(
                 out, OUTPUT_NORMAL, "No changes: all patterns already exist"
             );
         } else {
-            output_info(
+            output_summary(
                 out, OUTPUT_NORMAL, "No changes: patterns not found"
             );
         }
@@ -458,9 +458,8 @@ static error_t ignore_modify(
         );
     }
     if (missing > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Warning: %zu pattern%s not found (already removed or never added)",
+        output_warning(
+            out, OUTPUT_NORMAL, "%zu pattern%s not found (already removed or never added)",
             missing, missing == 1 ? "" : "s"
         );
     }

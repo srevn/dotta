@@ -643,8 +643,7 @@ static error_t profile_enable(
     /* Each skip said once: a refused profile by its warning above, an enabled
      * one by this count, its own line being verbose's */
     if (already_enabled > 0) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL, "%zu profile%s already enabled",
             already_enabled, already_enabled == 1 ? "" : "s"
         );
@@ -715,7 +714,6 @@ static error_t profile_enable(
     err = state_save(state);
     if (err) return err;
 
-    output_gap(out, OUTPUT_NORMAL);
     for (size_t i = 0; i < to_enable_validated.count; i++) {
         const char *name = to_enable_validated.entries[i];
         if (retarget && strcmp(name, retarget) == 0) {
@@ -794,7 +792,7 @@ static error_t profile_disable(
      * success). The historic ERR_NOT_FOUND here made the two paths inconsistent
      * for the same user intent. */
     if (opts->all_profiles && enabled_profiles.count == 0) {
-        output_info(out, OUTPUT_NORMAL, "No enabled profiles to disable");
+        output_summary(out, OUTPUT_NORMAL, "No enabled profiles to disable");
         return NULL;
     }
 
@@ -850,8 +848,7 @@ static error_t profile_disable(
     /* The skip said once: a named profile that was not enabled, by this count,
      * its own line being verbose's */
     if (not_enabled > 0) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL, "%zu profile%s not enabled",
             not_enabled, not_enabled == 1 ? "" : "s"
         );
@@ -913,7 +910,6 @@ static error_t profile_disable(
     err = state_save(state);
     if (err) return err;
 
-    output_gap(out, OUTPUT_NORMAL);
     for (size_t i = 0; i < to_disable_validated.count; i++) {
         const char *name = to_disable_validated.entries[i];
         output_success(out, OUTPUT_NORMAL, "Disabled %s", name);
@@ -999,7 +995,7 @@ static error_t profile_reorder(
     }
 
     if (!order_changed) {
-        output_info(out, OUTPUT_NORMAL, "Profiles already in requested order");
+        output_summary(out, OUTPUT_NORMAL, "Profiles already in requested order");
         return NULL;  /* Success, but no-op */
     }
 
@@ -1042,7 +1038,6 @@ static error_t profile_reorder(
     if (err) return err;
 
     /* Success message */
-    output_gap(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Reordered %zu profile%s",
         opts->profile_count, opts->profile_count == 1 ? "" : "s"

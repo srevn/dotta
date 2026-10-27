@@ -1044,8 +1044,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = profile_changed(draft, &changed);
     if (err) goto cleanup;
     if (!changed) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
+        output_summary(
             out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",
             restored.storage_path
         );
@@ -1191,8 +1190,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 20: a dry run ends here, its preview shown and nothing committed */
     if (opts->dry_run) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;
     }
 
@@ -1205,8 +1203,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
-                output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Cancelled");
+                output_summary(out, OUTPUT_NORMAL, "Cancelled");
                 goto cleanup;  /* err is NULL here: a cancel is not a failure */
             case OUTPUT_ANSWER_NONE:
                 err = error_create(
@@ -1262,7 +1259,6 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* Step 23: the receipt, once the commit lands and before the record phase,
      * which may wait on the store's lock (core/state.h state_begin). A block of
      * its own, beneath the preview's patch, the question or the trace. */
-    output_gap(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", restored.storage_path,
         profile

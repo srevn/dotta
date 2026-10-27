@@ -1354,10 +1354,9 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     err = materialize_entries(ctx, opts->profile, &list);
     if (err) goto cleanup;
 
-    output_gap(out, OUTPUT_NORMAL);
-    output_print(
+    output_success(
         out, OUTPUT_NORMAL,
-        "Exported %s to {cyan}%s{reset} (from {magenta}%s{reset}%s)\n",
+        "Exported %s to {cyan}%s{reset} (from {magenta}%s{reset}%s)",
         counts, dest_display, opts->profile, commit_suffix
     );
 

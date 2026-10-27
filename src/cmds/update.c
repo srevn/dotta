@@ -1615,8 +1615,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 work.count -= partition.new_files.count;
                 break;
             case OUTPUT_ANSWER_NONE:
-                output_gap(out, OUTPUT_NORMAL);
-                output_info(
+                output_summary(
                     out, OUTPUT_NORMAL, "%zu new file%s not added: no answer was "
                     "read; --include-new adds %s", partition.new_files.count,
                     partition.new_files.count == 1 ? "" : "s",
@@ -1635,13 +1634,12 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * words of the mode it ran in (the question is asked under neither flag),
      * and fires no hook */
     if (work.count == 0 && derive_rows.count == 0) {
-        output_gap(out, OUTPUT_NORMAL);
         if (opts->only_new) {
-            output_info(out, OUTPUT_NORMAL, "No new files to add");
+            output_summary(out, OUTPUT_NORMAL, "No new files to add");
         } else if (opts->include_new) {
-            output_info(out, OUTPUT_NORMAL, "No modified or new files/directories to update");
+            output_summary(out, OUTPUT_NORMAL, "No modified or new files/directories to update");
         } else {
-            output_info(out, OUTPUT_NORMAL, "No modified files or directories to update");
+            output_summary(out, OUTPUT_NORMAL, "No modified files or directories to update");
         }
         return NULL;
     }
@@ -1666,8 +1664,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* A dry run ends here, beneath its pre-hook, in the act it did not do: the
      * sections above are its preview */
     if (opts->dry_run) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         return NULL;
     }
 
@@ -1683,12 +1680,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * may wait on the store's lock (core/state.h state_begin): what it committed
      * — whole, or before the stop the error below names — or that it committed
      * nothing */
-    output_gap(out, OUTPUT_NORMAL);
     if (commit_count == 0) {
         /* Every profile committed nothing (the walk's race guard refused what
          * the plan admitted, the captures put back what the profile holds, or
          * the first profile stopped the run): say so instead of counting zero */
-        output_info(out, OUTPUT_NORMAL, "Nothing was committed");
+        output_summary(out, OUTPUT_NORMAL, "Nothing was committed");
     } else {
         /* A landed commit's user items are what it captured and deleted; a
          * derivation-only commit carries none */

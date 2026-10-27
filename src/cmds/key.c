@@ -65,8 +65,8 @@ static error_t key_set(const dotta_ctx_t *ctx) {
     error_t err = keymgr_set(keymgr);
     if (err) return err;
 
-    /* The receipt, a block of its own beneath the notice the prompt followed */
-    output_gap(out, OUTPUT_NORMAL);
+    /* The receipt, the run's summary, a block of its own beneath the notice the
+     * prompt followed */
     if (config->session_timeout == 0) {
         output_success(
             out, OUTPUT_NORMAL,
@@ -126,7 +126,7 @@ static error_t key_clear(const dotta_ctx_t *ctx) {
     if (keymgr_clear(keymgr)) {
         output_success(out, OUTPUT_NORMAL, "Session cache cleared");
     } else {
-        output_success(out, OUTPUT_NORMAL, "No session cache to clear");
+        output_summary(out, OUTPUT_NORMAL, "No session cache to clear");
     }
 
     output_gap(out, OUTPUT_VERBOSE);

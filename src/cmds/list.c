@@ -140,7 +140,7 @@ static error_t list_profiles(
     if (err) return err;
 
     if (profiles.count == 0) {
-        output_info(out, OUTPUT_NORMAL, "No profiles found");
+        output_summary(out, OUTPUT_NORMAL, "No profiles found");
         return NULL;
     }
 
@@ -500,12 +500,12 @@ static error_t list_files(
         if (count.directory_count > 0) {
             char counts[64];
             output_format_counts(0, count.directory_count, counts, sizeof(counts));
-            output_info(
+            output_summary(
                 out, OUTPUT_NORMAL, "No files in profile '%s' (%s)",
                 opts->profile, counts
             );
         } else {
-            output_info(
+            output_summary(
                 out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile
             );
         }
@@ -667,18 +667,17 @@ static error_t list_files(
     }
 
     /* Print summary */
-    output_gap(out, OUTPUT_NORMAL);
     if (verbose) {
         char size_str[32];
         output_format_size(total_size, size_str, sizeof(size_str));
-        output_print(
-            out, OUTPUT_VERBOSE, "Total: %zu file%s, %s\n",
+        output_summary(
+            out, OUTPUT_VERBOSE, "Total: %zu file%s, %s",
             walk.file_count,
             walk.file_count == 1 ? "" : "s", size_str
         );
     } else {
-        output_print(
-            out, OUTPUT_NORMAL, "Total: %zu file%s\n",
+        output_summary(
+            out, OUTPUT_NORMAL, "Total: %zu file%s",
             walk.file_count,
             walk.file_count == 1 ? "" : "s"
         );

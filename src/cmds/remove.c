@@ -993,8 +993,7 @@ static error_t remove_paths(
         claim_count = kept;
 
         if (claim_count == 0) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(out, OUTPUT_NORMAL, "Nothing removed");
+            output_summary(out, OUTPUT_NORMAL, "Nothing removed");
             goto cleanup;
         }
     }
@@ -1048,8 +1047,7 @@ static error_t remove_paths(
 
     /* A dry run ends here, beneath its pre-hook, in the act it did not do */
     if (opts->dry_run) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;  /* err is NULL, will return success */
     }
 
@@ -1062,8 +1060,7 @@ static error_t remove_paths(
         case OUTPUT_ANSWER_YES:
             break;
         case OUTPUT_ANSWER_NO:
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(out, OUTPUT_NORMAL, "Cancelled");
+            output_summary(out, OUTPUT_NORMAL, "Cancelled");
             goto cleanup;  /* err is NULL, will return success */
         case OUTPUT_ANSWER_NONE:
             err = error_create(
@@ -1134,7 +1131,6 @@ static error_t remove_paths(
      * phase, which may wait on the store's lock (core/state.h state_begin) */
     char counts[64];
     remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
-    output_gap(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
         counts, opts->profile
@@ -1362,8 +1358,7 @@ static error_t remove_profile(
 
     /* A dry run ends here, beneath its pre-hook, in the act it did not do */
     if (opts->dry_run) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was deleted");
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was deleted");
         goto cleanup;  /* err is NULL, will return success */
     }
 
@@ -1375,8 +1370,7 @@ static error_t remove_profile(
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
-                output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Cancelled");
+                output_summary(out, OUTPUT_NORMAL, "Cancelled");
                 goto cleanup;  /* err is NULL, will return success */
             case OUTPUT_ANSWER_NONE:
                 err = error_create(
@@ -1399,7 +1393,6 @@ static error_t remove_profile(
      * too, and nothing else on an unasked run says — said once the branch is
      * gone and before the record phase, which may wait on the store's lock
      * (core/state.h state_begin). */
-    output_gap(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
     );

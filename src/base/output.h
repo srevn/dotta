@@ -87,19 +87,35 @@ typedef enum {
  * to separate from. Moving the report to another stream (output_set_stream) starts
  * it over, because the new stream holds none of it.
  *
+ * A report ends on its summary (output_summary, output_success): what the run
+ * did, did not do, or found, said at the margin in one block. The block is the
+ * summary's from its first line to the next boundary asked, and every line that
+ * lands in it is one of its lines, so a summary line said there joins it rather
+ * than opening another: a run that sums up several acts says a line an act, and
+ * they stand together. A boundary closes it once asked, whether or not the block
+ * that asked it prints, so a summary line said after one opens a block of its
+ * own. What the run says after its summary stands at the margin too: a caveat a
+ * later phase raises, the remedy it calls for (output_hint), a post-hook's account
+ * (utils/hooks.h hook_fire_post). So no report ends on a section's or a list's
+ * rows, which read as a block still open above whatever follows the run. A run
+ * asked for a payload ends where the payload does, its bytes its own
+ * (output_write).
+ *
  * On a terminal, the line an act draws while it runs (output_progress) is no
  * line of the report: it pays no boundary, owes none, and moves the report nowhere,
  * so what follows it spaces itself against what stood before it. Off a terminal
  * no such line is drawn: a redirected report holds what an act did, never that
  * it ran.
  *
- * Read in two places, both in base/output.c: `output_land` asks what is owed,
- * and output_gap asks whether anything stands to owe it.
+ * Read in base/output.c alone: `output_land` asks what is owed and keeps the
+ * summary's block, output_gap asks whether anything stands to owe it, and the
+ * summary's two words whether their block stands.
  */
 typedef enum {
-    OUTPUT_REPORT_START,  /* Nothing of the report stands on `stream` */
-    OUTPUT_REPORT_LINE,   /* A line stands; the next one follows it */
-    OUTPUT_REPORT_GAP     /* A line stands; a blank is owed before the next */
+    OUTPUT_REPORT_START,    /* Nothing of the report stands on `stream` */
+    OUTPUT_REPORT_LINE,     /* A line stands; the next one follows it */
+    OUTPUT_REPORT_SUMMARY,  /* A line of the summary's block stands; the next one is the block's */
+    OUTPUT_REPORT_GAP       /* A line stands; a blank is owed before the next */
 } output_report_t;
 
 /**
@@ -330,7 +346,41 @@ void output_warning(
 ) __attribute__((format(printf, 3, 4)));
 
 /**
- * Print success message
+ * Say a line of the run's summary: what it did, did not do, or found
+ *
+ * A line at the margin, ended, in the summary's block ("Where the report stands").
+ * The block's first line asks its boundary, as a section's title does (output_gap
+ * at `min_level`); a line said while the block stands joins it, whatever landed
+ * in it between. So a run that sums up several acts says a line an act, in the
+ * order its arms print them, and no printer of a summary asks a boundary for it.
+ *
+ * The report ends on it. A run of phases may close each with its own (cmds/clone.c
+ * cmd_clone), and the last is the run's. A line that tells an act done carries
+ * its mark (output_success); what the run did not do, or found, is said plainly,
+ * here.
+ *
+ * @param ctx Output context (NULL: nothing)
+ * @param min_level Minimum verbosity level
+ * @param fmt The line's format, with no newline (printf-style)
+ */
+void output_summary(
+    output_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
+
+/**
+ * Say a line of the run's summary that tells an act done: "✓ " before it
+ *
+ * output_summary's line, in its block and by its rules, marked as an act the
+ * run carried out, as a receipt names it: Updated, Removed, Enabled. The mark
+ * is the word's, as "Warning: " is output_warning's; a row's ✓ is its format's
+ * glyph, as every row's ✗ and = are.
+ *
+ * @param ctx Output context (NULL: nothing)
+ * @param min_level Minimum verbosity level
+ * @param fmt The line's format, with no newline (printf-style)
  */
 void output_success(
     output_t *ctx,
@@ -431,10 +481,12 @@ void output_endline(output_t *ctx, output_verbosity_t min_level);
  * itself against what actually printed rather than against what would have.
  *
  * Every block opens with its boundary and no block closes with one. output_section,
- * output_list_render and the two questions ask theirs inside, so a call site
- * places one only above a block the layer does not recognise as one — a verdict
- * line, a warning, a hint, a row of its own. A function that prints such a block
- * asks it first, as the layer's own blocks do, so no caller asks it for one.
+ * output_list_render, the summary's two words (output_summary, output_success)
+ * and the two questions ask theirs inside, so a call site places one only above
+ * a block the layer does not recognise as one — a warning, a note, a hint, a
+ * row of its own. A function that prints such a block asks it first, as the layer's
+ * own blocks do, so no caller asks it for one. Asked while the summary's block
+ * stands, it closes the block: the line that pays it opens the next.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level

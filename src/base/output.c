@@ -786,7 +786,8 @@ bool output_is_tty(const output_t *ctx) {
  * another stream, so a question or a failure arrives under the run it is about
  * rather than inside it; a boundary the report owes is paid, on the stream this
  * line lands on; and the report is recorded as standing, which is what lets the
- * next block ask for a boundary at all.
+ * next block ask for a boundary at all. A line that lands in the summary's block
+ * is one of its lines, and leaves the block the summary's (output_summary).
  *
  * A line on stderr settles the debt but does not make the report stand — a run
  * whose first line is a failure opens no report to separate from. output_endline
@@ -804,7 +805,7 @@ static void output_land(output_t *ctx, FILE *stream) {
         ctx->report = OUTPUT_REPORT_LINE;
     }
 
-    if (stream == ctx->stream) {
+    if (stream == ctx->stream && ctx->report == OUTPUT_REPORT_START) {
         ctx->report = OUTPUT_REPORT_LINE;
     }
 }
@@ -943,11 +944,40 @@ void output_warning(
     output_put(&line);
 }
 
+void output_summary(
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
+) {
+    if (!ctx || !fmt) return;
+    if (ctx->verbosity < min_level) return;
+
+    /* The summary is a block: its first line owns the boundary above it, and a
+     * line said while the block stands joins it */
+    if (ctx->report != OUTPUT_REPORT_SUMMARY) output_gap(ctx, min_level);
+
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
+
+    va_list args;
+    va_start(args, fmt);
+    output_walk(&line, fmt, &args);
+    va_end(args);
+
+    output_bytes(&line, "\n", 1);
+    output_put(&line);
+
+    /* The block that stands is the summary's, until the next boundary */
+    ctx->report = OUTPUT_REPORT_SUMMARY;
+}
+
 void output_success(
     output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    /* A line of the summary (output_summary): the boundary above its block, or
+     * the block that stands */
+    if (ctx->report != OUTPUT_REPORT_SUMMARY) output_gap(ctx, min_level);
 
     line_t line;
     output_start(&line, ctx, ctx->stream);
@@ -960,6 +990,8 @@ void output_success(
 
     output_bytes(&line, "\n", 1);
     output_put(&line);
+
+    ctx->report = OUTPUT_REPORT_SUMMARY;
 }
 
 void output_info(
@@ -1027,7 +1059,9 @@ void output_endline(output_t *ctx, output_verbosity_t min_level) {
 
 void output_gap(output_t *ctx, output_verbosity_t min_level) {
     if (!ctx || ctx->verbosity < min_level) return;
-    if (ctx->report == OUTPUT_REPORT_LINE) ctx->report = OUTPUT_REPORT_GAP;
+
+    /* Owed wherever a line stands, and the summary's block is closed by it */
+    if (ctx->report != OUTPUT_REPORT_START) ctx->report = OUTPUT_REPORT_GAP;
 }
 
 void output_section(

@@ -129,8 +129,8 @@ printed
 ### `pre-remove`
 
 **When:** Before removing paths from a profile or deleting a profile: once the
-removal has decided what it takes — after `-i`'s questions and its preview —
-and before its question
+removal has decided what it takes — after `-i`'s questions, whose answers are
+its consent, and its preview — and before its question, where one is owed
 **Use For:** Backing up paths, validating removal, preventing accidental deletion
 
 **Example Use Cases:**

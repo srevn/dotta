@@ -827,7 +827,8 @@ static void remove_format_counts(
 
 /**
  * Ask whether to remove the claims the arguments took — or answer yes where no
- * question is owed: --force, a removal below the threshold
+ * question is owed: --force, which answers in advance; -i, whose answer for each
+ * claim was its consent (remove_paths); a removal below the threshold
  */
 static output_answer_t remove_ask_paths(
     const remove_claim_t *claims,
@@ -836,8 +837,8 @@ static output_answer_t remove_ask_paths(
     const config_t *config,
     output_t *out
 ) {
-    /* Skip confirmation if --force */
-    if (opts->force) return OUTPUT_ANSWER_YES;
+    /* Answered already: --force in advance, -i claim by claim */
+    if (opts->force || opts->interactive) return OUTPUT_ANSWER_YES;
 
     /* Check config threshold */
     size_t threshold = 5; /* Default threshold */
@@ -960,12 +961,13 @@ static error_t remove_paths(
      * the overlap section and before anything fires — so the hooks and the plan
      * below see exactly what will happen, a declined claim out before the pre-hook
      * names the set. Each is a consent question, answered by a terminal or a
-     * pipe, as a script answers it (base/output.h output_ask); a claim no answer
-     * came for refuses the run: -i asked of each, and a selection with one
-     * unanswered is no selection. The refusal names that claim and no way on,
-     * since the asking is the flag the user typed. None binds a dry run, which
-     * lists every claim; and a selection that keeps none ends the run, which
-     * fires no hook. */
+     * pipe, as a script answers it (base/output.h output_ask), and its answer
+     * is that claim's consent, so the run asks nothing more after the hook
+     * (remove_ask_paths). A claim no answer came for refuses the run: -i asked
+     * of each, and a selection with one unanswered is no selection. The refusal
+     * names that claim and no way on, since the asking is the flag the user typed.
+     * None binds a dry run, which lists every claim; and a selection that keeps
+     * none ends the run, which fires no hook. */
     if (opts->interactive && !opts->dry_run) {
         size_t kept = 0;
         for (size_t i = 0; i < claim_count; i++) {
@@ -1051,10 +1053,11 @@ static error_t remove_paths(
         goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Confirm operation: the consent, after the hook. Declined is the user's
-     * word, and no failure; unanswered — the input ended before a line — nobody
-     * declined, and the run did not do what it was asked: its refusal, naming
-     * the flag that answers in advance. */
+    /* Confirm operation: the set's consent, after the hook, where -i did not
+     * give it claim by claim. Declined is the user's word, and no failure;
+     * unanswered — the input ended before a line — nobody declined, and the run
+     * did not do what it was asked: its refusal, naming the flag that answers
+     * in advance. */
     switch (remove_ask_paths(claims, claim_count, opts, config, out)) {
         case OUTPUT_ANSWER_YES:
             break;

@@ -264,7 +264,7 @@ cleanup:
  * a row a profile in the selection's order, in the grammar of sync's receipt
  * (cmds/sync.c sync_print_receipt): its local branch created, or where the one
  * already here stands against the remote's the fetch brought, or why neither
- * could be said.
+ * could be said; then the summary beneath it, the profiles fetched.
  */
 static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
     CHECK_NULL(ctx);
@@ -422,6 +422,19 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
             upstream_state_symbol(upstream.state)
         );
         output_print(out, OUTPUT_NORMAL, " {cyan}%s{reset}: %s\n", profile, phrase);
+    }
+
+    /* The run's summary, beneath the table, in clone's words (cmds/clone.c
+     * cmd_clone): every profile the fetch brought that the run could make local
+     * or read, or none */
+    size_t fetched = selection.count - failed;
+    if (fetched > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Fetched %zu profile%s from '{cyan}%s{reset}'",
+            fetched, fetched == 1 ? "" : "s", remote_name
+        );
+    } else {
+        output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
     }
 
     /* The run's failure. A profile the fetch brought and the run could not make

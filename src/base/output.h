@@ -85,6 +85,12 @@ typedef enum {
  * to separate from. Moving the report to another stream (output_set_stream) starts
  * it over, because the new stream holds none of it.
  *
+ * On a terminal, the line an act draws while it runs (output_progress) is no
+ * line of the report: it pays no boundary, owes none, and moves the report nowhere,
+ * so what follows it spaces itself against what stood before it. Off a terminal
+ * no such line is drawn: a redirected report holds what an act did, never that
+ * it ran.
+ *
  * Read in two places, both in base/output.c: `output_land` asks what is owed,
  * and output_gap asks whether anything stands to owe it.
  */
@@ -200,18 +206,15 @@ static inline bool output_is_verbose(const output_t *ctx) {
 bool output_colors_enabled(const output_t *ctx);
 
 /**
- * Check if the output stream is a TTY
+ * Whether the report's stream is a terminal: the medium, asked at the call
  *
- * Returns true if ctx->stream is connected to a terminal. This is distinct from
- * output_colors_enabled():
- *   - colors_enabled can be true on non-TTY (--color=always)
- *   - is_tty can be true with colors disabled (NO_COLOR, TERM=dumb)
+ * On a terminal alone a line is drawn while an act runs (output_progress) and
+ * taken down once it is done (output_clear_line), as sys/transfer's progress
+ * frames are. Not the colours' question: they can be on off a terminal (the
+ * configuration's color = "always") and off on one (NO_COLOR, TERM=dumb).
  *
- * Use for decisions about ephemeral output (progress indicators, inline status),
- * not for color decisions.
- *
- * @param ctx Output context (returns false if NULL)
- * @return true if ctx->stream is a terminal
+ * @param ctx Output context (false for NULL)
+ * @return Whether the report's stream is a terminal
  */
 bool output_is_tty(const output_t *ctx);
 
@@ -404,9 +407,9 @@ void output_hintline(
  * first part — an endline below its opener writes a bare newline into a run where
  * the line itself never printed.
  *
- * Alone among the words that write, it moves the report nowhere: the line it
- * ends already stands, and a boundary asked mid-line is left standing so the
- * block that follows still pays it — or, if none follows, so nobody does.
+ * It moves the report nowhere: the line it ends already stands, and a boundary
+ * asked mid-line is left standing so the block that follows still pays it — or,
+ * if none follows, so nobody does.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
@@ -462,17 +465,51 @@ void output_section(
 ) __attribute__((format(printf, 3, 4)));
 
 /**
- * Clear current line and flush (for inline progress)
+ * Draw a progress line: on a terminal alone, taken down once its act is done
  *
- * Designed for cleaning up ephemeral progress output (spinners, progress bars,
- * status lines that should vanish when done).
+ * The line an act draws while it runs (a fetch's) is no line of the report: it
+ * pays no boundary, owes none, and moves the report nowhere, so the block after
+ * it spaces itself against what stood before it. Built as every line is — its
+ * format the author's, with no newline, its arguments data — written where the
+ * cursor stands, and flushed. Its act's end takes it down at the level it was
+ * drawn at (output_clear_line), and nothing that can return stands between the
+ * two: a refusal told before the take-down would land on the drawn row.
+ * sys/transfer's frames draw over it while objects move, and take their row down
+ * when their op ends (sys/transfer.h transfer_op_end). Off a terminal nothing
+ * is drawn: a redirected report holds what an act did, never that it ran.
  *
- * TTY: carriage return + ANSI clear line Non-TTY: newline (ANSI clear doesn't
- * work on pipes) Always flushes the stream.
+ * Readers: cmds/sync.c sync_fetch, cmds/profile.c profile_fetch, cmds/status.c
+ * status_remote.
  *
- * @param ctx Output context
+ * @param ctx Output context (NULL: nothing)
+ * @param min_level Minimum verbosity level
+ * @param fmt The line's format, with no newline (printf-style)
  */
-void output_clear_line(output_t *ctx);
+void output_progress(
+    output_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
+
+/**
+ * Take down a progress line (output_progress), or the frame sys/transfer drew
+ * over it: on a terminal, the row erased and the cursor at its start
+ *
+ * Its level is the level the line was drawn at, as output_endline's is the level
+ * of the line it ends: below it nothing was drawn, and nothing is written — nor
+ * off a terminal, where nothing ever is, as git's own take-down writes nothing
+ * there (lib/git/pager.c term_clear_line). A terminal whose TERM declares it
+ * reads no escape (unset, "dumb") receives the erase all the same: a stated limit
+ * — where it drops the erase, the next line written over the row leaves the row's
+ * longer tail beside it, where git pads the row with spaces.
+ *
+ * Readers: output_progress's three, and sys/transfer.c transfer_op_end.
+ *
+ * @param ctx Output context (NULL: nothing)
+ * @param min_level The level the line was drawn at
+ */
+void output_clear_line(output_t *ctx, output_verbosity_t min_level);
 
 /**
  * Print a patch, one line at a time

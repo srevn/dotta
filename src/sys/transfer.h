@@ -106,8 +106,9 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
  *
  * Ends the progress line the op drew, the one place it ends: cleared where the
  * session's progress is ephemeral, else closed with ", done." for an op that
- * succeeded and a bare newline for one that failed. So no line outlives its op,
- * and a caller that announced the op on that line finds only its announce left.
+ * succeeded and a bare newline for one that failed. So no line outlives its op:
+ * a caller that drew a progress line for the op (base/output.h output_progress)
+ * finds at most that line left, its own to take down.
  *
  * Advances the credential state machine on `rc`:
  *

@@ -1428,9 +1428,9 @@ typedef struct {
  * — said in its place where --remote asked for it — a remote the resolver could
  * not choose or read, and a listing --all could not make, are a warning in its
  * place and no section, and an empty set is no section, unsaid. The fetch, unless
- * --no-fetch, is the half's one write, each profile's remote-tracking ref:
- * announced at -v while it runs, its failure a warning beneath the announce at
- * -v, and the section then read from the refs at hand.
+ * --no-fetch, is the half's one write, each profile's remote-tracking ref: a
+ * progress line at -v while it runs, on a terminal; its failure a warning at
+ * -v; and the section then read from the refs at hand.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options: --remote, --all and --no-fetch (must not be NULL)
@@ -1450,8 +1450,6 @@ static status_remote_t status_remote(
 
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
-
-    bool verbose = output_is_verbose(out);
 
     /* Detect remote (name + URL — URL feeds the credential helper when we fetch
      * below). Both are the command arena's, so the name outlives this call in
@@ -1517,39 +1515,22 @@ static status_remote_t status_remote(
         };
         transfer_context_t *xfer = transfer_context_create(&xfer_opts);
 
-        if (verbose) {
-            /* Ephemeral fetch message (no newline — resolved after fetch). On
-             * TTY: progress overwrites via \r, then line is cleared. On pipe:
-             * falls back to inline " done.\n" resolution. */
-            output_print(
-                out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name
-            );
-            fflush(out->stream);
-        }
+        /* While the fetch runs, a progress line at -v: a terminal's alone, drawn
+         * over by transfer's frames while objects move (sys/transfer.h
+         * transfer_op_end), and never a line of the report (base/output.h
+         * output_progress) */
+        output_progress(out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name);
 
         /* Perform batched fetch — single network op for all branches */
         err = gitops_fetch_branches(repo, remote_name, profiles, xfer);
 
-        /* Resolve the "Fetching from ..." preamble line (verbose only) */
-        if (verbose) {
-            if (output_is_tty(out)) {
-                /* TTY: clear the preamble. Progress drawn over it ended with
-                 * its op (sys/transfer.h transfer_op_end), so the preamble is
-                 * all that can stand. */
-                output_clear_line(out);
-            } else if (err) {
-                /* Non-TTY + error: finish the line before the warning */
-                output_endline(out, OUTPUT_VERBOSE);
-            } else {
-                /* Non-TTY + success: inline resolution */
-                output_print(out, OUTPUT_VERBOSE, " done.\n");
-            }
-        }
+        /* Taken down once the fetch is done, whichever way it went: its warning
+         * lands on a row of its own */
+        output_clear_line(out, OUTPUT_VERBOSE);
 
         if (err) {
             /* Non-fatal: warn and continue with status display. The fetch's failure
-             * names its act and the remote (sys/gitops.h), a block of its own
-             * beneath the preamble it resolved. */
+             * names its act and the remote (sys/gitops.h), a block of its own. */
             output_gap(out, OUTPUT_VERBOSE);
             output_warning(out, OUTPUT_VERBOSE, "%s", error_line(err));
         }

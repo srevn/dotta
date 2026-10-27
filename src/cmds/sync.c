@@ -191,8 +191,8 @@ static void sync_print_wire(output_t *out, transfer_wire_t wire) {
 }
 
 /**
- * Fetch the scope's profiles from the remote: announced while the fetch runs,
- * and at verbose said once it lands, with what it moved
+ * Fetch the scope's profiles from the remote: a progress line on a terminal while
+ * the fetch runs, and at verbose said once it lands, with what it moved
  *
  * Operates on the scope's profiles (scope_profiles): fetching is driven by what
  * the user asked for. `dotta sync -p work` fetches only `work`, not every enabled
@@ -221,11 +221,10 @@ static error_t sync_fetch(
 
     output_t *out = ctx->out;
 
-    /* Ephemeral fetch progress — shown while fetching, cleared after. On TTY:
-     * transfer progress overwrites via \r, then line cleared entirely. On pipe:
-     * falls back to persistent line with newline. */
-    output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
-    fflush(out->stream);
+    /* While the fetch runs, a progress line: a terminal's alone, drawn over by
+     * transfer's frames while objects move (sys/transfer.h transfer_op_end),
+     * and never a line of the report (base/output.h output_progress) */
+    output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
 
     /* Perform batched fetch - single network operation for all branches */
     const transfer_stats_t mark = transfer_stats(xfer);
@@ -233,15 +232,9 @@ static error_t sync_fetch(
         ctx->run.repo, remote_name, scope_profiles(scope), xfer
     );
 
-    /* The announce line ends here. Progress drawn over it ended with its op
-     * (sys/transfer.h transfer_op_end), whichever way the op went, so what can
-     * stand is the announce alone — an up-to-date fetch draws nothing over it:
-     * cleared on a terminal, ended on a pipe. */
-    if (output_is_tty(out)) {
-        output_clear_line(out);
-    } else {
-        output_endline(out, OUTPUT_NORMAL);
-    }
+    /* Taken down once the fetch is done, whichever way it went: a refusal lands
+     * on a row of its own */
+    output_clear_line(out, OUTPUT_NORMAL);
 
     /* The fetch's own error, which names the remote and the act: a refused
      * credential in the words the transfer's callback set for what was offered

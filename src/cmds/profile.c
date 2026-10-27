@@ -271,9 +271,10 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     xfer = transfer_context_create(&xfer_opts);
 
     /* What the remote holds, asked once: every profile --all fetches, and the
-     * pre-flight the names the line gives are held to. Asked unannounced: the
-     * announce waits for the fetch it says, so a refusal here or below stands
-     * alone on the report. */
+     * pre-flight the names the line gives are held to. Asked before the fetch's
+     * progress line, which is drawn around the fetch alone: nothing that can
+     * refuse stands between its draw and its take-down (base/output.h
+     * output_progress), so a refusal here or below lands on a row of its own. */
     string_array_t remote_branches;
     err = gitops_list_remote_branches(repo, remote_name, xfer, ctx->arena, &remote_branches);
     if (err) goto cleanup;
@@ -323,21 +324,17 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
 
     /* One fetch brings the selection, as sync's brings its scope (cmds/sync.c
      * sync_fetch): one negotiation and one pack for every profile, so what can
-     * still fail profile by profile is the profile's own, below. Announced while
-     * it runs — on a terminal the transfer's progress draws over the line and
-     * both are cleared, on a pipe the announce stands, ended here — and its failure
-     * is the run's, naming the act and the remote. */
-    output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
-    fflush(out->stream);
+     * still fail profile by profile is the profile's own, below. A progress line
+     * while it runs, a terminal's alone (base/output.h output_progress), and
+     * its failure the run's, naming the act and the remote. */
+    output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
 
     const transfer_stats_t mark = transfer_stats(xfer);
     err = gitops_fetch_branches(repo, remote_name, &selection, xfer);
 
-    if (output_is_tty(out)) {
-        output_clear_line(out);
-    } else {
-        output_endline(out, OUTPUT_NORMAL);
-    }
+    /* Taken down once the fetch is done, whichever way it went: a refusal lands
+     * on a row of its own */
+    output_clear_line(out, OUTPUT_NORMAL);
     if (err) goto cleanup;
 
     /* At verbose, the fetch done and what it moved: one op and one pack, so one

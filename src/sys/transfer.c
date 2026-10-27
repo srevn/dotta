@@ -247,11 +247,11 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
      * more past the indexer's last object (transports/smart_protocol.c
      * git_smart__download_pack), a local push's indexer once per delta it resolves
      * — so a line a callback ended by its counts was drawn and ended again. An
-     * ephemeral line is cleared; a lasting one says done only for an op that
-     * succeeded. */
+     * ephemeral line is cleared, at the level the callbacks draw it at; a lasting
+     * one says done only for an op that succeeded. */
     if (xfer->progress_active) {
         if (xfer->ephemeral) {
-            output_clear_line(xfer->output);
+            output_clear_line(xfer->output, OUTPUT_NORMAL);
         } else {
             fputs(rc == 0 ? ", done.\n" : "\n", xfer->output->stream);
             fflush(xfer->output->stream);

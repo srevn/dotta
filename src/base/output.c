@@ -70,11 +70,11 @@ static const char *ANSI_CODES[] = {
 /* ═══════════════════════════════════════════════════════════════════
  * The Line
  *
- * One emitter call's bytes, built whole and written once (output_start,
- * output_put). 512 bytes on the stack cover nearly every line; a longer one grows
- * on the heap, and exhaustion is the run's death (base/heap.h). Written with
- * one fwrite, a line on stderr — which stdio does not buffer — is one write(2):
- * nothing another process writes lands inside it.
+ * One emitter call's bytes, built whole and written once (output_open, output_put).
+ * 512 bytes on the stack cover nearly every line; a longer one grows on the heap,
+ * and exhaustion is the run's death (base/heap.h). Written with one fwrite, a
+ * line on stderr — which stdio does not buffer — is one write(2): nothing another
+ * process writes lands inside it.
  *
  * A style a tag or a colour opens is tracked, and closed where the line's text
  * ends, before its own trailing newlines, never after them: so no line hands
@@ -780,12 +780,13 @@ bool output_is_tty(const output_t *ctx) {
 /**
  * A line of the report is about to land on `stream`
  *
- * Every line's first act (output_start). Three things happen here and nowhere
- * else: the report is flushed when this line crosses to another stream, so a
- * question or a failure arrives under the run it is about rather than inside
- * it; a boundary the report owes is paid, on the stream this line lands on; and
- * the report is recorded as standing, which is what lets the next block ask for
- * a boundary at all.
+ * The first act of every line that lands (output_start), the report's or one on
+ * stderr; a progress line is drawn and never lands (output_progress). Three things
+ * happen here and nowhere else: the report is flushed when this line crosses to
+ * another stream, so a question or a failure arrives under the run it is about
+ * rather than inside it; a boundary the report owes is paid, on the stream this
+ * line lands on; and the report is recorded as standing, which is what lets the
+ * next block ask for a boundary at all.
  *
  * A line on stderr settles the debt but does not make the report stand — a run
  * whose first line is a failure opens no report to separate from. output_endline
@@ -809,20 +810,27 @@ static void output_land(output_t *ctx, FILE *stream) {
 }
 
 /**
- * Start a line on `stream` — the report's own, or stderr
- *
- * The line lands first (output_land), so a boundary the report owes is paid above
- * it; its colour is its stream's: the report's decision, or stderr's.
+ * Open a line on `stream`: empty, in its stream's colours — the report's decision,
+ * or stderr's
  */
-static void output_start(line_t *line, output_t *ctx, FILE *stream) {
-    output_land(ctx, stream);
-
+static void output_open(line_t *line, const output_t *ctx, FILE *stream) {
     line->stream = stream;
     line->data = line->stack;
     line->len = 0;
     line->cap = sizeof(line->stack);
     line->color = stream == ctx->stream ? ctx->color_enabled : ctx->stderr_color_enabled;
     line->styled = false;
+}
+
+/**
+ * Start a line on `stream` — the report's own, or stderr
+ *
+ * The line lands first (output_land), so a boundary the report owes is paid above
+ * it, and then opens (output_open).
+ */
+static void output_start(line_t *line, output_t *ctx, FILE *stream) {
+    output_land(ctx, stream);
+    output_open(line, ctx, stream);
 }
 
 /**
@@ -1050,14 +1058,38 @@ void output_section(
     output_put(&line);
 }
 
-void output_clear_line(output_t *ctx) {
-    if (!ctx) return;
+void output_progress(
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
+) {
+    if (!ctx || !fmt) return;
+    if (ctx->verbosity < min_level) return;
 
-    if (isatty(fileno(ctx->stream)))
-        fputs("\r\033[2K", ctx->stream);
-    else
-        fputc('\n', ctx->stream);
+    /* Off a terminal nothing is drawn: nothing there could take it down */
+    if (!output_is_tty(ctx)) return;
 
+    /* The act's line, never the report's: opened as every line is and never landed,
+     * so no boundary is paid and the report stays where it stood */
+    line_t line;
+    output_open(&line, ctx, ctx->stream);
+
+    va_list args;
+    va_start(args, fmt);
+    output_walk(&line, fmt, &args);
+    va_end(args);
+
+    output_put(&line);
+
+    /* No newline ends it, and the report's stream is line-buffered (main.c main) */
+    fflush(ctx->stream);
+}
+
+void output_clear_line(output_t *ctx, output_verbosity_t min_level) {
+    if (!ctx || ctx->verbosity < min_level) return;
+
+    /* Off a terminal nothing was drawn, so nothing is taken down */
+    if (!output_is_tty(ctx)) return;
+
+    fputs("\r\033[2K", ctx->stream);
     fflush(ctx->stream);
 }
 

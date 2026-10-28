@@ -670,6 +670,12 @@ typedef struct transfer_context_s transfer_context_t;
  * error of the fetch, so what landed is read afterwards
  * (gitops_list_remote_tracking).
  *
+ * Neither fetch here prunes: a remote-tracking ref whose branch the remote no
+ * longer holds stays — the remote as this store last saw it — whatever fetch.prune
+ * or remote.<remote>.prune says (lib/libgit2/src/libgit2/remote.c git_remote_fetch,
+ * lookup_remote_prune_config). A prune is a hand's, `dotta git fetch --prune`:
+ * git's own, which no option here reaches.
+ *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
  * @param xfer Transfer context for credentials and progress (must not be NULL)
@@ -692,7 +698,8 @@ error_t gitops_fetch_remote(
  * what the remote held is read off the remote-tracking refs afterwards. Each
  * one follows its branch wherever the remote moved it, a force push included:
  * the refspecs are forced, as git's own for a tracking ref is, whatever fetch
- * refspec the remote's configuration holds, or none.
+ * refspec the remote's configuration holds, or none — and none is pruned where
+ * the remote's branch went (gitops_fetch_remote).
  *
  * Readers: cmds/sync.c sync_fetch (every profile in the run's scope) and
  * cmds/status.c status_remote (every profile its section lists), each asking

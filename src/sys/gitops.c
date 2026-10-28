@@ -875,8 +875,12 @@ error_t gitops_fetch_remote(
     int rc = git_remote_lookup(&remote, repo, remote_name);
     if (rc < 0) return error_git(rc, "Cannot fetch from remote '%s'", remote_name);
 
+    /* Never pruning, whatever remote.<remote>.prune or fetch.prune says: left
+     * unspecified, the option is the configuration's (lib/libgit2/src/libgit2/
+     * remote.c git_remote_fetch, lookup_remote_prune_config) */
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
+    fetch_opts.prune = GIT_FETCH_NO_PRUNE;
     transfer_configure_callbacks(
         &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
     );
@@ -943,8 +947,12 @@ error_t gitops_fetch_branches(
         string_array_push(&refspecs, refspec);
     }
 
+    /* Never pruning, as every fetch here (gitops_fetch_remote): a tracking ref
+     * pruned under a profile the remote no longer holds reads its branch here
+     * as never pushed, which the next sync would push back */
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
+    fetch_opts.prune = GIT_FETCH_NO_PRUNE;
     transfer_configure_callbacks(
         &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
     );

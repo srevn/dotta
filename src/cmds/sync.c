@@ -20,7 +20,6 @@
 #include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
-#include "core/workspace.h"
 #include "infra/commit.h"
 #include "infra/epoch.h"
 #include "infra/label.h"
@@ -1417,11 +1416,12 @@ static void sync_print_epoch_damaged(output_t *out, const char *remote_name) {
  * fact-finding already happened in infra/epoch; this layer is pure policy and
  * printing.
  *
- * Runs before the fetch phase so the decision's census is never contaminated by
- * pulled remote ciphertext. Every outcome is best-effort — a warning and the
- * rest of the sync — which is why nothing here is returned: the two errors the
- * resolve produces, a local ref that would not read and a census that could not
- * finish, are verdicts to print, not a run to fail.
+ * Runs before any profile acts: its census walks the local branches (infra/epoch.c
+ * epoch_walk), which a pull moves and the fetch does not. Every outcome is
+ * best-effort — a warning and the rest of the sync — which is why nothing here
+ * is returned: the two errors the resolve produces, a local ref that would not
+ * read and a census that could not finish, are verdicts to print, not a run to
+ * fail.
  *
  * The epoch is machinery, so it says as little as it can get away with. Five of
  * the seven verdicts are a verbose line or nothing at all: dotta either did the
@@ -1737,8 +1737,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     };
     xfer = transfer_context_create(&xfer_opts);
 
-    /* Reconcile the repository epoch with the remote. Placed before the fetch
-     * so the divergence's census cannot see pulled remote ciphertext. */
+    /* Reconcile the repository epoch with the remote, before any profile acts:
+     * its census reads the local branches, which the fetch leaves and a pull
+     * moves. */
     sync_reconcile_epoch(ctx, remote_name, xfer, opts);
 
     err = sync_fetch(ctx, remote_name, scope, xfer);
@@ -1831,7 +1832,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * which clears it.
      *
      * Sync does not deploy, nor settle what a pull let go: apply's divergence
-     * analysis does both, which is what the hint closing the report points at.
+     * analysis does both.
      *
      * A failed build is not sync's failure — every Git ref already moved and
      * stands — and its message carries the repair (a tree that will not load,

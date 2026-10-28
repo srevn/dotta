@@ -2,7 +2,7 @@
  * list.c - List profiles, files, and commit history
  *
  * Hierarchical listing interface with three levels:
- * 1. Profiles (default) - Show every local profile
+ * 1. Profiles (default) - Show every profile here, and every enabled one
  * 2. Files (with -p) - Show files in a profile
  * 3. File History (with -p <file>) - Show commits affecting a file
  */
@@ -17,6 +17,7 @@
 
 #include "base/arena.h"
 #include "base/args.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "base/timeutil.h"
@@ -118,9 +119,13 @@ static error_t list_size_claim(const profile_claim_t *claim, void *payload) {
  * Default: the names, the enabled ones starred. Verbose: what each holds, what
  * that weighs, and its last commit. Remote: each one's remote sync status, in
  * the row and under the title status's remote section prints (cmds/status.c
- * status_print_remote) — the glyph beside its phrase, so no legend keys it. Every
- * mode closes on the total: the profiles, the enabled among them, and at verbose
- * what they weigh.
+ * status_print_remote) — the glyph beside its phrase, so no legend keys it. And
+ * beneath them in every mode, each enabled row Git lists no branch for, starred
+ * and marked (no branch) where a branch's facts would stand, as profile list
+ * marks its row (cmds/profile.c profile_list): the fact the view says as
+ * core/manifest.h manifest_missing, read off the rows and the listing, since
+ * list declares no view. Every mode closes on the total: the profiles listed,
+ * the enabled among them, and at verbose what they weigh.
  */
 static error_t list_profiles(
     const dotta_ctx_t *ctx,
@@ -140,7 +145,20 @@ static error_t list_profiles(
     error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
     if (err) return err;
 
-    if (profiles.count == 0) {
+    /* And every enabled row the listing holds no branch for, in the rows' order.
+     * The rows and the listing are joined by name, the star below asking the
+     * same join from the branch's side (state_enabled), so each row is listed
+     * once: starred on its branch's line, or beneath the rest. The rows are the
+     * handle's, and nothing here moves them (core/state.h state_profiles). */
+    state_profiles_t enabled_profiles = state_profiles(state);
+    string_array_t missing;
+    string_array_init(&missing, ctx->arena, 0);
+    for (size_t i = 0; i < enabled_profiles.count; i++) {
+        const char *name = enabled_profiles.entries[i].name;
+        if (!string_array_contains(&profiles, name)) string_array_push(&missing, name);
+    }
+
+    if (profiles.count == 0 && missing.count == 0) {
         output_summary(out, OUTPUT_NORMAL, "No profiles found");
         return NULL;
     }
@@ -160,11 +178,19 @@ static error_t list_profiles(
         }
     }
 
-    /* Calculate max profile name length for column alignment */
+    /* Calculate max profile name length for column alignment, over the enabled
+     * rows with no branch too: their mark stands where a branch's columns start */
     size_t max_name_len = 0;
     if (verbose || show_remote) {
         for (size_t i = 0; i < profiles.count; i++) {
             const char *name = profiles.entries[i];
+            size_t len = strlen(name);
+            if (len > max_name_len) {
+                max_name_len = len;
+            }
+        }
+        for (size_t i = 0; i < missing.count; i++) {
+            const char *name = missing.entries[i];
             size_t len = strlen(name);
             if (len > max_name_len) {
                 max_name_len = len;
@@ -275,14 +301,10 @@ static error_t list_profiles(
         output_section(out, OUTPUT_NORMAL, "Profiles");
     }
 
-    /* List profiles, counting the enabled ones for the total */
-    size_t enabled = 0;
+    /* List profiles, the enabled ones starred */
     for (size_t i = 0; i < profiles.count; i++) {
         const char *profile = profiles.entries[i];
-
-        bool is_enabled = state_enabled(state, profile);
-        const char *indicator = is_enabled ? "* " : "  ";
-        if (is_enabled) enabled++;
+        const char *indicator = state_enabled(state, profile) ? "* " : "  ";
 
         /* Simple mode: Just name with enabled indicator */
         if (!verbose && !show_remote) {
@@ -350,19 +372,33 @@ static error_t list_profiles(
         output_endline(out, OUTPUT_NORMAL);
     }
 
-    /* Print summary: the file listing's shape (list_files), the profiles counted
-     * and the enabled among them, and at verbose what they weigh */
+    /* Beneath them, each enabled row with no branch, as status lists them beneath
+     * the rest (cmds/status.c status_print_profiles). What a branch's line says
+     * beside its name — what it holds, what that weighs, its last commit, where
+     * it stands against the remote — is read off the branch, so the mark takes
+     * its place, in every mode */
+    for (size_t i = 0; i < missing.count; i++) {
+        output_print(
+            out, OUTPUT_NORMAL, "  * {cyan}%-*s{reset}  {yellow}(no branch){reset}\n",
+            (int) max_name_len, missing.entries[i]
+        );
+    }
+
+    /* Print summary: the file listing's shape (list_files), the profiles listed
+     * and the enabled among them — every enabled row, each listed once above —
+     * and at verbose what they weigh */
+    size_t total = profiles.count + missing.count;
     if (verbose) {
         char size_str[32];
         output_format_size(total_size, size_str, sizeof(size_str));
         output_summary(
             out, OUTPUT_VERBOSE, "Total: %zu profile%s, %zu enabled, %s",
-            profiles.count, profiles.count == 1 ? "" : "s", enabled, size_str
+            total, total == 1 ? "" : "s", enabled_profiles.count, size_str
         );
     } else {
         output_summary(
             out, OUTPUT_NORMAL, "Total: %zu profile%s, %zu enabled",
-            profiles.count, profiles.count == 1 ? "" : "s", enabled
+            total, total == 1 ? "" : "s", enabled_profiles.count
         );
     }
 

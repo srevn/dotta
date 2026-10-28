@@ -6,6 +6,7 @@ Profiles are the central organizing unit in dotta. Each profile is built on a Gi
 
 - **Available** -- exists as a local Git branch but is not enabled
 - **Enabled** -- switched on for this machine; every command acts on it (apply, update, sync, status)
+- **No branch** -- enabled, but Git holds no branch for it: it deploys nothing, and the listings mark it `(no branch)` until `dotta profile disable` drops it or `dotta profile fetch` brings its branch back
 - **Remote** -- exists on a remote but has not been fetched locally
 
 ## Enabling and Disabling

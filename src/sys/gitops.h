@@ -60,10 +60,10 @@
  * One producer for a fact every binary linking this library shares: how dotta
  * configures libgit2. The library's options are process-wide, so a knob set in
  * a `main()` would be the shipped binary's alone and every unit suite would
- * exercise a differently configured library — a difference that costs only
- * performance today and would cost correctness the first time a knob is one of
- * the strict-object or owner-validation family. Paired with gitops_shutdown so
- * no caller writes half of the lifecycle.
+ * exercise a differently configured library — a difference in speed for the object
+ * cache's knobs, and in what a run can read at all for the bound on the packs
+ * it holds open. Paired with gitops_shutdown so no caller writes half of the
+ * lifecycle.
  *
  * @return Error or NULL on success
  */

@@ -14,6 +14,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -61,15 +62,35 @@ error_t gitops_init(void) {
      *
      * Unchecked because a refused opt leaves these two defaults standing, and
      * standing they cost speed and change no answer. That is the test and not
-     * the habit: a knob whose refusal would change an answer — the strict-object
-     * and owner-validation family this function's header names — is checked where
-     * it is set. */
+     * the habit: a knob whose refusal would change an answer is checked where
+     * it is set, as the bound below is. */
     (void) git_libgit2_opts(
         GIT_OPT_SET_CACHE_OBJECT_LIMIT, GIT_OBJECT_TREE, (size_t) SIZE_MAX
     );
     (void) git_libgit2_opts(
         GIT_OPT_SET_CACHE_MAX_SIZE, (ssize_t) (64 * 1024 * 1024)
     );
+
+    /* A pack an object is read from keeps its descriptor for the run unless libgit2
+     * holds a bound, and its default is none: under one, a pack that registers
+     * closes the least recently used, never one with a window in use
+     * (lib/libgit2/src/libgit2/mwindow.c git_mwindow_file_register,
+     * DEFAULT_FILE_LIMIT), and a closed one opens again at its next read (pack.c
+     * packfile_open_locked). Every fetch that moves objects writes a pack and
+     * nothing here repacks, so past the soft descriptor limit, 256 on macOS, a
+     * run's reads would fail, naming objects the store holds. The bound is git's:
+     * the soft limit less 3 for stdin, stdout and stderr and 22 for work, one
+     * at least (lib/git/packfile.c open_packed_git_1). A limit the kernel does
+     * not set leaves one no run reaches; a getrlimit that fails — none can, for
+     * RLIMIT_NOFILE — leaves git's last resort, one. Checked: a refusal would
+     * leave every pack a run reads open. */
+    struct rlimit nofile;
+    const size_t packs = getrlimit(RLIMIT_NOFILE, &nofile) == 0 && nofile.rlim_cur > 25
+        ? (size_t) (nofile.rlim_cur - 25) : 1;
+    int rc = git_libgit2_opts(GIT_OPT_SET_MWINDOW_FILE_LIMIT, packs);
+    if (rc < 0) {
+        return error_git(rc, "Cannot limit the packs libgit2 holds open to %zu", packs);
+    }
 
     return NULL;
 }

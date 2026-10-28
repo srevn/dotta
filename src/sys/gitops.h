@@ -688,6 +688,11 @@ typedef struct transfer_context_s transfer_context_t;
  * lookup_remote_prune_config). A prune is a hand's, `dotta git fetch --prune`:
  * git's own, which no option here reaches.
  *
+ * Nothing is taken out of a fetched name's way, as gitops_fetch_branches takes
+ * a tracking ref out: the one reader, cmds/clone.c cmd_clone, fetches into a
+ * store it just created, which holds no tracking ref, and a remote holds no two
+ * names that nest.
+ *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
  * @param xfer Transfer context for credentials and progress (must not be NULL)
@@ -713,10 +718,27 @@ error_t gitops_fetch_remote(
  * refspec the remote's configuration holds, or none — and none is pruned where
  * the remote's branch went (gitops_fetch_remote).
  *
+ * Git's namespace holds a name or the names beneath it, never both
+ * (lib/libgit2/src/libgit2/refdb_fs.c reference_path_available), so a tracking
+ * ref in a requested name's way — at a name the requested one continues, or beneath
+ * it — would fail the whole fetch at its write, which libgit2 makes before any
+ * prune (remote.c git_remote_fetch). Each is taken out first, from its read
+ * (gitops_delete_reference), git's order (lib/git/builtin/fetch.c do_fetch prunes
+ * before it fetches), a look's fetch as an act's, whether or not the remote holds
+ * the requested name — which this fetch cannot tell. So every fetch reads the
+ * remote's tracking refs whole first (gitops_list_remote_tracking), and one that
+ * will not read refuses it. One beside a branch that stands here is never taken
+ * out: it is that branch's counterpart, and its branch stands in the requested
+ * name's way here too — so a name whose way it holds is barred: not fetched,
+ * nothing written for it, as for a name the remote lacks. Where every name is
+ * barred, nothing is asked of the remote.
+ *
  * Readers: cmds/sync.c sync_fetch (every profile in the run's scope) and
  * cmds/status.c status_remote (every profile its section lists), each asking
- * for branches the remote may never have held; cmds/profile.c profile_fetch (the
- * profiles the remote was just listed as holding, gitops_list_remote_branches).
+ * for branches the remote may never have held, every one a branch here — and no
+ * branch here is nested with another, so neither meets a barred name;
+ * cmds/profile.c profile_fetch (the profiles the remote was just listed as holding,
+ * gitops_list_remote_branches), whose names a branch here may bar.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
@@ -956,7 +978,8 @@ error_t gitops_write_reference(
  * microseconds between this read and that lock is refused with the reflog gone,
  * the reference standing where its writer left it.
  *
- * Reader: gitops_delete_branch.
+ * Readers: gitops_delete_branch; gitops_fetch_branches, each tracking ref it
+ * takes out of a fetched name's way, from the id it read there.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL or empty)
@@ -987,8 +1010,10 @@ error_t gitops_delete_reference(
  * readers that act on a reference's absence as an answer: sys/upstream.c
  * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
  * sync_fast_forward (nothing fetched to fast-forward to), infra/epoch.c
- * epoch_resolve (no local epoch), gitops_reference_commit, which reads the commit
- * at the id, and gitops_resolve_reference_oid, which refuses it.
+ * epoch_resolve (no local epoch), gitops_fetch_branches (a tracking ref in a
+ * fetched name's way gone since its listing, nothing to take out),
+ * gitops_reference_commit, which reads the commit at the id, and
+ * gitops_resolve_reference_oid, which refuses it.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)

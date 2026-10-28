@@ -229,11 +229,14 @@ error_t upstream_ensure_tracking_branch(
 
     /* A name Git's ref namespace cannot hold beside the ones already here. The
      * remote cannot ship a colliding pair — Git forbids it there too — so the
-     * blocker is always a local branch: a profile added on this machine and never
-     * pushed, standing where a fetched one would go. Refused by name, ahead of
-     * the ref write whose own message names only one of the two. The listing
-     * the blocker is read from is a frame of this call's own: what the call answers
-     * is no memory, and the refusal copies the name. */
+     * blocker is a branch here the remote does not hold: one never pushed, standing
+     * where a fetched one would go, or one the remote no longer holds, whose
+     * tracking ref stood in the fetched name's way and barred its fetch
+     * (sys/gitops.h gitops_fetch_branches). Refused by name, ahead of the ref
+     * write whose own message names only one of the two, and of the barred name's
+     * tracking ref, which no fetch wrote. The listing the blocker is read from
+     * is a frame of this call's own: what the call answers is no memory, and
+     * the refusal copies the name. */
     arena_t *frame = arena_create(0);
     const char *blocker = NULL;
     err = gitops_branch_blocker(repo, branch_name, frame, &blocker);

@@ -239,7 +239,9 @@ static error_t sync_fetch(
     /* The fetch's own error, which names the remote and the act: a refused
      * credential in the words the transfer's callback set for what was offered
      * (sys/transfer.c transfer_credentials_callback), any other failure — a ref
-     * write as well as a network — in libgit2's */
+     * write as well as a network — in libgit2's; or a tracking ref the fetch
+     * read or took out of a name's way first, naming the ref (sys/gitops.h
+     * gitops_fetch_branches) */
     if (err) return err;
 
     /* At verbose, the fetch done and what it moved: one op and one pack, so one

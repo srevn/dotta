@@ -358,6 +358,23 @@ error_t gitops_branch_exists(
     return gitops_reference_exists(repo, refname, exists);
 }
 
+/*
+ * Nested names: one is a folder the other lives in — the shorter matched whole,
+ * with a '/' where the longer one continues past it — and Git's namespace holds
+ * one of the two, never both (lib/libgit2/src/libgit2/refdb_fs.c
+ * reference_path_available). Equal names are not nested, and the boundary test
+ * says so on its own: the shorter length indexes the other name's terminator.
+ * Readers: gitops_branch_blocker, a branch in a name's way; gitops_fetch_branches,
+ * a tracking ref in a fetched name's way.
+ */
+static bool gitops_nested(const char *a, const char *b) {
+    size_t a_len = strlen(a);
+    size_t b_len = strlen(b);
+    size_t shorter = a_len < b_len ? a_len : b_len;
+
+    return strncmp(a, b, shorter) == 0 && (a_len > b_len ? a[b_len] : b[a_len]) == '/';
+}
+
 error_t gitops_branch_blocker(
     git_repository *repo, const char *name, arena_t *arena, const char **out
 ) {
@@ -380,19 +397,11 @@ error_t gitops_branch_blocker(
     err = gitops_list_branches(repo, arena, &branches);
     if (err) return err;
 
-    size_t len = strlen(name);
+    /* The first branch nested with it: a name, or the folder of names, Git cannot
+     * hold beside it (gitops_nested) */
     for (size_t i = 0; i < branches.count; i++) {
-        const char *other = branches.entries[i];
-        size_t other_len = strlen(other);
-
-        /* Nested names: one is a folder the other lives in — the shorter matched
-         * whole, with a '/' where the longer one continues past it. Equal names
-         * are not nested, and the boundary test says so on its own: the shorter
-         * length indexes the other name's terminator. */
-        size_t shorter = other_len < len ? other_len : len;
-        if (strncmp(other, name, shorter) == 0
-            && (other_len > len ? other[len] : name[other_len]) == '/') {
-            *out = other;
+        if (gitops_nested(branches.entries[i], name)) {
+            *out = branches.entries[i];
             return NULL;
         }
     }
@@ -932,15 +941,21 @@ error_t gitops_fetch_branches(
     int rc = git_remote_lookup(&remote, repo, remote_name);
     if (rc < 0) return error_git(rc, "Cannot fetch from remote '%s'", remote_name);
 
-    /* The refspecs, one per branch, in a frame of this call's own — its answer
-     * is no memory — and in the one shape git_strarray reads: a string array's
-     * entries are an argv as they stand. */
+    /* The refspecs, one per branch the fetch can write, and the tracking refs
+     * in their way, in a frame of this call's own — its answer is no memory —
+     * the refspecs in the one shape git_strarray reads: a string array's entries
+     * are an argv as they stand. The tracking refs are listed whole first, complete
+     * or an error, for the ones in a requested name's way (the header). */
     arena_t *frame = arena_create(0);
-    string_array_t refspecs;
+    string_array_t refspecs, blockers, remote_branches;
     string_array_init(&refspecs, frame, branches->count);
+    string_array_init(&blockers, frame, 0);
+    error_t err = gitops_list_remote_tracking(repo, remote_name, frame, &remote_branches);
+    if (err) goto cleanup;
 
-    error_t err = NULL;
     for (size_t i = 0; i < branches->count; i++) {
+        const char *branch = branches->entries[i];
+
         /* Each refspec's halves, the branch's ref and the remote-tracking ref
          * it lands at — +refs/heads/<branch>:refs/remotes/<remote>/<branch> —
          * each spelled where every one is; two built names fit the refspec's
@@ -951,19 +966,56 @@ error_t gitops_fetch_branches(
          * and only a fetch refspec the remote's configuration holds would write
          * it after (opportunistic_updates) */
         char refname[DOTTA_REFNAME_MAX];
-        err = gitops_branch_refname(refname, sizeof(refname), branches->entries[i]);
+        err = gitops_branch_refname(refname, sizeof(refname), branch);
         if (err) goto cleanup;
 
         char tracking[DOTTA_REFNAME_MAX];
-        err = gitops_remote_branch_refname(
-            tracking, sizeof(tracking), remote_name, branches->entries[i]
-        );
+        err = gitops_remote_branch_refname(tracking, sizeof(tracking), remote_name, branch);
         if (err) goto cleanup;
 
         char refspec[DOTTA_REFSPEC_MAX];
         err = gitops_build_refname(refspec, sizeof(refspec), "+%s:%s", refname, tracking);
         if (err) goto cleanup;
+
+        /* Barred where a tracking ref in its way (gitops_nested) stands beside
+         * its own branch here: that branch's counterpart, never taken out, so
+         * the name is not fetched (the header) */
+        bool barred = false;
+        for (size_t j = 0; j < remote_branches.count && !barred; j++) {
+            if (!gitops_nested(remote_branches.entries[j], branch)) continue;
+            err = gitops_branch_exists(repo, remote_branches.entries[j], &barred);
+            if (err) goto cleanup;
+        }
+        if (barred) continue;
+
+        /* Otherwise each one in its way is taken out, once however many names
+         * it stands in the way of */
+        for (size_t j = 0; j < remote_branches.count; j++) {
+            const char *other = remote_branches.entries[j];
+            if (gitops_nested(other, branch) && !string_array_contains(&blockers, other)) {
+                string_array_push(&blockers, other);
+            }
+        }
         string_array_push(&refspecs, refspec);
+    }
+
+    /* Every name barred: nothing to ask of the remote, where an empty list would
+     * fetch its configured refspecs (remote.c git_remote__download) */
+    if (refspecs.count == 0) goto cleanup;
+
+    /* Each one in the way taken out before the fetch writes anything, git's order
+     * (lib/git/builtin/fetch.c do_fetch prunes first, "to avoid F/D conflicts"),
+     * and from its read: one gone since the listing leaves nothing to take, one
+     * moved since its read refuses (gitops_delete_reference) */
+    for (size_t i = 0; i < blockers.count; i++) {
+        char tracking[DOTTA_REFNAME_MAX];
+        git_oid id;
+        err = gitops_remote_branch_refname(
+            tracking, sizeof(tracking), remote_name, blockers.entries[i]
+        );
+        if (!err) err = gitops_reference_oid(repo, tracking, &id);
+        if (!err && !git_oid_is_zero(&id)) err = gitops_delete_reference(repo, tracking, &id);
+        if (err) goto cleanup;
     }
 
     /* Never pruning, as every fetch here (gitops_fetch_remote): a tracking ref

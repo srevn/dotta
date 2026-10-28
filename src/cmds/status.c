@@ -1530,7 +1530,9 @@ static status_remote_t status_remote(
 
         if (err) {
             /* Non-fatal: warn and continue with status display. The fetch's failure
-             * names its act and the remote (sys/gitops.h), a block of its own. */
+             * names its act and the remote, or the tracking ref it read or took
+             * out of a name's way first (sys/gitops.h gitops_fetch_branches), a
+             * block of its own. */
             output_gap(out, OUTPUT_VERBOSE);
             output_warning(out, OUTPUT_VERBOSE, "%s", error_line(err));
         }

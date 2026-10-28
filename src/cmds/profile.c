@@ -346,9 +346,12 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
 
     /* One fetch brings the selection, as sync's brings its scope (cmds/sync.c
      * sync_fetch): one negotiation and one pack for every profile, so what can
-     * still fail profile by profile is the profile's own, below. A progress line
+     * still fail profile by profile is the profile's own, below — a name a branch
+     * here bars among them, which the fetch passes over (sys/gitops.h
+     * gitops_fetch_branches) and its row refuses by both names. A progress line
      * while it runs, a terminal's alone (base/output.h output_progress), and
-     * its failure the run's, naming the act and the remote. */
+     * its failure the run's, naming the act and the remote, or the tracking ref
+     * it would take out of a name's way. */
     output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
 
     const transfer_stats_t mark = transfer_stats(xfer);
@@ -362,7 +365,9 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     /* At verbose, the fetch done and what it moved: one op and one pack, so one
      * wire, never a profile's (lib/libgit2/include/git2/indexer.h
      * git_indexer_progress) — dim beside the line, and nothing where nothing
-     * moved */
+     * moved. A fetch whose every name a branch here barred asked nothing of the
+     * remote, and the line says it fetched all the same, over the rows that refuse
+     * each name (stated: the fetch answers no word of what it asked) */
     const transfer_wire_t received = transfer_stats_since(xfer, mark).received;
     output_print(out, OUTPUT_VERBOSE, "{green}✓{reset} Fetched from '%s'", remote_name);
     if (received.objects > 0) {

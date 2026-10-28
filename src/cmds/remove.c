@@ -1181,19 +1181,38 @@ static error_t remove_profile(
 
     /* Initialize all resources to NULL */
     error_t err = NULL;
+    git_tree *tree = NULL;
     profile_t *profile = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
 
-    /* Is the profile here? Git's answer or Git's error: an unreadable ref is
-     * not an absence. One that is not here is refused whatever --force says:
-     * the flag answers the questions a deletion asks — the warnings below and
-     * the confirmation they preface — and an absence is none of them. */
-    bool exists = false;
-    err = gitops_branch_exists(repo, opts->profile, &exists);
-    if (err) goto cleanup;
-    if (!exists) {
+    /* The branch's head, read once and first: what the deletion says before it
+     * acts is said of this commit, and the delete takes the branch only where
+     * it still names it (sys/gitops.h gitops_delete_branch), so a commit landed
+     * since — the pre-remove hook's, another writer's — is never deleted unseen.
+     * Git's answer or Git's error: an unreadable ref is not an absence, and a
+     * head that will not read refuses here, in gitops' words, which name the
+     * branch. One that is not here is refused whatever --force says: the flag
+     * answers the questions a deletion asks — the warnings below and the
+     * confirmation they preface — and an absence is none of them. The id is kept
+     * and the commit let go: the tree and the id are all the deletion reads of
+     * it. */
+    git_commit *head = NULL;
+    err = gitops_branch_commit(repo, opts->profile, &head);
+    if (!err && !head) {
         err = error_create(ERR_NOT_FOUND, "Profile '%s' does not exist", opts->profile);
+    }
+    if (err) goto cleanup;
+
+    git_oid head_oid;
+    git_oid_cpy(&head_oid, git_commit_id(head));
+    int rc = git_commit_tree(&tree, head);
+    git_commit_free(head);
+    if (rc < 0) {
+        /* In the words the walk below says of a tree it cannot read
+         * (core/profiles.h profile_walk): the deletion says one thing of its
+         * tree */
+        err = error_git(rc, "Cannot read profile '%s'", opts->profile);
         goto cleanup;
     }
 
@@ -1210,12 +1229,10 @@ static error_t remove_profile(
         goto cleanup;
     }
 
-    /* The profile at its head, read once for all the deletion says before it
-     * acts: every claim it takes, for its hooks, and what it holds, for the preview
-     * and the confirmation, one commit for both. A head that will not load refuses
-     * here, in gitops' words, which name the branch. */
-    err = profile_load(repo, opts->profile, &profile);
-    if (err) goto cleanup;
+    /* The profile at that tree, for all the deletion says before it acts: every
+     * claim it takes, for its hooks, and what it holds, for the preview and the
+     * confirmation, one commit for both */
+    profile = profile_open(opts->profile, tree);
 
     /* Every claim the deletion takes, each placed where this machine puts it —
      * the claims the walk shows, and those the tree contradicts, by the producer
@@ -1249,12 +1266,14 @@ static error_t remove_profile(
      * profile_counts): one truth with `dotta list`. Its failure is display-only
      * — the deletion must not refuse over a count — so it becomes the phrase
      * the preview prints, its error dropped and err back to the NULL the phase
-     * began with. The profile is read no further: the claims its hooks are handed
-     * hold their own copies. */
+     * began with. The profile and its tree are read no further: the claims its
+     * hooks are handed hold their own copies. */
     profile_counts_t count = { 0 };
     err = profile_counts(profile, &count);
     profile_free(profile);
     profile = NULL;
+    git_tree_free(tree);
+    tree = NULL;
 
     char counts[64];
     if (err) {
@@ -1343,7 +1362,8 @@ static error_t remove_profile(
      * each once, by the producer the path route's hooks read (remove_hook_paths):
      * HOME and ROOT place every home/ and root/ claim, and a custom/ claim with
      * no binding here hands its name. The list is the command arena's. The deletion
-     * reads no draft: it deletes the branch whatever the hook committed. */
+     * reads no draft, and a commit the hook lands refuses it: it deletes from
+     * the head read first. */
     const string_array_t hook_paths = remove_hook_paths(ctx->arena, claims, claim_count);
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
@@ -1384,8 +1404,11 @@ static error_t remove_profile(
     /* No filesystem deletion here either — see the Architectural note in
      * remove_paths: apply owns deferred filesystem cleanup. */
 
-    /* Delete local branch */
-    err = gitops_delete_branch(repo, opts->profile);
+    /* The branch, from the head read first: one another writer moved since —
+     * the hook above, a second terminal — refuses the deletion in the writer's
+     * words, the branch and its reflog standing, nothing recorded and nothing
+     * pushed; run again, the deletion says what the branch then holds */
+    err = gitops_delete_branch(repo, opts->profile, &head_oid);
     if (err) goto cleanup;
 
     /* Success message: every exit before the deletion is behind us (dry run,
@@ -1462,9 +1485,11 @@ static error_t remove_profile(
     hook_fire_post(config, out, &hook_inv);
 
 cleanup:
-    /* The profile is freed once its count is read; here only a refusal before
-     * that frees it. The record phase ended its own transaction. */
+    /* The profile and the tree it was opened at are freed once its count is read;
+     * here only a refusal before that frees them. The record phase ended its
+     * own transaction. */
     profile_free(profile);
+    git_tree_free(tree);
 
     return err;
 }

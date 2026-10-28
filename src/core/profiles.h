@@ -260,9 +260,11 @@ typedef struct profile profile_t;
  * cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c cmd_export,
  * cmds/show.c cmd_show and cmds/list.c list_file_history (the tree the verb
  * selected), cmds/list.c list_profiles and list_files (the tree of the head each
- * listing read, so what each prints is that commit's); profile_load, at the head
- * it read; and a profile's draft, at the tree its stage opened at — a head, or
- * Git's empty tree (profile_draft_open, profile_draft_orphan).
+ * listing read, so what each prints is that commit's), cmds/remove.c remove_profile
+ * (the tree of the head its deletion is from: every claim for its hooks, the
+ * counts for its preview); profile_load, at the head it read; and a profile's
+ * draft, at the tree its stage opened at — a head, or Git's empty tree
+ * (profile_draft_open, profile_draft_orphan).
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
@@ -286,10 +288,9 @@ profile_t *profile_open(const char *name, const git_tree *tree);
  * which load every local profile; cmds/ignore.c ignore_test; the questions asked
  * of a head by name, what it holds and whether it needs a target — cmds/profile.c
  * profile_list and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c
- * read_targets; what a profile's deletion takes, every claim for its hooks and
- * the counts for its preview (cmds/remove.c remove_profile); and the directory
- * claims a completion offers at a profile's head — export's (cmds/completion.c
- * completion_directories) and remove's own (cmds/remove.c remove_complete).
+ * read_targets; and the directory claims a completion offers at a profile's head
+ * — export's (cmds/completion.c completion_directories) and remove's own
+ * (cmds/remove.c remove_complete).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param name The profile's name, which its branch is named by (must not be NULL;

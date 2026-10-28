@@ -611,27 +611,29 @@ error_t gitops_list_remote_tracking(
     return NULL;
 }
 
-error_t gitops_delete_branch(git_repository *repo, const char *name) {
+error_t gitops_delete_branch(
+    git_repository *repo, const char *name, const git_oid *expected
+) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
+    CHECK_NULL(expected);
 
     char refname[DOTTA_REFNAME_MAX];
     error_t err = gitops_branch_refname(refname, sizeof(refname), name);
     if (err) return err;
 
-    /* The lookup is the deletion's first step, and its failure is the deletion's */
-    git_reference *ref = NULL;
-    int rc = git_reference_lookup(&ref, repo, refname);
-    if (rc < 0) {
-        return error_git(rc, "Failed to delete branch '%s'", name);
-    }
-
     /* A linked worktree's checkout is the one that must be asked (the header):
      * the store itself checks nothing out, so a bare main repository is passed
      * over by libgit2's walk of the worktrees and only a linked one can answer.
      * A walk that fails answers "not checked out" (branch.c
-     * git_branch_is_checked_out), so an unreadable worktree refuses nothing. */
-    if (git_branch_is_checked_out(ref)) {
+     * git_branch_is_checked_out), so an unreadable worktree refuses nothing.
+     * The walk is asked of a reference, found for it beside the delete's own
+     * read: a branch gone since is asked of no worktree, and the delete refuses
+     * it. */
+    git_reference *ref = NULL;
+    err = gitops_reference_find(repo, refname, &ref);
+    if (err) return err;
+    if (ref && git_branch_is_checked_out(ref)) {
         git_reference_free(ref);
         return error_create(
             ERR_CONFLICT,
@@ -639,14 +641,10 @@ error_t gitops_delete_branch(git_repository *repo, const char *name) {
             "'dotta git worktree list' names it", name
         );
     }
-
-    rc = git_reference_delete(ref);
     git_reference_free(ref);
-    if (rc < 0) {
-        return error_git(rc, "Failed to delete branch '%s'", name);
-    }
 
-    return NULL;
+    /* The ref and its reflog, only where it still names what its writer read */
+    return gitops_delete_reference(repo, refname, expected);
 }
 
 /**
@@ -1319,6 +1317,47 @@ static error_t gitops_reference_terminal(
     );
 }
 
+/*
+ * The id a found reference names, into `out` — Git's null id where none was found
+ * (NULL): the one reading of what a reference names, for every reader that holds
+ * the reference it read (gitops_reference_oid, after its find;
+ * gitops_delete_reference, whose delete takes that reference). Unlike libgit2's
+ * git_reference_target it reads a symbolic one through to the one it names.
+ */
+static error_t gitops_reference_target(const git_reference *ref, git_oid *out) {
+    if (!ref) {
+        memset(out, 0, sizeof(*out));
+        return NULL;
+    }
+
+    /* A direct reference's target as it was found: resolving it would look the
+     * name up a second time (refs.c git_reference_resolve). Through a symbolic
+     * one to the one it names — one that names nothing stands, and resolves to
+     * no id. */
+    const char *refname = git_reference_name(ref);
+    if (git_reference_type(ref) == GIT_REFERENCE_DIRECT) {
+        git_oid_cpy(out, git_reference_target(ref));
+    } else {
+        git_reference *direct = NULL;
+        int rc = git_reference_resolve(&direct, ref);
+        if (rc < 0) return error_git(rc, "Failed to resolve reference '%s'", refname);
+        git_oid_cpy(out, git_reference_target(direct));
+        git_reference_free(direct);
+    }
+
+    /* Git's null id is no object's, and a reference standing at it is broken,
+     * as git reads one (lib/git/refs/files-backend.c
+     * loose_fill_ref_dir_regular_file): never the absence this answer reserves
+     * it for. */
+    if (git_oid_is_zero(out)) {
+        return error_create(
+            ERR_GIT, "Reference '%s' is broken: it names the null id", refname
+        );
+    }
+
+    return NULL;
+}
+
 error_t gitops_write_reference(
     git_repository *repo, const char *refname, const git_oid *target,
     const git_oid *expected, const char *reflog_msg
@@ -1357,6 +1396,42 @@ error_t gitops_write_reference(
     return NULL;
 }
 
+error_t gitops_delete_reference(
+    git_repository *repo, const char *refname, const git_oid *expected
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(refname);
+    CHECK_NULL(expected);
+    CHECK_ARG(!git_oid_is_zero(expected), "a delete expects the id its writer read standing");
+
+    /* What it names, read as gitops_reference_oid reads it — the null id where
+     * none stands — off the one reference the delete then takes: a lookup of
+     * its own would hand libgit2's compare another read than this one */
+    git_reference *ref = NULL;
+    error_t err = gitops_reference_find(repo, refname, &ref);
+    if (err) return err;
+    git_oid id;
+    err = gitops_reference_target(ref, &id);
+
+    /* Taken only where it still names what its writer read, before libgit2's
+     * lock takes the reflog (the header), and compared again under that lock
+     * against this read: a move since is refused there as modified, a deletion
+     * since as not found (refdb_fs.c refdb_fs_backend__delete_tail, cmp_old_ref)
+     * — one refusal either way, its writer having read it standing */
+    int rc = !err && git_oid_equal(&id, expected) ? git_reference_delete(ref) : GIT_EMODIFIED;
+    git_reference_free(ref);
+    if (err) return err;
+    if (rc == GIT_EMODIFIED || rc == GIT_ENOTFOUND) {
+        return error_create(
+            ERR_CONFLICT, "Reference '%s' was changed by another writer since this "
+            "command read it", refname
+        );
+    }
+    if (rc < 0) return error_git(rc, "Cannot delete reference '%s'", refname);
+
+    return NULL;
+}
+
 error_t gitops_reference_oid(
     git_repository *repo, const char *ref_name, git_oid *out
 ) {
@@ -1365,42 +1440,15 @@ error_t gitops_reference_oid(
     CHECK_NULL(out);
 
     /* Found, or its absence proven (gitops_reference_find): a packed-refs that
-     * will not parse is its own failure, never a reference that is not there. */
+     * will not parse is its own failure, never a reference that is not there.
+     * What it names is read as the delete reads it (gitops_reference_target). */
     git_reference *ref = NULL;
     error_t err = gitops_reference_find(repo, ref_name, &ref);
     if (err) return err;
-    if (!ref) {
-        memset(out, 0, sizeof(*out));
-        return NULL;
-    }
 
-    /* Through a symbolic reference to the one it names — one that names nothing
-     * stands, and resolves to no id — and a direct one's target as it was found:
-     * resolving it would look the name up a second time (refs.c
-     * git_reference_resolve). */
-    if (git_reference_type(ref) == GIT_REFERENCE_SYMBOLIC) {
-        git_reference *direct = NULL;
-        int rc = git_reference_resolve(&direct, ref);
-        git_reference_free(ref);
-        if (rc < 0) {
-            return error_git(rc, "Failed to resolve reference '%s'", ref_name);
-        }
-        ref = direct;
-    }
-
-    /* Git's null id is no object's, and a reference standing at it is broken,
-     * as git reads one (lib/git/refs/files-backend.c
-     * loose_fill_ref_dir_regular_file): never the absence this answer reserves
-     * it for. */
-    git_oid_cpy(out, git_reference_target(ref));
+    err = gitops_reference_target(ref, out);
     git_reference_free(ref);
-    if (git_oid_is_zero(out)) {
-        return error_create(
-            ERR_GIT, "Reference '%s' is broken: it names the null id", ref_name
-        );
-    }
-
-    return NULL;
+    return err;
 }
 
 error_t gitops_resolve_reference_oid(

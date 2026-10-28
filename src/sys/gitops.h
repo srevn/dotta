@@ -196,7 +196,9 @@ void gitops_close_repository(git_repository *repo);
  *
  * Readers: gitops_reference_exists, and every presence question through it;
  * gitops_reference_oid, and every reader of what a reference names through it —
- * its id, its commit, its tree (their headers).
+ * its id, its commit, its tree (their headers); gitops_delete_reference, which
+ * deletes the reference it finds; gitops_delete_branch, the worktrees' question
+ * of a branch.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL or empty)
@@ -340,23 +342,31 @@ error_t gitops_list_remote_tracking(
 );
 
 /**
- * Delete a branch
+ * Delete a branch, only from the head its writer read
  *
- * The ref and its reflog. Refused, in dotta's words, when a linked worktree of
- * the repository has the branch checked out (`dotta git worktree add`): a bare
- * store checks nothing out itself, so a worktree is the one place a checkout of
- * a profile can stand, and `git_reference_delete` would take the branch from
+ * gitops_delete_reference of refs/heads/<name>, the name through the branch rule
+ * (gitops_branch_refname) on the way: the ref and its reflog, only where the
+ * branch still names `expected`. Refused, in dotta's words, when a linked worktree
+ * of the repository has the branch checked out (`dotta git worktree add`): a
+ * bare store checks nothing out itself, so a worktree is the one place a checkout
+ * of a profile can stand, and `git_reference_delete` would take the branch from
  * under it without a word. Not refused for the branch HEAD names: HEAD is git's
  * and unborn (gitops_init_repository), a hand may have pointed it at a profile,
  * and git itself deletes that branch in a bare repository — `git_branch_delete`
  * is the stricter one and is not used. Per-branch config another tool wrote
  * (`branch.<name>.*`) is that tool's and stays; dotta writes none.
  *
+ * Reader: cmds/remove.c remove_profile, from the head its preview read.
+ *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
- * @return Error or NULL on success
+ * @param expected The head its writer read (must not be NULL, nor Git's null id)
+ * @return NULL; ERR_CONFLICT naming the branch where a linked worktree has it
+ *         checked out; every other answer gitops_delete_reference's
  */
-error_t gitops_delete_branch(git_repository *repo, const char *name);
+error_t gitops_delete_branch(
+    git_repository *repo, const char *name, const git_oid *expected
+);
 
 /**
  * The commit a reference names, or NULL where no reference stands
@@ -414,8 +424,10 @@ error_t gitops_reference_tree(
  * Readers: core/manifest.c manifest_build (each enabled profile, its claims read
  * from the head's tree and the head's id kept beside them, a branch gone
  * contributing nothing), core/workspace.c workspace_ask_departures (each owned
- * file orphan's profile, whose branch gone answers every name GONE) and cmds/sync.c
- * sync_departure_counts (each profile whose files a pull's view lost).
+ * file orphan's profile, whose branch gone answers every name GONE), cmds/sync.c
+ * sync_departure_counts (each profile whose files a pull's view lost) and
+ * cmds/remove.c remove_profile (the head a deletion takes, read once, before it
+ * says what it takes; a branch gone, no profile to delete).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
@@ -926,14 +938,53 @@ error_t gitops_write_reference(
 );
 
 /**
+ * Delete a reference, only from the state its writer read
+ *
+ * `refname` goes, and its reflog with it, only where it still names `expected`,
+ * the id its writer read there — git's update-ref -d <ref> <old>. What it names
+ * is read as gitops_reference_oid reads it — an absence proven, a damaged
+ * packed-refs the read's own failure, a symbolic reference read through — off
+ * the one reference the delete then takes, so libgit2 compares again under the
+ * reference's lock against that read (lib/libgit2/src/libgit2/refs.c
+ * git_reference_delete, refdb_fs.c refdb_fs_backend__delete_tail). A symbolic
+ * reference is deleted itself, as git's branch -d deletes one
+ * (lib/git/builtin/branch.c, REF_NO_DEREF), never what it names, which update-ref
+ * -d without --no-deref would delete (lib/git/builtin/update-ref.c).
+ *
+ * One window stays: libgit2 takes the lock and deletes the reflog before it
+ * compares (refdb_fs.c refdb_fs_backend__delete), so a write inside the
+ * microseconds between this read and that lock is refused with the reflog gone,
+ * the reference standing where its writer left it.
+ *
+ * Reader: gitops_delete_branch.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param refname Full reference name (must not be NULL or empty)
+ * @param expected The id its writer read there (must not be NULL, nor Git's null
+ *                 id: a writer deletes what it read standing)
+ * @return NULL; ERR_CONFLICT "Reference '<refname>' was changed by another writer
+ *         since this command read it" where it names another id or none — moved
+ *         or deleted since, met at this read or at libgit2's under the lock —
+ *         and nowhere else; the read's own failure, gitops_reference_oid's; every
+ *         other failure Git's, in Git's words — a lock another writer holds among
+ *         them
+ */
+error_t gitops_delete_reference(
+    git_repository *repo,
+    const char *refname,
+    const git_oid *expected
+);
+
+/**
  * The id a reference names, or Git's null id where none stands
  *
  * gitops_reference_find, read through a symbolic reference to the one it names:
  * the null id — all zeros, git_oid_is_zero, Git's own id for no object — only
  * where the absence is proven. A symbolic reference that names nothing is a
  * failure, not an absence, and so is a reference that stands at the null id:
- * git reads one as broken (lib/git/refs/files-backend.c), never as missing. For
- * the readers that act on a reference's absence as an answer: sys/upstream.c
+ * git reads one as broken (lib/git/refs/files-backend.c), never as missing. The
+ * delete reads the reference it takes so too (gitops_delete_reference). For the
+ * readers that act on a reference's absence as an answer: sys/upstream.c
  * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
  * sync_fast_forward (nothing fetched to fast-forward to), infra/epoch.c
  * epoch_resolve (no local epoch), gitops_reference_commit, which reads the commit

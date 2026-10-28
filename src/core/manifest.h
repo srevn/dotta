@@ -852,7 +852,8 @@ typedef struct {
  * or the profile a disable lets go of.
  *
  * Readers: the health channel's listing (cmds/status.c status_print_profiles)
- * and apply's (cmds/apply.c cmd_apply).
+ * and apply's (cmds/apply.c cmd_apply); and an enable that names one says so,
+ * with both ways out (cmds/profile.c profile_enable).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the profiles' names, valid for the arena's lifetime

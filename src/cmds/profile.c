@@ -470,16 +470,17 @@ cleanup:
  * set as it stands at dispatch (the spec declares it; a set that will not build
  * ends dispatch with the builder's message, and the enable never runs):
  *   1. Gather & validate — resolve --all/args to a request set, then filter out
- *      the already-enabled, the missing, and the ones that need a target and
- *      were named without one: such a profile is enabled only with one, so it
- *      is skipped and told the flag, whatever the request shape. Each skip is
- *      said once — a refused profile by its warning, the already-enabled by one
- *      count — and a run that enabled nothing is an error where one was refused.
- *      An enabled profile whose claims hold no target is told the flag too;
- *      produces to_enable_validated. An already-enabled profile named with a
- *      --target that differs from its row's is not a skip: it re-enters the
- *      validated set as a retarget, and `retarget` remembers which one (at most
- *      one: a target binds the one profile the line names,
+ *      the already-enabled, the ones not here, and the ones that need a target
+ *      and were named without one: such a profile is enabled only with one, so
+ *      it is skipped and told the flag, whatever the request shape. Each skip
+ *      is said once — a refused profile by its warning, the already-enabled by
+ *      one count — and a run that enabled nothing is an error where one was
+ *      refused. An enabled profile whose claims hold no target is told the flag
+ *      too, and one whose branch is gone is told so with both ways out, whichever
+ *      arm it takes; produces to_enable_validated. An already-enabled profile
+ *      named with a --target that differs from its row's is not a skip: it
+ *      re-enters the validated set as a retarget, and `retarget` remembers which
+ *      one (at most one: a target binds the one profile the line names,
  *      profile_enable_post_parse).
  *   2. Write scope to state — state_enable_profile per target. The one call serves
  *      both kinds: a fresh enable inserts the row, a retarget runs the UPSERT
@@ -516,7 +517,7 @@ static error_t profile_enable(
      * profile_enable_post_parse). */
     const char *retarget = NULL;
     size_t already_enabled = 0;
-    size_t refused = 0;    /* Missing, or needing a target the line did not give */
+    size_t refused = 0;    /* Not here, or needing a target the line did not give */
 
     /* Phase 1: Gather & validate
      *
@@ -563,10 +564,10 @@ static error_t profile_enable(
         if (err) return error_wrap(err, "Invalid --target value");
     }
 
-    /* Filter: already-enabled, missing-branch and needs-a-target are per-profile
-     * skips — unless the already-enabled profile came with a differing --target,
-     * which is a retarget and stays in the run's work. The surviving set lands
-     * in to_enable_validated. */
+    /* Filter: already-enabled, not-here and needs-a-target are per-profile skips
+     * — unless the already-enabled profile came with a differing --target, which
+     * is a retarget and stays in the run's work. The surviving set lands in
+     * to_enable_validated. */
     string_array_t to_enable_validated;
     string_array_init(&to_enable_validated, ctx->arena, 0);
 
@@ -577,6 +578,28 @@ static error_t profile_enable(
         if (!hashmap_add(seen_set, name, NULL)) continue;
 
         if (state_enabled(state, name)) {
+            /* A row whose branch is gone, said whichever arm below it takes — a
+             * retarget moves its binding and brings no branch back: the fact in
+             * the set's words (core/scope.h scope_require_enabled), and both
+             * ways out in apply's order (cmds/apply.c cmd_apply), enable asking
+             * no remote which of them it is. The fact is the view before's, as
+             * the unbound one below is (core/manifest.h manifest_missing). */
+            manifest_missing_t missing = manifest_missing(before);
+            for (size_t j = 0; j < missing.count; j++) {
+                if (strcmp(missing.entries[j], name) != 0) continue;
+
+                output_gap(out, OUTPUT_NORMAL);
+                output_warning(
+                    out, OUTPUT_NORMAL,
+                    "Profile '%s' is enabled, and Git holds no branch for it", name
+                );
+                output_hint(
+                    out, OUTPUT_NORMAL, "Run 'dotta profile disable %s' to drop it, "
+                    "or 'dotta profile fetch %s' to bring its branch back", name, name
+                );
+                break;
+            }
+
             /* --target on an enabled profile is a retarget: the binding is the
              * verb's subject, and state_enable_profile's UPSERT arm updates it
              * in place. Only another directory is work — the row's own, under

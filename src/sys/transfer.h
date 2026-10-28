@@ -3,7 +3,8 @@
  *
  * Provides an opaque context for Git network operations (clone, fetch, push,
  * delete) that encapsulates credential session identity, progress reporting,
- * and what its ops moved on the wire.
+ * what its ops moved on the wire, and the remote's words a push's side band
+ * carries.
  *
  * Design principles:
  * - Single context per command-level network session (one remote, N ops)
@@ -87,9 +88,9 @@ void transfer_context_free(transfer_context_t *ctx);
 /**
  * Begin an op on this transfer session.
  *
- * Resets per-op scratch (anti-loop attempts, the op's wire). Records the direction
- * so transfer_op_end() knows which side of transfer_stats_t to fold into on
- * success.
+ * Resets per-op scratch (anti-loop attempts, the op's wire, the remote's words).
+ * Records the direction so transfer_op_end() knows which side of transfer_stats_t
+ * to fold into on success.
  *
  * Pair with transfer_op_end() around each libgit2 network call (git_clone,
  * git_remote_fetch, git_remote_push, git_remote_connect).
@@ -104,11 +105,19 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
 /**
  * End an op on this transfer session.
  *
- * Ends the progress line the op drew, the one place it ends: cleared where the
+ * Ends the progress line the op drew, with the op's outcome: cleared where the
  * session's progress is ephemeral, else closed with ", done." for an op that
- * succeeded and a bare newline for one that failed. So no line outlives its op:
- * a caller that drew a progress line for the op (base/output.h output_progress)
- * finds at most that line left, its own to take down.
+ * succeeded and a bare newline for one that failed. A remote's line said while
+ * the op runs takes the line down before it, and libgit2's closing report draws
+ * it again (transfer_push_sideband_callback), so the outcome is said here alone
+ * and no line outlives its op: a caller that drew a progress line for a fetch
+ * (base/output.h output_progress) finds at most that line left, its own to take
+ * down. None is drawn around a push, whose remote's words are said inside it
+ * and would land on its row.
+ *
+ * Then the remote's words the op kept are said: under -v the line the remote
+ * left open, the others said as they arrived; otherwise, where the op failed,
+ * every line, a block of its own at OUTPUT_NORMAL — and where it succeeded, none.
  *
  * Advances the credential state machine on `rc`:
  *
@@ -177,10 +186,12 @@ void transfer_wire_phrase(
  *
  * Installs the credential callback (always), the progress callback matching
  * `direction`, and for a push the per-ref status (transfer_push_status_callback),
- * without which a ref the remote refused reads as pushed. The transfer context
- * is required — every gitops_* network primitive enforces this with CHECK_NULL,
- * so a NULL payload here would be a dotta-internal contract violation, not a
- * user-recoverable case.
+ * without which a ref the remote refused reads as pushed, and the side band
+ * (transfer_push_sideband_callback), the remote's words. A fetch's side band is
+ * left uninstalled: it carries the server's packing progress alone. The transfer
+ * context is required — every gitops_* network primitive enforces this with
+ * CHECK_NULL, so a NULL payload here would be a dotta-internal contract violation,
+ * not a user-recoverable case.
  *
  * Ops with no byte transfer (e.g., git_remote_connect + git_remote_ls) may pass
  * GIT_DIRECTION_FETCH; the installed progress callback simply never fires.
@@ -244,6 +255,34 @@ int transfer_push_progress_callback(
 int transfer_push_status_callback(
     const char *refname,
     const char *status,
+    void *payload
+);
+
+#define TRANSFER_SIDEBAND_MAX ((size_t) 64 * 1024) /* What a push keeps of the remote's words; the rest is counted */
+
+/**
+ * libgit2 side band callback for a push (payload = transfer_context_t *).
+ *
+ * The remote's words — a refusing hook's reason, a server's notice, receive-pack's
+ * own progress — a packet at a time, cut anywhere, said by the hooks' rule
+ * (utils/hooks.h hook_fire_pre): under -v each line as the remote ends it, the
+ * op's progress line taken down first; otherwise every byte kept, to
+ * TRANSFER_SIDEBAND_MAX and counted past it, for the op's end to say where the
+ * push failed (transfer_op_end). A line is said as a terminal shows it, behind
+ * "remote: ", and as a datum: no byte of it starts a line, moves the cursor or
+ * sets a colour (base/output.h "Layout and data"). A path remote sends none,
+ * its transport running no hook (lib/libgit2/src/libgit2/transports/local.c
+ * local_push).
+ *
+ * Installed by transfer_configure_callbacks for a push. Not intended for direct
+ * use.
+ *
+ * @return 0, always: a negative answer cancels the push
+ *         (lib/libgit2/src/libgit2/transports/smart_protocol.c parse_report)
+ */
+int transfer_push_sideband_callback(
+    const char *str,
+    int len,
     void *payload
 );
 

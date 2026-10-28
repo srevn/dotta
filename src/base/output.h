@@ -557,7 +557,8 @@ void output_progress(
  * — where it drops the erase, the next line written over the row leaves the row's
  * longer tail beside it, where git pads the row with spaces.
  *
- * Readers: output_progress's three, and sys/transfer.c transfer_op_end.
+ * Readers: output_progress's three, and sys/transfer.c transfer_op_end and
+ * transfer_push_sideband_callback (a remote's line said while a push runs).
  *
  * @param ctx Output context (NULL: nothing)
  * @param min_level The level the line was drawn at

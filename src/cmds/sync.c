@@ -761,16 +761,18 @@ static void sync_reset(git_repository *repo, const char *remote_name, sync_row_t
 }
 
 /**
- * Carry every verdict out, in the scope's order, printing nothing: what each
- * act came to, the failure it met and what it sent, written on its row for the
- * receipt
+ * Carry every verdict out, in the scope's order, printing nothing of its own:
+ * what each act came to, the failure it met and what it sent, written on its
+ * row for the receipt
  *
  * Git only: every pull, rebase, merge and reset moves a branch head and nothing
  * else — a resolution that lands reads its history once more, for its row's
  * disagreements, in `arena` (sync_disagreements) — and what the acts did to the
  * view is read off once, for every enabled profile, in cmd_sync's Manifest block.
  * Each verdict is one mechanism, called as the decision named it: nothing here
- * decides again.
+ * decides again. A push says the remote's words as it runs, above the receipt
+ * as git's stand above its ref list — where it failed, and under -v every push's
+ * as they come (sys/transfer.h transfer_push_sideband_callback).
  *
  * @return The run's error where a resolution's rollback failed — the rows after
  *         it left as decided, their outcome none — or NULL: every other failure
@@ -1497,7 +1499,9 @@ static void sync_reconcile_epoch(
                 return;
             }
             /* The push's failure names its act, the ref and the remote, then
-             * libgit2's reason (infra/epoch.c epoch_push): printed whole */
+             * libgit2's reason (infra/epoch.c epoch_push): printed whole, beneath
+             * the remote's words where it sent any (sys/transfer.h
+             * transfer_op_end) */
             const transfer_stats_t mark = transfer_stats(xfer);
             err = epoch_push(repo, remote_name, xfer);
             if (err) {
@@ -1792,10 +1796,11 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
     }
 
-    /* The act: every verdict carried out, and nothing said. Git only — no state
-     * is written, so the write lock is never held across network IO. Nothing
-     * catches up afterwards either: the view is computed, and the block that
-     * follows only reports what the act did to it. */
+    /* The act: every verdict carried out, and nothing said but the remote's words
+     * a push brings (sync_execute). Git only — no state is written, so the write
+     * lock is never held across network IO. Nothing catches up afterwards either:
+     * the view is computed, and the block that follows only reports what the
+     * act did to it. */
     err = sync_execute(ctx->arena, repo, remote_name, &rows, xfer);
 
     /* The receipt, once every act is done, a row for every profile — a run a

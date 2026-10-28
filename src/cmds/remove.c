@@ -1439,8 +1439,10 @@ static error_t remove_profile(
 
     /* Push the deletion to the remote, unless the profile was never pushed there
      * (remote_name NULL, above): sync needs it, since other repositories learn
-     * the branch is gone only from there. The push is a block of its own: its
-     * announce, then its outcome. */
+     * the branch is gone only from there. The push is a block of its own, its
+     * announce then its outcome; where it failed and the remote said why, the
+     * remote's words stand between them, a block the outcome joins (sys/transfer.h
+     * transfer_op_end). */
     if (remote_name) {
         output_gap(out, OUTPUT_NORMAL);
         output_info(

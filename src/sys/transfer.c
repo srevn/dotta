@@ -38,13 +38,15 @@ typedef enum {
  * Owns the full lifecycle of a network session against one remote:
  *   - Progress reporting (line state, ephemeral flag)
  *   - Session stats (cumulative objects/bytes across all ops)
+ *   - The remote's words (a push's side band, an op's at a time)
  *   - Credential identity (URL, cached username/password)
  *   - Credential state machine (acquisition → validation / rejection)
  *
  * Per-op counters (op_attempts, op scratch) are reset by transfer_op_begin;
- * transfer_op_end folds the scratch and advances the credential state machine
- * on the op's return code. The cached credentials are filled at most once per
- * session by the first successful helper fill (cache-once identity pinning).
+ * transfer_op_end folds the scratch, says the remote's words it kept, and advances
+ * the credential state machine on the op's return code. The cached credentials
+ * are filled at most once per session by the first successful helper fill
+ * (cache-once identity pinning).
  */
 struct transfer_context_s {
     output_t *output;               /* Borrowed. */
@@ -56,11 +58,17 @@ struct transfer_context_s {
     /* Cumulative session stats (TTY-independent) */
     transfer_stats_t stats;
 
-    /* Per-op scratch. Written by the progress callbacks on each update; folded
-     * into `stats` by transfer_op_end on success. Reset by transfer_op_begin. */
+    /* Per-op scratch. Written by the callbacks as the op runs: the progress
+     * callbacks' counts, folded into `stats` by transfer_op_end on success, and
+     * the remote's words, said by the side band's callback or by transfer_op_end.
+     * Reset by transfer_op_begin. */
     struct {
         git_direction direction;    /* Op direction (fetch/push). */
         transfer_wire_t wire;       /* What it moved: the callbacks' latest counts. */
+        buffer_t sideband;          /* The remote's words not yet said: under -v the
+                                     * line still open, else every byte, to
+                                     * TRANSFER_SIDEBAND_MAX. */
+        size_t sideband_dropped;    /* The bytes past the bound, never kept. */
     } op;
 
     /* Credential session identity */
@@ -222,7 +230,61 @@ void transfer_context_free(transfer_context_t *ctx) {
         buffer_secure_free(ctx->password, strlen(ctx->password) + 1);
     }
     free(ctx->url);
+    buffer_deinit(&ctx->op.sideband);
     free(ctx);
+}
+
+/**
+ * Say the remote's words the op kept, and let them go: each line as a terminal
+ * shows it, behind "remote: ", then what the bound dropped, counted — utils/hooks.c
+ * hook_print_output's twin, each line a datum
+ *
+ * At `level`, in the block that stands: the caller's to open where it asks one
+ * (transfer_op_end). What is said is taken off the op, so a line is said once,
+ * whichever of the side band's callback and the op's end says it.
+ */
+static void transfer_print_sideband(transfer_context_t *xfer, output_verbosity_t level) {
+    buffer_t *kept = &xfer->op.sideband;
+
+    for (size_t at = 0; at < kept->size;) {
+        /* A line ends at its newline, or where the words do: what the remote
+         * left open, or what the bound cut */
+        const char *line = kept->data + at;
+        const char *newline = memchr(line, '\n', kept->size - at);
+        size_t len = newline ? (size_t) (newline - line) : kept->size - at;
+        at += len + 1;
+
+        /* What a terminal shows of it: the CRs that end it dropped — a CRLF ends
+         * a line as its newline does — and of the rest, what follows its last
+         * CR, the last state of a line the remote redrew in place (receive-pack's
+         * progress). A line that shows nothing is said as none. */
+        const char *end = line + len;
+        while (end > line && end[-1] == '\r') end--;
+        const char *start = end;
+        while (start > line && start[-1] != '\r') start--;
+
+        /* A datum (base/output.h "Layout and data"): every control byte spelled,
+         * never sent — a colour's too, which git passes on (lib/git/sideband.c
+         * strbuf_add_sanitized) — and the line ended at a NUL, where git's
+         * sanitizer ends it as well */
+        if (start < end) {
+            output_print(
+                xfer->output, level, "remote: %.*s\n", (int) (end - start), start
+            );
+        }
+    }
+
+    /* What the bound dropped is counted, never shown, as a hook's output past
+     * its capture's bound is (utils/hooks.c hook_print_output) */
+    if (xfer->op.sideband_dropped > 0) {
+        output_print(
+            xfer->output, level, "remote: ... and %zu more bytes\n",
+            xfer->op.sideband_dropped
+        );
+    }
+
+    buffer_clear(kept);
+    xfer->op.sideband_dropped = 0;
 }
 
 /**
@@ -233,6 +295,8 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
     xfer->op_attempts = 0;
     xfer->op.direction = direction;
     xfer->op.wire = (transfer_wire_t){ 0 };
+    buffer_clear(&xfer->op.sideband);
+    xfer->op.sideband_dropped = 0;
 }
 
 /**
@@ -242,13 +306,17 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
 void transfer_op_end(transfer_context_t *xfer, int rc) {
     if (!xfer) return;
 
-    /* The line the op drew ends here, once. A callback cannot tell its last call
-     * from one libgit2 makes after it — the smart protocol reports a fetch once
-     * more past the indexer's last object (transports/smart_protocol.c
-     * git_smart__download_pack), a local push's indexer once per delta it resolves
-     * — so a line a callback ended by its counts was drawn and ended again. An
-     * ephemeral line is cleared, at the level the callbacks draw it at; a lasting
-     * one says done only for an op that succeeded. */
+    /* The line the op drew ends here, with the op's outcome, once. A callback
+     * cannot tell its last call from one libgit2 makes after it — the smart
+     * protocol reports a fetch once more past the indexer's last object
+     * (transports/smart_protocol.c git_smart__download_pack) and a push once
+     * more past the remote's report (git_smart__push), a local push's indexer
+     * once per delta it resolves — so a line a callback ended by its counts was
+     * drawn and ended again; a remote's line said while the op runs takes it
+     * down and says no outcome (transfer_push_sideband_callback), and the next
+     * report draws it again. An ephemeral line is cleared, at the level the
+     * callbacks draw it at; a lasting one says done only for an op that
+     * succeeded. */
     if (xfer->progress_active) {
         if (xfer->ephemeral) {
             output_clear_line(xfer->output, OUTPUT_NORMAL);
@@ -257,6 +325,18 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
             fflush(xfer->output->stream);
         }
         xfer->progress_active = false;
+    }
+
+    /* Then the remote's words, once the line has ended: under -v the line the
+     * remote left open, said in the run's trace as the lines it ended were;
+     * otherwise every line where the push failed — a block of its own, as a
+     * refusing hook's output is (utils/hooks.c hook_fire_pre) — and none where
+     * it landed */
+    if (output_is_verbose(xfer->output)) {
+        transfer_print_sideband(xfer, OUTPUT_VERBOSE);
+    } else if (rc != 0 && xfer->op.sideband.size > 0) {
+        output_gap(xfer->output, OUTPUT_NORMAL);
+        transfer_print_sideband(xfer, OUTPUT_NORMAL);
     }
 
     /* Fold what the op moved into its direction's. An op that failed folds nothing,
@@ -362,6 +442,7 @@ void transfer_configure_callbacks(
     if (direction == GIT_DIRECTION_PUSH) {
         cb->push_transfer_progress = transfer_push_progress_callback;
         cb->push_update_reference = transfer_push_status_callback;
+        cb->sideband_progress = transfer_push_sideband_callback;
     } else {
         cb->transfer_progress = transfer_progress_callback;
     }
@@ -664,4 +745,50 @@ int transfer_push_status_callback(
 
     (void) git_error_set_str(GIT_ERROR_CALLBACK, status);
     return GIT_ERROR;
+}
+
+/**
+ * libgit2 side band callback for a push: the remote's words, kept for the op's
+ * end or said as they come
+ */
+int transfer_push_sideband_callback(const char *str, int len, void *payload) {
+    if (!payload || len <= 0) return 0;
+
+    transfer_context_t *ctx = (transfer_context_t *) payload;
+    buffer_t *kept = &ctx->op.sideband;
+
+    /* A packet is cut wherever the remote's writes were, so it is read up to
+     * each newline in turn, and to its end, each part kept to the bound with
+     * the rest counted, as a hook's capture is (sys/process.h PROCESS_CAPTURE_MAX):
+     * a newline past the bound still ends its line */
+    for (const char *at = str, *end = str + len; at < end;) {
+        const char *newline = memchr(at, '\n', (size_t) (end - at));
+        const char *next = newline ? newline + 1 : end;
+
+        size_t n = (size_t) (next - at);
+        size_t room = TRANSFER_SIDEBAND_MAX - kept->size;
+        size_t keep = n < room ? n : room;
+        buffer_append(kept, at, keep);
+        ctx->op.sideband_dropped += n - keep;
+
+        /* Under -v a line is said once the remote ends it, as a hook's output
+         * is under -v (utils/hooks.c hook_fire, PROCESS_OUTPUT_INHERIT) — a slow
+         * hook's words while it runs — on a row of its own: the op's progress
+         * line is taken down first, and libgit2's closing report draws it again
+         * beneath the remote's lines (transports/smart_protocol.c git_smart__push),
+         * so a lasting line too stands once, its outcome said at the op's end */
+        if (newline && output_is_verbose(ctx->output)) {
+            if (ctx->progress_active) {
+                output_clear_line(ctx->output, OUTPUT_NORMAL);
+                ctx->progress_active = false;
+            }
+            transfer_print_sideband(ctx, OUTPUT_VERBOSE);
+        }
+
+        at = next;
+    }
+
+    /* A negative answer cancels the push (transports/smart_protocol.c
+     * parse_report): the remote's words are never a reason to stop it */
+    return 0;
 }

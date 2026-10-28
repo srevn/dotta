@@ -420,6 +420,11 @@ static int show_print_line_cb(
  * of cmd_show named the profile did the resolving, and the search (core/scope.h
  * scope_resolve_commit) is over before anything here prints. Both are borrowed
  * — the commit is the caller's to free.
+ *
+ * A merge names its parents beneath the commit line, as git's header does, and
+ * its diff is against the first — what the merge brought into that line, which
+ * its stat line says. So a merge shows a file a file's history may not credit
+ * it with: the history follows the side the merge took the file from (sys/stats.h).
  */
 static error_t show_commit(
     git_repository *repo,
@@ -445,7 +450,7 @@ static error_t show_commit(
         goto cleanup;
     }
 
-    /* Get parent tree (NULL if first commit) — only its oid is in hand */
+    /* The first parent's tree (none for a root) — only its oid is in hand */
     unsigned int parent_count = git_commit_parentcount(commit);
     if (parent_count > 0) {
         const git_oid *parent_oid = git_commit_parent_id(commit, 0);
@@ -468,6 +473,18 @@ static error_t show_commit(
         out, OUTPUT_NORMAL, "{yellow}commit %s{reset} {cyan}(%s){reset}\n",
         oid_str, profile
     );
+
+    /* A merge's parents, in their order, each abbreviated: git's own line
+     * (lib/git/pretty.c add_merge_info), its value aligned with the author's */
+    if (parent_count > 1) {
+        output_print(out, OUTPUT_NORMAL, "{bold}Merge:{reset} ");
+        for (unsigned int i = 0; i < parent_count; i++) {
+            char parent_str[8];
+            git_oid_tostr(parent_str, sizeof(parent_str), git_commit_parent_id(commit, i));
+            output_print(out, OUTPUT_NORMAL, " %s", parent_str);
+        }
+        output_endline(out, OUTPUT_NORMAL);
+    }
 
     output_print(
         out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
@@ -512,6 +529,13 @@ static error_t show_commit(
         out, OUTPUT_NORMAL, " %zu file%s changed",
         files_changed, files_changed == 1 ? "" : "s"
     );
+    /* A merge's counts are against its first parent: "from" it, as git says of
+     * a merge's diff against one parent (lib/git/log-tree.c show_log) */
+    if (parent_count > 1) {
+        char parent_str[8];
+        git_oid_tostr(parent_str, sizeof(parent_str), git_commit_parent_id(commit, 0));
+        output_print(out, OUTPUT_NORMAL, " from %s", parent_str);
+    }
     if (insertions > 0) {
         output_print(
             out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",

@@ -169,6 +169,8 @@ dotta show a4f2c8e
 dotta export global:home/.bashrc -
 ```
 
+A merge's header names its parents, as `git show` does, and its diff is against the first — what the merge brought into that line, its stat line reading "changed from" that parent.
+
 ## Reverting Files
 
 ```bash

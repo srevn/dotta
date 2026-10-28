@@ -46,16 +46,18 @@ error_t gitops_init(void) {
      * for a tree by default — an entry costs its name plus 27 — so a directory
      * past ~110 entries yields a tree that is never cached, and every look through
      * it — a git_tree_entry_bypath, or a descent's git_tree_lookup — re-reads,
-     * inflates and SHA-1-verifies each tree on the way down. Three readers ask
+     * inflates and SHA-1-verifies each tree on the way down. Four readers ask
      * the same trees again and again: sys/history.c's removals' walk, which reads
      * each tree on the paths it follows twice — a commit's as a parent at its
      * child's read, then as the child at its own — and again for a path that
      * reaches a commit late; its holdings' walks, which ask each commit's tree
      * at the path of every entry not yet found, each directory on the way once
-     * an entry; and core/profiles.c per directory item of a sheet
-     * (profile_blob_above, asked by the walk and profile_contradicted at each
-     * item, and by the point questions), quadratic where the items scale with
-     * the directory's own width.
+     * an entry; sys/stats.c's walks of a path's lines (stats_last_changes,
+     * stats_file_history), which ask each parent's tree at the path of every
+     * line waiting at its child, each directory on the way once a line; and
+     * core/profiles.c per directory item of a sheet (profile_blob_above, asked
+     * by the walk and profile_contradicted at each item, and by the point
+     * questions), quadratic where the items scale with the directory's own width.
      *
      * Trees: no ceiling. Blobs: libgit2's zero, never cached — infra/content
      * keeps the one a blob needs. Total: 64 MB, below libgit2's 256 MB default.

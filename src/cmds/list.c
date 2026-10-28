@@ -17,7 +17,6 @@
 
 #include "base/arena.h"
 #include "base/args.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "base/timeutil.h"
@@ -546,10 +545,10 @@ static error_t list_files(
      * them in another */
     qsort(walk.files, walk.file_count, sizeof(*walk.files), list_path_order);
 
-    /* What a verbose row reads beyond its claim: the history behind each name,
-     * and the width the names need. Both are the whole listing's, read once before
-     * any row prints, the way the profile listing above reads and measures before
-     * its own.
+    /* What a verbose row reads beyond its claim: the last change behind each
+     * name, and the width the names need. Both are the whole listing's, read
+     * once before any row prints, the way the profile listing above reads and
+     * measures before its own.
      *
      * A sheet the walk could not read costs the rows their marks and leaves their
      * sizes the stored blobs' own — the listing itself is the tree's and stands
@@ -558,7 +557,7 @@ static error_t list_files(
      * is wrong with it. The count's sentence (list_profiles, and the empty-profile
      * arm above) names what it failed to do; this one names what it failed to
      * read, which is the other question about the same document. */
-    file_commit_map_t *commit_map = NULL;
+    commit_info_t *changes = NULL;
     size_t max_path_len = 0;
     if (verbose) {
         err = profile_load_sheet(profile);
@@ -570,16 +569,16 @@ static error_t list_files(
             err = NULL;
         }
 
-        /* The history behind each row, sought for the rows alone, from the head
-         * they were listed at. The map seeks names (sys/stats.h), so the rows
-         * hand it theirs, in their order */
-        string_array_t names;
-        string_array_init(&names, ctx->arena, walk.file_count);
+        /* The last change behind each row, sought for the rows alone, from the
+         * head they were listed at. The walk asks names (sys/stats.h), so the
+         * rows lend it theirs, in their order, and its answers stand in that
+         * order */
+        const char **names = arena_calloc(ctx->arena, walk.file_count, sizeof(*names));
         for (size_t i = 0; i < walk.file_count; i++) {
-            string_array_push(&names, walk.files[i].storage_path);
+            names[i] = walk.files[i].storage_path;
         }
-        err = stats_build_file_commit_map(
-            repo, &head_oid, &names, ctx->arena, &commit_map
+        err = stats_last_changes(
+            repo, &head_oid, names, walk.file_count, ctx->arena, &changes
         );
         if (err) {
             /* Non-fatal: continue without commit info */
@@ -664,26 +663,24 @@ static error_t list_files(
                 err = NULL;
             }
 
-            /* Get last commit for this file */
-            if (commit_map) {
-                const commit_info_t *commit_info = stats_file_commit_map_get(
-                    commit_map, file->storage_path
+            /* Its last change, printed as a profile row prints its last commit
+             * (list_profiles): a row is a file the head holds, so its line ends
+             * at the commit that made its entry, and every row has one */
+            if (changes) {
+                const commit_info_t *last = &changes[i];
+                char oid_str[LIST_SHORT_OID_BUF_SIZE];
+                git_oid_tostr(oid_str, sizeof(oid_str), &last->oid);
+
+                char time_str[64];
+                timeutil_relative(last->time, time_str, sizeof(time_str));
+
+                size_t summary_len = strlen(last->summary);
+                if (summary_len > 40) summary_len = 40;
+
+                output_print(
+                    out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                    oid_str, (int) summary_len, last->summary, time_str
                 );
-                if (commit_info) {
-                    char oid_str[LIST_SHORT_OID_BUF_SIZE];
-                    git_oid_tostr(oid_str, sizeof(oid_str), &commit_info->oid);
-
-                    char time_str[64];
-                    timeutil_relative(commit_info->time, time_str, sizeof(time_str));
-
-                    size_t summary_len = strlen(commit_info->summary);
-                    if (summary_len > 40) summary_len = 40;
-
-                    output_print(
-                        out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
-                        oid_str, (int) summary_len, commit_info->summary, time_str
-                    );
-                }
             }
         }
 
@@ -829,8 +826,8 @@ static error_t list_file_history(
      * once (core/profiles.h profile_holds), and only a file has a history to
      * list: a directory is refused as one whichever document holds it, a submodule
      * as one, and a name neither holds is a deleted file — given its word before
-     * the O(total_commits) walk, which is the search's own. The profile reads
-     * its sheet only where the head is silent, strictly, and a path's view above
+     * the walk of its lines, which is the search's own. The profile reads its
+     * sheet only where the head is silent, strictly, and a path's view above
      * has already read it. The history is one name's — a path's former names
      * under another contract are the user's to type, a prospective name proving
      * nothing about what the profile once held there. */
@@ -858,8 +855,8 @@ static error_t list_file_history(
     }
 
     /* The history, from the head the name was asked of. None is a name the head
-     * does not hold that no commit touched either — the search announced above,
-     * which found nothing. */
+     * does not hold that no commit on its lines held either — the search announced
+     * above, which found nothing. */
     file_history_t history;
     err = stats_file_history(repo, &head_oid, storage_path, ctx->arena, &history);
     if (err) {

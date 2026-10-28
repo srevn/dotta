@@ -145,6 +145,8 @@ dotta list global home/.bashrc
 dotta list global home/.bashrc -v  # Each commit's full id, date and title
 ```
 
+Through a merge, a file's history — and its last commit at level 2 — follows the side the merge took the file from, as `git log -- <file>` does: the merge is listed only where it composed the file anew, and a side whose version the merge discarded is no part of it.
+
 ## Showing File Content
 
 ```bash

@@ -1,56 +1,55 @@
 /**
  * stats.c - Git object and history statistics implementation
  *
- * Implementation notes:
- * - Uses git_odb_read_header for size queries (10-50x faster than git_blob_lookup)
- * - Unified commit walker eliminates code duplication
- * - Early termination when all files found (major speedup)
+ * A blob's size is its object header's (git_odb_read_header): nothing inflated.
+ * A path's history is two walks of its lines (sys/stats.h), sharing the rule
+ * and nothing else: what a tree holds at a path (stats_entry), and a parent read
+ * with its tree (stats_parent). Each keeps lines (stats_line_t), the newest commit
+ * a line has reached read next: the last changes' walk one line a path, in the
+ * call's one transient; the history's its one path's lines, queued in a frame
+ * of its own with every commit they reached.
  */
 
 #include "sys/stats.h"
 
 #include <ctype.h>
 #include <git2.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 
 /**
- * File -> commit map (opaque type)
- */
-struct file_commit_map {
-    hashmap_t *map;  /* path (string) -> commit_info_t*, both the arena's */
-};
-
-/**
- * Walk mode for unified commit walker
- */
-typedef enum {
-    WALK_MODE_MAP,      /* Build file -> commit map (early termination enabled) */
-    WALK_MODE_HISTORY   /* Collect all commits for single file */
-} walk_mode_t;
-
-/**
- * The unified commit walker's state
+ * A path's entry in a tree, as its history reads it: a blob, by its id and its
+ * filemode, or none
  */
 typedef struct {
-    /* Input configuration */
-    walk_mode_t mode;
-    const char *target_path;      /* File path (for HISTORY mode), NULL for MAP mode */
-    arena_t *arena;               /* Where every commit info, its summary and the history live */
+    git_oid blob;               /* Git's null id: none */
+    git_filemode_t mode;        /* Its filemode; none's is 0 */
+} stats_entry_t;
 
-    /* Output destinations (one will be populated based on mode) */
-    hashmap_t *map;               /* For MAP mode: path -> commit_info_t* */
-    commit_info_t *commits;       /* For HISTORY mode: array of commits */
-    size_t commits_count;
-    size_t commits_capacity;
+/**
+ * A line of a path's history: the entry it carries, and the commit it has reached
+ */
+typedef struct {
+    stats_entry_t entry;        /* What every commit on it holds at the path */
+    git_oid reached;            /* Git's null id once the line ended */
+    git_time_t time;            /* Its commit time: the newest a line has reached is read next */
+} stats_line_t;
 
-    /* State tracking (for early termination in MAP mode) */
-    size_t files_found;           /* Number of files found so far */
-    size_t files_needed;          /* Total files in current tree */
-} walk_t;
+/**
+ * One file's lines not yet read, each commit queued once
+ */
+typedef struct {
+    arena_t *frame;             /* The walk's own: the lines and the set */
+    hashmap_t *seen;            /* Hex id: every commit a line has reached */
+    stats_line_t *lines;        /* Oldest first: the newest is read next */
+    size_t count;
+    size_t capacity;
+} stats_queue_t;
 
 /**
  * A commit's info, its summary copied into `arena`
@@ -70,192 +69,9 @@ commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit) {
 }
 
 /**
- * Unified commit walker
- *
- * Walks commit history and processes diffs based on mode:
- * - MAP mode: Populates pre-seeded hashmap entries with commit info. The map
- *   must be pre-populated with the names to map (NULL values) to ensure only
- *   they are mapped and early termination is correct.
- * - HISTORY mode: Collects all commits that modified a specific file.
- *
- * Every info it makes is the walk's arena's, so a walk that fails partway leaves
- * nothing to release but the revwalk.
- */
-static error_t stats_walk(
-    git_repository *repo,
-    const git_oid *head_oid,
-    walk_t *walk
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(head_oid);
-    CHECK_NULL(walk);
-
-    git_revwalk *walker = NULL;
-    error_t err = NULL;
-
-    /* The history from the caller's commit, and no reference read here: the caller
-     * read its head once, beside everything else it read off that commit.
-     * git_revwalk_push copies the id it is given. */
-    int rc = git_revwalk_new(&walker, repo);
-    if (rc < 0) return error_git(rc, "Cannot walk the history");
-
-    rc = git_revwalk_push(walker, head_oid);
-    if (rc < 0) {
-        err = error_git(rc, "Cannot walk the history");
-        goto cleanup;
-    }
-
-    /* Sort by time (newest first) */
-    git_revwalk_sorting(walker, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
-
-    /* Walk commits. GIT_ITEROVER ends the history; a negative code is a walk
-     * that failed, and a history it could not finish must not read as a whole
-     * one — the callers report an absence in it as fact. */
-    for (;;) {
-        git_oid oid;
-        rc = git_revwalk_next(&oid, walker);
-        if (rc == GIT_ITEROVER) {
-            break;
-        }
-        if (rc < 0) {
-            err = error_git(rc, "Cannot walk the history");
-            goto cleanup;
-        }
-
-        /* Early termination for MAP mode */
-        if (walk->mode == WALK_MODE_MAP && walk->files_found >= walk->files_needed) {
-            break;  /* All files found! */
-        }
-
-        git_commit *commit = NULL;
-        rc = git_commit_lookup(&commit, repo, &oid);
-        if (rc < 0) {
-            err = error_git(rc, "Cannot read a commit in the history");
-            goto cleanup;
-        }
-
-        /* Get commit tree */
-        git_tree *tree = NULL;
-        rc = git_commit_tree(&tree, commit);
-        if (rc < 0) {
-            git_commit_free(commit);
-            err = error_git(rc, "Cannot read a commit's tree in the history");
-            goto cleanup;
-        }
-
-        /* Get parent tree (if exists). A parent the commit names and that will
-         * not load is the walk's failure, as its tree's is: read as no parent,
-         * the commit would be diffed against the empty tree and credited with
-         * every file it holds. The revwalk above parses a parent more lightly
-         * than a load does (commit_list.c commit_quick_parse reads no tree id
-         * and no author), so reaching the commit proves nothing about its
-         * parent. */
-        git_tree *parent_tree = NULL;
-        if (git_commit_parentcount(commit) > 0) {
-            git_commit *parent = NULL;
-            rc = git_commit_parent(&parent, commit, 0);
-            if (rc == 0) {
-                rc = git_commit_tree(&parent_tree, parent);
-                git_commit_free(parent);
-            }
-            if (rc < 0) {
-                git_tree_free(tree);
-                git_commit_free(commit);
-                err = error_git(rc, "Cannot read a commit's parent in the history");
-                goto cleanup;
-            }
-        }
-
-        /* Create diff */
-        git_diff *diff = NULL;
-        rc = git_diff_tree_to_tree(&diff, repo, parent_tree, tree, NULL);
-
-        if (parent_tree) {
-            git_tree_free(parent_tree);
-        }
-        git_tree_free(tree);
-
-        if (rc < 0) {
-            git_commit_free(commit);
-            err = error_git(rc, "Cannot compare a commit with its parent");
-            goto cleanup;
-        }
-
-        /* Process diff based on mode */
-        if (walk->mode == WALK_MODE_MAP) {
-            /* MAP mode: Add file -> commit mappings. The commit's info is made
-             * at the first file it maps and shared by the rest: nothing frees
-             * an info, so one copy serves every file of the commit. */
-            commit_info_t *info = NULL;
-            size_t num_deltas = git_diff_num_deltas(diff);
-            for (size_t i = 0; i < num_deltas; i++) {
-                const git_diff_delta *delta = git_diff_get_delta(diff, i);
-                const char *path = delta->new_file.path ? delta->new_file.path
-                                                        : delta->old_file.path;
-
-                if (!path) continue;
-
-                /* Only map files that exist in the current tree. The map is
-                 * pre-populated with current-tree paths (NULL values). Skip paths
-                 * not in the tree (deleted files, old renames) and paths already
-                 * mapped (non-NULL value): one probe tells the two apart. */
-                void *mapped = NULL;
-                if (!hashmap_find(walk->map, path, &mapped) || mapped) continue;
-
-                if (!info) {
-                    info = arena_calloc(walk->arena, 1, sizeof(*info));
-                    *info = stats_commit_info(walk->arena, commit);
-                }
-                hashmap_set(walk->map, path, info);
-
-                walk->files_found++;
-            }
-
-        } else { /* WALK_MODE_HISTORY */
-            /* HISTORY mode: Check if diff contains target file */
-            size_t num_deltas = git_diff_num_deltas(diff);
-            bool found = false;
-
-            for (size_t i = 0; i < num_deltas; i++) {
-                const git_diff_delta *delta = git_diff_get_delta(diff, i);
-                const char *path = delta->new_file.path ? delta->new_file.path
-                                                        : delta->old_file.path;
-
-                if (path && strcmp(path, walk->target_path) == 0) {
-                    found = true;
-                    break;
-                }
-            }
-
-            /* The history grows in the arena, abandoning each spine it outgrows */
-            if (found) {
-                walk->commits = arena_grow(
-                    walk->arena, walk->commits, &walk->commits_capacity,
-                    walk->commits_count + 1, sizeof(*walk->commits)
-                );
-                walk->commits[walk->commits_count++] = stats_commit_info(
-                    walk->arena, commit
-                );
-            }
-        }
-
-        git_diff_free(diff);
-        git_commit_free(commit);
-    }
-
-cleanup:
-    git_revwalk_free(walker);
-    return err;
-}
-
-/**
  * A blob's size
  */
-error_t stats_blob_size(
-    git_repository *repo,
-    const git_oid *blob_oid,
-    size_t *out
-) {
+error_t stats_blob_size(git_repository *repo, const git_oid *blob_oid, size_t *out) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
     CHECK_NULL(out);
@@ -273,11 +89,7 @@ error_t stats_blob_size(
 /**
  * A blob's size, through a caller-held ODB handle
  */
-error_t stats_blob_size_with_odb(
-    git_odb *odb,
-    const git_oid *blob_oid,
-    size_t *out
-) {
+error_t stats_blob_size_with_odb(git_odb *odb, const git_oid *blob_oid, size_t *out) {
     CHECK_NULL(odb);
     CHECK_NULL(blob_oid);
     CHECK_NULL(out);
@@ -296,65 +108,215 @@ error_t stats_blob_size_with_odb(
 }
 
 /**
- * Build file -> commit map
+ * The entry `tree` holds at `path`
+ *
+ * A blob of any filemode; none where a component is missing, or the name or one
+ * above it is no tree's (git_tree_entry_bypath answers GIT_ENOTFOUND for both).
+ *
+ * @param tree The tree (must not be NULL)
+ * @param path A storage path (must not be NULL)
+ * @param out The entry (must not be NULL)
+ * @return Error or NULL: a subtree on the way that will not read is the failure,
+ *         never none
  */
-error_t stats_build_file_commit_map(
-    git_repository *repo,
-    const git_oid *head_oid,
-    const string_array_t *paths,
-    arena_t *arena,
-    file_commit_map_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(head_oid);
-    CHECK_NULL(paths);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
+static error_t stats_entry(const git_tree *tree, const char *path, stats_entry_t *out) {
+    *out = (stats_entry_t){ 0 };
 
-    /* Pre-populate the map with the caller's names (NULL values), and only them.
-     * The commit walker maps a name the map holds and no other, so a file deleted
-     * or renamed along the history is never credited, and the walk stops once
-     * every name is mapped — a name nobody reads, left in, would hold it to the
-     * root commit. The map owns its keys, copied into the arena as each takes
-     * its slot. */
-    hashmap_t *map = hashmap_create(arena, paths->count);
-    for (size_t i = 0; i < paths->count; i++) {
-        hashmap_set(map, paths->entries[i], NULL);
+    git_tree_entry *entry = NULL;
+    int rc = git_tree_entry_bypath(&entry, tree, path);
+    if (rc == GIT_ENOTFOUND) return NULL;
+    if (rc < 0) return error_git(rc, "Cannot read '%s' in the history", path);
+
+    if (git_tree_entry_type(entry) == GIT_OBJECT_BLOB) {
+        *out = (stats_entry_t){
+            .blob = *git_tree_entry_id(entry),
+            .mode = git_tree_entry_filemode(entry),
+        };
     }
+    git_tree_entry_free(entry);
 
-    /* Initialize walk context */
-    walk_t walk = {
-        .mode             = WALK_MODE_MAP,
-        .target_path      = NULL,
-        .arena            = arena,
-        .map              = map,
-        .commits          = NULL,
-        .commits_count    = 0,
-        .commits_capacity = 0,
-        .files_found      = 0,
-        .files_needed     = hashmap_size(map)
-    };
-
-    /* Walk commits to build map */
-    error_t err = stats_walk(repo, head_oid, &walk);
-    if (err) return err;
-
-    file_commit_map_t *commit_map = arena_calloc(arena, 1, sizeof(*commit_map));
-    commit_map->map = map;
-
-    *out = commit_map;
     return NULL;
 }
 
 /**
- * The commits that touched one file
+ * Parent `i` of `commit`, and its tree
+ *
+ * @param commit The commit (must not be NULL)
+ * @param i Which parent, below the commit's count
+ * @param parent The parent, the caller's to free; NULL on a failure (must not
+ *               be NULL)
+ * @param tree Its tree, the caller's to free; NULL on a failure (must not be NULL)
+ * @return Error or NULL
+ */
+static error_t stats_parent(
+    const git_commit *commit, unsigned int i, git_commit **parent, git_tree **tree
+) {
+    *parent = NULL;
+    *tree = NULL;
+
+    /* A parent the commit names and that will not load is the walk's failure,
+     * as its tree is: read as none, the commit would be a root, credited with
+     * every path it holds */
+    int rc = git_commit_parent(parent, commit, i);
+    if (rc == 0) rc = git_commit_tree(tree, *parent);
+    if (rc < 0) {
+        git_commit_free(*parent);
+        *parent = NULL;
+        return error_git(rc, "Cannot read a commit's parent in the history");
+    }
+
+    return NULL;
+}
+
+/**
+ * Each of a set of paths' last change
+ */
+error_t stats_last_changes(
+    git_repository *repo, const git_oid *head_oid, const char *const *paths,
+    size_t count, arena_t *arena, commit_info_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(head_oid);
+    if (count > 0) CHECK_NULL(paths);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    /* A line a path, each at the head and carrying the entry the head holds there:
+     * a line goes on only through a parent holding it, so it carries it to its
+     * end. The lines are the call's one transient, the heap's (include/runtime.h
+     * "Memory"); the answers are the caller's arena's, a none zeroed. */
+    stats_line_t *lines = heap_calloc(count, sizeof(*lines));
+    commit_info_t *changes = arena_calloc(arena, count, sizeof(*changes));
+    error_t err = NULL;
+
+    git_commit *head = NULL;
+    git_tree *head_tree = NULL;
+    int rc = git_commit_lookup(&head, repo, head_oid);
+    if (rc == 0) rc = git_commit_tree(&head_tree, head);
+    if (rc < 0) err = error_git(rc, "Cannot read a commit in the history");
+    for (size_t p = 0; !err && p < count; p++) {
+        err = stats_entry(head_tree, paths[p], &lines[p].entry);
+        lines[p].reached = *head_oid;
+        lines[p].time = git_commit_time(head);
+    }
+    git_tree_free(head_tree);
+    git_commit_free(head);
+
+    while (!err) {
+        /* The newest commit a line has reached is read next, once for every line
+         * waiting there */
+        size_t newest = count;
+        for (size_t p = 0; p < count; p++) {
+            if (git_oid_is_zero(&lines[p].reached)) continue;
+            if (newest == count || lines[p].time > lines[newest].time) newest = p;
+        }
+        if (newest == count) break;
+
+        const git_oid reached = lines[newest].reached;
+        size_t waiting = 0;
+        for (size_t p = 0; p < count; p++) {
+            waiting += git_oid_equal(&lines[p].reached, &reached);
+        }
+
+        git_commit *commit = NULL;
+        rc = git_commit_lookup(&commit, repo, &reached);
+        if (rc < 0) {
+            err = error_git(rc, "Cannot read a commit in the history");
+            break;
+        }
+
+        /* Each parent in order takes the lines waiting here whose entry it holds,
+         * and a parent is read only while one is left for it: a line goes on
+         * through the first parent holding its entry, and that one alone
+         * (lib/git/revision.c try_to_simplify_commit) */
+        const unsigned int parent_count = git_commit_parentcount(commit);
+        for (unsigned int i = 0; !err && waiting > 0 && i < parent_count; i++) {
+            git_commit *parent = NULL;
+            git_tree *tree = NULL;
+            err = stats_parent(commit, i, &parent, &tree);
+
+            for (size_t p = 0; !err && p < count; p++) {
+                if (!git_oid_equal(&lines[p].reached, &reached)) continue;
+
+                stats_entry_t held;
+                err = stats_entry(tree, paths[p], &held);
+                if (!err && git_oid_equal(&held.blob, &lines[p].entry.blob) &&
+                    held.mode == lines[p].entry.mode) {
+                    lines[p].reached = *git_commit_id(parent);
+                    lines[p].time = git_commit_time(parent);
+                    waiting--;
+                }
+            }
+
+            git_tree_free(tree);
+            git_commit_free(parent);
+        }
+
+        /* The lines no parent took end here: the commit changed their paths — a
+         * root what it holds, its parent Git's empty tree, so a line carrying
+         * none to a root ends with none */
+        if (!err && waiting > 0) {
+            const commit_info_t info = stats_commit_info(arena, commit);
+            for (size_t p = 0; p < count; p++) {
+                if (!git_oid_equal(&lines[p].reached, &reached)) continue;
+
+                if (parent_count > 0 || !git_oid_is_zero(&lines[p].entry.blob)) {
+                    changes[p] = info;
+                }
+                lines[p].reached = (git_oid){ 0 };
+            }
+        }
+
+        git_commit_free(commit);
+    }
+
+    free(lines);
+    if (err) return err;
+
+    *out = changes;
+    return NULL;
+}
+
+/**
+ * A line of one file's history reaches a commit
+ *
+ * Queued by the commit's time where no line reached it before — past every line
+ * older, before every line as new, so of two of one age the one queued first is
+ * read first — and never again: git's own queue (lib/git/revision.c
+ * process_parents, its SEEN).
+ *
+ * @param queue The file's lines (must not be NULL)
+ * @param commit The commit (must not be NULL)
+ * @param entry What the commit holds at the path (must not be NULL)
+ */
+static void stats_arrive(
+    stats_queue_t *queue, const git_commit *commit, const stats_entry_t *entry
+) {
+    char hex[GIT_OID_SHA1_HEXSIZE + 1];
+    git_oid_tostr(hex, sizeof(hex), git_commit_id(commit));
+    if (!hashmap_add(queue->seen, hex, NULL)) return;
+
+    queue->lines = arena_grow(
+        queue->frame, queue->lines, &queue->capacity, queue->count + 1,
+        sizeof(*queue->lines)
+    );
+
+    const git_time_t time = git_commit_time(commit);
+    size_t slot = queue->count++;
+    for (; slot > 0 && queue->lines[slot - 1].time >= time; slot--) {
+        queue->lines[slot] = queue->lines[slot - 1];
+    }
+    queue->lines[slot] = (stats_line_t){
+        .entry = *entry, .reached = *git_commit_id(commit), .time = time,
+    };
+}
+
+/**
+ * One file's every change
  */
 error_t stats_file_history(
-    git_repository *repo,
-    const git_oid *head_oid,
-    const char *file_path,
-    arena_t *arena,
-    file_history_t *out
+    git_repository *repo, const git_oid *head_oid, const char *file_path,
+    arena_t *arena, file_history_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(head_oid);
@@ -362,36 +324,90 @@ error_t stats_file_history(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    /* Initialize walk context */
-    walk_t walk = {
-        .mode             = WALK_MODE_HISTORY,
-        .target_path      = file_path,
-        .arena            = arena,
-        .map              = NULL,
-        .commits          = NULL,
-        .commits_count    = 0,
-        .commits_capacity = 0,
-        .files_found      = 0,
-        .files_needed     = 0
-    };
+    /* The lines and every commit they reached are the walk's frame's; the history
+     * grows in the caller's arena, abandoning each spine it outgrows */
+    stats_queue_t queue = { .frame = arena_create(0) };
+    queue.seen = hashmap_create(queue.frame, 0);
+    file_history_t history = { 0 };
+    size_t capacity = 0;
+    error_t err = NULL;
 
-    /* Walk commits to collect history: what a failed walk collected is the arena's
-     * bytes, and a walk that found none answers so — its words are the caller's */
-    error_t err = stats_walk(repo, head_oid, &walk);
+    /* The head's line, carrying the entry the head holds there */
+    git_commit *head = NULL;
+    git_tree *head_tree = NULL;
+    stats_entry_t entry;
+    int rc = git_commit_lookup(&head, repo, head_oid);
+    if (rc == 0) rc = git_commit_tree(&head_tree, head);
+    if (rc < 0) err = error_git(rc, "Cannot read a commit in the history");
+    if (!err) err = stats_entry(head_tree, file_path, &entry);
+    if (!err) stats_arrive(&queue, head, &entry);
+    git_tree_free(head_tree);
+    git_commit_free(head);
+
+    while (!err && queue.count > 0) {
+        const stats_line_t line = queue.lines[--queue.count];
+
+        git_commit *commit = NULL;
+        rc = git_commit_lookup(&commit, repo, &line.reached);
+        if (rc < 0) {
+            err = error_git(rc, "Cannot read a commit in the history");
+            break;
+        }
+
+        /* Each parent in order takes the line where it holds its entry, and a
+         * parent is read only while the line is left for it: the first holding
+         * the entry takes it alone (lib/git/revision.c try_to_simplify_commit) */
+        const unsigned int parent_count = git_commit_parentcount(commit);
+        size_t waiting = 1;
+        for (unsigned int i = 0; !err && waiting > 0 && i < parent_count; i++) {
+            git_commit *parent = NULL;
+            git_tree *tree = NULL;
+            err = stats_parent(commit, i, &parent, &tree);
+
+            stats_entry_t held;
+            if (!err) err = stats_entry(tree, file_path, &held);
+            if (!err && git_oid_equal(&held.blob, &line.entry.blob) &&
+                held.mode == line.entry.mode) {
+                stats_arrive(&queue, parent, &held);
+                waiting--;
+            }
+
+            git_tree_free(tree);
+            git_commit_free(parent);
+        }
+
+        /* A line no parent took: the commit changed the path — a root where it
+         * holds it, its parent Git's empty tree — and the line goes on through
+         * every parent, each carrying what it holds there */
+        if (!err && waiting > 0) {
+            if (parent_count > 0 || !git_oid_is_zero(&line.entry.blob)) {
+                history.commits = arena_grow(
+                    arena, history.commits, &capacity, history.count + 1,
+                    sizeof(*history.commits)
+                );
+                history.commits[history.count++] = stats_commit_info(arena, commit);
+            }
+
+            for (unsigned int i = 0; !err && i < parent_count; i++) {
+                git_commit *parent = NULL;
+                git_tree *tree = NULL;
+                err = stats_parent(commit, i, &parent, &tree);
+
+                stats_entry_t held;
+                if (!err) err = stats_entry(tree, file_path, &held);
+                if (!err) stats_arrive(&queue, parent, &held);
+
+                git_tree_free(tree);
+                git_commit_free(parent);
+            }
+        }
+
+        git_commit_free(commit);
+    }
+
+    arena_free(queue.frame);
     if (err) return err;
 
-    *out = (file_history_t){ walk.commits, walk.commits_count };
+    *out = history;
     return NULL;
-}
-
-/**
- * Lookup commit info for file
- */
-const commit_info_t *stats_file_commit_map_get(
-    const file_commit_map_t *map,
-    const char *file_path
-) {
-    if (!map || !file_path) return NULL;
-
-    return (const commit_info_t *) hashmap_get(map->map, file_path);
 }

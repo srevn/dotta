@@ -744,8 +744,8 @@ static void epoch_walk_commit(epoch_walk_t *walk, const git_oid *commit_oid) {
  * the head of the walk, an asker's answer whatever was passed over, else the
  * first thing it could not read, which names where it stands — sync prints the
  * census's cause whole, after its own words (`sync_reconcile_epoch`). The revwalk
- * speaks libgit2 directly the way sys/stats does. The epoch ref lives outside
- * refs/heads and is never walked.
+ * speaks libgit2 directly, as sys/revision.c revision_search's does. The epoch
+ * ref lives outside refs/heads and is never walked.
  */
 static error_t epoch_walk(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload

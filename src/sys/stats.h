@@ -1,23 +1,32 @@
 /**
  * stats.h - Git object and history statistics
  *
- * Provides efficient statistics gathering over blobs and commit history. What a
- * *profile* holds is a different question — which tree paths are content and
- * which are dotta's own bookkeeping is knowledge this layer does not have — and
- * is answered by the profile's counts (core/profiles.h profile_counts), which
- * read no blob; the bytes a listing names are read through the primitive below
- * by the listing itself (cmds/list.c list_size_claim, list_files).
+ * A blob's size, a commit's info, and a path's history. What a *profile* holds
+ * is a different question — which tree paths are content and which are dotta's
+ * own bookkeeping is knowledge this layer does not have — and is answered by
+ * the profile's counts (core/profiles.h profile_counts), which read no blob;
+ * the bytes a listing names are read through the primitive below by the listing
+ * itself (cmds/list.c list_size_claim, list_files).
  *
- * Design principles:
- * - Minimize expensive operations (commit walking deferred to verbose mode)
- * - Single-pass algorithms where possible
- * - Early termination optimizations
- * - Const-correct interfaces
+ * A path's history is read along its lines. A commit changed a path where its
+ * entry there — a blob, by its id and its filemode, or none: nothing at the name,
+ * a subtree, a gitlink, or a blob or a gitlink above it — is no parent's own, a
+ * root's parent being Git's empty tree, so a root changed what it holds. From a
+ * commit that did not change the path, its line goes back through the first parent
+ * whose entry is the commit's own, and through that one alone; from a commit
+ * that changed it, through every parent. So a merge that took the path as one
+ * side held it hands the line to that side, and what the side it discarded did
+ * there is no part of the path's history, where a merge that composed the path
+ * anew changed it. The rule is git's default simplification (lib/git/revision.c
+ * try_to_simplify_commit), asked of one name: git's pathspec matches beneath a
+ * directory of that name too, and a directory is no entry here.
  *
- * Performance characteristics:
- * - Blob size: O(1) - one object-header read, no decompression
- * - File commit map: O(commits_needed × files_per_commit) - with early termination
- * - File history: O(total_commits) - walks entire history
+ * Two questions of the lines, each its own walk back from a head the caller read
+ * once: each of a set of paths' last change, the first change its line meets —
+ * no line parts before it (stats_last_changes); and one file's every change,
+ * newest first (stats_file_history). A walk reads the commits on the lines and
+ * no other, each asking the path of a parent's tree by name: a path the head
+ * changed costs the head, however long the history behind it.
  */
 
 #ifndef DOTTA_STATS_H
@@ -39,21 +48,9 @@ typedef struct {
 } commit_info_t;
 
 /**
- * File→commit mapping
- *
- * Maps each file path to its most recent commit. Optimized for the use case:
- * "for each file in current tree, get last commit"
- *
- * Internal implementation is opaque. Use accessor functions. The map, its keys
- * and every commit it holds are the arena's it was built in: nothing frees one.
- */
-typedef struct file_commit_map file_commit_map_t;
-
-/**
  * File history
  *
- * List of all commits that modified a specific file, in reverse chronological
- * order (newest first).
+ * The commits that changed one file along its lines, newest first.
  */
 typedef struct {
     commit_info_t *commits;  /* The commits, the arena's */
@@ -65,7 +62,7 @@ typedef struct {
  *
  * The summary is the message's first line with its trailing whitespace trimmed,
  * and empty for a commit with no message. The one producer of a commit_info_t:
- * every commit the history walks keep, and each branch head a verbose profile
+ * every change the history walks answer, and each branch head a verbose profile
  * row prints (cmds/list.c list_profiles), so a row's commit and a file's read
  * alike.
  *
@@ -114,54 +111,59 @@ error_t stats_blob_size_with_odb(
 );
 
 /**
- * Build file→commit mapping
+ * Each of a set of paths' last change
  *
- * Walks the history from `head_oid` back, newest to oldest, mapping each of `paths`
- * to the most recent commit that touched it. The names are the caller's: which
- * of a tree's blobs a screen reads is knowledge this layer does not have (the
- * header), so the reader hands in the listing it prints — the profile's content,
- * never its machinery (cmds/list.c list_files) — and the map holds those names
- * and no other. So is the head: the commit the names were listed at, read once
- * by the caller, so the map and the listing are one snapshot's whatever the branch
- * says by the time the map is built — no branch is read here.
+ * Per path, parallel to `paths`: the first change its line meets back from
+ * `head_oid` — the commit that made the entry the head holds, or where the head
+ * holds none, the one that took the path away — or, where no commit on its line
+ * held the path, none: the info zeroed. The names are the caller's: which of a
+ * tree's blobs a screen reads is knowledge this layer does not have (the header),
+ * so the reader hands in the listing it prints (cmds/list.c list_files). So is
+ * the head: the commit the names were listed at, read once by the caller, so
+ * the answers and the listing are one snapshot's whatever the branch says by
+ * the time they are read — no branch is read here.
  *
- * Stops early once every name is mapped, which makes a history whose listed files
- * all changed recently cheap however long it is. Each name is met first at its
- * newest commit, so stopping sooner changes no answer.
+ * One walk answers every path. Each path's line carries the entry the head holds
+ * there, and waits at the commit it has reached; the newest such commit is read
+ * next, once for every line waiting there, and its parents in order each take
+ * the lines whose entry they hold. A line no parent takes ends there: the commit
+ * is its path's last change. A line reaching a commit after its read — clocks
+ * skewed against the graph — has it read again, which changes what the walk costs,
+ * never what it answers.
  *
- * Performance: O(commits_needed × files_per_commit) - with early termination
- * Memory: O(paths) - one slot per name, and one commit_info per commit that maps
- * a name, shared by every name it maps
- *
- * Note: This is expensive (history walk). Use only in verbose mode.
+ * Reader: cmds/list.c list_files.
  *
  * @param repo Repository (required)
  * @param head_oid The head the names were listed at (required)
- * @param paths The names to map: storage paths that commit's tree holds (required)
- * @param arena Arena the map, its keys and its commits live in (required)
- * @param out File→commit map (required; left as it was on a failure)
- * @return Error or NULL on success
+ * @param paths Storage paths, in any order, one more than once (required where
+ *              count > 0)
+ * @param count How many
+ * @param arena Arena the answers and their summaries live in (required)
+ * @param out The answers, parallel to `paths` (required; left as it was on a
+ *            failure)
+ * @return Error or NULL on success: a commit or a tree a line needs that will
+ *         not read fails every answer, in Git's words naming the object
  */
-error_t stats_build_file_commit_map(
+error_t stats_last_changes(
     git_repository *repo,
     const git_oid *head_oid,
-    const string_array_t *paths,
+    const char *const *paths,
+    size_t count,
     arena_t *arena,
-    file_commit_map_t **out
+    commit_info_t **out
 );
 
 /**
- * The commits that touched one file
+ * One file's every change
  *
- * Returns every commit from `head_oid` back that modified the specified file,
- * in reverse chronological order (newest first). None is an answer — `out->count`
- * 0 — whose words are the caller's (cmds/list.c list_file_history).
+ * The commits that changed `file_path` along its lines back from `head_oid`,
+ * newest first by commit time, each read once however many lines reach it, and
+ * none before the child its line came from. None is an answer — `out->count` 0
+ * — whose words are the caller's (cmds/list.c list_file_history): a name no commit
+ * on its lines held. The head is the caller's, read once, as stats_last_changes'
+ * is.
  *
- * Performance: O(total_commits) - walks entire branch history Memory:
- * O(matching_commits) - allocates array for all commits touching file
- *
- * Note: This is very expensive. Use only when user explicitly requests file history
- *       (e.g., `dotta list -p <profile> <file>`).
+ * Reader: cmds/list.c list_file_history.
  *
  * @param repo Repository (required)
  * @param head_oid The head the history is read back from, read once by the caller
@@ -169,7 +171,8 @@ error_t stats_build_file_commit_map(
  * @param file_path File path within tree (required)
  * @param arena Arena the commits and their summaries live in (required)
  * @param out File history (required; left as it was on a failure)
- * @return Error or NULL on success
+ * @return Error or NULL on success: a commit or a tree its lines need that will
+ *         not read fails the history, in Git's words naming the object
  */
 error_t stats_file_history(
     git_repository *repo,
@@ -177,23 +180,6 @@ error_t stats_file_history(
     const char *file_path,
     arena_t *arena,
     file_history_t *out
-);
-
-/**
- * Lookup commit info for a file
- *
- * Returns the commit info for the specified file path, or NULL if the file is
- * not in the map.
- *
- * Performance: O(1) - constant time hashmap lookup
- *
- * @param map File→commit map (required)
- * @param file_path File path (required)
- * @return Commit info (the map's arena's) or NULL if not found
- */
-const commit_info_t *stats_file_commit_map_get(
-    const file_commit_map_t *map,
-    const char *file_path
 );
 
 #endif /* DOTTA_STATS_H */

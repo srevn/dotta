@@ -773,8 +773,11 @@ error_t gitops_push_branch(
  * Force-push branch to remote (overwrites remote history).
  *
  * Identical to gitops_push_branch except the refspec is prefixed with '+', which
- * instructs the server to accept a non-fast-forward update. Used by sync's 'ours'
- * divergence strategy.
+ * lifts libgit2's own fast-forward check (lib/libgit2/src/libgit2/push.c
+ * queue_objects) and nothing more: the command a server reads names the old head
+ * and the new alone (transports/smart_protocol.c gen_pktline), so a server that
+ * refuses a non-fast-forward refuses it still (lib/git/builtin/receive-pack.c
+ * update, receive.denyNonFastForwards). Used by sync's 'ours' divergence strategy.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)

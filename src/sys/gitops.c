@@ -1690,9 +1690,13 @@ error_t gitops_merge_trees_safe(
         return error_wrap(err, "Failed to get their tree");
     }
 
-    /* Perform three-way merge on trees */
+    /* Perform three-way merge on trees, pairing no renames: the options' one
+     * default flag is GIT_MERGE_FIND_RENAMES (include/git2/merge.h
+     * GIT_MERGE_OPTIONS_INIT), and with it clear the pairing returns at once
+     * (lib/libgit2/src/libgit2/merge.c git_merge_diff_list__find_renames) */
     git_merge_options merge_opts;
     git_merge_options_init(&merge_opts, GIT_MERGE_OPTIONS_VERSION);
+    merge_opts.flags &= ~GIT_MERGE_FIND_RENAMES;
     rc = git_merge_trees(
         &index, repo, ancestor_tree, our_tree, their_tree, &merge_opts
     );
@@ -1862,11 +1866,14 @@ error_t gitops_rebase_inmemory_safe(
     /* In memory: HEAD, the index and a working tree untouched, and no rebase
      * state left in the repository — none to finish or abort, which libgit2 answers
      * at once (rebase.c git_rebase_finish, git_rebase_abort) — each replay written
-     * by the one object writer (gitops_create_replay) */
+     * by the one object writer (gitops_create_replay), and each pick merged under
+     * these merge options (rebase.c rebase_next_inmemory), which pair no renames,
+     * as gitops_merge_trees_safe's do */
     rebase_replay_t replay = { 0 };
     git_rebase_options opts;
     git_rebase_options_init(&opts, GIT_REBASE_OPTIONS_VERSION);
     opts.inmemory = 1;
+    opts.merge_options.flags &= ~GIT_MERGE_FIND_RENAMES;
     opts.commit_create_cb = gitops_create_replay;
     opts.payload = &replay;
 

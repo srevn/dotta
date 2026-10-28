@@ -1224,6 +1224,11 @@ error_t gitops_find_merge_base(
  * Performs a three-way merge using common ancestor. This is a pure tree-level
  * operation that never touches HEAD.
  *
+ * Pairs no renames: dotta has no rename verb — a move is a removal and a capture
+ * — so a pairing could only read a hand's rename against a removal as a conflict
+ * nothing explains. A hand's rename is a removal and an add, and an edit against
+ * it a removal against an edit, refused as every such pair is.
+ *
  * @param repo Repository (must not be NULL)
  * @param ancestor_oid Common ancestor commit (must not be NULL)
  * @param our_oid Our commit (local) (must not be NULL)
@@ -1348,8 +1353,9 @@ error_t gitops_create_merge_commit(
  * Each commit `branch_oid` holds that `onto_oid` lacks — a pick — is replayed
  * onto the last replay written, the onto before any, in libgit2's in-memory mode:
  * HEAD, the index and a working tree untouched, and no rebase state left in the
- * repository. A replay keeps its pick's author, message and encoding, and the
- * action its header names (gitops_commit_action), written by the one object writer
+ * repository. Each pick is merged as gitops_merge_trees_safe merges, no rename
+ * paired. A replay keeps its pick's author, message and encoding, and the action
+ * its header names (gitops_commit_action), written by the one object writer
  * (gitops_create_commit) under the committer every commit dotta writes carries
  * (gitops_get_signature); every other header a pick carries — a second action
  * line among them — is dropped, as git_commit_create drops them all. A pick whose

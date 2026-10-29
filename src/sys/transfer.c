@@ -36,7 +36,7 @@ typedef enum {
  * Transfer context.
  *
  * Owns the full lifecycle of a network session against one remote:
- *   - Progress reporting (line state, ephemeral flag)
+ *   - Progress reporting (the op's frames, through the output layer)
  *   - Session stats (cumulative objects/bytes across all ops)
  *   - The remote's words (a push's side band, an op's at a time)
  *   - Credential identity (URL, cached username/password)
@@ -50,10 +50,6 @@ typedef enum {
  */
 struct transfer_context_s {
     output_t *output;               /* Borrowed. */
-
-    /* Progress UI state */
-    bool progress_active;           /* The op drew a line its end has not ended. */
-    bool ephemeral;                 /* The op's end clears it, never says done. */
 
     /* Cumulative session stats (TTY-independent) */
     transfer_stats_t stats;
@@ -152,15 +148,13 @@ static void secure_replace(char **slot, char *incoming) {
     *slot = incoming;
 }
 
-transfer_context_t *transfer_context_create(const transfer_options_t *opts) {
-    CHECK_NULL(opts);
-    CHECK_NULL(opts->output);
+transfer_context_t *transfer_context_create(output_t *output, const char *url) {
+    CHECK_NULL(output);
 
     transfer_context_t *ctx = heap_calloc(1, sizeof(*ctx));
 
-    ctx->url = heap_strdup(opts->url);
-    ctx->output = opts->output;
-    ctx->ephemeral = opts->ephemeral_progress;
+    ctx->url = heap_strdup(url);
+    ctx->output = output;
     ctx->local_transport = url_is_local(ctx->url);
     /* All other fields zero-initialized by heap_calloc. */
 
@@ -300,33 +294,23 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
 }
 
 /**
- * End an op — end its progress line, fold stats, advance the credential state
- * machine.
+ * End an op — take its progress line down, fold stats, advance the credential
+ * state machine.
  */
 void transfer_op_end(transfer_context_t *xfer, int rc) {
     if (!xfer) return;
 
-    /* The line the op drew ends here, with the op's outcome, once. A callback
-     * cannot tell its last call from one libgit2 makes after it — the smart
-     * protocol reports a fetch once more past the indexer's last object
+    /* The row the op leaves is taken down here, once, whichever way it went. A
+     * callback cannot tell its last call from one libgit2 makes after it — the
+     * smart protocol reports a fetch once more past the indexer's last object
      * (transports/smart_protocol.c git_smart__download_pack) and a push once
      * more past the remote's report (git_smart__push), a local push's indexer
-     * once per delta it resolves — so a line a callback ended by its counts was
-     * drawn and ended again; a remote's line said while the op runs takes it
-     * down and says no outcome (transfer_push_sideband_callback), and the next
-     * report draws it again. The line is drawn past the output layer, which takes
-     * down only a line it drew (base/output.h output_clear_line), so it is ended
-     * past it too: an ephemeral line erased, a lasting one saying done only for
-     * an op that succeeded. */
-    if (xfer->progress_active) {
-        if (xfer->ephemeral) {
-            fputs("\r\033[2K", xfer->output->stream);
-        } else {
-            fputs(rc == 0 ? ", done.\n" : "\n", xfer->output->stream);
-        }
-        fflush(xfer->output->stream);
-        xfer->progress_active = false;
-    }
+     * once per delta it resolves — so a line a callback took down by its counts
+     * would be drawn again; a remote's line said while the op runs takes it down
+     * as it lands, and the next report draws it again. The layer keeps whether
+     * one stands (base/output.h output_clear_line): nothing is written where
+     * none does. */
+    output_clear_line(xfer->output);
 
     /* Then the remote's words, once the line has ended: under -v the line the
      * remote left open, said in the run's trace as the lines it ended were;
@@ -615,18 +599,11 @@ int transfer_progress_callback(
         .bytes = stats->received_bytes,
     };
 
-    /* Skip progress if no output context or below NORMAL verbosity */
-    if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {
-        return 0;
-    }
-
-    /* Inline progress uses \r — only works on TTY. */
-    if (!output_is_tty(ctx->output)) return 0;
-
+    /* Then a frame of the op's progress line, each drawn over the last, a
+     * terminal's alone at OUTPUT_NORMAL (base/output.h output_progress) */
     unsigned int total = stats->total_objects;
     unsigned int received = stats->received_objects;
 
-    /* Determine what to display based on state */
     if (total > 0) {
         /* Show receiving progress with percentage and bytes */
         int percent = (received * 100) / total;
@@ -634,23 +611,18 @@ int transfer_progress_callback(
         output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
 
         /* Display: "Receiving objects: XX% (current/total), X.X MiB" */
-        fprintf(
-            ctx->output->stream, "\rReceiving objects: %3d%% (%u/%u), %s",
+        output_progress(
+            ctx->output, OUTPUT_NORMAL, "Receiving objects: %3d%% (%u/%u), %s",
             percent, received, total, bytes_str
         );
-        fflush(ctx->output->stream);
-        ctx->progress_active = true;
     } else if (received > 0) {
         /* Don't know total yet, just show count */
         char bytes_str[32];
         output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
 
-        fprintf(
-            ctx->output->stream, "\rReceiving objects: %u, %s",
-            received, bytes_str
+        output_progress(
+            ctx->output, OUTPUT_NORMAL, "Receiving objects: %u, %s", received, bytes_str
         );
-        fflush(ctx->output->stream);
-        ctx->progress_active = true;
     }
 
     return 0;
@@ -678,47 +650,36 @@ int transfer_push_progress_callback(
         .bytes = ctx->local_transport ? 0 : bytes,
     };
 
-    /* Skip progress if no output context or below NORMAL verbosity */
-    if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {
-        return 0;
-    }
-
-    /* Inline progress uses \r — only works on TTY */
-    if (!output_is_tty(ctx->output)) return 0;
-
+    /* Then a frame of the op's progress line, as a fetch's is
+     * (transfer_progress_callback) */
     if (total > 0) {
         int percent = (current * 100) / total;
 
         if (ctx->local_transport) {
             /* Local push has no wire-byte count; show objects only. */
-            fprintf(
-                ctx->output->stream, "\rSending objects: %3d%% (%u/%u)",
+            output_progress(
+                ctx->output, OUTPUT_NORMAL, "Sending objects: %3d%% (%u/%u)",
                 percent, current, total
             );
         } else {
             char bytes_str[32];
             output_format_size(bytes, bytes_str, sizeof(bytes_str));
-            fprintf(
-                ctx->output->stream, "\rSending objects: %3d%% (%u/%u), %s",
+            output_progress(
+                ctx->output, OUTPUT_NORMAL, "Sending objects: %3d%% (%u/%u), %s",
                 percent, current, total, bytes_str
             );
         }
-        fflush(ctx->output->stream);
-        ctx->progress_active = true;
     } else {
         /* Total unknown — show count (and bytes when meaningful). */
         if (ctx->local_transport) {
-            fprintf(ctx->output->stream, "\rSending objects: %u", current);
+            output_progress(ctx->output, OUTPUT_NORMAL, "Sending objects: %u", current);
         } else {
             char bytes_str[32];
             output_format_size(bytes, bytes_str, sizeof(bytes_str));
-            fprintf(
-                ctx->output->stream, "\rSending objects: %u, %s",
-                current, bytes_str
+            output_progress(
+                ctx->output, OUTPUT_NORMAL, "Sending objects: %u, %s", current, bytes_str
             );
         }
-        fflush(ctx->output->stream);
-        ctx->progress_active = true;
     }
 
     return 0;
@@ -775,16 +736,11 @@ int transfer_push_sideband_callback(const char *str, int len, void *payload) {
         /* Under -v a line is said once the remote ends it, as a hook's output
          * is under -v (utils/hooks.c hook_fire, PROCESS_OUTPUT_INHERIT) — a slow
          * hook's words while it runs — on a row of its own: the op's progress
-         * line is erased first, past the output layer as it was drawn
-         * (transfer_op_end), and libgit2's closing report draws it again beneath
-         * the remote's lines (transports/smart_protocol.c git_smart__push), so
-         * a lasting line too stands once, its outcome said at the op's end */
+         * line is taken down as the line lands (base/output.h output_progress),
+         * and libgit2's closing report draws it again beneath the remote's lines
+         * (transports/smart_protocol.c git_smart__push), for the op's end to
+         * take down */
         if (newline && output_is_verbose(ctx->output)) {
-            if (ctx->progress_active) {
-                fputs("\r\033[2K", ctx->output->stream);
-                fflush(ctx->output->stream);
-                ctx->progress_active = false;
-            }
             transfer_print_sideband(ctx, OUTPUT_VERBOSE);
         }
 

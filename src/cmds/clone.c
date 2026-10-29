@@ -233,11 +233,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     output_info(out, OUTPUT_NORMAL, "  Path: %s", local_path);
 
     /* Create transfer context for progress reporting and credentials */
-    transfer_options_t xfer_opts = {
-        .output = out,
-        .url    = opts->url,
-    };
-    xfer = transfer_context_create(&xfer_opts);
+    xfer = transfer_context_create(out, opts->url);
 
     /* The place the clone lands must be absent or an empty directory. What stands
      * there is somebody's: a repository would be taken by the init below, and

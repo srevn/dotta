@@ -185,11 +185,7 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
             );
         } else {
             /* Create transfer context for credentials */
-            transfer_options_t xfer_opts = {
-                .output = out,
-                .url    = remote_url,
-            };
-            xfer = transfer_context_create(&xfer_opts);
+            xfer = transfer_context_create(out, remote_url);
 
             /*
              * Query remote server for available branches (network operation)
@@ -285,12 +281,7 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     if (err) goto cleanup;
 
     /* Create transfer context for progress reporting and credentials */
-    transfer_options_t xfer_opts = {
-        .output             = out,
-        .url                = remote_url,
-        .ephemeral_progress = true,
-    };
-    xfer = transfer_context_create(&xfer_opts);
+    xfer = transfer_context_create(out, remote_url);
 
     /* What the remote holds, asked once: every profile --all fetches, and the
      * pre-flight the names the line gives are held to. Asked before the fetch's

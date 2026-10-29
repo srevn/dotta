@@ -55,26 +55,14 @@ typedef struct {
 } transfer_stats_t;
 
 /**
- * Configuration for transfer_context_create.
- *
- * Designated-initializer friendly; unset fields default to zero/NULL/false.
- */
-typedef struct {
-    output_t *output;              /* Required. Borrowed for the session. */
-    const char *url;               /* Remote URL. NULL is legal (SSH agent /
-                                    * unauthenticated paths still work;
-                                    * helper approve/reject become no-ops). */
-    bool ephemeral_progress;       /* If true, clear the progress line on
-                                    * completion instead of emitting "done". */
-} transfer_options_t;
-
-/**
  * Create a transfer context.
  *
- * @param opts Configuration (must not be NULL; opts->output required)
+ * @param output The run's output, borrowed for the session (must not be NULL)
+ * @param url The remote's URL; NULL is legal — SSH agent and unauthenticated
+ *        paths still work, and the helper's approve and reject become no-ops
  * @return The context (caller frees via transfer_context_free)
  */
-transfer_context_t *transfer_context_create(const transfer_options_t *opts);
+transfer_context_t *transfer_context_create(output_t *output, const char *url);
 
 /**
  * Free a transfer context.
@@ -105,14 +93,12 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
 /**
  * End an op on this transfer session.
  *
- * Ends the progress line the op drew, with the op's outcome: cleared where the
- * session's progress is ephemeral, else closed with ", done." for an op that
- * succeeded and a bare newline for one that failed. A remote's line said while
- * the op runs takes the line down before it, and libgit2's closing report draws
- * it again (transfer_push_sideband_callback), so the outcome is said here alone
- * and no line outlives its op: a caller that drew a progress line around the op
- * (base/output.h output_progress) finds at most that line left, its own to take
- * down, and a line said while it stands takes it down first.
+ * Takes down the row the op leaves standing (base/output.h output_clear_line):
+ * its frame, or a progress line its caller drew around it, whichever way the op
+ * went — libgit2 reports past an op's last count, so its end alone knows the
+ * line is done. A remote's line said while the op runs takes the row down as it
+ * lands, and libgit2's closing report draws it again
+ * (transfer_push_sideband_callback), so no line outlives its op.
  *
  * Then the remote's words the op kept are said: under -v the line the remote
  * left open, the others said as they arrived; otherwise, where the op failed,
@@ -221,6 +207,9 @@ int transfer_credentials_callback(
 /**
  * libgit2 fetch progress callback (payload = transfer_context_t *).
  *
+ * Each report recorded as the op's wire, then drawn as a frame of its progress
+ * line (base/output.h output_progress).
+ *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  */
 int transfer_progress_callback(
@@ -230,6 +219,9 @@ int transfer_progress_callback(
 
 /**
  * libgit2 push progress callback (payload = transfer_context_t *).
+ *
+ * Each report recorded as the op's wire, then drawn as a frame of its progress
+ * line, as a fetch's is.
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  */
@@ -264,8 +256,8 @@ int transfer_push_status_callback(
  *
  * The remote's words — a refusing hook's reason, a server's notice, receive-pack's
  * own progress — a packet at a time, cut anywhere, said by the hooks' rule
- * (utils/hooks.h hook_fire_pre): under -v each line as the remote ends it, the
- * op's progress line taken down first; otherwise every byte kept, to
+ * (utils/hooks.h hook_fire_pre): under -v each line as the remote ends it, on a
+ * row of its own (base/output.h output_progress); otherwise every byte kept, to
  * TRANSFER_SIDEBAND_MAX and counted past it, for the op's end to say where the
  * push failed (transfer_op_end). A line is said as a terminal shows it, behind
  * "remote: ", and as a datum: no byte of it starts a line, moves the cursor or

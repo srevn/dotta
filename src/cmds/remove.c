@@ -1452,8 +1452,7 @@ static error_t remove_profile(
 
         /* remote_url was resolved alongside remote_name above. NULL is legal —
          * unauthenticated paths still work, helper approve/reject become no-ops. */
-        transfer_options_t del_opts = { .output = out, .url = remote_url };
-        transfer_context_t *del_xfer = transfer_context_create(&del_opts);
+        transfer_context_t *del_xfer = transfer_context_create(out, remote_url);
         error_t push_err = gitops_delete_remote_branch(
             repo, remote_name, opts->profile, del_xfer
         );

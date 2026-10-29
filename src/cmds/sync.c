@@ -1729,12 +1729,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* Create transfer context for progress reporting and what each op moved.
      * URL was resolved alongside the remote name above; it feeds the credential
      * helper here */
-    transfer_options_t xfer_opts = {
-        .output             = out,
-        .url                = remote_url,
-        .ephemeral_progress = true,
-    };
-    xfer = transfer_context_create(&xfer_opts);
+    xfer = transfer_context_create(out, remote_url);
 
     /* Reconcile the repository epoch with the remote, before any profile acts:
      * its census reads the local branches, which the fetch leaves and a pull

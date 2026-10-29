@@ -16,8 +16,7 @@
  * failed write is the run's error, and output_write returns nothing.
  *
  * A line closes as a message does (base/error.h "Messages"), with no period and
- * no exclamation mark: a question keeps its question mark, and a progress line
- * git's "done." (sys/transfer.h transfer_op_end).
+ * no exclamation mark: a question keeps its question mark.
  */
 
 #ifndef DOTTA_OUTPUT_H
@@ -230,9 +229,9 @@ bool output_colors_enabled(const output_t *ctx);
  * Whether the report's stream is a terminal: the medium, asked at the call
  *
  * On a terminal alone a line is drawn while an act runs (output_progress) and
- * taken down once it is done (output_clear_line), as sys/transfer's progress
- * frames are. Not the colours' question: they can be on off a terminal (the
- * configuration's color = "always") and off on one (NO_COLOR, TERM=dumb).
+ * taken down once it is done (output_clear_line). Not the colours' question:
+ * they can be on off a terminal (the configuration's color = "always") and off
+ * on one (NO_COLOR, TERM=dumb).
  *
  * @param ctx Output context (false for NULL)
  * @return Whether the report's stream is a terminal
@@ -532,13 +531,14 @@ void output_section(
  * The layer keeps that one stands (output_t's progress_drawn), so every line
  * that lands, on the report's stream or on stderr, takes it down first: a refusal,
  * a warning, a remote's words each stand on a row of their own. Its act's end
- * takes it down. sys/transfer's frames draw over it while objects move, and take
- * their row down when their op ends (sys/transfer.h transfer_op_end). Off a
- * terminal nothing is drawn: a redirected report holds what an act did, never
+ * takes it down. sys/transfer's frames are such lines, drawn over it while objects
+ * move and taken down when their op ends (sys/transfer.h transfer_op_end). Off
+ * a terminal nothing is drawn: a redirected report holds what an act did, never
  * that it ran.
  *
  * Readers: cmds/sync.c sync_fetch, cmds/profile.c profile_fetch, cmds/status.c
- * status_remote.
+ * status_remote; sys/transfer.c transfer_progress_callback and
+ * transfer_push_progress_callback, the frames.
  *
  * @param ctx Output context (NULL: nothing)
  * @param min_level Minimum verbosity level
@@ -552,9 +552,8 @@ void output_progress(
 ) __attribute__((format(printf, 3, 4)));
 
 /**
- * Take down the progress line that stands (output_progress), or the frame
- * sys/transfer drew over it on its row: on a terminal, the row erased and the
- * cursor at its start
+ * Take down the progress line that stands (output_progress): on a terminal, the
+ * row erased and the cursor at its start
  *
  * The layer keeps whether one stands, so where none does nothing is written:
  * none drawn below its level, none ever off a terminal — as git's own take-down
@@ -564,8 +563,10 @@ void output_progress(
  * line written over the row leaves the row's longer tail beside it, where git
  * pads the row with spaces.
  *
- * Readers: output_progress's three; and the layer's own, before every line that
- * lands (output_land) and before the stream moves (output_set_stream).
+ * Readers: cmds/sync.c sync_fetch, cmds/profile.c profile_fetch, cmds/status.c
+ * status_remote, once the fetch their line names is done; sys/transfer.c
+ * transfer_op_end; and the layer's own, before every line that lands (output_land)
+ * and before the stream moves (output_set_stream).
  *
  * @param ctx Output context (NULL: nothing)
  */

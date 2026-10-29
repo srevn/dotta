@@ -1505,15 +1505,8 @@ static status_remote_t status_remote(
     /* Fetch if requested */
     if (!opts->no_fetch) {
         /* xfer is required by gitops network ops (credential state machine +
-         * approve/reject are needed even without verbose progress). Status's
-         * fetch is a background refresh: progress is always ephemeral so it never
-         * persists between status sections. */
-        transfer_options_t xfer_opts = {
-            .output             = out,
-            .url                = remote_url,
-            .ephemeral_progress = true,
-        };
-        transfer_context_t *xfer = transfer_context_create(&xfer_opts);
+         * approve/reject are needed even without verbose progress) */
+        transfer_context_t *xfer = transfer_context_create(out, remote_url);
 
         /* While the fetch runs, a progress line at -v: a terminal's alone, drawn
          * over by transfer's frames while objects move (sys/transfer.h

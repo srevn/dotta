@@ -61,8 +61,9 @@ void transfer_context_free(transfer_context_t *xfer);
  *
  * Resets per-op scratch (anti-loop attempts, the op's wire, the remote's words).
  *
- * Pair with transfer_op_end() around each libgit2 network call (git_remote_connect,
- * git_remote_download, git_remote_upload).
+ * Pair with transfer_op_end() around each libgit2 network call (the open's
+ * git_remote_connect_ext, a push's git_remote_connect, git_remote_download,
+ * git_remote_upload).
  *
  * @param xfer Transfer context (must not be NULL)
  */
@@ -138,7 +139,7 @@ void transfer_wire_phrase(
  * Readers: sys/remote.c remote_open (the connect), remote_fetch (the download)
  * and remote_push (the push's connect and its upload).
  *
- * An op with no byte transfer — the session's open, git_remote_connect and
+ * An op with no byte transfer — the session's open, git_remote_connect_ext and
  * git_remote_ls — passes GIT_DIRECTION_FETCH; the installed progress callback
  * simply never fires.
  *

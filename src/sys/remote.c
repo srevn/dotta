@@ -3,8 +3,12 @@
  *
  * See remote.h. Every op the session makes is one libgit2 network call — the
  * connect, the download, a push's connect and upload — wrapped in sys/transfer's
- * op, its callbacks configured for its direction, and its failure's sentence
- * read before anything closes: a close may set libgit2's error over the op's
+ * op and handed its options whole, as a connected remote takes the options each
+ * op hands it in place of the last (lib/libgit2/src/libgit2/remote.c
+ * connect_or_reset_options): transfer's callbacks for its direction, and the
+ * proxy git's configuration names, no credential callback beside it, so the
+ * remote's credential is never a proxy's answer. Its failure's sentence is read
+ * before anything closes: a close may set libgit2's error over the op's
  * (transports/smart.c git_smart__close writes a flush to the connection). Every
  * ref the session writes, here or on the remote, is written from its writer's
  * read: a tracking ref through sys/gitops' writers (gitops_write_reference,
@@ -189,12 +193,13 @@ error_t remote_open(
 
     /* The open's one op: the connect for upload-pack, which reads the remote's
      * advertisement — no byte of a pack moves, so no frame is drawn */
-    git_remote_callbacks callbacks;
-    git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
-    transfer_configure_callbacks(&callbacks, remote->xfer, GIT_DIRECTION_FETCH);
+    git_remote_connect_options opts;
+    git_remote_connect_options_init(&opts, GIT_REMOTE_CONNECT_OPTIONS_VERSION);
+    transfer_configure_callbacks(&opts.callbacks, remote->xfer, GIT_DIRECTION_FETCH);
+    opts.proxy_opts.type = GIT_PROXY_AUTO;
 
     transfer_op_begin(remote->xfer);
-    rc = git_remote_connect(git, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL);
+    rc = git_remote_connect_ext(git, GIT_DIRECTION_FETCH, &opts);
     transfer_op_end(remote->xfer, rc);
 
     const git_remote_head **heads = NULL;
@@ -366,15 +371,15 @@ error_t remote_fetch(
      * tips and the prune being git_remote_fetch's (remote.c git_remote_fetch) —
      * and no tag is followed, whatever remote.<remote>.tagOpt says (fetch.c
      * filter_wants): an option whose value would change what dotta's own fetch
-     * answers is set here. A connected remote takes the options each op hands
-     * it (remote.c connect_or_reset_options), so the callbacks are named again.
-     * A fetch of nothing asks nothing of the remote, where an empty list would
-     * download its configured refspecs (remote.c git_remote__download). */
+     * answers is set here. A fetch of nothing asks nothing of the remote, where
+     * an empty list would download its configured refspecs (remote.c
+     * git_remote__download). */
     if (refspecs.count > 0) {
         git_fetch_options opts;
         git_fetch_options_init(&opts, GIT_FETCH_OPTIONS_VERSION);
-        opts.download_tags = GIT_REMOTE_DOWNLOAD_TAGS_NONE;
         transfer_configure_callbacks(&opts.callbacks, remote->xfer, GIT_DIRECTION_FETCH);
+        opts.proxy_opts.type = GIT_PROXY_AUTO;
+        opts.download_tags = GIT_REMOTE_DOWNLOAD_TAGS_NONE;
         git_strarray refs = { refspecs.entries, refspecs.count };
 
         transfer_op_begin(remote->xfer);
@@ -508,12 +513,15 @@ error_t remote_push(
     git_push_options opts;
     git_push_options_init(&opts, GIT_PUSH_OPTIONS_VERSION);
     transfer_configure_callbacks(&opts.callbacks, remote->xfer, GIT_DIRECTION_PUSH);
+    opts.proxy_opts.type = GIT_PROXY_AUTO;
 
     /* The push's own connection, for receive-pack, its op the connect alone as
      * the open's is: its listing, read on it, names the ref as the remote holds
      * it now */
     transfer_op_begin(remote->xfer);
-    int rc = git_remote_connect(remote->git, GIT_DIRECTION_PUSH, &opts.callbacks, NULL, NULL);
+    int rc = git_remote_connect(
+        remote->git, GIT_DIRECTION_PUSH, &opts.callbacks, &opts.proxy_opts, NULL
+    );
     transfer_op_end(remote->xfer, rc);
 
     const git_remote_head **heads = NULL;

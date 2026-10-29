@@ -37,6 +37,17 @@
  * push that lands moves its tracking ref after it, from its read; a tracking
  * ref that will not follow is left as it stands, the next fetch's to write.
  *
+ * Every op takes the proxy git's configuration names, as git's own transfers
+ * do, which libgit2 takes only where asked (GIT_PROXY_AUTO): remote.<name>.proxy,
+ * then http.<url>.proxy and http.proxy, then the environment's (https_proxy,
+ * http_proxy) unless no_proxy names the host, an empty value naming none
+ * (lib/libgit2/src/libgit2/remote.c git_remote__http_proxy). An https remote is
+ * reached through it, by CONNECT; an http one directly whatever it names, libgit2's
+ * client writing the proxy's form of each request to the remote itself
+ * (transports/httpclient.c http_client_connect); ssh, git:// and a path read
+ * none. A proxy that asks for credentials is answered with those its URL carries
+ * alone: the helper answers for the remote, and its answer never reaches a proxy.
+ *
  * The callbacks libgit2 calls during each op are sys/transfer's, made at the
  * open and freed at the free, which commits the credential helper's one verdict.
  * Which remote: "origin", or the one configured (remote_default).

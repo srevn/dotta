@@ -36,7 +36,6 @@
 #include <git2.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -423,7 +422,8 @@ static error_t epoch_probe_remote(
 }
 
 error_t epoch_fetch(
-    git_repository *repo, const char *remote_name, transfer_context_t *xfer
+    git_repository *repo, const char *remote_name, commit_action_t action,
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -524,11 +524,13 @@ error_t epoch_fetch(
      * a missing (not divergent) local epoch, so there is nothing to overwrite.
      * Deliberate epoch rotation remains unsupported end-to-end: a re-minted epoch
      * cannot even be published (the push is non-force), and a clone whose
-     * ciphertext the old epoch keys lands on CONFLICT, not adopt. The write's
-     * failure names the ref, and the act and the remote are this call's to say. */
-    char reflog_msg[DOTTA_MESSAGE_MAX];
-    snprintf(reflog_msg, sizeof(reflog_msg), "epoch: Fetched from %s", remote_name);
-    err = gitops_write_reference(repo, EPOCH_REF, &advertised, NULL, reflog_msg);
+     * ciphertext the old epoch keys lands on CONFLICT, not adopt. Its line names
+     * the caller's command. The write's failure names the ref, and the act and
+     * the remote are this call's to say. */
+    err = gitops_write_reference(
+        repo, EPOCH_REF, &advertised, NULL, commit_action_word(action),
+        "adopted from %s", remote_name
+    );
     if (err) {
         return error_wrap(err, "Cannot adopt the epoch remote '%s' advertises", remote_name);
     }

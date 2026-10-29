@@ -62,14 +62,20 @@ typedef enum {
  *
  * The value of the header every commit dotta writes carries (sys/gitops.h
  * gitops_create_commit), which sys/ carries as an opaque word: "add", "update",
- * "remove", "revert", "ignore", "bootstrap", "sync", "init", "clone". A value
- * no enumerator names is only a cast's, and dies (base/error.h CHECK_ARG).
+ * "remove", "revert", "ignore", "bootstrap", "sync", "init", "clone". The reflog
+ * line of every reference the command moves names it too, a commit's as its header
+ * does (gitops_write_reference); a command that makes no commit names itself
+ * there in its own words (cmds/profile.c profile_fetch). A value no enumerator
+ * names is only a cast's, and dies (base/error.h CHECK_ARG).
  *
  * Readers: core/profiles.c profile_commit, and profile_departures, update's word
  * against each removal's; cmds/ignore.c ignore_edit and ignore_modify;
- * cmds/bootstrap.c bootstrap_edit; infra/epoch.c epoch_init; core/ignore.c
- * ignore_seed_baseline; cmds/sync.c sync_resolve and sync_reset, for the commit
- * a resolution writes (sys/resolve.h resolve_init).
+ * cmds/bootstrap.c bootstrap_edit; infra/epoch.c epoch_init, and epoch_fetch,
+ * the install's line; core/ignore.c ignore_seed_baseline; cmds/sync.c sync_resolve
+ * and sync_reset, for every line a resolution writes and the commit it makes
+ * (sys/resolve.h resolve_init), and sync_fast_forward, its line; cmds/clone.c
+ * land_profiles, the line of each branch it creates (sys/upstream.h
+ * upstream_ensure_tracking_branch).
  *
  * @param action The action
  * @return Its word, static

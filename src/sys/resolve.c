@@ -69,15 +69,9 @@ static error_t resolve_rebase_inmemory(resolve_context_t *ctx) {
     }
 
     /* Update branch reference to point to rebased commits */
-    char reflog_msg[DOTTA_MESSAGE_MAX];
-    snprintf(
-        reflog_msg, sizeof(reflog_msg),
-        "sync: Rebase onto %s/%s",
-        ctx->remote_name, ctx->branch_name
-    );
-
     err = gitops_write_reference(
-        ctx->repo, ctx->refname, &rebased_oid, &ctx->local_oid, reflog_msg
+        ctx->repo, ctx->refname, &rebased_oid, &ctx->local_oid, ctx->action,
+        "rebase onto %s/%s", ctx->remote_name, ctx->branch_name
     );
     if (err) return err;
 
@@ -172,15 +166,9 @@ static error_t resolve_merge_trees(resolve_context_t *ctx) {
     }
 
     /* Update branch reference to point to merge commit */
-    char reflog_msg[DOTTA_MESSAGE_MAX];
-    snprintf(
-        reflog_msg, sizeof(reflog_msg),
-        "sync: Merge %s/%s",
-        ctx->remote_name, ctx->branch_name
-    );
-
     err = gitops_write_reference(
-        ctx->repo, ctx->refname, &merge_commit_oid, &ctx->local_oid, reflog_msg
+        ctx->repo, ctx->refname, &merge_commit_oid, &ctx->local_oid, ctx->action,
+        "merge %s/%s", ctx->remote_name, ctx->branch_name
     );
     if (err) return err;
 
@@ -211,15 +199,9 @@ static error_t resolve_theirs(resolve_context_t *ctx) {
     CHECK_NULL(ctx);
 
     /* Update local branch to point to remote commit */
-    char reflog_msg[DOTTA_MESSAGE_MAX];
-    snprintf(
-        reflog_msg, sizeof(reflog_msg),
-        "sync: Reset to %s/%s (theirs strategy)",
-        ctx->remote_name, ctx->branch_name
-    );
-
     error_t err = gitops_write_reference(
-        ctx->repo, ctx->refname, &ctx->remote_oid, &ctx->local_oid, reflog_msg
+        ctx->repo, ctx->refname, &ctx->remote_oid, &ctx->local_oid, ctx->action,
+        "reset to %s/%s (theirs strategy)", ctx->remote_name, ctx->branch_name
     );
     if (err) return err;
 
@@ -265,8 +247,8 @@ error_t resolve_rollback(resolve_context_t *ctx) {
     /* Back to the branch's head resolve_init read, only from the one the resolution
      * left: before any, Git's null id, which a branch that stands refuses */
     return gitops_write_reference(
-        ctx->repo, ctx->refname, &ctx->local_oid, &ctx->resolved_oid,
-        "sync: Rollback after failure"
+        ctx->repo, ctx->refname, &ctx->local_oid, &ctx->resolved_oid, ctx->action,
+        "rollback after failure"
     );
 }
 

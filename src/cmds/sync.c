@@ -492,7 +492,8 @@ static error_t sync_fast_forward(
     /* The fast-forward, only from the head read above: one another writer moved
      * or deleted since refuses it (sys/gitops.h gitops_write_reference) */
     err = gitops_write_reference(
-        repo, local_refname, &remote_oid, &local_oid, "sync: Fast-forward pull"
+        repo, local_refname, &remote_oid, &local_oid, commit_action_word(COMMIT_ACTION_SYNC),
+        "fast-forward to %s/%s", remote_name, branch_name
     );
     if (err) return err;
 
@@ -690,7 +691,8 @@ static error_t sync_resolve(
 ) {
     /* The context keeps the two heads the resolution integrates — the branch's,
      * every write's expectation and the rollback's target, and the remote's —
-     * the head it leaves, and the action a merge's commit names */
+     * the head it leaves, and the action each write's line and a merge's commit
+     * name */
     resolve_context_t resolve;
     error_t err = resolve_init(
         &resolve, repo, remote_name, row->profile,
@@ -1550,7 +1552,7 @@ static void sync_reconcile_epoch(
             }
 
             const transfer_stats_t mark = transfer_stats(xfer);
-            err = epoch_fetch(repo, remote_name, xfer);
+            err = epoch_fetch(repo, remote_name, COMMIT_ACTION_SYNC, xfer);
             if (err) {
                 /* Every failure of the fetch names its act and leaves the local
                  * ref standing — one it could not adopt was judged before it

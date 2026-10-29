@@ -579,15 +579,15 @@ error_t stage_commit(
     const git_commit *parents[] = { st->parent };
     git_oid commit_oid;
     err = gitops_create_commit(
-        st->repo, sig, sig, NULL, message, tree, st->parent ? 1 : 0, parents, action,
-        &commit_oid
+        st->repo, sig, sig, NULL, message, tree, st->parent ? 1 : 0,
+        parents, action, &commit_oid
     );
     git_signature_free(sig);
     git_tree_free(tree);
     if (err) return error_wrap(err, "Failed to commit to '%s'", st->refname);
 
-    /* The line git writes for a commit, off the commit just written: libgit2's
-     * summary rule, never a second spelling of it (refs.c
+    /* The summary its line says, off the commit just written: libgit2's rule
+     * for a commit's line, never a second spelling of it (refs.c
      * git_reference__update_for_commit), and a summary it cannot allocate its
      * failure */
     git_commit *commit = NULL;
@@ -598,20 +598,17 @@ error_t stage_commit(
         git_commit_free(commit);
         return error_git(rc, "Failed to read the commit written for '%s'", st->refname);
     }
-    char *reflog_msg = heap_str_format(
-        "commit%s: %s", st->parent ? "" : " (initial)", summary
-    );
-    git_commit_free(commit);
 
     /* The ref, from the head the open read — from nothing for an orphan's stage:
      * a head another writer moved or deleted since, or a ref one made, refuses
-     * under the ref's lock (sys/gitops.h gitops_write_reference) */
+     * under the ref's lock — its line the writer's action, then the summary, a
+     * root's alike (sys/gitops.h gitops_write_reference) */
     const git_oid none = GIT_OID_SHA1_ZERO;
     err = gitops_write_reference(
         st->repo, st->refname, &commit_oid,
-        st->parent ? git_commit_id(st->parent) : &none, reflog_msg
+        st->parent ? git_commit_id(st->parent) : &none, action, "%s", summary
     );
-    free(reflog_msg);
+    git_commit_free(commit);
 
     /* Refused, the object stays loose (the header) and nothing was committed:
      * the clause every refusal of the write carries, re-minted over the writer's

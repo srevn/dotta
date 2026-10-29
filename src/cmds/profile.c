@@ -383,7 +383,9 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
         upstream_info_t upstream;
         error_t row_err = upstream_analyze_profile(repo, remote_name, profile, &upstream);
         if (!row_err && upstream.state == UPSTREAM_NO_LOCAL) {
-            row_err = upstream_ensure_tracking_branch(repo, remote_name, profile);
+            row_err = upstream_ensure_tracking_branch(
+                repo, remote_name, profile, "profile fetch"
+            );
         }
 
         /* A profile that fails is named and counted, its error dropped — at most

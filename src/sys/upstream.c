@@ -215,11 +215,13 @@ error_t upstream_discover_branches(
  * Make a remote branch local, or leave the local one where it stands
  */
 error_t upstream_ensure_tracking_branch(
-    git_repository *repo, const char *remote_name, const char *branch_name
+    git_repository *repo, const char *remote_name, const char *branch_name,
+    const char *action
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_NULL(action);
 
     /* Already here: a fetch never moves a local branch. */
     bool exists = false;
@@ -259,19 +261,17 @@ error_t upstream_ensure_tracking_branch(
 
     /* The local branch at the same commit, created only where the name is still
      * free — one made since the look above refuses (sys/gitops.h
-     * gitops_write_reference) — under git's line for a branch made from another */
+     * gitops_write_reference) — its line git's words for a branch created from
+     * another, under the command that creates it */
     char local_refname[DOTTA_REFNAME_MAX];
     err = gitops_branch_refname(
         local_refname, sizeof(local_refname), branch_name
     );
     if (err) return err;
 
-    char reflog_msg[DOTTA_MESSAGE_MAX];
-    snprintf(
-        reflog_msg, sizeof(reflog_msg), "branch: Created from %s/%s", remote_name,
-        branch_name
-    );
-
     const git_oid none = GIT_OID_SHA1_ZERO;
-    return gitops_write_reference(repo, local_refname, &target_oid, &none, reflog_msg);
+    return gitops_write_reference(
+        repo, local_refname, &target_oid, &none, action,
+        "created from %s/%s", remote_name, branch_name
+    );
 }

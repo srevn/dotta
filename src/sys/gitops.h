@@ -931,9 +931,15 @@ error_t gitops_resolve_default_remote(
  * such a file — so only a file damaged between that proof and the write has a
  * loose reference written over a packed one.
  *
- * The reflog line is `reflog_msg`, under the handle's ident
- * (gitops_open_repository), HEAD's log taking it too where HEAD names the reference
- * written (refdb_fs.c maybe_append_head); its clock is the write's.
+ * The reflog line names the command that moved the reference, then what it did:
+ * `dotta <action>: <words>`, opened as a commit's action header is
+ * (gitops_create_commit), so a commit's line and its header name one command.
+ * Formatted here alone, so no writer spells a line of its own. It is signed with
+ * the handle's ident (gitops_open_repository), HEAD's log takes it too where
+ * HEAD names the reference written (refdb_fs.c maybe_append_head), and Git keeps
+ * it where it keeps the reference's log — in dotta's store a branch's and a
+ * remote-tracking ref's (utils/repo.h repo_declare_store), not the epoch's or
+ * the baseline's (refdb.c git_refdb_should_write_reflog). Its clock is the write's.
  *
  * Readers: sys/stage.c stage_commit; sys/resolve.c resolve_rebase_inmemory,
  * resolve_merge_trees, resolve_theirs and resolve_rollback; cmds/sync.c
@@ -945,7 +951,10 @@ error_t gitops_resolve_default_remote(
  * @param target The id the reference is to name (must not be NULL; an object
  *               the repository holds)
  * @param expected What the writer read: an id, Git's null id, or NULL (above)
- * @param reflog_msg The reflog line (must not be NULL: every write says why)
+ * @param action The word of the command that moves the reference (must not be
+ *               NULL: every line names one)
+ * @param format What it did, a printf format over the arguments after it (must
+ *               not be NULL)
  * @return NULL; ERR_CONFLICT "Reference '<refname>' was changed by another writer
  *         since this command read it" where the compare refuses, and nowhere
  *         else; every other failure Git's, in Git's words — a head deleted since
@@ -959,8 +968,10 @@ error_t gitops_write_reference(
     const char *refname,
     const git_oid *target,
     const git_oid *expected,
-    const char *reflog_msg
-);
+    const char *action,
+    const char *format,
+    ...
+) __attribute__((format(printf, 6, 7)));
 
 /**
  * Delete a reference, only from the state its writer read

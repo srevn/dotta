@@ -426,13 +426,14 @@ error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out);
  * that moved, or a ref that appeared, reads as ERR_CONFLICT naming the ref; a
  * head deleted since, and every other refusal of the write, in Git's words; each
  * says nothing was committed, and the object stays loose. The reflog line is
- * git's for a commit: "commit: <summary>", a root's "commit (initial): <summary>".
+ * "dotta <action>: <summary>", the action the header's and the summary the
+ * commit's, a root's alike (gitops_write_reference).
  *
  * @param st Stage (must not be NULL)
  * @param message Commit message (must not be NULL)
- * @param action The word its writer names the commit's action by (must not be
- *               NULL: every commit a stage writes names one; the words are
- *               infra/commit.h commit_action_word's)
+ * @param action The word its writer names the commit's action by, in its header
+ *               and its reflog line (must not be NULL: every commit a stage writes
+ *               names one; the words are infra/commit.h commit_action_word's)
  * @param out_committed Whether a commit was made — for the callers that must
  *                      say "nothing changed" and cannot know before staging
  *                      (optional, can be NULL)

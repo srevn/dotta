@@ -180,12 +180,15 @@ error_t upstream_discover_branches(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")
  * @param branch_name Branch name
+ * @param action The word of the command the branch is created under, its reflog
+ *               line's (must not be NULL)
  * @return Error or NULL on success
  */
 error_t upstream_ensure_tracking_branch(
     git_repository *repo,
     const char *remote_name,
-    const char *branch_name
+    const char *branch_name,
+    const char *action
 );
 
 #endif /* DOTTA_UPSTREAM_H */

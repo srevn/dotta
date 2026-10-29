@@ -249,6 +249,7 @@ error_t epoch_push(
  *
  * @param repo        Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL, e.g. "origin")
+ * @param action      The command the install's reflog line names: the caller's
  * @param xfer        Transfer context for credentials / progress
  * @return Error or NULL on success; ERR_NOT_FOUND if the remote lacks the ref;
  *         ERR_CRYPTO if the fetched epoch could not be proved (the local ref
@@ -257,6 +258,7 @@ error_t epoch_push(
 error_t epoch_fetch(
     git_repository *repo,
     const char *remote_name,
+    commit_action_t action,
     transfer_context_t *xfer
 );
 

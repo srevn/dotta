@@ -47,15 +47,16 @@ typedef enum {
  * expectation and the rollback's target, and the remote-tracking head, what a
  * rebase, a merge and a reset to the remote integrate — and the one the resolution
  * left, the rollback's expectation, Git's null id until a resolution lands. The
- * action is the word the commit a resolution writes names: the merge's — a rebase's
- * replays carry their picks' own, and a reset writes none.
+ * action is the word of the command a resolution runs under: every line a write
+ * to the branch logs names it, the rollback's among them, and so does the merge's
+ * commit — a rebase's replays carry their picks' own.
  */
 typedef struct {
     git_repository *repo;             /* Repository handle (must not be NULL) */
     const char *remote_name;          /* Remote name (e.g., "origin") */
     const char *branch_name;          /* Branch name to resolve */
     resolve_strategy_t strategy;      /* Resolution strategy */
-    const char *action;               /* The word the merge commit names its action by */
+    const char *action;               /* The command's word: each write's line, a merge's header */
     char refname[DOTTA_REFNAME_MAX];  /* The branch's reference, every write's */
     git_oid local_oid;                /* The branch's head resolve_init read */
     git_oid remote_oid;               /* The remote-tracking head resolve_init read */
@@ -77,8 +78,9 @@ typedef struct {
  * @param remote_name Remote name (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
  * @param strategy Resolution strategy
- * @param action The word its caller names the action of a commit the resolution
- *               writes by (must not be NULL; borrowed for the context's life)
+ * @param action The word of the command the resolution runs under, which each
+ *               line it logs and a merge's commit name (must not be NULL; borrowed
+ *               for the context's life)
  * @return Error or NULL on success
  */
 error_t resolve_init(

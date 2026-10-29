@@ -18,6 +18,7 @@
 #ifndef DOTTA_HEAP_H
 #define DOTTA_HEAP_H
 
+#include <stdarg.h>
 #include <types.h>
 
 /**
@@ -87,5 +88,19 @@ char *heap_strndup(const char *str, size_t n);
  */
 char *heap_str_format(const char *fmt, ...)
 __attribute__((format(printf, 1, 2)));
+
+/**
+ * heap_str_format over a va_list, for a formatter of its own
+ *
+ * The format is dotta's own, so one that cannot be formatted is its writer's
+ * bug. Readers: base/heap.c heap_str_format, and sys/gitops.c
+ * gitops_write_reference.
+ *
+ * @param fmt  Format string (must not be NULL)
+ * @param args The arguments, as a variadic caller received them
+ * @return The string; never NULL
+ */
+char *heap_str_vformat(const char *fmt, va_list args)
+__attribute__((format(printf, 1, 0)));
 
 #endif /* DOTTA_HEAP_H */

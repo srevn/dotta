@@ -77,7 +77,9 @@ static void land_profiles(
         /* The local branch: created at the remote's commit, or already here (the
          * same name given twice) and left where it stands. A name that fails is
          * warned about and skipped, its error dropped, one per such name. */
-        error_t err = upstream_ensure_tracking_branch(repo, remote_name, profile);
+        error_t err = upstream_ensure_tracking_branch(
+            repo, remote_name, profile, commit_action_word(COMMIT_ACTION_CLONE)
+        );
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
@@ -287,7 +289,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * is not a dotta repository: refuse before any local materialization below
      * (the record, the local branches, the baseline). The ref also carries the
      * repository's epoch; without it, every encrypted blob is undecryptable. */
-    err = epoch_fetch(repo, "origin", xfer);
+    err = epoch_fetch(repo, "origin", COMMIT_ACTION_CLONE, xfer);
     if (error_code(err) == ERR_NOT_FOUND) {
         /* Split the diagnostic: an empty remote holds nothing to clone, and a
          * ref-bearing one is not dotta's until a machine that holds the repository

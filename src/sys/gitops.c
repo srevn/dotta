@@ -1414,12 +1414,13 @@ static error_t gitops_reference_target(const git_reference *ref, git_oid *out) {
 
 error_t gitops_write_reference(
     git_repository *repo, const char *refname, const git_oid *target,
-    const git_oid *expected, const char *reflog_msg
+    const git_oid *expected, const char *action, const char *format, ...
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(refname);
     CHECK_NULL(target);
-    CHECK_NULL(reflog_msg);
+    CHECK_NULL(action);
+    CHECK_NULL(format);
 
     /* A create decides on what the store does not hold, so it reads a database
      * that has read nothing yet (gitops_reopen_refdb): the namespace scan and
@@ -1432,13 +1433,23 @@ error_t gitops_write_reference(
     err = gitops_reference_terminal(repo, refname, terminal);
     if (err) return err;
 
+    /* The line: the command that moves the reference, opened as a commit's action
+     * header is (gitops_create_commit), then what it did */
+    va_list args;
+    va_start(args, format);
+    char *words = heap_str_vformat(format, args);
+    va_end(args);
+    char *line = heap_str_format(GITOPS_ACTION_FIELD " %s: %s", action, words);
+    free(words);
+
     /* Forced, so the compare decides: libgit2's own existence check, outside
      * the lock, would refuse every name that stands. The compare runs under the
      * terminal's lock, and Git's namespace is asked whatever it says (refdb_fs.c
      * refdb_fs_backend__write: reference_path_available, then cmp_old_ref). */
     int rc = git_reference_create_matching(
-        NULL, repo, terminal, target, 1, expected, reflog_msg
+        NULL, repo, terminal, target, 1, expected, line
     );
+    free(line);
     if (rc == GIT_EMODIFIED) {
         return error_create(
             ERR_CONFLICT, "Reference '%s' was changed by another writer since this "

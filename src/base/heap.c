@@ -66,10 +66,16 @@ char *heap_strndup(const char *str, size_t n) {
 }
 
 char *heap_str_format(const char *fmt, ...) {
-    CHECK_NULL(fmt);
-
     va_list args;
     va_start(args, fmt);
+    char *str = heap_str_vformat(fmt, args);
+    va_end(args);
+
+    return str;
+}
+
+char *heap_str_vformat(const char *fmt, va_list args) {
+    CHECK_NULL(fmt);
 
     /* Pass 1: size the string. A format that cannot be formatted is its writer's
      * bug. */
@@ -83,7 +89,6 @@ char *heap_str_format(const char *fmt, ...) {
      * `len` excludes it but its `size` argument includes it. */
     char *str = heap_alloc((size_t) len + 1);
     vsnprintf(str, (size_t) len + 1, fmt, args);
-    va_end(args);
 
     return str;
 }

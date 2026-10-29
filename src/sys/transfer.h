@@ -93,12 +93,14 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
 /**
  * End an op on this transfer session.
  *
- * Takes down the row the op leaves standing (base/output.h output_clear_line):
- * its frame, or a progress line its caller drew around it, whichever way the op
- * went — libgit2 reports past an op's last count, so its end alone knows the
- * line is done. A remote's line said while the op runs takes the row down as it
- * lands, and libgit2's closing report draws it again
- * (transfer_push_sideband_callback), so no line outlives its op.
+ * Takes down the frame the op drew (base/output.h output_clear_line), whichever
+ * way the op went — libgit2 reports past an op's last count, so its end alone
+ * knows the frame is done. A remote's line said while the op runs takes the row
+ * down as it lands, and libgit2's closing report draws the frame again
+ * (transfer_push_sideband_callback), so no frame outlives its op. A frame stands
+ * only where an object moved: a progress line its caller drew around an op that
+ * moved none — a connect's, an up-to-date fetch's — is not the op's, and stands
+ * for its caller to take down.
  *
  * Then the remote's words the op kept are said: under -v the line the remote
  * left open, the others said as they arrived; otherwise, where the op failed,

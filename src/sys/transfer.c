@@ -248,23 +248,26 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
 }
 
 /**
- * End an op — take its progress line down, fold stats, advance the credential
- * state machine.
+ * End an op — take its frame down, fold stats, advance the credential state
+ * machine.
  */
 void transfer_op_end(transfer_context_t *xfer, int rc) {
     if (!xfer) return;
 
-    /* The row the op leaves is taken down here, once, whichever way it went. A
+    /* The frame the op drew is taken down here, once, whichever way it went. A
      * callback cannot tell its last call from one libgit2 makes after it — the
      * smart protocol reports a fetch once more past the indexer's last object
      * (transports/smart_protocol.c git_smart__download_pack) and a push once
      * more past the remote's report (git_smart__push), a local push's indexer
-     * once per delta it resolves — so a line a callback took down by its counts
+     * once per delta it resolves — so a frame a callback took down by its counts
      * would be drawn again; a remote's line said while the op runs takes it down
-     * as it lands, and the next report draws it again. The layer keeps whether
-     * one stands (base/output.h output_clear_line): nothing is written where
-     * none does. */
-    output_clear_line(xfer->output);
+     * as it lands, and the next report draws it again. A frame stands only where
+     * an object moved (transfer_draw), so the op's wire says whether it drew
+     * one: a line its caller drew around an op that moved none — a connect's,
+     * an up-to-date fetch's — is not the op's, and stands for its caller to take
+     * down. The layer keeps whether a row stands (base/output.h output_clear_line):
+     * nothing is written where none does. */
+    if (xfer->op.wire.objects > 0) output_clear_line(xfer->output);
 
     /* Then the remote's words, once the line has ended: under -v the line the
      * remote left open, said in the run's trace as the lines it ended were;

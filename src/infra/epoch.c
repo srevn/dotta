@@ -58,8 +58,8 @@ static error_t epoch_census(
  *
  * ERR_NOT_FOUND belongs to the ref alone (`epoch_load`), so nothing here returns
  * it: a ref that resolves to a commit whose tree lacks a blob is a broken shape,
- * not an uninitialized repository. `epoch_init` reads exactly that distinction
- * to decide whether there is a ref to delete before it mints.
+ * not an uninitialized repository. The dispatch reads exactly that distinction
+ * to say the epoch is missing or cannot be read (main.c open_run).
  *
  * Every refusal names the blob and never a ref: the tree is the ref's at a load
  * and an advertisement's at a fetch, which no ref names until it is proven, so
@@ -131,12 +131,13 @@ static error_t epoch_read_tree(
 /**
  * Read the epoch from the commit at `oid`, validating both blobs.
  *
- * The ref is never consulted, which is exactly what its two readers need: the
+ * The ref is never consulted, which is exactly what its readers need: the
  * acquisition boundary (epoch_adopt), judging bytes that sit in the object database
  * while `refs/dotta/epoch` still holds whatever it held — an object that is not
  * a commit, or a commit whose tree or blobs the fetch did not carry, refuses
- * here, before anything points at it — and the reconcile (epoch_resolve,
- * epoch_decide), judging the commit its one read of the ref named.
+ * here, before anything points at it — and the reconcile and the mint
+ * (epoch_resolve, epoch_decide, epoch_init), each judging the commit its one
+ * read of the ref named.
  */
 static error_t epoch_read_commit(
     git_repository *repo, const git_oid *oid, kdf_epoch_t *out
@@ -194,13 +195,27 @@ error_t epoch_init(
         *out_repaired = false;
     }
 
-    /* Idempotency: if the ref already resolves to a valid epoch, treat as success
+    /* The ref's id, read once (sys/gitops.h gitops_reference_oid): every finding
+     * below judges the commit at it, as the reconcile's reading does
+     * (epoch_resolve), and a repair deletes from it. A ref no read reaches — at
+     * the null id, a symbolic ref to nothing, a file Git cannot parse — names
+     * no id to judge or to delete from, and is refused here, before any census,
+     * its cause naming the ref. No restore is named: git's own fetch dies over
+     * such a ref ("bad object"), and neither git nor libgit2 makes one — a hand's
+     * or a disk's. */
+    git_oid local;
+    error_t err = gitops_reference_oid(repo, EPOCH_REF, &local);
+    if (err) return error_wrap(err, "Cannot read the repository epoch");
+
+    /* Idempotency: if the commit at that id yields a valid epoch, treat as success
      * and hand that epoch back. A user re-running `dotta init` on an existing
      * repo must not regenerate the epoch — that would silently invalidate every
      * encrypted blob in the repo. */
-    error_t probe_err = epoch_load(repo, out);
-    if (probe_err == NULL) {
-        return NULL;  /* already initialized */
+    error_t read_err = NULL;
+    if (!git_oid_is_zero(&local)) {
+        read_err = epoch_read_commit(repo, &local, out);
+        if (!read_err) return NULL;   /* already initialized */
+        memset(out, 0, sizeof(*out)); /* a judgment that refused may have half-filled it */
     }
 
     /* The ref yielded no epoch. Unreadable or gone, its bytes are unavailable
@@ -209,54 +224,51 @@ error_t epoch_init(
      * by what the ref held, and minting over it would orphan that ciphertext
      * permanently. One census answers both because it is one danger. */
     bool any_ciphertext = false;
-    error_t err = epoch_census(repo, NULL, &any_ciphertext);
+    err = epoch_census(repo, NULL, &any_ciphertext);
     if (err) {
         /* No absence was proved, so the verdict is the found-ciphertext verdict
          * — do not mint — but the reason is not that reason, and the census's
          * own message names the first thing it could not read, and where. Carry
-         * it. The probe goes: what is wrong with the ref is not actionable until
-         * the thing that broke the census is, and this refusal is the one blocking
-         * it. */
+         * it. The judgment goes: what is wrong with the ref is not actionable
+         * until the thing that broke the census is, and this refusal is the one
+         * blocking it. */
         return error_wrap(
             err, "Cannot tell whether this repository holds encrypted files sealed "
             "under the epoch at '%s', so minting a new one is refused", EPOCH_REF
         );
     }
 
-    if (error_code(probe_err) != ERR_NOT_FOUND) {
-        /* The ref is there and yields no epoch. Over reachable ciphertext it
-         * may be the unreadable form of the epoch that keys it, so the refusal
-         * keeps the probe as its cause — epoch_load names what is wrong with
-         * the blob — and the evidence stays in place for a restore. A clean census
-         * makes the ref pure noise: delete it, mint fresh, and tell the caller
-         * a repair happened. */
+    if (!git_oid_is_zero(&local)) {
+        /* The ref names a commit that yields no epoch. Over reachable ciphertext
+         * it may be the unreadable form of the epoch that keys it, so the refusal
+         * keeps the judgment as its cause — the read names what is wrong with
+         * the commit or its blob — and the evidence stays in place for a restore.
+         * A clean census makes the ref pure noise: delete it from the id it was
+         * read at — one another writer moved since refuses (sys/gitops.h
+         * gitops_delete_reference) — mint fresh, and tell the caller a repair
+         * happened. */
         if (any_ciphertext) {
             return error_wrap(
-                probe_err, "Repository epoch '%s' cannot be read and encrypted files "
+                read_err, "Repository epoch '%s' cannot be read and encrypted files "
                 "may be sealed under it; a fetch of '" EPOCH_RESTORE_REFSPEC "' from "
                 "a remote that holds this repository's epoch restores it", EPOCH_REF
             );
         }
 
-        int rc = git_reference_remove(repo, EPOCH_REF);
-        if (rc < 0) {
-            return error_git(rc, "Failed to remove unreadable epoch ref '%s'", EPOCH_REF);
-        }
+        err = gitops_delete_reference(repo, EPOCH_REF, &local);
+        if (err) return error_wrap(err, "Cannot remove the unreadable repository epoch");
         if (out_repaired) {
             *out_repaired = true;
         }
-    } else {
-        /* The ref is gone: nothing to repair, nothing to delete, and nothing
-         * for the probe to add — "not found" is what the refusal's own first
-         * line already says. Only the census stands between the mint and whatever
-         * the ref used to key. */
-        if (any_ciphertext) {
-            return error_create(
-                ERR_CRYPTO, "Repository epoch '%s' is missing and encrypted files may be "
-                "sealed under it; a fetch of '" EPOCH_RESTORE_REFSPEC "' from a remote "
-                "that holds this repository's epoch restores it", EPOCH_REF
-            );
-        }
+    } else if (any_ciphertext) {
+        /* The ref is gone: nothing to repair, nothing to delete, and no judgment
+         * to add — "missing" is what the refusal's own first line says. Only
+         * the census stands between the mint and whatever the ref used to key. */
+        return error_create(
+            ERR_CRYPTO, "Repository epoch '%s' is missing and encrypted files may be "
+            "sealed under it; a fetch of '" EPOCH_RESTORE_REFSPEC "' from a remote "
+            "that holds this repository's epoch restores it", EPOCH_REF
+        );
     }
 
     /* Mint: a fresh salt beside the pair given. entropy_fill scrubs the buffer
@@ -271,12 +283,12 @@ error_t epoch_init(
     err = entropy_fill(out->salt, KDF_SALT_SIZE);
 
     /* The mint is a root commit on a ref nothing names: the two blobs on an
-     * orphan's stage, committed. The census and the delete above ran on an absent
-     * ref, and the stage refuses a ref that appeared since — at its open, and
-     * again at the commit — which is the immutability the epoch wants: a second
-     * commit on this ref would seal every blob away. The message is diagnostic,
-     * the header its caller's action, as every commit's is: nothing in dotta
-     * reads either. */
+     * orphan's stage, committed. The ref is absent here — never there, or deleted
+     * above — and the stage refuses a ref that appeared since — at its open,
+     * and again at the commit — which is the immutability the epoch wants: a
+     * second commit on this ref would seal every blob away. The message is
+     * diagnostic, the header its caller's action, as every commit's is: nothing
+     * in dotta reads either. */
     stage_t *stage = NULL;
     if (!err) err = stage_orphan(repo, EPOCH_REF, &stage);
     if (!err) {
@@ -846,10 +858,11 @@ error_t epoch_adopt(
     }
 
     /* Install, and only now: the one mutation this function makes, and its last
-     * step. The write is forced — the local ref is replaced wholesale by the
-     * remote's, the one ref write dotta makes from no read of what stands
-     * (sys/gitops.h gitops_write_reference) — which is safe because the verdict
-     * licensed it: sync reaches ADOPT over a divergent local epoch only where
+     * step. The write is from the census's read — the local ref replaced by the
+     * remote's only where it still names the id the verdict judged, Git's null
+     * id where none stood, so one another writer moved since is refused
+     * (sys/gitops.h gitops_write_reference) — and what it replaces is the verdict's
+     * to license: sync reaches ADOPT over a divergent local epoch only where
      * the key-free census proved no reachable ciphertext (any commit, any branch)
      * is keyed by the epoch being replaced, and clone over none at all. Deliberate
      * epoch rotation remains unsupported end-to-end: a re-minted epoch cannot
@@ -858,8 +871,8 @@ error_t epoch_adopt(
      * Its line names the caller's command. The write's failure names the ref,
      * and the act and the remote are this call's to say. */
     err = gitops_write_reference(
-        repo, EPOCH_REF, &decision->advertised, NULL, commit_action_word(action),
-        "adopted from %s", remote_name
+        repo, EPOCH_REF, &decision->advertised, &decision->local,
+        commit_action_word(action), "adopted from %s", remote_name
     );
     if (err) {
         return error_wrap(

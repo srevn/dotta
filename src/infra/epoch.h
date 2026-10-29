@@ -102,35 +102,44 @@
 /**
  * Initialize the repository's epoch ref.
  *
- * If `refs/dotta/epoch` exists with a valid salt and params, no-op (idempotent
- * on repeat `dotta init`, and across partial-init repair paths): the pair given
- * is ignored, and the epoch that stands is what `*out` carries — the caller
- * compares it against what it asked for. Otherwise generates KDF_SALT_SIZE random
- * bytes via `entropy_fill`, writes a commit→tree→{`salt`, `params`} with the
- * pair given, naming its caller's action (infra/commit.h commit_action_word),
- * and points the ref at the new commit.
+ * The ref is read once, its id (sys/gitops.h gitops_reference_oid), and every
+ * finding below judges the commit at that id, as the reconcile's own reading
+ * does (epoch_resolve). If the commit yields a valid salt and params, no-op
+ * (idempotent on repeat `dotta init`, and across partial-init repair paths):
+ * the pair given is ignored, and the epoch that stands is what `*out` carries —
+ * the caller compares it against what it asked for. Otherwise generates
+ * KDF_SALT_SIZE random bytes via `entropy_fill`, writes a commit→tree→{`salt`,
+ * `params`} with the pair given, naming its caller's action (infra/commit.h
+ * commit_action_word), and points the ref at the new commit.
  *
  * Every fresh mint is gated on the ciphertext census, on both ways the ref can
- * fail to yield an epoch — it stands and yields none (a wrong-size blob, a missing
- * blob, a pair out of range, a broken shape, an object libgit2 will not load)
- * or it is absent. The danger is one danger: with the epoch's bytes unavailable
- * no blob's fingerprint can be matched against anything, so any reachable
- * ciphertext (any fingerprint, any version) may be keyed by what the ref held,
- * and a fresh epoch would orphan it permanently. With any reachable ciphertext,
- * the refusal names the state of the ref and the restore that repairs it, and
- * the evidence stays in place (a remote holding the true epoch heals a divergence
- * via sync's fetch paths instead). A census that found none and could not read
- * everything proves no absence and reaches the same verdict, but not for the
- * same reason, so it carries its own cause rather than borrowing that sentence.
- * With a clean census the ref binds nothing: an unreadable one is deleted and
- * re-minted (`*out_repaired` set — the caller renders the repair), an absent
- * one is simply a repository that has no epoch yet.
+ * fail to yield an epoch — it names a commit that yields none (a wrong-size blob,
+ * a missing blob, a pair out of range, a broken shape, an object libgit2 will
+ * not load) or it is absent. The danger is one danger: with the epoch's bytes
+ * unavailable no blob's fingerprint can be matched against anything, so any
+ * reachable ciphertext (any fingerprint, any version) may be keyed by what the
+ * ref held, and a fresh epoch would orphan it permanently. With any reachable
+ * ciphertext, the refusal names the state of the ref and the restore that repairs
+ * it, and the evidence stays in place (a remote holding the true epoch heals a
+ * divergence via sync's fetch paths instead). A census that found none and could
+ * not read everything proves no absence and reaches the same verdict, but not
+ * for the same reason, so it carries its own cause rather than borrowing that
+ * sentence. With a clean census the ref binds nothing: one that yields no epoch
+ * is deleted from the id it was read at, so a ref another writer moved since is
+ * refused, and re-minted (`*out_repaired` set — the caller renders the repair);
+ * an absent one is simply a repository that has no epoch yet.
  *
- * Every refusal names the epoch or its act — the census, the ref and its restore,
- * the removal, the mint (the salt's draw its first step) — and keeps its cause's
- * code: ERR_CRYPTO where the ref is missing, the load's or the census's where
- * they stand (ERR_CRYPTO for bytes refused, ERR_GIT for an object that would
- * not read). No caller reads it.
+ * A ref no read reaches — one at the null id, a symbolic ref to nothing, a file
+ * Git cannot parse, each a hand's or a disk's, never git's or libgit2's — has
+ * no id to judge or to delete from, and is refused before any census, the read's
+ * cause naming the ref: git's own fetch dies over it ("bad object"), so no restore
+ * is named, and the evidence stays in place.
+ *
+ * Every refusal names the epoch or its act — the read, the census, the ref and
+ * its restore, the removal, the mint (the salt's draw its first step) — and keeps
+ * its cause's code: ERR_CRYPTO where the ref is missing, the read's, the judgment's
+ * or the census's where they stand (ERR_CRYPTO for bytes refused, ERR_GIT for a
+ * reference or an object that would not read). No caller reads it.
  *
  * Called by `cmd_init` once the store is declared its own (utils/repo.h), which
  * returns each refusal as it is said (cmds/init.c cmd_init). Encryption-disabled
@@ -167,9 +176,8 @@ error_t epoch_init(
  * Returns ERR_NOT_FOUND when — and only when — the ref itself is missing, the
  * canonical diagnostic for "this dotta repo has not been initialized" or "this
  * clone could not adopt its remote's epoch". The dispatcher wraps it with the
- * restore (main.c open_run); `epoch_init` reads it as "there is no ref to delete
- * before minting" (infra/epoch.c epoch_init), which is why the code stops at
- * the ref and never speaks for the payload.
+ * restore (main.c open_run), its one reader, which is why the code stops at the
+ * ref and never speaks for the payload.
  *
  * Returns ERR_CRYPTO when the ref exists but yields no epoch — the tree lacks a
  * blob, an entry is not a blob, a blob is the wrong size, or the pair is out of
@@ -180,11 +188,10 @@ error_t epoch_init(
  * stands and yields no epoch — differing only in the mechanism that got there.
  * ERR_NOT_FOUND is the statement about the ref, made deliberately at one site;
  * everything else is that one fact, and every consumer may treat them as one.
- * Both readers of the code do: `epoch_init` asks whether there is a ref to delete
- * before it mints, and the dispatcher which of two first lines it prints. What
- * neither may read into ERR_CRYPTO is that the bytes are certainly malformed
- * rather than merely unavailable. The reconcile reads the ref's id instead, and
- * judges the bytes at it (`epoch_resolve`).
+ * The dispatcher, the code's one reader, does: it asks which of two first lines
+ * it prints, and may not read into ERR_CRYPTO that the bytes are certainly
+ * malformed rather than merely unavailable. The reconcile and the mint read the
+ * ref's id instead, and judge the bytes at it (`epoch_resolve`, `epoch_init`).
  *
  * @param repo Repository (must not be NULL)
  * @param out  The epoch (must not be NULL; zeroed on failure)
@@ -252,7 +259,8 @@ typedef enum {
  * named it, Git's null id for either absent. The act the verdict calls for is
  * made from them, never from a second read of either: the establish pushes `local`
  * expecting `advertised`, the remote holding none (sys/remote.h remote_push),
- * and the adopt proves `advertised`'s commit and installs it (epoch_adopt).
+ * and the adopt proves `advertised`'s commit and installs it over `local`
+ * (epoch_adopt).
  */
 typedef struct {
     epoch_reconcile_t verdict;      /* How the two ids relate, and the act it calls for */
@@ -342,11 +350,13 @@ error_t epoch_resolve(
  * sync_reconcile_epoch prints every failure whole and reads no code. Every failure
  * names the act and the remote.
  *
- * The install is a force: whatever the local ref held is replaced wholesale,
- * the one ref write dotta makes from no read of what stands (sys/gitops.h
- * gitops_write_reference). Whether that is safe is the verdict's: `cmd_sync`
- * reaches ADOPT only where nothing reachable here depends on the bytes being
- * replaced, `cmd_clone` with no epoch at all.
+ * The install is written from the census's read: the local ref is replaced by
+ * the remote's only where it still names what the decision judged — `local`,
+ * Git's null id where none stood — so one another writer moved, deleted or made
+ * since is refused and stands as that writer left it (sys/gitops.h
+ * gitops_write_reference). Whether replacing what the census read is safe is
+ * the verdict's: `cmd_sync` reaches ADOPT only where nothing reachable here depends
+ * on the bytes being replaced, `cmd_clone` with no epoch at all.
  *
  * @param repo        Repository (must not be NULL)
  * @param decision    The verdict, ADOPT, and the ids it judged (must not be NULL)
@@ -354,7 +364,8 @@ error_t epoch_resolve(
  *                    and in every failure (must not be NULL)
  * @param action      The command the install's reflog line names: the caller's
  * @return Error or NULL on success; ERR_CRYPTO where the advertised epoch could
- *         not be proved (the local ref untouched)
+ *         not be proved (the local ref untouched); ERR_CONFLICT where another
+ *         writer moved the local ref since the census read it
  */
 error_t epoch_adopt(
     git_repository *repo,

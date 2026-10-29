@@ -211,14 +211,10 @@ The order matters. `dotta init` refuses to mint an epoch while any encrypted fil
 
 ```
 $ dotta init --strength paranoid
-Error: Repository epoch 'refs/dotta/epoch' is missing and encrypted files may be sealed under it
-
-Minting a new one would seal them away permanently. Restore the ref instead:
-  dotta git fetch origin '+refs/dotta/epoch:refs/dotta/epoch'
-or copy it from a machine that still has this repository.
+Error: Repository epoch 'refs/dotta/epoch' is missing and encrypted files may be sealed under it; a fetch of '+refs/dotta/epoch:refs/dotta/epoch' from a remote that holds this repository's epoch restores it
 ```
 
-That refusal is the safety net for the accident this procedure resembles — a deleted, lost or unreadable epoch ref, where the remedy is to restore it, not to mint. `dotta sync` meets that state against a divergent remote too: a ref that is gone it replaces with the remote's epoch, which restores it where the remote holds this repository's; over one that cannot be read it prints the same finding and the same remedy, and refuses to replace the ref for you. The refspec is forced (`+`) because an epoch commit is an orphan: over a ref that is present but damaged, a plain fetch is rejected as non-fast-forward and restores nothing. `dotta remove` needs no key and works either way. Naming a `--strength` that an existing epoch does not match is refused rather than silently ignored, and an existing valid epoch is always preserved.
+That refusal is the safety net for the accident this procedure resembles — a deleted, lost or unreadable epoch ref, where the remedy is to restore it, not to mint. `dotta sync` meets that state against a divergent remote too: a ref that is gone it replaces with the remote's epoch, which restores it where the remote holds this repository's; over one that cannot be read it prints the same finding and the same remedy, and refuses to replace the ref for you. The refspec is forced (`+`) because an epoch commit is an orphan: over a ref that is present but damaged, a plain fetch is rejected as non-fast-forward and restores nothing. A ref that names no commit at all — the null id, a symbolic ref to nothing, a file Git cannot parse — no fetch restores: git's own dies over it, so `dotta init` refuses it and `dotta sync` leaves it alone, each naming what is broken, and it is removed by hand before anything else. `dotta remove` needs no key and works either way. Naming a `--strength` that an existing epoch does not match is refused rather than silently ignored, and an existing valid epoch is always preserved.
 
 ## Security Properties
 

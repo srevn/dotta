@@ -986,6 +986,7 @@ error_t gitops_write_reference(
     CHECK_NULL(repo);
     CHECK_NULL(refname);
     CHECK_NULL(target);
+    CHECK_NULL(expected);
     CHECK_NULL(action);
     CHECK_NULL(format);
 
@@ -993,7 +994,7 @@ error_t gitops_write_reference(
      * that has read nothing yet (gitops_reopen_refdb): the namespace scan and
      * an unsorted packed-refs' lookup read the cache of its parse, which a parse
      * an earlier read refused leaves empty — every packed name free in it */
-    error_t err = expected && git_oid_is_zero(expected) ? gitops_reopen_refdb(repo) : NULL;
+    error_t err = git_oid_is_zero(expected) ? gitops_reopen_refdb(repo) : NULL;
     if (err) return err;
 
     char terminal[DOTTA_REFNAME_MAX];

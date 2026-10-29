@@ -691,15 +691,13 @@ error_t gitops_load_branch_commit(
  * Write a reference, only from the state its writer read
  *
  * `refname` comes to name `target` only where it still stands as `expected` says
- * — git's update-ref <ref> <new> [<old>]:
+ * — git's update-ref <ref> <new> <old>:
  *   - an id: the head it must still name — the stage's commit, sync's resolutions
  *     and their rollback, its fast-forward, a remote-tracking ref the session
- *     moves;
+ *     moves, the epoch's install over the ref its census judged;
  *   - Git's null id: nothing, the name free — the stage's root, a tracking branch's
- *     create, a remote-tracking ref the session writes first;
- *   - NULL: whatever stands — the epoch's install alone, the one write from no
- *     read, licensed by the census that found nothing the replaced epoch keys
- *     (infra/epoch.h epoch_adopt).
+ *     create, a remote-tracking ref the session writes first, the epoch's install
+ *     where none stood.
  * libgit2 compares under the reference's own lock, and asks Git's namespace
  * whatever the compare says (lib/libgit2/src/libgit2/refdb_fs.c
  * refdb_fs_backend__write: reference_path_available, then cmp_old_ref), so a
@@ -741,7 +739,8 @@ error_t gitops_load_branch_commit(
  * @param refname Full reference name (must not be NULL)
  * @param target The id the reference is to name (must not be NULL; an object
  *               the repository holds)
- * @param expected What the writer read: an id, Git's null id, or NULL (above)
+ * @param expected What the writer read: an id, or Git's null id (must not be
+ *                 NULL: every write is from a read)
  * @param action The word of the command that moves the reference (must not be
  *               NULL: every line names one)
  * @param format What it did, a printf format over the arguments after it (must

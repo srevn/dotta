@@ -168,14 +168,16 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     if (err) goto cleanup;
 
     /* The repository's epoch at refs/dotta/epoch, minted at the preset's strength.
-     * Idempotent — keeps an existing valid one; one that yields no epoch is
-     * regenerated when the ciphertext census proves the repository holds none,
-     * and surfaced as an error otherwise. Done unconditionally (not gated on
-     * encryption_enabled) so a later `dotta key set` finds the epoch ready, and
-     * so `dotta clone` of this repo can fetch it regardless of the cloner's config.
-     * Every refusal names the epoch or its act — the census, the ref and the
-     * restore that repairs it, the salt, the commit — so each stands as it is
-     * said: a wrap would only push it under a line that says less. */
+     * Idempotent — keeps an existing valid one; one whose commit yields no epoch
+     * is deleted from the id it was read at and regenerated when the ciphertext
+     * census proves the repository holds none, and surfaced as an error otherwise;
+     * one no read reaches is refused (infra/epoch.h). Done unconditionally (not
+     * gated on encryption_enabled) so a later `dotta key set` finds the epoch
+     * ready, and so `dotta clone` of this repo can fetch it regardless of the
+     * cloner's config. Every refusal names the epoch or its act — the read, the
+     * census, the ref and the restore that repairs it, the salt, the commit —
+     * so each stands as it is said: a wrap would only push it under a line that
+     * says less. */
     kdf_epoch_t epoch;
     bool epoch_repaired = false;
     err = epoch_init(

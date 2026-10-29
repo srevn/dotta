@@ -67,12 +67,15 @@ error_t scope_build(
      *    profile or a typo: a filter that narrowed to nothing would touch nothing
      *    and say nothing. The refusal tells the two apart by asking the refusing
      *    verb, one lookup paid only here: when it does not refuse, the branch
-     *    is here and the fact is that it is not enabled. */
+     *    is here and the fact is that it is not enabled. A name given twice, by
+     *    -p or as a positional, is one profile, kept where it was first given:
+     *    every reader of the filter acts on each profile once. */
     if (in->profile_count > 0) {
         string_array_init(&s->filter, arena, in->profile_count);
 
         for (size_t i = 0; i < in->profile_count; i++) {
             const char *name = in->profiles[i];
+            if (string_array_contains(&s->filter, name)) continue;
             if (!string_array_contains(s->enabled, name)) {
                 error_t err = profile_require(repo, name);
                 if (err) return err;

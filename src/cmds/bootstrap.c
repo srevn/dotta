@@ -383,9 +383,12 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
     string_array_t profiles;
     if (opts->profile_count > 0) {
         /* Explicit profiles: each must be here — a script asked for by a name
-         * that is not a profile is a typo, not a skip */
+         * that is not a profile is a typo, not a skip — and each runs once: a
+         * name given twice is one profile, kept where it was first given, as
+         * the scope takes it (core/scope.h scope_build) */
         string_array_init(&profiles, ctx->arena, opts->profile_count);
         for (size_t i = 0; i < opts->profile_count; i++) {
+            if (string_array_contains(&profiles, opts->profiles[i])) continue;
             err = profile_require(repo, opts->profiles[i]);
             if (err) return err;
             string_array_push(&profiles, opts->profiles[i]);

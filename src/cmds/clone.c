@@ -51,8 +51,9 @@
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (typically "origin")
- * @param profiles Array of profile names to make local (may be NULL when count
- *                 is 0: the entries of an empty listing, a remote with no branch)
+ * @param profiles Array of profile names to make local, each once (may be NULL
+ *                 when count is 0: the entries of an empty listing, a remote
+ *                 with no branch)
  * @param count Number of profiles
  * @param out Output context for messages
  * @param landed Array the names made local are pushed to, in order (must not be
@@ -74,9 +75,9 @@ static void land_profiles(
     for (size_t i = 0; i < count; i++) {
         const char *profile = profiles[i];
 
-        /* The local branch: created at the remote's commit, or already here (the
-         * same name given twice) and left where it stands. A name that fails is
-         * warned about and skipped, its error dropped, one per such name. */
+        /* The local branch, created at the remote's commit: each name comes once,
+         * into a store the clone just made. A name that fails is warned about
+         * and skipped, its error dropped, one per such name. */
         error_t err = upstream_ensure_tracking_branch(
             repo, remote_name, profile, commit_action_word(COMMIT_ACTION_CLONE)
         );
@@ -338,16 +339,24 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     string_array_init(&fetched_profiles, ctx->arena, 0);
 
     if (opts->profiles && opts->profile_count > 0) {
-        /* Explicit profile management */
+        /* Explicit profile management: the names the line gave, each once — a
+         * name given twice is one profile, kept where it was first given, as
+         * the scope takes it (core/scope.h scope_build) */
+        string_array_t specified;
+        string_array_init(&specified, ctx->arena, opts->profile_count);
+        for (size_t i = 0; i < opts->profile_count; i++) {
+            if (string_array_contains(&specified, opts->profiles[i])) continue;
+            string_array_push(&specified, opts->profiles[i]);
+        }
+
         land_profiles(
-            repo, "origin", opts->profiles, opts->profile_count, out, &fetched_profiles
+            repo, "origin", specified.entries, specified.count, out, &fetched_profiles
         );
 
         if (fetched_profiles.count > 0) {
             output_success(
                 out, OUTPUT_NORMAL, "Fetched %zu of %zu specified profile%s",
-                fetched_profiles.count, opts->profile_count,
-                opts->profile_count == 1 ? "" : "s"
+                fetched_profiles.count, specified.count, specified.count == 1 ? "" : "s"
             );
         } else {
             output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");

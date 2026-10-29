@@ -40,8 +40,8 @@
  *              filter is checked against, and the one the receipts attribute to
  *              (sync). The workspace reads the same names off the view itself.
  *   profiles — display/hook face of the scope. Equal to the CLI filter names
- *              when one was given, else equal to enabled. "What the user asked
- *              for, not the underlying world."
+ *              when one was given, each once, else equal to enabled. "What the
+ *              user asked for, not the underlying world."
  *   paths    — the CLI-derived path filter (NULL when no positional args), one
  *              matcher over the two keys a managed path has: its filesystem path
  *              and its storage path (infra/pathspec). Exposed for diff, which
@@ -131,7 +131,8 @@ typedef struct scope_inputs {
  *   2. If in->profile_count > 0, check every CLI filter name against the enabled
  *      set: one not in it is refused, whether it is a disabled profile ("is not
  *      enabled") or no profile here at all (profile_require's refusal). A filter
- *      never narrows in silence.
+ *      never narrows in silence. A name given twice is one profile, kept where
+ *      it was first given.
  *   3. Compile the positional arguments into the path filter (infra/pathspec):
  *      one matcher over the two keys a managed path has, each input read in the
  *      key its own shape names — none, every path in, where none was given.
@@ -381,9 +382,9 @@ const string_array_t *scope_enabled(const scope_t *s);
 /**
  * The scope's profiles — its display and hook face.
  *
- * Equal to the CLI filter names when -p was given, else equal to scope_enabled(s).
- * Use this for hook context strings ("what the user asked for") and for verbose
- * output.
+ * Equal to the CLI filter names when -p was given — each once, in the order first
+ * given — else equal to scope_enabled(s). Use this for hook context strings ("what
+ * the user asked for") and for verbose output.
  *
  * Always non-NULL. Borrowed from the scope.
  */

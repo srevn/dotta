@@ -1524,9 +1524,8 @@ static status_remote_t status_remote(
         /* Perform batched fetch — single network op for all branches */
         err = gitops_fetch_branches(repo, remote_name, profiles, xfer);
 
-        /* Taken down once the fetch is done, whichever way it went: its warning
-         * lands on a row of its own */
-        output_clear_line(out, OUTPUT_VERBOSE);
+        /* Taken down once the fetch is done, whichever way it went */
+        output_clear_line(out);
 
         if (err) {
             /* Non-fatal: warn and continue with status display. The fetch's failure

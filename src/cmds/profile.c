@@ -294,9 +294,8 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
 
     /* What the remote holds, asked once: every profile --all fetches, and the
      * pre-flight the names the line gives are held to. Asked before the fetch's
-     * progress line, which is drawn around the fetch alone: nothing that can
-     * refuse stands between its draw and its take-down (base/output.h
-     * output_progress), so a refusal here or below lands on a row of its own. */
+     * progress line, which is drawn around the fetch alone (base/output.h
+     * output_progress). */
     string_array_t remote_branches;
     err = gitops_list_remote_branches(repo, remote_name, xfer, ctx->arena, &remote_branches);
     if (err) goto cleanup;
@@ -357,9 +356,8 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     const transfer_stats_t mark = transfer_stats(xfer);
     err = gitops_fetch_branches(repo, remote_name, &selection, xfer);
 
-    /* Taken down once the fetch is done, whichever way it went: a refusal lands
-     * on a row of its own */
-    output_clear_line(out, OUTPUT_NORMAL);
+    /* Taken down once the fetch is done, whichever way it went */
+    output_clear_line(out);
     if (err) goto cleanup;
 
     /* At verbose, the fetch done and what it moved: one op and one pack, so one

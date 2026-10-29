@@ -31,6 +31,7 @@
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/string.h"
+#include "base/terminal.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * ANSI Escape Codes
@@ -712,6 +713,9 @@ void output_set_color_mode(output_t *ctx, output_color_mode_t color_mode) {
 void output_set_stream(output_t *ctx, FILE *stream) {
     if (!ctx || !stream) return;
 
+    /* A progress line is taken down on the stream it stands on */
+    output_clear_line(ctx);
+
     ctx->stream = stream;
     ctx->color_enabled = output_colors_on(ctx->color_mode, stream);
 
@@ -781,13 +785,15 @@ bool output_is_tty(const output_t *ctx) {
  * A line of the report is about to land on `stream`
  *
  * The first act of every line that lands (output_start), the report's or one on
- * stderr; a progress line is drawn and never lands (output_progress). Three things
- * happen here and nowhere else: the report is flushed when this line crosses to
- * another stream, so a question or a failure arrives under the run it is about
- * rather than inside it; a boundary the report owes is paid, on the stream this
- * line lands on; and the report is recorded as standing, which is what lets the
- * next block ask for a boundary at all. A line that lands in the summary's block
- * is one of its lines, and leaves the block the summary's (output_summary).
+ * stderr; a progress line is drawn and never lands (output_progress), and one
+ * that stands is taken down first, so no line lands beside it on either stream
+ * (output_clear_line). Then three things happen here and nowhere else: the report
+ * is flushed when this line crosses to another stream, so a question or a failure
+ * arrives under the run it is about rather than inside it; a boundary the report
+ * owes is paid, on the stream this line lands on; and the report is recorded as
+ * standing, which is what lets the next block ask for a boundary at all. A line
+ * that lands in the summary's block is one of its lines, and leaves the block
+ * the summary's (output_summary).
  *
  * A line on stderr settles the debt but does not make the report stand — a run
  * whose first line is a failure opens no report to separate from. output_endline
@@ -796,6 +802,8 @@ bool output_is_tty(const output_t *ctx) {
  * closing a line (output.h).
  */
 static void output_land(output_t *ctx, FILE *stream) {
+    output_clear_line(ctx);
+
     if (stream != ctx->stream) {
         fflush(ctx->stream);
     }
@@ -1096,9 +1104,13 @@ void output_progress(
     if (!output_is_tty(ctx)) return;
 
     /* The act's line, never the report's: opened as every line is and never landed,
-     * so no boundary is paid and the report stays where it stood */
+     * so no boundary is paid and the report stays where it stood. Over a line
+     * that stands it is drawn from the row's start, the row erased, in the line's
+     * one write */
+    static const char erase[] = "\r" ANSI_CLEAR_LINE;
     line_t line;
     output_open(&line, ctx, ctx->stream);
+    if (ctx->progress_drawn) output_bytes(&line, erase, sizeof(erase) - 1);
 
     va_list args;
     va_start(args, fmt);
@@ -1107,18 +1119,20 @@ void output_progress(
 
     output_put(&line);
 
-    /* No newline ends it, and the report's stream is line-buffered (main.c main) */
+    /* No newline ends it, and the report's stream is line-buffered (main.c main).
+     * It stands until it is taken down (output_clear_line). */
     fflush(ctx->stream);
+    ctx->progress_drawn = true;
 }
 
-void output_clear_line(output_t *ctx, output_verbosity_t min_level) {
-    if (!ctx || ctx->verbosity < min_level) return;
+void output_clear_line(output_t *ctx) {
+    /* Where none stands nothing is written: none drawn below its level, none
+     * off a terminal, none since a take-down */
+    if (!ctx || !ctx->progress_drawn) return;
 
-    /* Off a terminal nothing was drawn, so nothing is taken down */
-    if (!output_is_tty(ctx)) return;
-
-    fputs("\r\033[2K", ctx->stream);
+    fputs("\r" ANSI_CLEAR_LINE, ctx->stream);
     fflush(ctx->stream);
+    ctx->progress_drawn = false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

@@ -231,9 +231,8 @@ static error_t sync_fetch(
         ctx->run.repo, remote_name, scope_profiles(scope), xfer
     );
 
-    /* Taken down once the fetch is done, whichever way it went: a refusal lands
-     * on a row of its own */
-    output_clear_line(out, OUTPUT_NORMAL);
+    /* Taken down once the fetch is done, whichever way it went */
+    output_clear_line(out);
 
     /* The fetch's own error, which names the remote and the act: a refused
      * credential in the words the transfer's callback set for what was offered

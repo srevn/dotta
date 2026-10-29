@@ -103,9 +103,9 @@ typedef enum {
  *
  * On a terminal, the line an act draws while it runs (output_progress) is no
  * line of the report: it pays no boundary, owes none, and moves the report nowhere,
- * so what follows it spaces itself against what stood before it. Off a terminal
- * no such line is drawn: a redirected report holds what an act did, never that
- * it ran.
+ * so what follows it spaces itself against what stood before it, on the row the
+ * line held — every line that lands takes it down first. Off a terminal no such
+ * line is drawn: a redirected report holds what an act did, never that it ran.
  *
  * Read in base/output.c alone: `output_land` asks what is owed and keeps the
  * summary's block, output_gap asks whether anything stands to owe it, and the
@@ -128,6 +128,7 @@ typedef struct output {
     bool color_enabled;         /* Computed from color_mode for stream */
     bool stderr_color_enabled;  /* Computed from color_mode for stderr (errors, prompts) */
     output_report_t report;     /* Where the report stands on `stream` */
+    bool progress_drawn;        /* A progress line stands on `stream`, the cursor at its end */
 } output_t;
 
 /**
@@ -203,9 +204,11 @@ void output_set_color_mode(output_t *ctx, output_color_mode_t color_mode);
  * for the new stream: under AUTO, the payload's pipe and the chatter's tty are
  * different answers. Errors and prompts already live on stderr and are unaffected.
  *
- * The report starts over, because the new stream holds none of it: a boundary
- * owed on the old one is dropped rather than paid somewhere it does not belong,
- * and the first line to land on the new one opens a report with nothing above it.
+ * A progress line standing on the old stream is taken down there first
+ * (output_clear_line). Then the report starts over, because the new stream holds
+ * none of it: a boundary owed on the old one is dropped rather than paid somewhere
+ * it does not belong, and the first line to land on the new one opens a report
+ * with nothing above it.
  */
 void output_set_stream(output_t *ctx, FILE *stream);
 
@@ -524,12 +527,15 @@ void output_section(
  * pays no boundary, owes none, and moves the report nowhere, so the block after
  * it spaces itself against what stood before it. Built as every line is — its
  * format the author's, with no newline, its arguments data — written where the
- * cursor stands, and flushed. Its act's end takes it down at the level it was
- * drawn at (output_clear_line), and nothing that can return stands between the
- * two: a refusal told before the take-down would land on the drawn row.
- * sys/transfer's frames draw over it while objects move, and take their row down
- * when their op ends (sys/transfer.h transfer_op_end). Off a terminal nothing
- * is drawn: a redirected report holds what an act did, never that it ran.
+ * cursor stands, and flushed; over one that stands, from that row's start, the
+ * row erased in the same write, as a take-down erases it (output_clear_line).
+ * The layer keeps that one stands (output_t's progress_drawn), so every line
+ * that lands, on the report's stream or on stderr, takes it down first: a refusal,
+ * a warning, a remote's words each stand on a row of their own. Its act's end
+ * takes it down. sys/transfer's frames draw over it while objects move, and take
+ * their row down when their op ends (sys/transfer.h transfer_op_end). Off a
+ * terminal nothing is drawn: a redirected report holds what an act did, never
+ * that it ran.
  *
  * Readers: cmds/sync.c sync_fetch, cmds/profile.c profile_fetch, cmds/status.c
  * status_remote.
@@ -546,24 +552,24 @@ void output_progress(
 ) __attribute__((format(printf, 3, 4)));
 
 /**
- * Take down a progress line (output_progress), or the frame sys/transfer drew
- * over it: on a terminal, the row erased and the cursor at its start
+ * Take down the progress line that stands (output_progress), or the frame
+ * sys/transfer drew over it on its row: on a terminal, the row erased and the
+ * cursor at its start
  *
- * Its level is the level the line was drawn at, as output_endline's is the level
- * of the line it ends: below it nothing was drawn, and nothing is written — nor
- * off a terminal, where nothing ever is, as git's own take-down writes nothing
- * there (lib/git/pager.c term_clear_line). A terminal whose TERM declares it
- * reads no escape (unset, "dumb") receives the erase all the same: a stated limit
- * — where it drops the erase, the next line written over the row leaves the row's
- * longer tail beside it, where git pads the row with spaces.
+ * The layer keeps whether one stands, so where none does nothing is written:
+ * none drawn below its level, none ever off a terminal — as git's own take-down
+ * writes nothing there (lib/git/pager.c term_clear_line) — and none once taken
+ * down. A terminal whose TERM declares it reads no escape (unset, "dumb") receives
+ * the erase all the same: a stated limit — where it drops the erase, the next
+ * line written over the row leaves the row's longer tail beside it, where git
+ * pads the row with spaces.
  *
- * Readers: output_progress's three, and sys/transfer.c transfer_op_end and
- * transfer_push_sideband_callback (a remote's line said while a push runs).
+ * Readers: output_progress's three; and the layer's own, before every line that
+ * lands (output_land) and before the stream moves (output_set_stream).
  *
  * @param ctx Output context (NULL: nothing)
- * @param min_level The level the line was drawn at
  */
-void output_clear_line(output_t *ctx, output_verbosity_t min_level);
+void output_clear_line(output_t *ctx);
 
 /**
  * Print a patch, one line at a time

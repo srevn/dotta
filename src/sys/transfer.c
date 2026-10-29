@@ -314,16 +314,17 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
      * once per delta it resolves — so a line a callback ended by its counts was
      * drawn and ended again; a remote's line said while the op runs takes it
      * down and says no outcome (transfer_push_sideband_callback), and the next
-     * report draws it again. An ephemeral line is cleared, at the level the
-     * callbacks draw it at; a lasting one says done only for an op that
-     * succeeded. */
+     * report draws it again. The line is drawn past the output layer, which takes
+     * down only a line it drew (base/output.h output_clear_line), so it is ended
+     * past it too: an ephemeral line erased, a lasting one saying done only for
+     * an op that succeeded. */
     if (xfer->progress_active) {
         if (xfer->ephemeral) {
-            output_clear_line(xfer->output, OUTPUT_NORMAL);
+            fputs("\r\033[2K", xfer->output->stream);
         } else {
             fputs(rc == 0 ? ", done.\n" : "\n", xfer->output->stream);
-            fflush(xfer->output->stream);
         }
+        fflush(xfer->output->stream);
         xfer->progress_active = false;
     }
 
@@ -774,12 +775,14 @@ int transfer_push_sideband_callback(const char *str, int len, void *payload) {
         /* Under -v a line is said once the remote ends it, as a hook's output
          * is under -v (utils/hooks.c hook_fire, PROCESS_OUTPUT_INHERIT) — a slow
          * hook's words while it runs — on a row of its own: the op's progress
-         * line is taken down first, and libgit2's closing report draws it again
-         * beneath the remote's lines (transports/smart_protocol.c git_smart__push),
-         * so a lasting line too stands once, its outcome said at the op's end */
+         * line is erased first, past the output layer as it was drawn
+         * (transfer_op_end), and libgit2's closing report draws it again beneath
+         * the remote's lines (transports/smart_protocol.c git_smart__push), so
+         * a lasting line too stands once, its outcome said at the op's end */
         if (newline && output_is_verbose(ctx->output)) {
             if (ctx->progress_active) {
-                output_clear_line(ctx->output, OUTPUT_NORMAL);
+                fputs("\r\033[2K", ctx->output->stream);
+                fflush(ctx->output->stream);
                 ctx->progress_active = false;
             }
             transfer_print_sideband(ctx, OUTPUT_VERBOSE);

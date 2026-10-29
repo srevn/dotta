@@ -110,10 +110,9 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
  * succeeded and a bare newline for one that failed. A remote's line said while
  * the op runs takes the line down before it, and libgit2's closing report draws
  * it again (transfer_push_sideband_callback), so the outcome is said here alone
- * and no line outlives its op: a caller that drew a progress line for a fetch
+ * and no line outlives its op: a caller that drew a progress line around the op
  * (base/output.h output_progress) finds at most that line left, its own to take
- * down. None is drawn around a push, whose remote's words are said inside it
- * and would land on its row.
+ * down, and a line said while it stands takes it down first.
  *
  * Then the remote's words the op kept are said: under -v the line the remote
  * left open, the others said as they arrived; otherwise, where the op failed,

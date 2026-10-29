@@ -86,12 +86,13 @@ error_t remote_default(git_repository *repo, arena_t *arena, const char **out);
  * Meet the remote: looked up, connected for upload-pack, its advertisement copied
  *
  * The one op the open makes is the connect, its listing read on it (sys/transfer.h
- * transfer_op_begin), and what the remote advertises is copied into the session's
- * own arena — the transport's is gone at its next connection
+ * transfer_op_begin), and every ref the remote advertises is copied into the
+ * session's own arena — the transport's copy is gone at its next connection
  * (transports/smart_protocol.c git_smart__store_refs, transports/local.c
- * local_connect). The connection stays for the fetch, its last use, or until
- * the first push or the free closes it. A session that opened has reached its
- * remote.
+ * local_connect) — and never the line the listing adds beside a ref that names
+ * a tag, `<ref>^{}`: the commit the tag peels to, which no ref names. The
+ * connection stays for the fetch, its last use, or until the first push or the
+ * free closes it. A session that opened has reached its remote.
  *
  * Every failure is the session's whole, nothing kept: a name Git refuses or no
  * remote by it, a remote with no URL, the connect and the listing, each "Cannot

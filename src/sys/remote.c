@@ -207,10 +207,17 @@ error_t remote_open(
     }
 
     /* What the remote advertises, copied: each ref's name and id, and the branches
-     * among them in the listing's order */
+     * among them in the listing's order. A name holding '^' is no ref — Git's
+     * reference rule refuses the character: it is the line a listing adds beside
+     * a ref that names a tag, `<ref>^{}` and the commit the tag peels to
+     * (lib/git/upload-pack.c write_v0_ref, transports/local.c add_ref), and is
+     * copied never, as git's fetch passes it over (lib/git/remote.c
+     * get_expanded_map: "a dereference item") */
     remote->advertised = hashmap_create(arena, count);
     string_array_init(&remote->branches, arena, 0);
     for (size_t i = 0; i < count; i++) {
+        if (strchr(heads[i]->name, '^')) continue;
+
         git_oid *id = arena_alloc(arena, sizeof(*id));
         git_oid_cpy(id, &heads[i]->oid);
         hashmap_set(remote->advertised, heads[i]->name, id);

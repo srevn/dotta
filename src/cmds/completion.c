@@ -35,7 +35,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/remote.h"
-#include "sys/upstream.h"
 
 /* Emission limits */
 #define COMPLETE_COMMIT_SHORT_OID_LEN 8
@@ -62,8 +61,10 @@ void completion_profiles(
     }
 
     /* A listing that failed offers no local name, and the remote's may still; a
-     * state the tolerant open could not load marks none of them enabled */
-    string_array_t profiles;
+     * state the tolerant open could not load marks none of them enabled. A failed
+     * listing leaves the array as it was: empty, read by the remote's offers
+     * below as nothing here. */
+    string_array_t profiles = { 0 };
     error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
     if (!err) {
         for (size_t i = 0; i < profiles.count; i++) {
@@ -71,20 +72,27 @@ void completion_profiles(
             fprintf(
                 out, "%s\t%s\n", profile,
                 state && state_enabled(state, profile) ? "Enabled profile"
-                                                      : "Available profile"
+                                                       : "Available profile"
             );
         }
     }
 
     if (set == COMPLETION_ALL) {
+        /* A remote the fetch would meet, or nothing to download: none configured,
+         * or several with no origin, and the fetch refuses before any name */
         const char *remote_name = NULL;
         err = remote_default(repo, ctx->arena, &remote_name);
-        if (err) return;  /* no remote configured: nothing to download */
-        string_array_t remote_branches;
-        err = upstream_discover_branches(repo, remote_name, ctx->arena, &remote_branches);
         if (err) return;
-        for (size_t i = 0; i < remote_branches.count; i++) {
-            fprintf(out, "%s\tRemote profile\n", remote_branches.entries[i]);
+
+        /* What the remote's last contact listed (sys/remote.h
+         * remote_last_branches), less what is here already: no network in a
+         * completion, so a profile created there since its last contact is not
+         * offered, and one deleted there since is offered and refused by the
+         * fetch. */
+        const string_array_t remote_names = remote_last_branches(repo, ctx->arena);
+        for (size_t i = 0; i < remote_names.count; i++) {
+            if (string_array_contains(&profiles, remote_names.entries[i])) continue;
+            fprintf(out, "%s\tRemote profile\n", remote_names.entries[i]);
         }
     }
 }

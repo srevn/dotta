@@ -5,7 +5,10 @@
  * once, connects for upload-pack and copies what the remote advertises — every
  * ref by name and the id it names — into its own arena: the epoch's verdict,
  * each branch's head there, a selection and what the fetch asks for are one
- * listing, and the transport's own copy is gone at its next connection.
+ * listing, and the transport's own copy is gone at its next connection. The open
+ * also keeps the branch names the listing held, beside the store's database,
+ * written only where they changed: what completion offers of the remote, offline
+ * (remote_last_branches); nothing reads them as the remote's present.
  *
  * A fetch — at most one, the listing connection's last use — downloads on that
  * connection, so what it brings are the objects of the ids the listing named:
@@ -92,7 +95,10 @@ error_t remote_default(git_repository *repo, arena_t *arena, const char **out);
  *
  * Every failure is the session's whole, nothing kept: a name Git refuses or no
  * remote by it, a remote with no URL, the connect and the listing, each "Cannot
- * reach remote '<name>'" over libgit2's cause, read before anything closes.
+ * reach remote '<name>'" over libgit2's cause, read before anything closes. The
+ * branch names the listing held are kept once it is copied (remote_last_branches),
+ * and a keep that fails is no failure of the open's: completion alone reads them,
+ * and the next open keeps them again.
  *
  * Readers: cmds/sync.c cmd_sync; cmds/status.c status_remote; cmds/profile.c
  * profile_fetch and profile_list; cmds/clone.c cmd_clone; cmds/remove.c
@@ -151,6 +157,24 @@ void remote_advertised(const remote_t *remote, const char *refname, git_oid *out
  * @return The names (never NULL)
  */
 const string_array_t *remote_branches(const remote_t *remote);
+
+/**
+ * The branches the remote's last contact listed, by name, in its listing's order
+ *
+ * What a session's open kept beside the store's database (remote_open), read
+ * with no network, and true of that contact alone: a branch created on the remote
+ * since is not here, one deleted there since still is, and after `remote set-url`
+ * they are the old remote's until the next contact; nothing reads them as the
+ * remote's present. None before a first contact, and none where the file will
+ * not read: no names is the one answer its reader takes from either.
+ *
+ * Reader: cmds/completion.c completion_profiles, its Remote profile offers.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param arena Arena the names live in (must not be NULL)
+ * @return The names; empty where none are kept
+ */
+string_array_t remote_last_branches(git_repository *repo, arena_t *arena);
 
 /**
  * Fetch: download what the open's listing names, then write the tracking refs

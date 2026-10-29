@@ -22,11 +22,12 @@
  *       need none, come back.
  *
  * The sources print newline-separated candidates to a stream, one authority each:
- * a source reads the enabled set, the view, Git, or the filesystem, never a blend
- * — a hook composes sources, the library names them. A verb whose own argument
- * rule decides which of a profile's claims its names reach offers those beside
- * the library's sources, under that rule (cmds/remove.c remove_complete). One
- * state read or one view build, never a workspace load. The filesystem source
+ * a source reads the enabled set, the view, Git, the names the remote's last
+ * contact listed (sys/remote.h remote_last_branches), or the filesystem, never
+ * a blend — a hook composes sources, the library names them. A verb whose own
+ * argument rule decides which of a profile's claims its names reach offers those
+ * beside the library's sources, under that rule (cmds/remove.c remove_complete).
+ * One state read or one view build, never a workspace load. The filesystem source
  * asks the enabled set for the root it lists under — the one the command reads
  * its arguments under — and never for the paths, which are the disk's alone
  * (completion_paths_under).
@@ -45,15 +46,17 @@
 typedef enum {
     COMPLETION_ENABLED,   /* The enabled set, in precedence order */
     COMPLETION_LOCAL,     /* Every local profile, the enabled ones marked */
-    COMPLETION_ALL        /* Local profiles, then the remote-tracking branches not yet local */
+    COMPLETION_ALL        /* Local profiles, then the remote's last listed branches not yet local */
 } completion_profiles_t;
 
 /**
  * Profile names.
  *
  * ENABLED is the filter a workspace verb takes; LOCAL is what a verb that names
- * a profile reads or writes; ALL adds what `profile fetch` would download. Branch
- * order is the ref iteration's; the shell sorts.
+ * a profile reads or writes; ALL adds what `profile fetch` would download, as
+ * the remote's last contact listed it — offline, so true of that contact alone
+ * (sys/remote.h remote_last_branches). Branch order is the ref iteration's, the
+ * remote's the listing's; the shell sorts.
  */
 void completion_profiles(
     const dotta_ctx_t *ctx, FILE *out, completion_profiles_t set

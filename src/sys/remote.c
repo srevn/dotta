@@ -13,17 +13,24 @@
 
 #include "sys/remote.h"
 
+#include <fcntl.h>
 #include <git2.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "base/arena.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 
 #define REMOTE_HEADS "refs/heads/"   /* a branch's ref, and its name past it */
+#define REMOTE_KEPT  "dotta.remote"  /* the branch names an open listed, beside dotta.db */
 
 struct remote {
     arena_t *arena;             /* The handle's own: itself, the listing it copies, the names it lends */
@@ -34,6 +41,78 @@ struct remote {
     hashmap_t *advertised;      /* Every ref the open listed: its name, and its id (git_oid *) */
     string_array_t branches;    /* The names under refs/heads/, in the listing's order */
 };
+
+/*
+ * Where the branch names an open listed are kept: beside the store's database,
+ * in the directory libgit2 names for every repository it opened
+ * (lib/libgit2/src/libgit2/repository.c git_repository_path), spelled with its
+ * separator where libgit2's spelling lacks one. One spelling for the keep and
+ * its reader (remote_keep_branches, remote_last_branches).
+ */
+static const char *remote_kept_path(git_repository *repo, arena_t *arena) {
+    const char *git_dir = git_repository_path(repo);
+
+    return arena_str_format(
+        arena, "%s%s" REMOTE_KEPT, git_dir, str_ends_with(git_dir, "/") ? "" : "/"
+    );
+}
+
+/*
+ * What the kept names' file holds, into `out` (BUFFER_INIT): nothing where none
+ * stands or it will not read whole — a regular file, opened waiting on nothing,
+ * a FIFO refused at once (sys/filesystem.h fs_read_fd). dotta's own artifact,
+ * read by a raw call (sys/filesystem.h): the invoker's by construction. One read
+ * for the keep and its reader, so the two compare what one reading holds.
+ */
+static void remote_kept_read(const char *path, buffer_t *out) {
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return;
+
+    if (fs_read_fd(fd, out)) buffer_clear(out);
+    close(fd);
+}
+
+/*
+ * Keep the branch names the open listed (remote_last_branches reads them): each
+ * on a line of its own, in the listing's order — names alone, which is all
+ * completion asks, and an id the store may hold no object of would answer nothing
+ * else. A branch name holds no newline (Git's reference rule).
+ *
+ * Written only where the file holds other bytes, into a temporary beside it that
+ * is renamed over it, so a reader meets the old names or the new, whole. dotta's
+ * own artifact, by raw calls (sys/filesystem.h): the invoker's by construction,
+ * 0600 from mkstemp. A step that fails drops the keep and takes its temporary
+ * back — completion alone reads the names, and the next open keeps them again;
+ * a process killed between the temporary and the rename leaves the temporary
+ * beside the file.
+ */
+static void remote_keep_branches(const remote_t *remote) {
+    const char *path = remote_kept_path(remote->repo, remote->arena);
+
+    buffer_t names = BUFFER_INIT;
+    for (size_t i = 0; i < remote->branches.count; i++) {
+        buffer_appendf(&names, "%s\n", remote->branches.entries[i]);
+    }
+
+    /* An empty listing's buffer holds no pointer, and memcmp is undefined over
+     * a null one even across zero bytes (infra/compare.c judge) */
+    buffer_t kept = BUFFER_INIT;
+    remote_kept_read(path, &kept);
+    if (kept.size != names.size ||
+        (names.size > 0 && memcmp(kept.data, names.data, names.size) != 0)) {
+        /* A failed mkstemp created no file, and its template may now name one
+         * that is not ours: nothing below it runs, the unlink included */
+        char *temp = arena_str_format(remote->arena, "%s.XXXXXX", path);
+        int fd = mkstemp(temp);
+        if (fd >= 0) {
+            error_t err = fs_write_fd(fd, temp, names.data, names.size);
+            if (close(fd) != 0 || err || rename(temp, path) != 0) unlink(temp);
+        }
+    }
+
+    buffer_deinit(&kept);
+    buffer_deinit(&names);
+}
 
 error_t remote_default(git_repository *repo, arena_t *arena, const char **out) {
     CHECK_NULL(repo);
@@ -141,6 +220,9 @@ error_t remote_open(
         }
     }
 
+    /* The branch names kept for completion, beside the store's database */
+    remote_keep_branches(remote);
+
     *out = remote;
     return NULL;
 }
@@ -162,6 +244,27 @@ const string_array_t *remote_branches(const remote_t *remote) {
     CHECK_NULL(remote);
 
     return &remote->branches;
+}
+
+string_array_t remote_last_branches(git_repository *repo, arena_t *arena) {
+    CHECK_NULL(repo);
+    CHECK_NULL(arena);
+
+    buffer_t kept = BUFFER_INIT;
+    remote_kept_read(remote_kept_path(repo, arena), &kept);
+
+    /* A name a line, as the open kept them: a line and its newline are one step */
+    string_array_t names;
+    string_array_init(&names, arena, 0);
+    const char *line = kept.data;
+    while (line && *line) {
+        const size_t len = strcspn(line, "\n");
+        string_array_pushf(&names, "%.*s", (int) len, line);
+        line += len + (line[len] == '\n');
+    }
+
+    buffer_deinit(&kept);
+    return names;
 }
 
 error_t remote_fetch(

@@ -1178,8 +1178,8 @@ static void profile_fetch_defaults(void *o) {
     ((cmd_profile_options_t *) o)->subcommand = PROFILE_FETCH;
 }
 
-/* What can stand at the cursor: a profile to download — a remote-tracking branch
- * not yet local, or a local one to refresh. */
+/* What can stand at the cursor: a profile to download — one the remote's last
+ * contact listed and not yet local, or a local one to refresh. */
 static args_want_t profile_fetch_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {

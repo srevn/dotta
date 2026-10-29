@@ -4,8 +4,8 @@
  * Read off the remote-tracking refs the session's last fetch wrote (sys/remote.h
  * remote_fetch), and nothing here contacts the remote: a branch's state against
  * its remote (upstream_analyze_profile) and the face every screen gives that
- * state — its glyph, its colour and its phrase — then the remote's branches made
- * local (upstream_discover_branches, upstream_ensure_tracking_branch).
+ * state — its glyph, its colour and its phrase — then a remote's branch made
+ * local (upstream_ensure_tracking_branch).
  */
 
 #ifndef DOTTA_UPSTREAM_H
@@ -126,40 +126,6 @@ void upstream_state_phrase(
     const upstream_info_t *info,
     char *buffer,
     size_t buffer_size
-);
-
-/**
- * Discover remote branches that don't exist locally
- *
- * Scans LOCAL remote tracking refs (refs/remotes/<remote>/...) and identifies
- * branches that don't have corresponding local branches yet.
- *
- * **LOCAL OPERATION** - Does NOT contact the remote server.
- *
- * This function is useful after a fetch/clone when remote tracking refs exist
- * and you want to see what's available to create local branches from.
- *
- * **Limitation**: If a remote was just added without fetching, this returns empty
- * because no remote tracking refs exist yet. The remote's own listing is the
- * session's (sys/remote.h remote_branches).
- *
- * **Use cases:**
- * - After git clone, to show unfetched profiles
- * - After git fetch, to see what new branches are available
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (e.g., "origin")
- * @param arena Arena the answer and both listings it is read from live in (must
- *              not be NULL)
- * @param out The branch names, in the remote listing's order (must not be NULL;
- *            left as it was on a failure)
- * @return Error or NULL on success
- */
-error_t upstream_discover_branches(
-    git_repository *repo,
-    const char *remote_name,
-    arena_t *arena,
-    string_array_t *out
 );
 
 /**

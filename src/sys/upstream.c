@@ -9,7 +9,6 @@
 #include <stdlib.h>
 
 #include "base/arena.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "sys/gitops.h"
 
@@ -175,39 +174,6 @@ void upstream_state_phrase(
     }
 
     CHECK_ARG(false, "an upstream state no enumerator names");
-}
-
-/**
- * Discover remote branches that don't exist locally
- */
-error_t upstream_discover_branches(
-    git_repository *repo, const char *remote_name, arena_t *arena, string_array_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    /* Every remote tracking branch, and every local one: both listings are the
-     * answer's arena's */
-    string_array_t remote_branches;
-    error_t err = gitops_list_remote_tracking(repo, remote_name, arena, &remote_branches);
-    if (err) return err;
-
-    string_array_t local_branches;
-    err = gitops_list_branches(repo, arena, &local_branches);
-    if (err) return err;
-
-    /* Set difference, in place and in the remote's order: what is here already
-     * leaves the remote listing, which is then the answer */
-    for (size_t i = remote_branches.count; i-- > 0;) {
-        if (string_array_contains(&local_branches, remote_branches.entries[i])) {
-            string_array_remove(&remote_branches, i);
-        }
-    }
-
-    *out = remote_branches;
-    return NULL;
 }
 
 /**

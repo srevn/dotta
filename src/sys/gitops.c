@@ -1,7 +1,7 @@
 /**
- * gitops.c - Git operations wrapper implementation
+ * gitops.c - The store, local: implementation
  *
- * All libgit2 calls are wrapped with error handling and resource cleanup.
+ * See gitops.h.
  */
 
 #include "sys/gitops.h"

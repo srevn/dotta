@@ -1,19 +1,30 @@
 /**
- * gitops.h - Git operations wrapper
+ * gitops.h - The store, local: what dotta adds to Git
  *
- * Thin wrapper around libgit2 with error handling and resource management.
- *
- * Design principles:
- * - Validate all inputs
- * - Convert libgit2 errors to dotta errors
- * - Manage libgit2 object lifecycles
- * - No business logic (just git operations)
+ * What dotta holds the store to beyond what libgit2 does, each rule in the one
+ * place it is kept. The library is configured once a process (gitops_init), and
+ * a handle opened or created signs the reflog lines libgit2 writes with the
+ * identity dotta's commits carry (gitops_open_repository). A branch name becomes
+ * a ref here alone, under Git's branch rule (gitops_branch_refname). A reference
+ * is read as one chain — found, its id, its commit, its tree — its absence proven
+ * on a fresh read, never a lookup's word alone (gitops_reference_find), and a
+ * listing is complete or an error (below). A reference is written and deleted
+ * here only from the state its writer read, its reflog line naming the command
+ * that moved it (gitops_write_reference, gitops_delete_reference), and a commit
+ * object has one writer, the action that made it in its header
+ * (gitops_create_commit). An option whose configured value would change what
+ * dotta's own operation answers is dotta's, whatever the configuration says:
+ * the merge's rename pairing here (gitops_merge_trees_safe), the fetch's tags
+ * and its prune in sys/remote. Beside the rules stand the passes the layers above
+ * share — a tree walked, a blob read in place, two trees diffed, a merge base —
+ * and calls passed through, each failure in Git's words. Nothing here meets a
+ * remote (sys/remote.h).
  *
  * Converting libgit2's errors includes its iterators, the ones easy to miss:
- * `git_reference_next_name`, `git_revwalk_next` and `git_rebase_next` each return
- * 0, GIT_ITEROVER at the end, or a negative code, and a loop testing only for 0
- * cannot tell an enumeration that finished from one that gave up. Every iteration
- * here classifies all three.
+ * `git_reference_next_name` and `git_rebase_next` each return 0, GIT_ITEROVER
+ * at the end, or a negative code, and a loop testing only for 0 cannot tell an
+ * enumeration that finished from one that gave up. Every iteration here classifies
+ * all three.
  *
  * For a ref listing that is necessary and not sufficient: libgit2's filesystem
  * refdb reads `packed-refs` loudly the first time on a handle — a parse it refused

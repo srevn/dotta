@@ -76,52 +76,7 @@ struct transfer_context_s {
     /* Session state machine */
     credential_state_t credential_state;
     int op_attempts;                /* Per-op anti-loop counter. */
-
-    /* Transport classification (cached from `url` at create time). True for file://
-     * or plain filesystem paths. libgit2's local push transport leaves the `bytes`
-     * parameter of push_transfer_progress uninitialized (no wire bytes to count),
-     * so byte accounting must be suppressed for these sessions. */
-    bool local_transport;
 };
-
-/**
- * Classify a remote URL as local (file:// or plain filesystem path) or remote
- * (http(s)://, ssh://, git://, user@host:path).
- *
- * libgit2's local transport synthesizes push progress from packfile creation
- * and does not populate the `bytes` parameter reliably. We use this classification
- * to suppress byte accounting for local sessions so a wire's phrase never says
- * a size the transport did not count (transfer_wire_phrase; observed: 131038.9
- * GiB for an 8-object push against a file:// remote).
- *
- * Why this is not credential_url_parse:
- *   The credential parser deliberately rejects URLs that have no credential
- *   identity — file:// (empty host) and bare filesystem paths both fail the "valid
- *   host" rule. Those are exactly the shapes this function must classify as local.
- *   The two predicates partition URL space — credential_url_parse for "is this
- *   an authenticated transport?", url_is_local for "did libgit2 pick its local
- *   transport?" — and pulling them through one function would cost an
- *   allocate-and-free on every session create just to reuse a 4-line shape check.
- *   The duplication is the right trade.
- */
-static bool url_is_local(const char *url) {
-    if (!url || !*url) return false;
-
-    /* Explicit local scheme. */
-    if (strncmp(url, "file://", 7) == 0) return true;
-
-    /* Any other `scheme://` is a remote network transport. */
-    if (strstr(url, "://")) return false;
-
-    /* SCP-style `user@host:path` → SSH. Detect by `@` preceding the first `:`.
-     * Plain filesystem paths can contain `@` but not in this position. */
-    const char *at = strchr(url, '@');
-    const char *colon = strchr(url, ':');
-    if (at && colon && at < colon) return false;
-
-    /* No scheme, no SCP-style marker → filesystem path. */
-    return true;
-}
 
 /**
  * Advance credential_state on first helper fill. Idempotent: subsequent calls
@@ -155,7 +110,6 @@ transfer_context_t *transfer_context_create(output_t *output, const char *url) {
 
     ctx->url = heap_strdup(url);
     ctx->output = output;
-    ctx->local_transport = url_is_local(ctx->url);
     /* All other fields zero-initialized by heap_calloc. */
 
     return ctx;
@@ -393,8 +347,9 @@ transfer_stats_t transfer_stats_since(const transfer_context_t *xfer, transfer_s
 void transfer_wire_phrase(transfer_wire_t wire, char *buffer, size_t buffer_size) {
     CHECK_NULL(buffer);
 
-    /* A transport that counted no bytes — a local push (see push callback) —
-     * leaves the size unsaid, never a size of nothing */
+    /* A transport that counted no bytes — a local push (pack-objects.c
+     * git_packbuilder_write) — leaves the size unsaid, never a size of nothing,
+     * as a frame does (transfer_draw) */
     if (wire.bytes == 0) {
         snprintf(
             buffer, buffer_size, "%zu object%s",
@@ -415,9 +370,7 @@ void transfer_wire_phrase(transfer_wire_t wire, char *buffer, size_t buffer_size
  * Wire transfer_context_t into a remote_callbacks struct.
  */
 void transfer_configure_callbacks(
-    git_remote_callbacks *cb,
-    transfer_context_t *xfer,
-    git_direction direction
+    git_remote_callbacks *cb, transfer_context_t *xfer, git_direction direction
 ) {
     if (!cb) return;
 
@@ -470,11 +423,8 @@ static void discard_obtained_credentials(char *user, char *pass) {
  *      (public-repo path) and finally libgit2's default.
  */
 int transfer_credentials_callback(
-    git_credential **out,
-    const char *url,
-    const char *username_from_url,
-    unsigned int allowed_types,
-    void *payload
+    git_credential **out, const char *url, const char *username_from_url,
+    unsigned int allowed_types, void *payload
 ) {
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
@@ -588,11 +538,54 @@ int transfer_credentials_callback(
 }
 
 /**
+ * Draw a frame of the op's progress line: the objects moved, of their total where
+ * one is known, and their size where the transport counted one
+ *
+ * A fetch's and a push's alike, each frame drawn over the last, a terminal's
+ * alone at OUTPUT_NORMAL (base/output.h output_progress). None is drawn before
+ * an object moved: neither the report a fetch's pack header brings, its total
+ * and no object yet (indexer.c git_indexer_append), nor a deletion's, nothing
+ * sent of nothing to send (transports/smart_protocol.c git_smart__push). A size
+ * of nothing is left unsaid, as a wire's phrase leaves it (transfer_wire_phrase):
+ * a local push counts no bytes (pack-objects.c git_packbuilder_write).
+ */
+static void transfer_draw(
+    const transfer_context_t *xfer, const char *title,
+    unsigned int moved, unsigned int total, size_t bytes
+) {
+    if (moved == 0) return;
+
+    char size[32];
+    output_format_size(bytes, size, sizeof(size));
+
+    if (total > 0 && bytes > 0) {
+        output_progress(
+            xfer->output, OUTPUT_NORMAL, "%s: %3u%% (%u/%u), %s",
+            title, moved * 100 / total, moved, total, size
+        );
+    } else if (total > 0) {
+        output_progress(
+            xfer->output, OUTPUT_NORMAL, "%s: %3u%% (%u/%u)",
+            title, moved * 100 / total, moved, total
+        );
+    } else if (bytes > 0) {
+        output_progress(
+            xfer->output, OUTPUT_NORMAL, "%s: %u, %s",
+            title, moved, size
+        );
+    } else {
+        output_progress(
+            xfer->output, OUTPUT_NORMAL, "%s: %u",
+            title, moved
+        );
+    }
+}
+
+/**
  * Transfer progress callback for fetch operations
  */
 int transfer_progress_callback(
-    const git_indexer_progress *stats,
-    void *payload
+    const git_indexer_progress *stats, void *payload
 ) {
     if (!stats || !payload) return 0;
 
@@ -605,35 +598,10 @@ int transfer_progress_callback(
         .bytes = stats->received_bytes,
     };
 
-    /* Then a frame of the op's progress line, each drawn over the last, a
-     * terminal's alone at OUTPUT_NORMAL (base/output.h output_progress) — and
-     * none before an object moved: the report the pack's header brings, its total
-     * and no object yet (indexer.c git_indexer_append), draws nothing */
-    unsigned int total = stats->total_objects;
-    unsigned int received = stats->received_objects;
-    if (received == 0) return 0;
-
-    if (total > 0) {
-        /* Show receiving progress with percentage and bytes */
-        int percent = (received * 100) / total;
-        char bytes_str[32];
-        output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
-
-        /* Display: "Receiving objects: XX% (current/total), X.X MiB" */
-        output_progress(
-            ctx->output, OUTPUT_NORMAL, "Receiving objects: %3d%% (%u/%u), %s",
-            percent, received, total, bytes_str
-        );
-    } else {
-        /* Don't know total yet, just show count */
-        char bytes_str[32];
-        output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
-
-        output_progress(
-            ctx->output, OUTPUT_NORMAL, "Receiving objects: %u, %s", received, bytes_str
-        );
-    }
-
+    transfer_draw(
+        ctx, "Receiving objects", stats->received_objects,
+        stats->total_objects, stats->received_bytes
+    );
     return 0;
 }
 
@@ -641,60 +609,20 @@ int transfer_progress_callback(
  * Push transfer progress callback for push operations
  */
 int transfer_push_progress_callback(
-    unsigned int current,
-    unsigned int total,
-    size_t bytes,
-    void *payload
+    unsigned int current, unsigned int total, size_t bytes, void *payload
 ) {
     if (!payload) return 0;
 
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
-    /* Record latest values for the stats fold at op_end (TTY-independent). For
-     * local transports libgit2 does not populate `bytes` meaningfully (no wire
-     * to count) — treat it as absent rather than fold garbage into the session
-     * total. */
+    /* Record latest values for the stats fold at op_end, as a fetch's are: the
+     * bytes as the transport counted them, none for a local push */
     ctx->op.wire = (transfer_wire_t){
         .objects = current,
-        .bytes = ctx->local_transport ? 0 : bytes,
+        .bytes = bytes,
     };
 
-    /* Then a frame of the op's progress line, as a fetch's is, none before an
-     * object is sent (transfer_progress_callback): a deletion sends none, and
-     * its report, nothing sent of nothing to send (transports/smart_protocol.c
-     * git_smart__push), draws nothing */
-    if (current == 0) return 0;
-
-    if (total > 0) {
-        int percent = (current * 100) / total;
-
-        if (ctx->local_transport) {
-            /* Local push has no wire-byte count; show objects only. */
-            output_progress(
-                ctx->output, OUTPUT_NORMAL, "Sending objects: %3d%% (%u/%u)",
-                percent, current, total
-            );
-        } else {
-            char bytes_str[32];
-            output_format_size(bytes, bytes_str, sizeof(bytes_str));
-            output_progress(
-                ctx->output, OUTPUT_NORMAL, "Sending objects: %3d%% (%u/%u), %s",
-                percent, current, total, bytes_str
-            );
-        }
-    } else {
-        /* Total unknown — show count (and bytes when meaningful). */
-        if (ctx->local_transport) {
-            output_progress(ctx->output, OUTPUT_NORMAL, "Sending objects: %u", current);
-        } else {
-            char bytes_str[32];
-            output_format_size(bytes, bytes_str, sizeof(bytes_str));
-            output_progress(
-                ctx->output, OUTPUT_NORMAL, "Sending objects: %u, %s", current, bytes_str
-            );
-        }
-    }
-
+    transfer_draw(ctx, "Sending objects", current, total, bytes);
     return 0;
 }
 
@@ -702,9 +630,7 @@ int transfer_push_progress_callback(
  * libgit2 push status callback: a ref the remote refused is the push's failure
  */
 int transfer_push_status_callback(
-    const char *refname,
-    const char *status,
-    void *payload
+    const char *refname, const char *status, void *payload
 ) {
     (void) refname;
     (void) payload;

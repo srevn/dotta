@@ -213,7 +213,8 @@ int transfer_credentials_callback(
  * libgit2 fetch progress callback (payload = transfer_context_t *).
  *
  * Each report recorded as the op's wire, then drawn as a frame of its progress
- * line once an object moved (base/output.h output_progress).
+ * line once an object moved, its size where the transport counted one
+ * (base/output.h output_progress).
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  */
@@ -226,8 +227,9 @@ int transfer_progress_callback(
  * libgit2 push progress callback (payload = transfer_context_t *).
  *
  * Each report recorded as the op's wire, then drawn as a frame of its progress
- * line once an object was sent: a push that sends nothing — a deletion — draws
- * nothing.
+ * line once an object was sent, its size where the transport counted one: a push
+ * that sends nothing — a deletion — draws nothing, and a local push counts no
+ * bytes.
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  */

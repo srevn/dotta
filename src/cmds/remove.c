@@ -1369,7 +1369,8 @@ static error_t remove_profile(
                 ? 0 : git_graph_ahead_behind(&ahead, &behind, repo, &head_oid, &tracking);
             if (rc < 0) {
                 err = error_git(
-                    rc, "Cannot count the commits between '%s' and '%s'", ref, tracking_ref
+                    rc, "Cannot count the commits between '%s' and '%s'",
+                    ref, tracking_ref
                 );
             } else if (ahead > 0 || git_oid_is_zero(&tracking)) {
                 output_gap(out, OUTPUT_NORMAL);
@@ -1474,30 +1475,27 @@ static error_t remove_profile(
      * a server holding the branch as its current one, a remote gone since the
      * open — is the run's, in the push's own words, which name the ref and the
      * remote, and nothing here moved: run again, the deletion reads the remote
-     * again (sys/remote.h remote_push). The push is a block of its own, its
-     * announce then its outcome. */
+     * again (sys/remote.h remote_push). The push is said once: while it runs, a
+     * progress line, a terminal's alone (base/output.h output_progress), taken
+     * down once it is done, whichever way it went; then its outcome, a line of
+     * the run's summary, before whatever the delete here meets. */
     if (!git_oid_is_zero(&advertised)) {
         err = gitops_verify_branch(repo, opts->profile, &head_oid);
         if (err) goto cleanup;
 
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
-            out, OUTPUT_NORMAL, "Pushing profile deletion to remote '%s'...",
-            remote_name
-        );
-
+        output_progress(out, OUTPUT_NORMAL, "Deleting from '%s'...", remote_name);
         const git_oid none = GIT_OID_SHA1_ZERO;
         err = remote_push(remote, ref, &none, &tracking, NULL);
+        output_clear_line(out);
         if (error_code(err) == ERR_CONFLICT) err = remove_moved(opts->profile, remote_name);
         if (err) goto cleanup;
 
-        output_info(out, OUTPUT_NORMAL, "Profile deletion pushed to remote");
+        output_success(out, OUTPUT_NORMAL, "Deleted from '%s'", remote_name);
     } else if (remote) {
         /* The remote holds no branch of the name — never pushed there, or taken
          * since this store last saw it, by another machine or a hand: nothing
-         * is pushed, and the remote's absence is what is said */
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
+         * is pushed, and the remote's absence is the summary's line */
+        output_summary(
             out, OUTPUT_NORMAL,
             "Profile '%s' is not on remote '%s': nothing to delete there",
             opts->profile, remote_name
@@ -1516,8 +1514,8 @@ static error_t remove_profile(
     /* Success message: every exit before the deletion is behind us (dry run,
      * cancel, error) — with what it took, which a question asked before it said
      * too, and nothing else on an unasked run says — said once the branch is
-     * gone and before the record phase, which may wait on the store's lock
-     * (core/state.h state_begin). */
+     * gone, in the summary beneath the remote's half, and before the record phase,
+     * which may wait on the store's lock (core/state.h state_begin). */
     output_success(
         out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
     );

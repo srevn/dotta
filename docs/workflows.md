@@ -247,3 +247,5 @@ dotta remove global ~/.bashrc --dry-run
 That works when the copy you deleted was the profile's latest version. If the profile has moved on since you last applied, or dotta never saw your copy match it, the deletion doesn't count: `update` leaves the profile as it is, and `dotta apply` brings the file back.
 
 A file removed from a directory the profile tracks shows up again as a new file; `dotta ignore <profile> --add <pattern>` keeps it out.
+
+`dotta remove <profile> --delete-profile` deletes the whole profile, locally and on the remote; no file is deleted from disk. If another machine pushed to the profile since your last `dotta sync`, the deletion is refused and nothing changes: sync, then delete again. If the remote can't be reached, the profile is deleted locally and dotta prints the command that deletes it on the remote once it can.

@@ -30,7 +30,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/remote.h"
-#include "sys/upstream.h"
 #include "utils/hooks.h"
 
 /**
@@ -908,6 +907,23 @@ static void remove_print_deletion(
 }
 
 /**
+ * The lease's refusal: the remote's branch is not where this store last saw it
+ * — moved since, or never fetched here — so a deletion would take a branch this
+ * store has not seen there
+ *
+ * One sentence wherever the lease meets it (remove_profile): off the session's
+ * listing, before anything moves, and at the push's own, where the remote moved
+ * during the question or the hook (sys/remote.h remote_push's ERR_CONFLICT).
+ */
+static error_t remove_moved(const char *profile, const char *remote_name) {
+    return error_create(
+        ERR_CONFLICT, "Profile '%s' moved on remote '%s' since this store last saw it; "
+        "'dotta sync' fetches its commits, and a deletion after it takes them",
+        profile, remote_name
+    );
+}
+
+/**
  * Remove paths from a profile
  */
 static error_t remove_paths(
@@ -1184,6 +1200,7 @@ static error_t remove_profile(
     git_tree *tree = NULL;
     profile_t *profile = NULL;
     const char *remote_name = NULL;
+    remote_t *remote = NULL;
 
     /* The branch's head, read once and first: what the deletion says before it
      * acts is said of this commit, and the delete takes the branch only where
@@ -1284,44 +1301,90 @@ static error_t remove_profile(
         );
     }
 
-    /* The remote, resolved up-front for two readers: where the profile stands
-     * against it, said before the act — in the dry run too, which previews what
-     * the deletion says before it acts — and the deletion's push below. No remote
-     * configured is an answer — the profile is this repository's alone, nothing
-     * pushed (sys/remote.h names this read) — and every other failure is the
-     * run's, joined below with the upstream's own. */
+    /* The remote, for where the profile stands against it — said before the
+     * deletion acts, in the dry run too, which previews what the deletion says
+     * before it acts — and for the deletion's push, the remote's half first. No
+     * remote configured is an answer: the profile is this repository's alone,
+     * nothing read and nothing pushed (sys/remote.h names this read). Every other
+     * failure leaves where the profile stands unknown, joined below with the
+     * count's. */
     err = remote_default(repo, ctx->arena, &remote_name);
-    if (error_code(err) == ERR_NOT_FOUND) {
-        err = NULL;
-    } else if (!err) {
-        /* A remote: where the profile stands against it */
-        upstream_info_t upstream_info;
-        err = upstream_analyze_profile(
-            repo, remote_name, opts->profile, &upstream_info
-        );
+    if (error_code(err) == ERR_NOT_FOUND) err = NULL;
+
+    /* The two heads the deletion is leased on, each read once: the remote as
+     * this store last saw it, the branch's tracking ref (T), and the remote as
+     * it stands, off the session's listing (R). The session is met here, before
+     * the question, and held to the push it leases. */
+    char ref[DOTTA_REFNAME_MAX];
+    git_oid tracking = GIT_OID_SHA1_ZERO;
+    git_oid advertised = GIT_OID_SHA1_ZERO;
+    if (!err && remote_name) {
+        /* T, from the store, whether the remote answers or not: the lease, the
+         * head the unpushed commits are counted from, and the push printed where
+         * the remote cannot be reached. Git's answer or Git's error: a tracking
+         * ref that will not read leases nothing, so it refuses the deletion here,
+         * in gitops' words, which name it. */
+        char tracking_ref[DOTTA_REFNAME_MAX];
+        err = gitops_branch_refname(ref, sizeof(ref), opts->profile);
         if (!err) {
-            /* Commits no remote holds — ahead of what it pushed, or never pushed
-             * at all: the deletion takes them with every other commit of the
-             * profile's, so they are said before it, unless --force. No sync
-             * first saves them: the deletion is pushed as well. */
-            if (!opts->force &&
-                (upstream_info.ahead > 0 || upstream_info.state == UPSTREAM_NO_REMOTE)) {
+            err = gitops_remote_branch_refname(
+                tracking_ref, sizeof(tracking_ref), remote_name, opts->profile
+            );
+        }
+        if (!err) err = gitops_reference_oid(repo, tracking_ref, &tracking);
+        if (err) goto cleanup;
+
+        /* The remote, met once (sys/remote.h): one that cannot be reached leaves
+         * the deletion this store's — made here, its push printed to run by hand
+         * — said in the open's own words, which name the remote, whatever --force
+         * says: it says what the deletion will not do */
+        err = remote_open(
+            repo, remote_name, commit_action_word(COMMIT_ACTION_REMOVE), out, &remote
+        );
+        if (err) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
+            err = NULL;
+        }
+
+        /* R, off the open's listing: one that stands and is not T — moved since
+         * this store last saw it, or never fetched here — is a branch this store
+         * has not seen there, which no lease of its own covers, so the deletion
+         * is refused before anything moves, whatever --force says, in the lease's
+         * words (remove_moved) */
+        if (remote) remote_advertised(remote, ref, &advertised);
+        if (!git_oid_is_zero(&advertised) && !git_oid_equal(&advertised, &tracking)) {
+            err = remove_moved(opts->profile, remote_name);
+            goto cleanup;
+        }
+
+        /* Commits no remote holds: those beyond T — which R is, wherever R stands
+         * — and every commit where T is absent, this store having never seen
+         * the branch there. The deletion takes them with every other commit of
+         * the profile's, so they are said before it, unless --force. No sync
+         * first saves them: the deletion is pushed as well. */
+        if (!opts->force) {
+            size_t ahead = 0, behind = 0;
+            rc = git_oid_is_zero(&tracking)
+                ? 0 : git_graph_ahead_behind(&ahead, &behind, repo, &head_oid, &tracking);
+            if (rc < 0) {
+                err = error_git(
+                    rc, "Cannot count the commits between '%s' and '%s'", ref, tracking_ref
+                );
+            } else if (ahead > 0 || git_oid_is_zero(&tracking)) {
                 output_gap(out, OUTPUT_NORMAL);
                 output_warning(
                     out, OUTPUT_NORMAL, "Profile '%s' has unpushed changes", opts->profile
                 );
             }
-
-            /* Never pushed: no branch there for the deletion to delete */
-            if (upstream_info.state == UPSTREAM_NO_REMOTE) remote_name = NULL;
         }
     }
     if (err) {
         /* Where the profile stands is unknown — a remote the resolver could not
-         * choose, an upstream that would not read: said where unpushed changes
-         * are said, before the same confirmation, and --force skips it as it
-         * skips that warning. A refusal here would refuse past --force, where a
-         * positive finding only warns. */
+         * choose, commits that would not count: said where unpushed changes are
+         * said, before the same confirmation, and --force skips it as it skips
+         * that warning. A refusal here would refuse past --force, where a positive
+         * finding only warns. */
         if (!opts->force) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
@@ -1400,10 +1463,53 @@ static error_t remove_profile(
     /* No filesystem deletion here either — see the Architectural note in
      * remove_paths: apply owns deferred filesystem cleanup. */
 
+    /* The remote's half first, where R stood at the open: sync needs it, since
+     * other repositories learn the branch is gone only from there, and once pushed
+     * it cannot be taken back, so the local delete's own refusals are asked before
+     * it — a linked worktree's checkout, a commit landed since the head was read,
+     * the hook's or a second terminal's (sys/gitops.h gitops_verify_branch) —
+     * nothing moved by either. The push is leased on T, which R was at the open:
+     * a remote moved since — during the question, the hook — refuses it, nothing
+     * sent, in the lease's words. Every other refusal — a hook of the remote's,
+     * a server holding the branch as its current one, a remote gone since the
+     * open — is the run's, in the push's own words, which name the ref and the
+     * remote, and nothing here moved: run again, the deletion reads the remote
+     * again (sys/remote.h remote_push). The push is a block of its own, its
+     * announce then its outcome. */
+    if (!git_oid_is_zero(&advertised)) {
+        err = gitops_verify_branch(repo, opts->profile, &head_oid);
+        if (err) goto cleanup;
+
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(
+            out, OUTPUT_NORMAL, "Pushing profile deletion to remote '%s'...",
+            remote_name
+        );
+
+        const git_oid none = GIT_OID_SHA1_ZERO;
+        err = remote_push(remote, ref, &none, &tracking, NULL);
+        if (error_code(err) == ERR_CONFLICT) err = remove_moved(opts->profile, remote_name);
+        if (err) goto cleanup;
+
+        output_info(out, OUTPUT_NORMAL, "Profile deletion pushed to remote");
+    } else if (remote) {
+        /* The remote holds no branch of the name — never pushed there, or taken
+         * since this store last saw it, by another machine or a hand: nothing
+         * is pushed, and the remote's absence is what is said */
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Profile '%s' is not on remote '%s': nothing to delete there",
+            opts->profile, remote_name
+        );
+    }
+
     /* The branch, from the head read first: one another writer moved since —
-     * the hook above, a second terminal — refuses the deletion in the writer's
-     * words, the branch and its reflog standing, nothing recorded and nothing
-     * pushed; run again, the deletion says what the branch then holds */
+     * the hook above, a second terminal, or a writer inside the push, the remote's
+     * branch then gone and this one standing, never published, for the next sync
+     * to push back — refuses the deletion in the writer's words, the branch and
+     * its reflog standing, nothing recorded; run again, the deletion says what
+     * the branch then holds */
     err = gitops_delete_branch(repo, opts->profile, &head_oid);
     if (err) goto cleanup;
 
@@ -1418,86 +1524,41 @@ static error_t remove_profile(
 
     /* The record phase (remove_write_record): the enabled row and the record,
      * in one transaction, after the branch is gone — the view the phase builds
-     * is the one the deletion leaves — and before the push, the store settled
-     * before the network is asked. Its claims are the tolerant read's, so a sheet
-     * that would not load leaves its directory claims unreached, never reclaimed,
-     * the next apply's as every let-go (stated beside the read's warning).
-     * Non-fatal: the branch is gone and stands, so the store's refusal is warned
-     * in its own words, a block beneath the success line, and the command goes
-     * on; of what the phase owed, every later load re-derives its share — the
-     * next apply reclaims a gone copy's record as every absent orphan's, and
-     * every load names an enabled profile with no branch, with its remedy. */
+     * is the one the deletion leaves. Its claims are the tolerant read's, so a
+     * sheet that would not load leaves its directory claims unreached, never
+     * reclaimed, the next apply's as every let-go (stated beside the read's
+     * warning). Non-fatal: the branch is gone and stands, so the store's refusal
+     * is warned in its own words, a block beneath the success line, and the command
+     * goes on; of what the phase owed, every later load re-derives its share —
+     * the next apply reclaims a gone copy's record as every absent orphan's,
+     * and every load names an enabled profile with no branch, with its remedy. */
     error_t record_err = remove_write_record(ctx, opts, claims, claim_count);
     if (record_err) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
     }
 
-    /* Push the deletion to the remote, unless the profile was never pushed there
-     * (remote_name NULL, above): sync needs it, since other repositories learn
-     * the branch is gone only from there. The push is a block of its own, its
-     * announce then its outcome; where it failed and the remote said why, the
-     * remote's words stand between them, a block the outcome joins (sys/transfer.h
-     * transfer_op_end). */
-    if (remote_name) {
+    /* Where the remote could not be reached, the push to run by hand, leased on
+     * T as the deletion's own would have been: git refuses a deletion whose lease
+     * is stale (lib/git/remote.c set_ref_status_for_push), so a remote moved
+     * since loses nothing to it. Through dotta git, which runs git on the store
+     * (cmds/git.h cmd_git), where a git typed in a shell acts on whatever
+     * repository the shell stands in. None where T is absent: this store never
+     * saw the branch there. */
+    if (remote_name && !remote && !git_oid_is_zero(&tracking)) {
+        char hex[GIT_OID_SHA1_HEXSIZE + 1];
+        git_oid_tostr(hex, sizeof(hex), &tracking);
         output_gap(out, OUTPUT_NORMAL);
-        output_info(
-            out, OUTPUT_NORMAL, "Pushing profile deletion to remote '%s'...",
-            remote_name
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta git push --force-with-lease=%s:%s %s :%s' to push the deletion",
+            ref, hex, remote_name, ref
         );
-
-        /* The remote, met once (sys/remote.h): where its listing names the branch,
-         * the deletion is pushed, leased on that head, which a branch moved there
-         * since refuses; where it names none, there is nothing there to delete,
-         * and nothing is pushed */
-        char ref[DOTTA_REFNAME_MAX];
-        remote_t *remote = NULL;
-        git_oid advertised = GIT_OID_SHA1_ZERO;
-        error_t push_err = gitops_branch_refname(ref, sizeof(ref), opts->profile);
-        if (!push_err) {
-            push_err = remote_open(
-                repo, remote_name, commit_action_word(COMMIT_ACTION_REMOVE), out, &remote
-            );
-        }
-        if (!push_err) {
-            remote_advertised(remote, ref, &advertised);
-            if (!git_oid_is_zero(&advertised)) {
-                const git_oid none = GIT_OID_SHA1_ZERO;
-                push_err = remote_push(remote, ref, &none, &advertised, NULL);
-            }
-        }
-        remote_free(remote);
-        if (push_err) {
-            /* Non-fatal: the branch is gone here, as the success line above says,
-             * and what failed is the remote's half, which other machines learn
-             * the deletion from. Warned in its own words, which name the ref
-             * and the remote (sys/remote.h remote_open, remote_push), and the
-             * push by hand its remedy — through dotta git, which runs git on
-             * the store (cmds/git.h cmd_git), where a git typed in a shell acts
-             * on whatever repository the shell stands in. */
-            output_warning(out, OUTPUT_NORMAL, "%s", error_line(push_err));
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta git push %s --delete %s' to push the deletion",
-                remote_name, opts->profile
-            );
-        } else if (git_oid_is_zero(&advertised)) {
-            /* The remote holds no branch of the name, taken there since this
-             * store last saw it — by another machine, or a hand: nothing was
-             * pushed, and the remote's absence is what is said */
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Profile '%s' is not on remote '%s': nothing to delete there",
-                opts->profile, remote_name
-            );
-        } else {
-            output_info(out, OUTPUT_NORMAL, "Profile deletion pushed to remote");
-        }
     }
 
-    /* The next step, once the record phase and the push have ended: what the
-     * deletion let go is the next apply's (remove_print_pending; the Architectural
-     * note in remove_paths) */
+    /* The next step, once the record phase has ended: what the deletion let go
+     * is the next apply's (remove_print_pending; the Architectural note in
+     * remove_paths) */
     remove_print_pending(ctx);
 
     /* The post-remove hook, last (utils/hooks.h hook_fire_post): the deletion's
@@ -1507,9 +1568,11 @@ static error_t remove_profile(
 cleanup:
     /* The profile and the tree it was opened at are freed once its count is read;
      * here only a refusal before that frees them. The record phase ended its
-     * own transaction. */
+     * own transaction. The session, where one was met: its free commits the
+     * credential helper's verdict (sys/remote.h remote_free). */
     profile_free(profile);
     git_tree_free(tree);
+    remote_free(remote);
 
     return err;
 }

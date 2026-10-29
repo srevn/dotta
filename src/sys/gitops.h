@@ -211,7 +211,7 @@ void gitops_close_repository(git_repository *repo);
  * Readers: gitops_reference_exists, and every presence question through it;
  * gitops_reference_oid, and every reader of what a reference names through it —
  * its id, its commit, its tree (their headers); gitops_delete_reference, which
- * deletes the reference it finds; gitops_delete_branch, the worktrees' question
+ * deletes the reference it finds; gitops_verify_branch, the worktrees' question
  * of a branch.
  *
  * @param repo Repository (must not be NULL)
@@ -373,18 +373,46 @@ error_t gitops_list_remote_tracking(
 );
 
 /**
+ * Verify that a branch's delete would land: its refusals, asked without it
+ *
+ * gitops_delete_branch's two refusals, git's update-ref verify <ref> <old-oid>
+ * and the worktrees' question beside it, for a caller that must hear them before
+ * an act it cannot take back: the branch, its name through the branch rule
+ * (gitops_branch_refname), still names `expected`, read as the delete reads it
+ * (gitops_delete_reference), and no linked worktree of the repository has it
+ * checked out (gitops_delete_branch says why). Nothing is written, and the answer
+ * holds until another writer moves the branch, which the delete then refuses
+ * itself.
+ *
+ * Readers: gitops_delete_branch, before its delete; cmds/remove.c remove_profile,
+ * before the remote's deletion it pushes first.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param name Branch name (must not be NULL)
+ * @param expected The head its writer read (must not be NULL, nor Git's null id)
+ * @return NULL; ERR_CONFLICT "Reference '<refname>' was changed by another writer
+ *         since this command read it" where the branch names another id or none,
+ *         and ERR_CONFLICT naming the branch where a linked worktree has it checked
+ *         out; the read's own failure, gitops_reference_oid's; a name the branch
+ *         rule refuses, in its words
+ */
+error_t gitops_verify_branch(
+    git_repository *repo, const char *name, const git_oid *expected
+);
+
+/**
  * Delete a branch, only from the head its writer read
  *
- * gitops_delete_reference of refs/heads/<name>, the name through the branch rule
- * (gitops_branch_refname) on the way: the ref and its reflog, only where the
- * branch still names `expected`. Refused, in dotta's words, when a linked worktree
- * of the repository has the branch checked out (`dotta git worktree add`): a
- * bare store checks nothing out itself, so a worktree is the one place a checkout
- * of a profile can stand, and `git_reference_delete` would take the branch from
- * under it without a word. Not refused for the branch HEAD names: HEAD is git's
- * and unborn (gitops_init_repository), a hand may have pointed it at a profile,
- * and git itself deletes that branch in a bare repository — `git_branch_delete`
- * is the stricter one and is not used. Per-branch config another tool wrote
+ * Its refusals first (gitops_verify_branch), then gitops_delete_reference of
+ * refs/heads/<name>: the ref and its reflog, only where the branch still names
+ * `expected`. Refused, in dotta's words, when a linked worktree of the repository
+ * has the branch checked out (`dotta git worktree add`): a bare store checks
+ * nothing out itself, so a worktree is the one place a checkout of a profile
+ * can stand, and `git_reference_delete` would take the branch from under it without
+ * a word. Not refused for the branch HEAD names: HEAD is git's and unborn
+ * (gitops_init_repository), a hand may have pointed it at a profile, and git
+ * itself deletes that branch in a bare repository — `git_branch_delete` is the
+ * stricter one and is not used. Per-branch config another tool wrote
  * (`branch.<name>.*`) is that tool's and stays; dotta writes none.
  *
  * Reader: cmds/remove.c remove_profile, from the head its preview read.
@@ -392,8 +420,8 @@ error_t gitops_list_remote_tracking(
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
  * @param expected The head its writer read (must not be NULL, nor Git's null id)
- * @return NULL; ERR_CONFLICT naming the branch where a linked worktree has it
- *         checked out; every other answer gitops_delete_reference's
+ * @return NULL; every refusal gitops_verify_branch's; every other answer
+ *         gitops_delete_reference's
  */
 error_t gitops_delete_branch(
     git_repository *repo, const char *name, const git_oid *expected

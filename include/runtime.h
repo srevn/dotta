@@ -495,7 +495,7 @@ typedef struct dotta_run {
  *         index (`core/manifest.c` manifest_diff), the table with no binding a
  *         profile's need of a target is asked of (`core/profiles.c`
  *         profile_needs_target), a listing read to decide (`sys/filesystem.c`
- *         fs_remove_empty_dir, `sys/upstream.c` upstream_ensure_tracking_branch,
+ *         fs_remove_empty_dir, `sys/upstream.c` upstream_create_branch,
  *         `infra/epoch.c` epoch_walk), a printer's sections (`cmds/status.c`
  *         status_print_workspace), and a walk whose answer is an error
  *         (`sys/filesystem.c` fs_remove_dir).

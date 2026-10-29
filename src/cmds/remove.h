@@ -59,6 +59,12 @@ typedef struct {
  * - If delete_profile=true: Deletes the entire profile branch
  * - If delete_profile=false: Removes specified files from profile
  *
+ * A profile's deletion is pushed first, leased: it deletes the remote's branch
+ * only as this store last saw it — its remote-tracking ref — and is refused over
+ * commits this store has not seen, nothing moved: sync, then delete again. The
+ * branch here goes only once the remote's has, or where the remote cannot be
+ * reached, its push then printed to run by hand, carrying the same lease.
+ *
  * This command modifies the Git repository and nothing on disk: the deployed
  * copies of what it removes are the next apply's to settle, decided with the
  * landings they may stand in the way of; another machine meets the commit at

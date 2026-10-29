@@ -145,8 +145,8 @@ error_t remote_open(
  *
  * Readers: infra/epoch.c epoch_resolve (the epoch's verdict); cmds/sync.c sync_push
  * (a push's expectation); cmds/clone.c cmd_clone (its gate, through the epoch's
- * verdict); cmds/remove.c remove_profile (whether the remote holds the branch
- * its deletion would push).
+ * verdict); cmds/remove.c remove_profile (the remote's branch against the tracking
+ * ref its deletion is leased on, and whether there is one to delete).
  *
  * @param remote The session (must not be NULL)
  * @param refname Full reference name (must not be NULL)
@@ -281,7 +281,7 @@ error_t remote_fetch(
  *
  * Readers: cmds/sync.c sync_push (a profile's push, a resolution's) and
  * sync_reconcile_epoch (the epoch's establish); cmds/remove.c remove_profile (a
- * deletion's).
+ * deletion's, leased on the branch's tracking ref).
  *
  * @param remote The session (must not be NULL)
  * @param refname The remote's ref, in full (must not be NULL)
@@ -290,9 +290,10 @@ error_t remote_fetch(
  * @param sent What the push moved, set where it lands (NULL: not asked)
  * @return Error or NULL on success: ERR_CONFLICT "Reference '<refname>' on remote
  *         '<name>' was changed by another writer since this command read it"
- *         where the compare refuses, nothing sent; "Cannot push '<refname>' to
- *         remote '<name>'" over the cause — the remote's words where it refused
- *         the ref
+ *         where the compare refuses, nothing sent, and nowhere else — read by
+ *         cmds/remove.c remove_profile, which says it as its lease's refusal;
+ *         "Cannot push '<refname>' to remote '<name>'" over the cause — the
+ *         remote's words where it refused the ref
  */
 error_t remote_push(
     remote_t *remote,

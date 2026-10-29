@@ -147,8 +147,10 @@ void remote_advertised(const remote_t *remote, const char *refname, git_oid *out
  * Every ref under refs/heads/ the open listed, the prefix dropped: what the remote
  * holds now. A name the branch rule refuses — a leading '-', HEAD, which git's
  * plumbing alone makes — is listed as the remote holds it, and refused where a
- * reader builds its ref (sys/gitops.h gitops_branch_refname). Lent from the
- * session: valid until remote_free.
+ * reader builds its ref (sys/gitops.h gitops_branch_refname); so is a branch at
+ * a tag or a tree, which only a tool other than git makes, refused where a reader
+ * reads its head (sys/upstream.h upstream_create_branch). Lent from the session:
+ * valid until remote_free.
  *
  * Readers: cmds/profile.c profile_fetch (the selection and its pre-flight) and
  * profile_list (the remote's not fetched here); cmds/clone.c cmd_clone (its gate,

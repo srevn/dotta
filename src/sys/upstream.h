@@ -4,15 +4,14 @@
  * Read off the remote-tracking refs the session's last fetch wrote (sys/remote.h
  * remote_fetch), and nothing here contacts the remote: a branch's state against
  * its remote (upstream_analyze_profile) and the face every screen gives that
- * state — its glyph, its colour and its phrase — then a remote's branch made
- * local (upstream_ensure_tracking_branch).
+ * state — its glyph, its colour and its phrase — then a branch created at its
+ * remote's head (upstream_create_branch).
  */
 
 #ifndef DOTTA_UPSTREAM_H
 #define DOTTA_UPSTREAM_H
 
 #include <git2.h>
-#include <stdbool.h>
 #include <types.h>
 
 #include "base/output.h"
@@ -129,20 +128,23 @@ void upstream_state_phrase(
 );
 
 /**
- * Make a remote branch local, or leave the local one where it stands
+ * Create a branch at its remote's head
  *
- * A local branch of the name exists after the call. One already here is left as
- * it is: a fetch moves the remote-tracking ref and never the local branch — merging
- * the two is sync's, through sys/resolve. One absent is created at the commit
- * its remote-tracking ref names, as the session's fetch wrote it (sys/remote.h
- * remote_fetch).
+ * refs/heads/<branch> created at the commit its remote-tracking ref names, the
+ * remote's head as the session's fetch wrote it (sys/remote.h remote_fetch),
+ * and only where the name is still free: a branch of the name created since its
+ * caller found none refuses, ERR_CONFLICT in the writer's words (sys/gitops.h
+ * gitops_write_reference). The head is read as every head is (sys/gitops.h
+ * gitops_load_reference_commit): a remote's branch at a tag or a tree — which a
+ * git server's receive-pack refuses to write (lib/git/refs.c
+ * ref_transaction_update), so only a tool other than git makes one — is refused
+ * naming the remote-tracking ref, never created here as a branch every later
+ * read refuses.
  *
  * Refuses with ERR_CONFLICT, naming both branches, when the local ref namespace
  * cannot hold the name beside one already there (`gitops_branch_blocker`) — a
  * failure about the two names rather than the wire, which the ref write would
- * otherwise report in libgit2's own words — and with ERR_CONFLICT in the writer's
- * words where a branch of the name was made since the look: the create is written
- * only where the name is still free (sys/gitops.h gitops_write_reference).
+ * otherwise report in libgit2's own words.
  *
  * Readers: cmds/clone.c land_profiles, every profile the clone selected, each
  * once, into a store it just made; cmds/profile.c profile_fetch, a profile its
@@ -155,7 +157,7 @@ void upstream_state_phrase(
  *               line's (must not be NULL)
  * @return Error or NULL on success
  */
-error_t upstream_ensure_tracking_branch(
+error_t upstream_create_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,

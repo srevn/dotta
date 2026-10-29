@@ -76,9 +76,9 @@ typedef enum {
  * and sync_reset, for every line a resolution writes and the commit it makes
  * (sys/resolve.h resolve_init), and sync_fast_forward, its line; cmds/clone.c
  * land_profiles, the line of each branch it creates (sys/upstream.h
- * upstream_ensure_tracking_branch); cmds/sync.c cmd_sync, cmds/clone.c cmd_clone
- * and cmds/remove.c remove_profile, the word every line their session writes
- * names (sys/remote.h remote_open).
+ * upstream_create_branch); cmds/sync.c cmd_sync, cmds/clone.c cmd_clone and
+ * cmds/remove.c remove_profile, the word every line their session writes names
+ * (sys/remote.h remote_open).
  *
  * @param action The action
  * @return Its word, static

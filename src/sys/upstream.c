@@ -177,9 +177,9 @@ void upstream_state_phrase(
 }
 
 /**
- * Make a remote branch local, or leave the local one where it stands
+ * Create a branch at its remote's head
  */
-error_t upstream_ensure_tracking_branch(
+error_t upstream_create_branch(
     git_repository *repo, const char *remote_name, const char *branch_name,
     const char *action
 ) {
@@ -188,11 +188,20 @@ error_t upstream_ensure_tracking_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(action);
 
-    /* Already here: a fetch never moves a local branch. */
-    bool exists = false;
-    error_t err = gitops_branch_exists(repo, branch_name, &exists);
+    /* Build reference names */
+    char local_refname[DOTTA_REFNAME_MAX];
+    char remote_refname[DOTTA_REFNAME_MAX];
+    error_t err;
+
+    err = gitops_branch_refname(
+        local_refname, sizeof(local_refname), branch_name
+    );
     if (err) return err;
-    if (exists) return NULL;
+
+    err = gitops_remote_branch_refname(
+        remote_refname, sizeof(remote_refname), remote_name, branch_name
+    );
+    if (err) return err;
 
     /* A name Git's ref namespace cannot hold beside the ones already here. The
      * remote cannot ship a colliding pair — Git forbids it there too — so the
@@ -217,26 +226,23 @@ error_t upstream_ensure_tracking_branch(
     arena_free(frame);
     if (err) return err;
 
-    /* Get remote ref */
-    git_oid target_oid;
-    err = gitops_resolve_remote_branch_oid(
-        repo, remote_name, branch_name, &target_oid
-    );
+    /* The remote's head, read as every head is: a commit, or refused naming the
+     * remote-tracking ref, so a remote's branch at a tag or a tree is no branch
+     * here (the header) */
+    git_commit *head = NULL;
+    err = gitops_load_reference_commit(repo, remote_refname, &head);
     if (err) return err;
 
-    /* The local branch at the same commit, created only where the name is still
-     * free — one made since the look above refuses (sys/gitops.h
+    /* The local branch at that commit, created only where the name is still free
+     * — one created since its caller found none refuses (sys/gitops.h
      * gitops_write_reference) — its line git's words for a branch created from
      * another, under the command that creates it */
-    char local_refname[DOTTA_REFNAME_MAX];
-    err = gitops_branch_refname(
-        local_refname, sizeof(local_refname), branch_name
-    );
-    if (err) return err;
-
     const git_oid none = GIT_OID_SHA1_ZERO;
-    return gitops_write_reference(
-        repo, local_refname, &target_oid, &none, action,
+    err = gitops_write_reference(
+        repo, local_refname, git_commit_id(head), &none, action,
         "created from %s/%s", remote_name, branch_name
     );
+    git_commit_free(head);
+
+    return err;
 }

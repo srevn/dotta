@@ -198,9 +198,10 @@ static string_array_t land_profiles(
         const char *profile = selection->entries[i];
 
         /* The local branch, created at the remote's commit: each name comes once,
-         * into a store the clone just made. A name that fails is warned about
-         * and skipped, its error dropped, one per such name. */
-        error_t err = upstream_ensure_tracking_branch(
+         * into a store the clone just made. A name that fails — a remote's branch
+         * at a tag or a tree among them — is warned about and skipped, its error
+         * dropped, one per such name. */
+        error_t err = upstream_create_branch(
             repo, remote_name, profile, commit_action_word(COMMIT_ACTION_CLONE)
         );
         if (err) {

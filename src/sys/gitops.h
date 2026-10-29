@@ -650,7 +650,8 @@ error_t gitops_read_blob_content(
  * gitops_reference_commit for a reader that needs the reference: its absence,
  * proven, is refused (ERR_NOT_FOUND, naming the reference). Readers: sys/stage.c
  * stage_open (the parent-to-be), cmds/status.c status_print_remote (the
- * remote-tracking branch's head), and gitops_load_branch_commit.
+ * remote-tracking branch's head), sys/upstream.c upstream_create_branch (the
+ * remote's head a branch is created at), and gitops_load_branch_commit.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -695,9 +696,9 @@ error_t gitops_load_branch_commit(
  *   - an id: the head it must still name — the stage's commit, sync's resolutions
  *     and their rollback, its fast-forward, a remote-tracking ref the session
  *     moves, the epoch's install over the ref its census judged;
- *   - Git's null id: nothing, the name free — the stage's root, a tracking branch's
- *     create, a remote-tracking ref the session writes first, the epoch's install
- *     where none stood.
+ *   - Git's null id: nothing, the name free — the stage's root, a branch created
+ *     at its remote's head, a remote-tracking ref the session writes first, the
+ *     epoch's install where none stood.
  * libgit2 compares under the reference's own lock, and asks Git's namespace
  * whatever the compare says (lib/libgit2/src/libgit2/refdb_fs.c
  * refdb_fs_backend__write: reference_path_available, then cmp_old_ref), so a
@@ -731,7 +732,7 @@ error_t gitops_load_branch_commit(
  *
  * Readers: sys/stage.c stage_commit; sys/resolve.c resolve_rebase_inmemory,
  * resolve_merge_trees, resolve_theirs and resolve_rollback; cmds/sync.c
- * sync_fast_forward; sys/upstream.c upstream_ensure_tracking_branch; sys/remote.c
+ * sync_fast_forward; sys/upstream.c upstream_create_branch; sys/remote.c
  * remote_fetch and remote_follow, a remote-tracking ref after a fetch and a push;
  * infra/epoch.c epoch_adopt.
  *

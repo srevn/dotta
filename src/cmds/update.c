@@ -139,7 +139,7 @@ static error_t update_capture(
  * (workspace lifetime) and the command arena's (the claim's, which the capture
  * answers there). A deletion is kept as the item it took, the workspace's, which
  * the command arena holds past the record phase: its path is where the phase
- * reclaims the record of the node already gone. What the climb retires and what
+ * reclaims the record of the node already gone. What the climbs retire and what
  * the prune takes, the walk counts at -v (update_profile); the record of each
  * is the next apply's to decide.
  *
@@ -380,11 +380,13 @@ static void update_partition(
  * it: a deletion takes its claim by its kind, a file's capture becomes its entry
  * and its claim, a directory's its claim; a path changed since the preview is
  * skipped and said. The chain rides the capture: after the walk, every captured
- * leaf's ancestry is re-derived on the same commit — the content now comes from
- * this machine, and so does its way — and a named run hands in the profile's
- * in-scope rows the load could look along, each a leaf whose chain is climbed
- * whether or not anything about it diverged. The walk ends with the commit, which
- * prunes what nothing stands on any longer and saves the sheet where a claim moved.
+ * leaf's chain is climbed on the same commit — the content now comes from this
+ * machine; the way to it is claimed where the profile does not pass through it
+ * yet, and re-derived where the run's paths reach it — and a named run hands in
+ * the profile's in-scope rows the load could look along, each a leaf whose chain
+ * is climbed whether or not anything about it diverged. The walk ends with the
+ * commit, which prunes what nothing stands on any longer and saves the sheet
+ * where a claim moved.
  *
  * Success means committed or untouched, and the bookkeeping says which
  * (commit->committed, the commit's own answer): a walk whose edits moved nothing
@@ -401,8 +403,10 @@ static void update_partition(
  * @param items The profile's share of the run's work, in filter order (empty
  *              where the profile has only chains to re-derive)
  * @param rows The named run's in-scope view rows for this profile, each the leaf
- *             of a chain to re-derive, none beneath a squatter the view keeps
- *             (empty on a bare run, which names no paths)
+ *             of a chain re-derived where `path_filter` selects it, none beneath
+ *             a squatter the view keeps (empty on a bare run, which names no paths)
+ * @param path_filter The run's path filter (core/scope.h scope_paths); NULL on
+ *                    a bare run, which hands no rows
  * @param opts Update options (must not be NULL)
  * @param commit The commit's bookkeeping, zero-filled by the caller; the walk
  *               fills it (must not be NULL)
@@ -414,6 +418,7 @@ static error_t update_profile(
     const char *profile,
     workspace_items_t items,
     manifest_rows_t rows,
+    const pathspec_t *path_filter,
     const cmd_update_options_t *opts,
     update_commit_t *commit
 ) {
@@ -606,40 +611,47 @@ static error_t update_profile(
         }
     }
 
-    /* The chain rides the capture: every leaf the walk took has its ancestry
-     * re-derived — the content now comes from this machine, and so does its way
-     * (add's own rule, applied to the re-capture an update is). After the walk,
-     * so a rung the walk itself claimed stands as the walk's word; over both
-     * kinds, a captured tracked directory having a chain of its own; and never
-     * over a deleted item — the absence of a leaf says nothing about the chain
-     * that led to it. This trigger authors and refreshes but structurally never
-     * retires: a leaf beneath a squatted rung was refused at the filter (the
-     * route's displaced arms), whichever profile's claim the squatter displaced,
-     * so a chain that reaches here holds directories at every claimed rung. Its
-     * two outs count the claims it authored or refreshed and the ones it retired,
-     * for the lines below, the record of each the next apply's to decide. */
+    /* The chain rides the capture: every leaf the walk took has its chain climbed
+     * — the content now comes from this machine, and so does its way where the
+     * profile does not pass through it yet, the first capture (add's own rule,
+     * applied to the re-capture an update is), a rung it passes through keeping
+     * its word whatever this disk holds there. After the walk, so a rung the
+     * walk itself claimed stands as the walk's word; over both kinds, a captured
+     * tracked directory having a chain of its own; and never over a deleted item
+     * — the absence of a leaf says nothing about the chain that led to it. This
+     * trigger authors but structurally never retires: a leaf beneath a squatted
+     * rung was refused at the filter (the route's displaced arms), whichever
+     * profile's claim the squatter displaced, so a chain that reaches here holds
+     * directories at every claimed rung. Its two outs count the claims it authored
+     * and the ones it retired, for the lines below, the record of each the next
+     * apply's to decide. */
     size_t ancestors_captured = 0;
     size_t ancestors_retired = 0;
     for (size_t i = 0; i < commit->captured_count; i++) {
-        profile_capture_ancestors(
+        error_t err = profile_capture_ancestors(
             draft, ctx->run.mounts, commit->captured[i].storage_path,
             &ancestors_captured, &ancestors_retired
         );
+        if (err) return err;
     }
 
     /* A named path re-derives its subtree's chains: the rows the caller gathered
-     * are the leaves the run's paths named, each climbed whether or not anything
-     * about it diverged — naming is consent, and this is the derivation's one
-     * route to a retire (a captured leaf's chain cannot hold a squatted rung; a
-     * named one can where the squatter is the user's at a rung, and naming it
-     * is the remedy — no leaf beneath any other squatter is handed in, nor beneath
+     * are the leaves at and beneath the run's paths, each climbed whether or
+     * not anything about it diverged and re-derived at each rung the paths select
+     * — at and beneath a named path, never above one, so a named file re-derives
+     * nothing of its chain (core/profiles.h profile_derive_ancestors). Naming
+     * is consent, and this is the derivation's one route to a retire (a captured
+     * leaf's chain cannot hold a squatted rung; a named one can where the squatter
+     * is the user's at a rung, selected or not, and naming a path beneath it is
+     * the remedy — no leaf beneath any other squatter is handed in, nor beneath
      * one at a lost blob's place, cmd_update). A row the walk also captured climbs
      * twice for free: the derivation counts only differences. */
     for (size_t i = 0; i < rows.count; i++) {
-        profile_capture_ancestors(
-            draft, ctx->run.mounts, rows.entries[i]->storage_path,
+        error_t err = profile_derive_ancestors(
+            draft, ctx->run.mounts, rows.entries[i]->storage_path, path_filter,
             &ancestors_captured, &ancestors_retired
         );
+        if (err) return err;
     }
 
     if (ancestors_captured > 0) {
@@ -880,6 +892,9 @@ cleanup:
  *             re-derive)
  * @param derive_rows The named run's in-scope view rows, the chains to re-derive,
  *                    none beneath a squatter the view keeps (empty on a bare run)
+ * @param path_filter The run's path filter, which selects the rungs of each row's
+ *                    chain the run re-derives (core/scope.h scope_paths; NULL
+ *                    on a bare run)
  * @param opts Update options (must not be NULL)
  * @param out_commits Output: one commit's bookkeeping per landed commit, in the
  *                    command arena; set on every return (must not be NULL)
@@ -892,6 +907,7 @@ static error_t update_execute(
     const string_array_t *enabled,
     workspace_items_t work,
     manifest_rows_t derive_rows,
+    const pathspec_t *path_filter,
     const cmd_update_options_t *opts,
     update_commit_t **out_commits,
     size_t *out_commit_count
@@ -968,7 +984,7 @@ static error_t update_execute(
                 ctx, draft, profile,
                 (workspace_items_t){ .entries = items, .count = item_count },
                 (manifest_rows_t){ .entries = rows, .count = row_count },
-                opts, &bookkeeping
+                path_filter, opts, &bookkeeping
             );
         }
         profile_draft_free(draft);
@@ -1481,12 +1497,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* A named path re-derives its subtree's chains. Naming is consent, so a run
      * given paths climbs the chain of every in-scope row under them, captured
-     * or not — the explicit backfill, and the remedy for a rung the world moved
-     * under. The slice is the leaves: blob rows and tracked directory rows, each
-     * the root of its own chain; an ancestor claim is never a leaf — its own
-     * re-derivation is carried by the leaves beneath it, which the residue rule
-     * guarantees exist. The exclude gate binds here (the user excluded the path
-     * from this operation), where the chain riding a captured leaf stays
+     * or not, and re-derives each rung at and beneath a path it named
+     * (update_profile) — the explicit backfill, and the remedy for a rung the
+     * world moved under. The slice is the leaves: blob rows and tracked directory
+     * rows, each the root of its own chain; an ancestor claim is never a leaf —
+     * its own re-derivation is carried by the leaves beneath it, which the residue
+     * rule guarantees exist. The exclude gate binds here (the user excluded the
+     * path from this operation), where the chain riding a captured leaf stays
      * scope-blind like add's — an exclusion names a path, never the way to it.
      * A bare run names nothing and derives nothing. The rows are walked as the
      * active items, one a row, each carrying the look the load took at it; the
@@ -1514,7 +1531,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             }
 
             /* The climb reads the disk rung by rung (core/profiles.h
-             * profile_capture_ancestors), so a leaf the load looked at nothing
+             * profile_derive_ancestors), so a leaf the load looked at nothing
              * along — beneath a squatter, whose look answers for the occupant
              * (core/workspace.h workspace_displaced_t) — is climbed only beneath
              * the user's squatter at a rung: the climb's own retire there — under
@@ -1673,7 +1690,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     update_commit_t *commits = NULL;
     size_t commit_count = 0;
     err = update_execute(
-        ctx, scope_enabled(scope), work, derive_rows, opts, &commits, &commit_count
+        ctx, scope_enabled(scope), work, derive_rows, scope_paths(scope), opts, &commits,
+        &commit_count
     );
 
     /* The run's one line, once the act is done and before the record phase, which
@@ -1912,10 +1930,17 @@ const args_command_t spec_update = {
         "  New files inside tracked directories are included based on\n"
         "  config: core.auto_detect_new_files toggles detection,\n"
         "  security.confirm_new_files toggles the prompt. --include-new\n"
-        "  and --only-new override both for this invocation.\n",
+        "  and --only-new override both for this invocation.\n"
+        "\n"
+        "Directories:\n"
+        "  Updating a file never changes the permissions recorded for the\n"
+        "  directories above it. To record a directory's current\n"
+        "  permissions, name it: 'dotta update ~/.config' records those of\n"
+        "  ~/.config and of the directories in it that hold your files.\n",
     .examples     =
         "  %s update                             # Every modified path\n"
         "  %s update ~/.bashrc                   # Specific file\n"
+        "  %s update ~/.config                   # A directory, permissions included\n"
         "  %s update -p global                   # Filter to 'global'\n"
         "  %s update --include-new               # Modified + new files\n"
         "  %s update --only-new                  # New files only\n"

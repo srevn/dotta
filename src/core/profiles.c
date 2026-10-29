@@ -29,14 +29,16 @@
  * far, claiming a directory in the copy as it admits it; a removal edits the
  * stage and the copy; a capture authors its claim off the look, asks the base
  * what stands in its way, puts its bytes and writes the claim into the copy,
- * and the climb claims the way to a leaf off the disk; a restore asks the base
- * the same, puts its entry by id and writes its claim and its way into the copy;
- * dotta's own file is put beside the claims; the change test holds each document
- * against the one the draft opened, and the changes merge what each says moved
- * into the explicit claims the commit adds, updates and removes; and the commit,
- * where an edit moved either, prunes the copy, saves it where its claims are no
- * longer the base's, renders its message from the writer's words over those changes
- * and commits.
+ * and the climbs claim the way to a leaf off the disk — the first capture where
+ * the profile does not pass through a rung yet, the named re-derivation again
+ * where a run's paths select one; a restore asks the base the same, puts its
+ * entry by id and writes its claim, and its way where the profile does not pass
+ * through it, into the copy; dotta's own file is put beside the claims; the change
+ * test holds each document against the one the draft opened, and the changes
+ * merge what each says moved into the explicit claims the commit adds, updates
+ * and removes; and the commit, where an edit moved either, prunes the copy, saves
+ * it where its claims are no longer the base's, renders its message from the
+ * writer's words over those changes and commits.
  */
 
 #include "core/profiles.h"
@@ -58,6 +60,7 @@
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
+#include "infra/pathspec.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/history.h"
@@ -1214,7 +1217,7 @@ error_t profile_remove(profile_draft_t *draft, path_kind_t kind, const char *sto
  * "does not exist": the half is an absent entry or a lookup that failed alike.
  * The refusal names the path it was handed, so no caller names it again.
  *
- * Readers: profile_capture_file and profile_capture_directory, each first. The
+ * Readers: profile_capture_file and profile_capture_directory, each first. A
  * climb's rung reads the answer itself and refuses nothing (profile_capture_rung).
  *
  * @param ownership The capture's answer
@@ -1460,33 +1463,117 @@ error_t profile_capture_directory(
 }
 
 /**
- * Author, refresh or retire the derived claims at one rung of a chain
+ * Does a tracked claim stand beneath this key in `sheet`?
  *
- * One component of a leaf's name, spelled by the climb, standing where its own
- * name resolves under the table the leaf was named under — the profile the base's,
+ * The sheet's half of the tracked set. An empty directory is named by its own
+ * claim and by nothing else, so a tracked claim is the one thing beneath a key
+ * that no tree and no index can name. Nothing derived keeps another standing —
+ * a derivation survives by what stands beneath it, and letting one keep another
+ * would hold a doomed chain alive a rung per command. The word that decides the
+ * prune's subject decides this too, so the two readings cannot drift: they are
+ * one field.
+ *
+ * Strictly beneath, at a component boundary: a claim AT the key is the key, and
+ * one above it is the ancestry every path has — so the claims asked are one slice
+ * of the sheet's key order (core/metadata.h metadata_items_beneath).
+ *
+ * Readers: profile_passes, of the base's sheet at a rung of a way; and
+ * profile_prune_ancestors, of the copy at a derivation's key.
+ *
+ * @param sheet The sheet asked: a draft's base's, or its copy
+ * @param key The key
+ * @return true iff a tracked directory claim stands strictly beneath it
+ */
+static bool profile_tracked_beneath(const metadata_t *sheet, const char *key) {
+    const metadata_items_t beneath = metadata_items_beneath(
+        sheet, PATH_KIND_DIRECTORY, key
+    );
+
+    for (size_t i = 0; i < beneath.count; i++) {
+        if (beneath.entries[i]->tracked) return true;
+    }
+
+    return false;
+}
+
+/**
+ * Whether the profile passes through `rung`: whether it holds anything there,
+ * or a directory it tracks beneath it
+ *
+ * The question each writer of the way asks of the base before it writes a rung
+ * — the climbs from the disk, a restore from its commit — so the writers cannot
+ * part over whether a rung is new to the profile. Two halves, each a footprint
+ * of what the profile claims at or beneath the rung: what the base holds there,
+ * by the namespace's own question (profile_holds) — a subtree, which holds what
+ * stands beneath it, or a directory claim, the profile's word on the rung — and,
+ * where the tree is silent, a directory the profile tracks beneath it, the one
+ * claim no tree can hold (an empty directory, or one whose every file is ignored).
+ * A rung the profile passes through and claims nothing at is the user's way,
+ * kept as a claim is.
+ *
+ * Asked at a rung of a leaf the base holds or the commit puts: no blob stands
+ * above the rung, so every tracked claim beneath it stands, and none is asked
+ * whether a blob contradicts it.
+ *
+ * Readers: profile_capture_ancestors and profile_derive_ancestors, at each rung
+ * a directory stands at; and profile_restore_ancestors, at each rung of the way
+ * it brings back.
+ *
+ * @param base The draft's base, its sheet read at the draft's open
+ * @param rung The rung's name
+ * @param out Whether the profile passes through it (written on success alone)
+ * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
+ *         '%s'"
+ */
+static error_t profile_passes(profile_t *base, const char *rung, bool *out) {
+    /* What the base holds at the rung: the tree's entry, or the sheet's claim
+     * where the tree is silent */
+    profile_held_t held;
+    error_t err = profile_holds(base, rung, &held);
+    if (err) return err;
+
+    /* Else beneath it: a directory the profile tracks there, which no tree holds */
+    *out = held.kind != PROFILE_HELD_NOTHING || profile_tracked_beneath(base->sheet, rung);
+
+    return NULL;
+}
+
+/**
+ * The disk's answer at one rung of a way: the place a directory stands at, the
+ * claims another kind contradicts retired
+ *
+ * One component of a leaf's name, cut by a climb, standing where its own name
+ * resolves under the table the leaf was named under — the profile the base's,
  * whose bindings place a custom/ rung. The rule is the sheet's own, read one
  * level up: an item exists iff it claims something, so a rung the disk answers
- * "directory" for claims its attributes, a rung it answers anything else for
- * retires every claim that said otherwise — the answer is about the place, which
- * the profile can derive under more than one name — and a rung it does not answer
- * at all leaves the copy exactly as it found it.
+ * anything but "directory" for retires every derived claim that said otherwise
+ * — the answer is about the place, which the profile can derive under more than
+ * one name — and a rung it does not answer at all leaves the copy exactly as it
+ * found it. A directory is the one answer a claim is taken from, and whether
+ * one is taken is each climb's own (profile_capture_ancestors,
+ * profile_derive_ancestors).
  *
- * Derived throughout: this rule authors the way, never intent. And it cannot
- * fail: every answer the disk gives is one of the three, and a look the capture
- * cannot claim, an owner this host cannot name, is the silence of the third.
+ * Both climbs look at every rung, whatever the profile holds there: the retire
+ * is no climb's choice, and the look is what lets a capture through the user's
+ * link retire the rung (cmds/add.c add_refuse_ancestry, the consent it is). It
+ * cannot fail: every answer the disk gives is one of the three.
  *
- * Reader: profile_capture_ancestors, each rung of each leaf it climbs.
+ * Readers: profile_capture_ancestors and profile_derive_ancestors, each rung of
+ * each leaf they climb.
  *
- * @param draft The draft: the copy the rung's claims are read and written in,
+ * @param draft The draft: the copy the rung's claims are read and retired in,
  *              and the arena the rung's place and its names are spelled into
  * @param mounts The table the rung's name resolves through
  * @param rung The rung's name
- * @param captured Incremented where the rung's claim moved
+ * @param st The look at the place, where a directory stands there
  * @param retired Incremented for each name whose claim goes
+ * @return The rung's place, where a directory stands there; NULL where the climb
+ *         is done with the rung — a claim the profile tracks at it, no answer,
+ *         or another kind, whose contradicted claims are retired
  */
-static void profile_capture_rung(
+static const char *profile_look_rung(
     profile_draft_t *draft, const mount_table_t *mounts, const char *rung,
-    size_t *captured, size_t *retired
+    struct stat *st, size_t *retired
 ) {
     /* The directory claim at the rung, the one a derivation may touch, and only
      * a derived one: a tracked claim is the walk's own word about a directory
@@ -1494,13 +1581,13 @@ static void profile_capture_rung(
      * item at the rung's key is the other kind's, and no business of this rule:
      * a blob at the rung would have left the leaf beneath it no room, so the
      * item is residue no blob backs, carried as every write carries it, and the
-     * rung is claimed beside it — the way's mode is the claim another machine
+     * rung is decided beside it — the way's mode is the claim another machine
      * creates the rung by. The prune is no authority over it either: it takes
      * derivations, and this item is not one. */
     const metadata_item_t *held = metadata_find_item(
         draft->sheet, PATH_KIND_DIRECTORY, rung
     );
-    if (held && held->tracked) return;
+    if (held && held->tracked) return NULL;
 
     /* Where the rung stands is where its own name resolves. The climb carries
      * one string, not a pair that must agree: a resolve is a root's spelling
@@ -1515,16 +1602,15 @@ static void profile_capture_rung(
 
     /* A rung this machine cannot place — an unbound custom/ name — has no answer
      * to give, the same silence as a rung nothing stands at. */
-    if (!filesystem_path) return;
+    if (!filesystem_path) return NULL;
 
-    struct stat st;
-    fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &st);
+    fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, st);
 
     /* Nothing there, or nothing this host could see: the rung has no answer,
      * and no answer is not an answer of "no". A chain the world moved under between
      * the leaf's capture and this climb keeps the claims it already had. */
     if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
-        return;
+        return NULL;
     }
 
     /* Something stands here that is not a directory, so the profile passes through
@@ -1545,7 +1631,7 @@ static void profile_capture_rung(
      * here goes, under each name a root of its own strictly above the place gives
      * it — the rung's own among them, the place being where that name resolves.
      * A tracked one is the walk's word under any name, and stays; and a root's
-     * own word is no rung's, the climb deriving nothing there
+     * own word is no rung's, the climbs deriving nothing there
      * (profile_capture_ancestors). */
     if (occupant != FS_OCCUPANT_DIRECTORY) {
         for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
@@ -1570,9 +1656,34 @@ static void profile_capture_rung(
                 (*retired)++;
             }
         }
-        return;
+        return NULL;
     }
 
+    /* A directory stands, the look's own kind: the one answer a claim is taken
+     * from, and whether one is the climb's to decide */
+    return filesystem_path;
+}
+
+/**
+ * Claim one rung off its look: the directory standing there, derived
+ *
+ * Derived throughout: this rule authors the way, never intent, the claim binding
+ * only dotta's own creation of the path (core/deploy.c, the ancestors' pass).
+ * And it cannot fail: a look the capture cannot claim, an owner this host cannot
+ * name, is the silence of a rung the disk does not answer.
+ *
+ * Readers: profile_capture_ancestors, at each rung new to the profile, and
+ * profile_derive_ancestors, at those and at each rung the run's paths select.
+ *
+ * @param draft The draft: the copy the claim is written in, and the arena its
+ *              names are spelled into
+ * @param rung The rung's name
+ * @param st The look that found a directory at the rung's place
+ * @param captured Incremented where the rung's claim moved
+ */
+static void profile_capture_rung(
+    profile_draft_t *draft, const char *rung, const struct stat *st, size_t *captured
+) {
     /* A directory stands, the look's own kind, so the capture's one answer short
      * of a claim is an owner or a group this host cannot name (core/metadata.h
      * metadata_capture_directory) — the same silence as a path it cannot see: a
@@ -1580,7 +1691,7 @@ static void profile_capture_rung(
      * what it had and dotta creates it as it would have before. Nothing is refused,
      * and nothing minted. */
     metadata_item_t item;
-    if (metadata_capture_directory(rung, &st, false, draft->arena, &item) !=
+    if (metadata_capture_directory(rung, st, false, draft->arena, &item) !=
         METADATA_OWNERSHIP_RESOLVED) {
         return;
     }
@@ -1592,7 +1703,7 @@ static void profile_capture_rung(
     if (metadata_write_item(draft->sheet, &item)) (*captured)++;
 }
 
-void profile_capture_ancestors(
+error_t profile_capture_ancestors(
     profile_draft_t *draft, const mount_table_t *mounts, const char *storage_path,
     size_t *captured, size_t *retired
 ) {
@@ -1602,25 +1713,72 @@ void profile_capture_ancestors(
     CHECK_NULL(captured);
     CHECK_NULL(retired);
 
-    /* One rung per separator in the label's tail. The word is excluded by where
-     * the scan starts and the leaf by where it ends — arithmetic, not a special
-     * case — so a path directly beneath a root climbs nowhere. */
-    const char *first = strchr(label_tail(storage_path), '/');
-    if (!first) return;
-
-    /* Every rung is a prefix of the leaf's own name, so one copy spells them
-     * all: each separator truncates it in place and is restored before the next
-     * one extends past it. The scan reads the caller's string, which is never
-     * written, so the cut is an offset into it. The copy is the draft's arena's,
-     * as each rung's place is; what keeps a rung, the copy's item, copies it. */
+    /* One copy of the leaf's name, cut from the leaf at each separator of its
+     * label's tail in turn, as a restore cuts its way: the word is excluded by
+     * where the tail starts and the leaf by the first cut — arithmetic, not a
+     * special case — so a path directly beneath a root climbs nowhere. Each rung
+     * is decided alone, so a rung the climb is done with puts nothing back. The
+     * copy is the draft's arena's, as each rung's place is; what keeps a rung,
+     * the copy's item, copies it. */
     char *rung = arena_strdup(draft->arena, storage_path);
 
-    for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
-        size_t cut = (size_t) (sep - storage_path);
+    for (;;) {
+        char *cut = strrchr(label_tail(rung), '/');
+        if (!cut) return NULL;
+        *cut = '\0';
 
-        rung[cut] = '\0';
-        profile_capture_rung(draft, mounts, rung, captured, retired);
-        rung[cut] = '/';
+        struct stat st;
+        if (!profile_look_rung(draft, mounts, rung, &st, retired)) continue;
+
+        /* A directory, claimed only where the profile does not pass through the
+         * rung yet: the capture that first passes through a rung authors its
+         * word, and every capture after it leaves that word as it stands — a
+         * claim, or the user's way where the first met none — whichever machine's
+         * disk it meets */
+        bool passes = false;
+        error_t err = profile_passes(draft->base, rung, &passes);
+        if (err) return err;
+        if (passes) continue;
+
+        profile_capture_rung(draft, rung, &st, captured);
+    }
+}
+
+error_t profile_derive_ancestors(
+    profile_draft_t *draft, const mount_table_t *mounts, const char *storage_path,
+    const pathspec_t *path_filter, size_t *captured, size_t *retired
+) {
+    CHECK_NULL(draft);
+    CHECK_NULL(mounts);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(path_filter);
+    CHECK_NULL(captured);
+    CHECK_NULL(retired);
+
+    /* The first capture's cut (profile_capture_ancestors) */
+    char *rung = arena_strdup(draft->arena, storage_path);
+
+    for (;;) {
+        char *cut = strrchr(label_tail(rung), '/');
+        if (!cut) return NULL;
+        *cut = '\0';
+
+        struct stat st;
+        const char *place = profile_look_rung(draft, mounts, rung, &st, retired);
+        if (!place) continue;
+
+        /* A directory the run's paths select, its place and its name asked as a
+         * directory's, claims its attributes whatever the profile held there:
+         * naming is consent, and the remedy for a rung the world moved under. A
+         * rung they do not select is the first capture's */
+        if (!pathspec_matches(path_filter, place, rung, PATH_KIND_DIRECTORY)) {
+            bool passes = false;
+            error_t err = profile_passes(draft->base, rung, &passes);
+            if (err) return err;
+            if (passes) continue;
+        }
+
+        profile_capture_rung(draft, rung, &st, captured);
     }
 }
 
@@ -1628,13 +1786,14 @@ void profile_capture_ancestors(
  * The way a restored file stood on at the commit it came from
  *
  * Each rung of `storage_path` — a separator of its label's tail, the word and
- * the leaf excluded, as the climb names them (profile_capture_ancestors) — paired
+ * the leaf excluded, as the climbs cut them (profile_capture_ancestors) — paired
  * from the leaf with a rung of `from_storage_path`: both names place one path,
  * so their tails end alike, and the pairing ends where either runs out. Each
  * rung is decided alone, since the base may hold a rung by a sheet claim with
- * nothing above it. A rung the base holds anything at is the base's word on that
- * directory, kept as it stands; at one it holds nothing at, `from`'s directory
- * claim at the pair is written, derived. No disk read: the commit is the source.
+ * nothing above it. A rung the profile passes through is the base's word on that
+ * directory, kept as it stands — the rule a capture keeps from the disk; at one
+ * it does not, `from`'s directory claim at the pair is written, derived. No disk
+ * read: the commit is the source.
  *
  * Asked after the put, of the base, which the restore edited at the leaf alone:
  * the put admitted, no blob stands at or above any rung, so every claim at a
@@ -1652,7 +1811,7 @@ static error_t profile_restore_ancestors(
     profile_draft_t *draft, profile_t *from, const char *from_storage_path,
     const char *storage_path
 ) {
-    /* Each name copied once into the draft's arena, as the climb spells its rungs,
+    /* Each name copied once into the draft's arena, as a climb spells its rungs,
      * and cut from the leaf in step, a rung of each at every cut: a name is read
      * past its label's word alone (infra/label.h label_tail), so the word is
      * never a rung */
@@ -1668,13 +1827,13 @@ static error_t profile_restore_ancestors(
         *rung_cut = '\0';
         *pair_cut = '\0';
 
-        /* A rung the base holds anything at — a subtree, a gitlink, a standing
-         * directory claim — is the base's, by the namespace's own question, the
-         * one every reader asks there (profile_holds) */
-        profile_held_t held;
-        error_t err = profile_holds(draft->base, rung, &held);
+        /* A rung the profile passes through — anything the base holds at it, a
+         * directory it tracks beneath it — is the base's, by the question each
+         * writer of the way asks there (profile_passes) */
+        bool passes = false;
+        error_t err = profile_passes(draft->base, rung, &passes);
         if (err) return err;
-        if (held.kind != PROFILE_HELD_NOTHING) continue;
+        if (passes) continue;
 
         /* The commit's claim at the pair, as its walk shows it — none where the
          * commit claimed none there — restored derived: the restore brings a
@@ -1883,42 +2042,9 @@ error_t profile_changes(
 }
 
 /**
- * Does a tracked claim stand beneath this key?
- *
- * The sheet's half of the tracked set. An empty directory is named by its own
- * claim and by nothing else, so a tracked claim is the one thing beneath a
- * derivation that no index can name. Nothing derived keeps another standing — a
- * derivation survives by what stands beneath it, and letting one keep another
- * would hold a doomed chain alive a rung per command. The word that decides the
- * prune's subject decides this too, so the two readings cannot drift: they are
- * one field.
- *
- * Strictly beneath, at a component boundary: a claim AT the key is the key, and
- * one above it is the ancestry every path has — so the claims asked are one slice
- * of the copy's key order (core/metadata.h metadata_items_beneath).
- *
- * Reader: profile_prune_ancestors.
- *
- * @param draft The draft, whose copy is asked
- * @param key The derivation's key
- * @return true iff a tracked directory claim stands strictly beneath it
- */
-static bool profile_tracked_beneath(const profile_draft_t *draft, const char *key) {
-    const metadata_items_t beneath = metadata_items_beneath(
-        draft->sheet, PATH_KIND_DIRECTORY, key
-    );
-
-    for (size_t i = 0; i < beneath.count; i++) {
-        if (beneath.entries[i]->tracked) return true;
-    }
-
-    return false;
-}
-
-/**
  * Prune the derivations nothing stands beneath
  *
- * The ancestors' last edit (profile_draft_t): the climb and the way author a
+ * The ancestors' last edit (profile_draft_t): the climbs and the way author a
  * derived claim at a rung because something beneath it stands, a directory claim's
  * removal leaves one where the claim stood, and this removes one the moment nothing
  * does. A tracked claim is not this pass's subject at all — the walk's own word
@@ -1972,8 +2098,8 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_prune
          * does. A tracked claim is the walk's own word that the profile tracks
          * the directory — it stands with nothing beneath it and at any attributes,
          * and it leaves the sheet where a verb takes it, never by inference
-         * (core/metadata.h). The field the climb's rung reads to leave a standing
-         * claim alone (profile_capture_rung), asked here for the same reason. */
+         * (core/metadata.h). The field the climbs' look reads to leave a standing
+         * claim alone (profile_look_rung), asked here for the same reason. */
         if (dir->tracked) {
             d++;
             continue;
@@ -1994,7 +2120,7 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_prune
 
         /* And the other half: the one path a tree cannot hold. With either beneath
          * it, the derivation stands, and the cursor moves past it. */
-        if (rc == 0 || profile_tracked_beneath(draft, dir->key)) {
+        if (rc == 0 || profile_tracked_beneath(draft->sheet, dir->key)) {
             d++;
             continue;
         }

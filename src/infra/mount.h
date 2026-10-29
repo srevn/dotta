@@ -378,11 +378,11 @@ const mount_root_t *mount_root_above(
  * Readers: add's receipt, which names the place the custom/ names it captured
  * went under (cmds/add.c add_print_labels); the target mark, which asks the table
  * no state row can produce for each label a profile claims under (core/profiles.c
- * profile_needs_target); the climb, which spells the name a place has under each
- * of the profile's roots strictly above it, to retire every derived claim the
- * disk contradicts there (core/profiles.c profile_capture_rung); and add's ancestry
- * refusal, the root a captured name's label resolves to, beneath which the
- * capture's climb goes (cmds/add.c add_refuse_ancestry).
+ * profile_needs_target); the climbs' look, which spells the name a place has
+ * under each of the profile's roots strictly above it, to retire every derived
+ * claim the disk contradicts there (core/profiles.c profile_look_rung); and add's
+ * ancestry refusal, the root a captured name's label resolves to, beneath which
+ * the capture's climb goes (cmds/add.c add_refuse_ancestry).
  */
 const mount_root_t *mount_root_of(
     const mount_table_t *table,

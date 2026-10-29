@@ -66,7 +66,7 @@ typedef enum {
 
 /**
  * The labels' arity, for a walk over them (the grammar's own, cmds/add.c
- * add_print_labels, core/profiles.c profile_needs_target and profile_capture_rung)
+ * add_print_labels, core/profiles.c profile_needs_target and profile_look_rung)
  * and for an array with one slot per label (label_words itself, that receipt's
  * counts, and the labels profile_needs_target notes). A macro, not an enumerator,
  * so the type holds no sentinel: every label_t a reader holds subscripts
@@ -230,10 +230,11 @@ label_t label_of(const char *storage_path);
  * subject it matched (cmds/ignore.c ignore_test). Two readers cut rather than
  * match: the negation that re-opens a verdict's rung, spelled from the tail cut
  * there (core/ignore.c ignore_verdict_negation), and the frame a walk's refusal
- * offers to leave out (cmds/add.c add_refuse_unjudged). Two walk the rungs rather
- * than match: the climb, whose rungs are the separators in the tail
- * (core/profiles.c profile_capture_ancestors), and the way a restore brings back,
- * which cuts them from the leaf (core/profiles.c profile_restore_ancestors).
+ * offers to leave out (cmds/add.c add_refuse_unjudged). Three walk the rungs
+ * rather than match, the separators in the tail, each cutting them from the leaf:
+ * the two climbs (core/profiles.c profile_capture_ancestors,
+ * profile_derive_ancestors) and the way a restore brings back (core/profiles.c
+ * profile_restore_ancestors).
  *
  * @param storage_path Storage path, under a label
  * @return Pointer past the label; "" for the word alone, and for a label spelled
@@ -284,10 +285,10 @@ error_t label_validate_storage(const char *storage_path);
  *
  * Readers: the last rung of the namer's ascent, which is the one place in the
  * tree a filesystem path is given a name (core/manifest.c manifest_ascend), over
- * the root the table found for it (infra/mount.h mount_root_above); and the climb,
- * which gives none — it spells every name a place has under the profile's roots,
- * to find the claims the disk contradicts there (core/profiles.c
- * profile_capture_rung, over infra/mount.h mount_root_of).
+ * the root the table found for it (infra/mount.h mount_root_above); and the climbs'
+ * look, which gives none — it spells every name a place has under the profile's
+ * roots, to find the claims the disk contradicts there (core/profiles.c
+ * profile_look_rung, over infra/mount.h mount_root_of).
  *
  * @param arena Arena that owns the answer (must not be NULL)
  * @param label The namespace the name is in

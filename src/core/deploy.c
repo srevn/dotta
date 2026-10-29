@@ -1849,9 +1849,11 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
 
     /* A parent no row claims: the word no claim makes, asked of its one producer
      * rather than spelled here a second time — two absences name nothing to miss,
-     * so the pair always resolves. Left root's, the next climb through this
-     * directory would claim it root's (core/profiles.h profile_capture_ancestors),
-     * and dotta's own artefact would enter the sheet as intent. */
+     * so the pair always resolves. Left root's, a climb that claims it — a
+     * profile's first capture through it, or a named re-derivation reaching it
+     * (core/profiles.h profile_capture_ancestors, profile_derive_ancestors) —
+     * would claim it root's, and dotta's own artefact would enter the sheet as
+     * intent. */
     uid_t uid;
     gid_t gid;
     (void) metadata_ownership(NULL, NULL, &uid, &gid);

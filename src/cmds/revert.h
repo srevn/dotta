@@ -92,7 +92,8 @@ typedef struct {
  *    claims and nothing fills has no entry for the index to find and a blob above
  *    one leaves it nowhere to stand, then the tree. The entry is put at its id
  *    and no object is written; the claim goes beside it, and the directory claims
- *    the file stood on at the commit wherever the head holds nothing
+ *    the file stood on at the commit wherever the profile does not pass through
+ *    them at the head (core/profiles.h profile_restore_file)
  * 6. Answers "nothing to do" when the restore moved neither document
  * 7. Refuses, off a terminal, a confirmation it owes (unless --force)
  * 8. Shows the preview (restored / diff / mode and ownership only), naming the

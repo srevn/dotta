@@ -924,8 +924,8 @@ static error_t add_refuse_ancestry(
     );
 
     /* Every strict ancestor, root first, each a cut of one copy of the key put
-     * back once the look is taken (profile_capture_ancestors' idiom): a key cut
-     * at a separator is a key, the spelling every lookup below reads */
+     * back once the look is taken: a key cut at a separator is a key, the spelling
+     * every lookup below reads */
     char *rung = arena_strdup(ctx->arena, filesystem_path);
     for (char *cut = strchr(rung + 1, '/'); cut; cut = strchr(cut + 1, '/')) {
         *cut = '\0';
@@ -2510,12 +2510,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The ancestry: the chain above every path this add captured, claimed as
      * the derivation it is — the attributes to give a rung if dotta ever has to
-     * create it, and nothing more. It runs after the walk's own claims so that
-     * a rung the walk entered is left exactly as the loop above wrote it, and
-     * over both lists: a directory the walk listed has a chain of its own, and
-     * an empty one has no file beneath it to carry that chain. Scope-blind by
-     * design, as the pass that reads it is — an exclusion names a path, never
-     * the way to it. Its two outs count the claims it authored or refreshed and
+     * create it, and nothing more — only where the profile does not pass through
+     * it yet: a rung it passes through keeps the word its first capture wrote,
+     * whatever this disk holds there (core/profiles.h profile_capture_ancestors).
+     * It runs after the walk's own claims so that a rung the walk entered is
+     * left exactly as the loop above wrote it, and over both lists: a directory
+     * the walk listed has a chain of its own, and an empty one has no file beneath
+     * it to carry that chain. Scope-blind by design, as the pass that reads it
+     * is — an exclusion names a path, never the way to it. Its one failure, the
+     * base's tree, stops the add. Its two outs count the claims it authored and
      * the ones it retired, for the lines below — a retired claim leaves the view
      * by this commit, and its record is the next apply's to decide
      * (core/workspace.c workspace_analyze_orphans).
@@ -2527,10 +2530,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         for (size_t i = 0; i < chains[b]->count; i++) {
             const add_path_t *path = chains[b]->entries[i];
 
-            profile_capture_ancestors(
+            err = profile_capture_ancestors(
                 draft, mounts, path->claim.storage_path, &ancestors_captured,
                 &ancestors_retired
             );
+            if (err) goto cleanup;
         }
     }
     if (ancestors_captured > 0) {

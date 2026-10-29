@@ -24,8 +24,9 @@
  * draft (profile_draft_t) — its next commit, built on a stage (sys/stage.h) —
  * asks the draft's base, the profile at the tree the draft opened at, and edits
  * the draft: never the two documents, which the draft keeps together by the rules
- * its type states. The draft looks at the disk in one place, the way above a
- * file a writer captured from it, and asks the host twice more: the names of a
+ * its type states. The draft looks at the disk in one place, the way to a leaf
+ * — first captured above a file a writer captured from it, and re-derived where
+ * a named run's paths reach it — and asks the host twice more: the names of a
  * look's owner and group, where a capture names them (core/metadata.h
  * metadata_capture_file, metadata_capture_directory), and the commit's signature
  * where Git's configuration names none (sys/gitops.h gitops_get_signature).
@@ -107,13 +108,14 @@
 #include <types.h>
 
 /* A profile's draft renders its commit's message from a writer's words over what
- * the commit changes (infra/commit.h), takes a capture of a file (infra/content.h)
- * and climbs through a mount table (infra/mount.h), each by pointer; each is
- * named here and defined there. */
+ * the commit changes (infra/commit.h), takes a capture of a file (infra/content.h),
+ * climbs through a mount table (infra/mount.h) and asks a run's path filter
+ * (infra/pathspec.h), each by pointer; each is named here and defined there. */
 typedef struct commit_changes commit_changes_t;
 typedef struct commit_words commit_words_t;
 typedef struct content_capture content_capture_t;
 typedef struct mount_table mount_table_t;
+typedef struct pathspec pathspec_t;
 
 /**
  * The profiles this machine layers, matched by name among those available
@@ -703,16 +705,17 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * it by what stands at the name (cmds/export.c export_collect_storage), and
  * remove's directory offer, which offers a claim where no blob stands at its
  * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
- * rung of the way a restore brings back, where whatever the base holds keeps
- * the rung (profile_restore_file). A reader not on this list is a bug. Three
- * neighbours ask profile_entry instead, the tree alone: revert's read of the
- * head at the name it writes (cmds/revert.c cmd_revert, step 11), and of each
- * holder's head in its search (revert_select_profile, at the holder's own name
- * for the argument), where a directory claim is never refused — it gives way to
- * the write where it stands, and rides it where the head's blob contradicts it;
- * the seal a capture keeps (profile_sealed), which a blob alone holds; and a
- * profile's changes, whether a blob stands at a name the tree did not move
- * (profile_changes).
+ * rung of a way it writes — the two climbs' and a restore's — where whatever
+ * the base holds keeps the rung, as a directory it tracks beneath does
+ * (profile_capture_ancestors, profile_derive_ancestors, profile_restore_file).
+ * A reader not on this list is a bug. Three neighbours ask profile_entry instead,
+ * the tree alone: revert's read of the head at the name it writes (cmds/revert.c
+ * cmd_revert, step 11), and of each holder's head in its search
+ * (revert_select_profile, at the holder's own name for the argument), where a
+ * directory claim is never refused — it gives way to the write where it stands,
+ * and rides it where the head's blob contradicts it; the seal a capture keeps
+ * (profile_sealed), which a blob alone holds; and a profile's changes, whether
+ * a blob stands at a name the tree did not move (profile_changes).
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -901,19 +904,25 @@ void profile_departures(
  *     what stands beneath it refuses on its own, and the prune takes where nothing
  *     does. A directory admitted is a claim the commit carries from its admission,
  *     so a blob chosen above it later meets it as it meets one the base holds;
- *   - the ancestors: a derived claim exists iff something tracked stands beneath
- *     it, and four edits keep that — the climb, which claims the way to a leaf
- *     from the disk, each rung where its own name resolves
- *     (profile_capture_ancestors); the way a restored file stood on at its commit,
- *     brought back at each rung the base holds nothing at, with no disk read
- *     (profile_restore_file); a directory claim's removal, which takes its tracking
- *     and leaves the claim the way to whatever stands beneath it, the attributes
- *     it claimed kept (profile_remove); and the prune, at the commit, of every
- *     derived claim nothing tracked stands beneath any longer (core/profiles.c
- *     profile_prune_ancestors), counted for a writer that asks — but a claim
- *     the base tracked, whose removal the writer names itself; the record of
- *     every rung it took is the next load's to decide, as of every claim a commit
- *     lets go (core/workspace.c workspace_analyze_orphans);
+ *   - the ancestors: a derived claim stands only where something tracked stands
+ *     beneath it, and the way is authored where the profile first passes through
+ *     a rung — the base holding nothing at it nor a directory it tracks beneath
+ *     it. Five edits keep that — the first capture, which claims from the disk
+ *     each rung of a captured leaf's way the profile does not pass through yet
+ *     (profile_capture_ancestors); the named re-derivation, which claims it again
+ *     from the disk at each rung a run's paths select (profile_derive_ancestors)
+ *     — both retiring every derived claim the profile holds at a place the disk
+ *     answers another kind for, each rung where its own name resolves; the way
+ *     a restored file stood on at its commit, brought back at each rung the profile
+ *     does not pass through, with no disk read (profile_restore_file); a directory
+ *     claim's removal, which takes its tracking and leaves the claim the way to
+ *     whatever stands beneath it, the attributes it claimed kept (profile_remove);
+ *     and the prune, at the commit, of every derived claim nothing tracked stands
+ *     beneath any longer (core/profiles.c profile_prune_ancestors), counted for
+ *     a writer that asks — but a claim the base tracked, whose removal the writer
+ *     names itself; the record of every rung it took is the next load's to decide,
+ *     as of every claim a commit lets go (core/workspace.c
+ *     workspace_analyze_orphans);
  *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
@@ -923,11 +932,11 @@ void profile_departures(
  *
  * Memory: a handle's own — an arena made at the open, holding the struct, the
  * copy of the base's sheet with every claim an edit writes into it, the names
- * the climb, the way and the prune spell, and the commit's message with the changes
- * it names — released by profile_draft_free with the admission, the base and
- * the stage; the base borrows the stage's tree, and goes before it. What a capture
- * answers is the caller's (profile_claim_t), so the claim outlives the draft
- * that wrote it.
+ * the climbs, the way and the prune spell, and the commit's message with the
+ * changes it names — released by profile_draft_free with the admission, the base
+ * and the stage; the base borrows the stage's tree, and goes before it. What a
+ * capture answers is the caller's (profile_claim_t), so the claim outlives the
+ * draft that wrote it.
  */
 typedef struct profile_draft profile_draft_t;
 
@@ -1161,31 +1170,40 @@ error_t profile_capture_directory(
 );
 
 /**
- * The way to a leaf, claimed from the disk
+ * The way to a leaf a writer captured, claimed from the disk where it is new to
+ * the profile
  *
- * The sheet's completeness rule for the chain: every rung between the label's
- * word and the leaf that is a real directory right now claims the attributes it
- * has, derived — the profile passes through it and does not track it, so the
- * claim binds only dotta's own creation of that path (core/deploy.c, the ancestors'
- * pass). The rungs are the separators of the label's tail, so the word is never
- * one, nor the leaf, which is its own capture's business. Each stands where its
- * own name resolves under `mounts`, the table the leaf was named under: a name
- * is portable and a binding is not, so a rung this machine mounts a root at is
- * claimed like every other — a chain answered the other way leaves a hole no
- * other machine can fill. Per rung, root-first, by what stands there now:
+ * The first capture: the capture that first passes through a rung authors the
+ * profile's word on it, and every capture after it leaves that word as it stands,
+ * whichever machine's disk it meets — so two machines whose disks differ at a
+ * shared rung rewrite nothing there at an ordinary capture. A rung the profile
+ * does not pass through yet — the base holds nothing at it (profile_holds), nor
+ * a directory it tracks beneath it — claims the attributes it has where it is a
+ * real directory right now, derived: the profile then passes through it and does
+ * not track it, so the claim binds only dotta's own creation of that path
+ * (core/deploy.c, the ancestors' pass). The rungs are the separators of the label's
+ * tail, so the word is never one, nor the leaf, which is its own capture's
+ * business. Each stands where its own name resolves under `mounts`, the table
+ * the leaf was named under: a name is portable and a binding is not, so a rung
+ * this machine mounts a root at is claimed like every other — a chain answered
+ * the other way leaves a hole no other machine can fill. Per rung, cut from the
+ * leaf, by what stands there now:
  *   - a tracked claim standing at it is the walk's own word, left exactly as it
  *     is, and the climb goes on past it, a tracked claim saying nothing of the
  *     rungs above it;
  *   - a FILE item at it is the other kind's, residue no blob backs, carried as
- *     every write carries it, and the rung is claimed beside it;
- *   - a directory claims its attributes, counted in `captured` only where the
- *     claim moved, so a re-derivation that found nothing new rewrites nothing
- *     and drives no commit;
+ *     every write carries it, and the rung is decided beside it;
+ *   - a directory claims its attributes where the profile does not pass through
+ *     the rung yet, counted in `captured` where the claim moved; a rung it passes
+ *     through keeps its word — a claim, or none where the capture that first
+ *     passed through it met no directory there: the user's way, on every machine;
  *   - anything else retires every derived claim the profile holds at that place,
  *     under each name a root of the profile's strictly above it gives the place,
  *     each counted in `retired`: the disk answers about a place, and a profile
  *     bound after its first captures derives one place under two names
- *     (core/manifest.h manifest_lookup_claim's note);
+ *     (core/manifest.h manifest_lookup_claim's note). A capture meets one only
+ *     through the user's link at a rung its profile derives, add's one admission,
+ *     whose consent the retire is (cmds/add.c add_refuse_ancestry);
  *   - no answer — an unbound custom/ name, nothing there, nothing this host could
  *     see, an owner it cannot name — leaves the rung as it is: no answer is not
  *     an answer of "no".
@@ -1193,17 +1211,19 @@ error_t profile_capture_directory(
  * no message names it (profile_changes, infra/commit.h), and a count is the whole
  * of what a writer says of either.
  *
- * Total and idempotent: nothing refuses the climb and no rung stops it, and each
- * climb decides every rung it passes, so a rung two leaves share is decided at
- * each climb through it — again to the same answer where nothing moved between,
- * counting and retiring nothing. A resolve and a look a rung, every climb; the
- * rungs' spellings are the draft's arena's. The one place the draft looks at
- * the disk: the handle reads Git's alone, and the draft, which writes, reads
- * the way off the machine the leaf was captured on.
+ * Total over the disk, and idempotent: no answer the disk gives stops the climb,
+ * and each climb decides every rung it passes, so a rung two leaves share is
+ * decided at each climb through it — again to the same answer where nothing moved
+ * between, counting and retiring nothing. The base's tree, which profile_holds
+ * reads, is its one failure, and needs a store that changed beneath the draft.
+ * A resolve and a look a rung, every climb — the look is what lets a capture
+ * through the user's link retire the rung; the rungs' spellings are the draft's
+ * arena's. With the named re-derivation (profile_derive_ancestors), the one place
+ * the draft looks at the disk: the handle reads Git's alone, and the draft, which
+ * writes, reads the way off the machine the leaf was captured on.
  *
  * Readers: cmds/add.c cmd_add, each path it captured, under the table it named
- * them under; and cmds/update.c update_profile — each leaf it captured, and each
- * row a named run hands it.
+ * them under; and cmds/update.c update_profile, each leaf it captured.
  *
  * @param draft The draft (must not be NULL)
  * @param mounts The table the leaf's name was made under, so a rung resolves
@@ -1211,15 +1231,60 @@ error_t profile_capture_directory(
  * @param storage_path The leaf's name, under a label — the vocabulary's
  *                     precondition (infra/label.h label_tail), which every writer
  *                     meets with a name it composed or validated (must not be NULL)
+ * @param captured Count of rungs whose claim the climb authored, added to (must
+ *                 not be NULL)
+ * @param retired Count of derived claims the climb retired, every name of each
+ *                place it retired at, added to (must not be NULL)
+ * @return Error or NULL on success: the base's tree, under "Cannot read '%s' in
+ *         profile '%s'"
+ */
+error_t profile_capture_ancestors(
+    profile_draft_t *draft,
+    const mount_table_t *mounts,
+    const char *storage_path,
+    size_t *captured,
+    size_t *retired
+);
+
+/**
+ * The way to a leaf a named run reaches, re-derived from the disk where the run's
+ * paths select it
+ *
+ * The first capture's rung rule (profile_capture_ancestors), but at a rung
+ * `path_filter` selects — its place and its name asked as a directory's
+ * (infra/pathspec.h pathspec_matches), so a rung at or beneath a path the run
+ * named — a directory claims its attributes whatever the profile held there,
+ * counted where the claim moved: naming is consent, the remedy for a rung the
+ * world moved under, and the way a chmod meant for every machine reaches the
+ * profile. A rung the filter does not select is the first capture's: a name at
+ * a file re-derives nothing above it, while a link on its way is retired as any
+ * climb retires one, so a named file frees the user's link at a rung of its way
+ * as a named directory does.
+ *
+ * Total and idempotent as the first capture is, and failing where it fails.
+ *
+ * Reader: cmds/update.c update_profile, each row a named run hands it, under
+ * the run's filter (core/scope.h scope_paths).
+ *
+ * @param draft The draft (must not be NULL)
+ * @param mounts The table the leaf's name was made under, so a rung resolves
+ *               back to where the leaf was read (must not be NULL)
+ * @param storage_path The leaf's name, under a label (infra/label.h label_tail;
+ *                     must not be NULL)
+ * @param path_filter The run's path filter (must not be NULL: a NULL filter selects
+ *                    every path, and would re-derive the whole way)
  * @param captured Count of rungs whose claim the climb authored or changed, added
  *                 to (must not be NULL)
  * @param retired Count of derived claims the climb retired, every name of each
  *                place it retired at, added to (must not be NULL)
+ * @return Error or NULL on success: the base's tree, under "Cannot read '%s' in
+ *         profile '%s'"
  */
-void profile_capture_ancestors(
+error_t profile_derive_ancestors(
     profile_draft_t *draft,
     const mount_table_t *mounts,
     const char *storage_path,
+    const pathspec_t *path_filter,
     size_t *captured,
     size_t *retired
 );
@@ -1240,8 +1305,10 @@ void profile_capture_ancestors(
  *     the base's blob contradicts rides the write;
  *   - the way: each rung of the name, paired from the leaf with a rung of
  *     `from_storage_path` — both names place one path, so their tails end alike
- *     — takes `from`'s directory claim at its pair, derived, wherever the base
- *     holds nothing at the rung (profile_holds);
+ *     — takes `from`'s directory claim at its pair, derived, wherever the profile
+ *     does not pass through the rung, as a capture claims one from the disk
+ *     (profile_capture_ancestors): the base holds nothing at it (profile_holds),
+ *     nor a directory it tracks beneath it;
  *   - the claim at its own kind, written (core/metadata.h metadata_write_item):
  *     the claim's, or — where it claims nothing, a link the commit records no
  *     ownership for — the retire of the FILE item standing there.

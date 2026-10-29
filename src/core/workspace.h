@@ -1445,9 +1445,9 @@ typedef enum {
  *                            so no flag lifts it and no decision pends. One verb
  *                            — the named re-derivation whose chain meets the
  *                            squatter retires the claim ('dotta update <dir>',
- *                            core/profiles.h profile_capture_ancestors). The
- *                            two arms partition what was one by the row's class:
- *                            a deployed item is a view row's (the join), so the
+ *                            core/profiles.h profile_derive_ancestors). The two
+ *                            arms partition what was one by the row's class: a
+ *                            deployed item is a view row's (the join), so the
  *                            row is the subject and manifest_is_derived is the
  *                            whole test — the kind gating the read inside it, a
  *                            file row's tracked field being a don't-care.

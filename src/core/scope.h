@@ -47,9 +47,13 @@
  *              and its storage path (infra/pathspec). Exposed for diff, which
  *              selects a commit range delta by delta, compares a commit's view
  *              under it, and answers the filter's coverage over the view each
- *              arm compares (pathspec_entry_at, pathspec_entry_matches_at), and
- *              for apply's count line (pathspec_count); none of them has a profile
- *              or exclude semantics to honor. In-workspace sites should prefer
+ *              arm compares (pathspec_entry_at, pathspec_entry_matches_at), for
+ *              apply's count line (pathspec_count), and for update's named
+ *              re-derivation, which asks it of each rung of the chains it climbs
+ *              (core/profiles.h profile_derive_ancestors); none of them has a
+ *              profile or exclude semantics to honor — the rungs above a leaf
+ *              the scope accepted are in no -e's way, an excluded directory
+ *              excluding everything beneath it. In-workspace sites should prefer
  *              scope_accepts_path.
  *
  * The CRITICAL invariant — load the enabled set, never the filter — is enforced
@@ -402,8 +406,10 @@ const string_array_t *scope_profiles(const scope_t *s);
  * compiled entries: cmds/diff.c diff_select_delta_cb, diff_print_view,
  * diff_validate_filter) and apply's count line (cmds/apply.c cmd_apply) — use
  * this with the pathspec accessors (pathspec_count / pathspec_entry_at /
- * pathspec_entry_matches_at). Per-iteration path-vs-filter checks should use
- * scope_accepts_path instead.
+ * pathspec_entry_matches_at); update's named re-derivation hands it to the draft,
+ * which asks it of each rung of the chains it climbs (cmds/update.c cmd_update,
+ * core/profiles.h profile_derive_ancestors). Per-iteration path-vs-filter checks
+ * should use scope_accepts_path instead.
  *
  * Borrowed from the scope.
  */

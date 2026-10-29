@@ -440,8 +440,9 @@ metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind);
  * it answers the empty slice, and so does a NULL sheet, as metadata_items answers.
  *
  * Readers: a profile's draft — the admission's sheet half, of the name a blob
- * would stand at (core/profiles.c profile_refuse_beneath), and the prune's, of
- * a derivation's key (profile_tracked_beneath).
+ * would stand at (core/profiles.c profile_refuse_beneath); and the tracked set's
+ * sheet half, the prune's of a derivation's key in the copy and the way's of a
+ * rung in the base's sheet (profile_tracked_beneath).
  *
  * @param metadata The sheet (NULL answers the empty slice)
  * @param kind Which kind's items
@@ -462,7 +463,7 @@ metadata_items_t metadata_items_beneath(
  * The half that did not resolve, where one did not — the answer the landing words,
  * a draft's capture refuses, the compare reads as "unresolvable" and a first
  * observation as a claim it cannot spell, no sentence minted on the way: the
- * compare asks it of every row on every load, the climb of every rung it passes,
+ * compare asks it of every row on every load, the climbs of every rung they claim,
  * and the flush of every node it first observes.
  *
  * Must-check by its type, as an error is (include/types.h): a capture writes
@@ -646,9 +647,9 @@ metadata_ownership_t metadata_capture_file(
  * established, and every caller holds its look to one first: a profile's next
  * commit's directory capture, whose writers each lstat and hold to S_ISDIR —
  * add's directory loop and update's (cmds/add.c cmd_add, cmds/update.c
- * update_profile) — and the climb's rung, a look that found a directory
- * (core/profiles.c profile_capture_rung). A stat of any other kind is a contract
- * breach and reads as one, not as a refusal with a remedy.
+ * update_profile) — and a climb's rung, whose look found a directory
+ * (core/profiles.c profile_look_rung, profile_capture_rung). A stat of any other
+ * kind is a contract breach and reads as one, not as a refusal with a remedy.
  *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim"): the item's key, borrowed by it

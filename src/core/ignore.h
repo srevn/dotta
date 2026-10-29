@@ -92,6 +92,16 @@ typedef struct source_filter source_filter_t;
 typedef struct stage stage_t;
 
 /**
+ * The ignore file's name, at the root of the tree it rides: a profile's branch,
+ * and the baseline's ref (BASELINE_REF).
+ *
+ * Readers: ignore_blob_read, where the file is looked up; ignore_blob_write and
+ * ignore_seed_baseline, where it is put; and cmds/add.c cmd_add, which puts the
+ * template there for a profile it creates.
+ */
+#define IGNORE_FILE_NAME ".dottaignore"
+
+/**
  * The baseline's home: a ref of this machine's own.
  *
  * It stands beside the epoch in refs/dotta and differs from it in one way — the

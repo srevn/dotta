@@ -256,7 +256,7 @@ error_t ignore_blob_read(
     /* No entry at the tree's root is no file yet — callers read an empty buffer
      * as "no baseline/profile .dottaignore yet" — and any failure of the read
      * is one (I/O, corruption), naming the ref the tree was read from. */
-    const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
+    const git_tree_entry *entry = git_tree_entry_byname(tree, IGNORE_FILE_NAME);
     if (!entry) return NULL;
 
     /* The blob's read names an id alone (sys/gitops.h gitops_blob_view_open):
@@ -321,7 +321,7 @@ error_t ignore_blob_write(stage_t *stage, const char *content, size_t size) {
     }
 
     return stage_put(
-        stage, ".dottaignore", content, size, GIT_FILEMODE_BLOB, NULL
+        stage, IGNORE_FILE_NAME, content, size, GIT_FILEMODE_BLOB, NULL
     );
 }
 
@@ -711,7 +711,7 @@ error_t ignore_seed_baseline(git_repository *repo, commit_action_t action) {
     err = stage_orphan(repo, BASELINE_REF, &stage);
     if (!err) {
         err = stage_put(
-            stage, ".dottaignore", DEFAULT_DOTTAIGNORE,
+            stage, IGNORE_FILE_NAME, DEFAULT_DOTTAIGNORE,
             strlen(DEFAULT_DOTTAIGNORE), GIT_FILEMODE_BLOB, NULL
         );
     }

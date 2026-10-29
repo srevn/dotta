@@ -2559,7 +2559,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * that was never created. */
     if (!profile_exists) {
         const char *template = ignore_profile_template();
-        err = profile_put_machinery(draft, ".dottaignore", template, strlen(template));
+        err = profile_put_machinery(draft, IGNORE_FILE_NAME, template, strlen(template));
         if (err) {
             err = error_wrap(
                 err, "Failed to initialize .dottaignore for profile '%s'",

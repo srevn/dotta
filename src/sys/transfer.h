@@ -194,6 +194,11 @@ void transfer_configure_callbacks(
 /**
  * libgit2 credential callback (payload = transfer_context_t *).
  *
+ * A helper's fill runs on a row of its own: git asks at the terminal where no
+ * helper answers (lib/git/prompt.c git_prompt), past the output layer, so the
+ * progress line that stands is taken down first, a caller's around the op among
+ * it (base/output.h output_clear_line).
+ *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  */
 int transfer_credentials_callback(

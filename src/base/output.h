@@ -565,8 +565,9 @@ void output_progress(
  *
  * Readers: cmds/sync.c sync_fetch, cmds/profile.c profile_fetch, cmds/status.c
  * status_remote, once the fetch their line names is done; sys/transfer.c
- * transfer_op_end; and the layer's own, before every line that lands (output_land)
- * and before the stream moves (output_set_stream).
+ * transfer_op_end, and transfer_credentials_callback before a helper's fill,
+ * which may ask at the terminal past the layer; and the layer's own, before every
+ * line that lands (output_land) and before the stream moves (output_set_stream).
  *
  * @param ctx Output context (NULL: nothing)
  */

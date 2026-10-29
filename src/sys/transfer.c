@@ -543,6 +543,12 @@ int transfer_credentials_callback(
                 "credential URL parse: %s\n", error_line(err)
             );
         } else {
+            /* The fill may ask at the terminal itself — git prompts there where
+             * no helper answers (lib/git/prompt.c git_prompt) — past the output
+             * layer, which sees none of it: the progress line that stands, a
+             * caller's around the op, is taken down first, so the prompt stands
+             * on a row of its own */
+            output_clear_line(ctx->output);
             err = credential_helper_fill(
                 &u, username_from_url, &fresh_user, &fresh_pass
             );

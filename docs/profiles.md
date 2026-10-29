@@ -162,7 +162,9 @@ When cloning, dotta auto-detects profiles that match the current system:
 - OS base and sub-profiles (e.g., `darwin`, `darwin/*`)
 - Host base and sub-profiles (e.g., `hosts/<hostname>`, `hosts/<hostname>/*`)
 
-These are automatically fetched and enabled in the layering convention's order. Override this with `--all` (fetch everything, enabled in the same order) or `--profile` (fetch specific ones, enabled in the order given).
+These are automatically fetched and enabled in the layering convention's order. Override this with `--all` (fetch everything, enabled in the same order) or `--profile` (fetch specific ones, enabled in the order given). A `--profile` name the remote does not hold refuses the clone.
+
+Only the selected profiles are fetched. The remote's other profiles stay on the remote: `dotta profile list --all` lists them, and [`dotta profile fetch`](#fetching-remote-profiles) brings one later.
 
 ## Interactive Mode
 

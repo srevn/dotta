@@ -144,9 +144,9 @@ void upstream_state_phrase(
  * words where a branch of the name was made since the look: the create is written
  * only where the name is still free (sys/gitops.h gitops_write_reference).
  *
- * Readers: cmds/clone.c land_profiles, every profile the clone chose — a name
- * given twice is here at its second; cmds/profile.c profile_fetch, a profile
- * its analysis found no local branch for (upstream_analyze_profile).
+ * Readers: cmds/clone.c land_profiles, every profile the clone selected, each
+ * once, into a store it just made; cmds/profile.c profile_fetch, a profile its
+ * analysis found no local branch for (upstream_analyze_profile).
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")

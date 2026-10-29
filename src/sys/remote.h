@@ -151,7 +151,7 @@ void remote_advertised(const remote_t *remote, const char *refname, git_oid *out
  *
  * Readers: cmds/profile.c profile_fetch (the selection and its pre-flight) and
  * profile_list (the remote's not fetched here); cmds/clone.c cmd_clone (its gate,
- * its arms and its fetch).
+ * and the listing select_profiles selects off).
  *
  * @param remote The session (must not be NULL)
  * @return The names (never NULL)
@@ -215,8 +215,8 @@ string_array_t remote_last_branches(git_repository *repo, arena_t *arena);
  * and cmds/status.c status_remote (every profile its section lists), each asking
  * for branches here, none nested with another, so neither meets a barred name;
  * cmds/profile.c profile_fetch (the remote's own names), whose names a branch
- * here may bar; cmds/clone.c cmd_clone (every branch the remote advertises, and
- * the epoch), into a store it just made, which holds no tracking ref.
+ * here may bar; cmds/clone.c cmd_clone (the profiles it selected off the listing,
+ * and the epoch), into a store it just made, which holds no tracking ref.
  *
  * @param remote The session (must not be NULL)
  * @param branches Branch names, each once and through the branch rule (must not

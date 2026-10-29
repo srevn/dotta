@@ -124,7 +124,8 @@ typedef struct mount_table mount_table_t;
  * Names alone: nothing here reads Git, the caller lists what is available. A
  * system call that fails costs its layer, never the answer.
  *
- * Reader: cmds/clone.c cmd_clone, among the branches its fetch brought.
+ * Reader: cmds/clone.c select_profiles, among the branches the remote advertises
+ * (sys/remote.h remote_branches).
  *
  * @param arena Arena the answer lives in (must not be NULL)
  * @param available The names to match among (must not be NULL)

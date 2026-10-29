@@ -40,8 +40,8 @@ typedef struct {
 /**
  * Clone dotta repository
  *
- * Creates the bare store, fetches the remote once, and makes the chosen profiles
- * local (clone.c).
+ * Creates the bare store, fetches the profiles it selects and the epoch once,
+ * and makes the selected profiles local (clone.c).
  *
  * The bootstrap that may follow never enters the clone's exit code: the repository
  * landed either way, so a script that failed is reported where it ran and again

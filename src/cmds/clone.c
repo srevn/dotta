@@ -3,14 +3,17 @@
  *
  * The clone is init with a remote: the bare store created and declared
  * (utils/repo.h), the remote added and met once (sys/remote.h) — its advertisement
- * of the epoch the identity gate, then one fetch of every branch it advertises
- * and of the epoch, the epoch adopted — and the chosen profiles made local from
- * what landed. No `git_clone`: that call creates a local branch for the remote's
- * HEAD whatever was asked for, and dotta's store has no branch nobody asked for.
+ * of the epoch the identity gate, and its branches what the profiles are selected
+ * off, then one fetch of the selected profiles and of the epoch, the epoch adopted
+ * — and the selected profiles made local. The remote's other branches stay there.
+ * No `git_clone`: that call fetches every branch the remote has and creates a
+ * local branch for the remote's HEAD whatever was asked for
+ * (lib/libgit2/src/libgit2/clone.c clone_into), and dotta's store has no branch
+ * and no tracking ref nobody asked for.
  *
  * Smart profile management
  * - Auto-detects relevant profiles by default
- * - Makes only detected/specified profiles local
+ * - Fetches and makes local only the detected/specified profiles
  * - Initializes state with those profiles
  * - Supports hub mode (--all) for backup workflows
  */
@@ -41,40 +44,158 @@
 #include "utils/repo.h"
 
 /**
- * Make the chosen profiles local
+ * Select the profiles the clone fetches and lands, off the remote's listing
  *
- * The one fetch has run (sys/remote.h remote_fetch): every branch the remote
- * advertised stands under refs/remotes/<remote>. Each chosen name becomes a local
- * branch at that commit; a name the remote does not have is warned about by name
- * and skipped, so a `-p` typo costs one profile and not the clone. The warnings
- * are one block, beneath whatever stood: its boundary is asked here, and paid
- * by the first of them or, where none prints, by the line the caller says next.
+ * Asked before anything is fetched, of the branches the remote holds now
+ * (sys/remote.h remote_branches): the names the line gave (-p), each once, every
+ * one the remote does not hold refusing the clone, as git's clone refuses a
+ * --branch its remote lacks (lib/git/builtin/clone.c cmd_clone); every branch
+ * the remote holds (--all); otherwise the ones this machine layers (core/profiles.h
+ * profile_detect), each shown as detected. An empty selection says why here,
+ * where it is made, so the land says only what landed (land_profiles).
+ *
+ * @param opts Clone options (must not be NULL)
+ * @param remote_name Remote name (typically "origin")
+ * @param remote_names The branches the remote advertises (must not be NULL)
+ * @param arena Arena the selection lives in (must not be NULL)
+ * @param out Output context for messages (must not be NULL)
+ * @param selection The profiles, each once, in the order they are landed and
+ *                  enabled (must not be NULL; set on success)
+ * @return Error or NULL on success
+ */
+static error_t select_profiles(
+    const cmd_clone_options_t *opts,
+    const char *remote_name,
+    const string_array_t *remote_names,
+    arena_t *arena,
+    output_t *out,
+    string_array_t *selection
+) {
+    CHECK_NULL(opts);
+    CHECK_NULL(remote_names);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+    CHECK_NULL(selection);
+
+    /* Explicit profile management: the names the line gave, each once — a name
+     * given twice is one profile, kept where it was first given, as the scope
+     * takes it (core/scope.h scope_build) — and every one the remote does not
+     * hold refused together, before anything is fetched, in profile fetch's words
+     * (cmds/profile.c profile_fetch): named profiles are fetched whole or not
+     * at all. The names the remote does hold are in hand, and the refusal says
+     * them. */
+    if (opts->profile_count > 0) {
+        string_array_t missing;
+        string_array_init(selection, arena, opts->profile_count);
+        string_array_init(&missing, arena, 0);
+        for (size_t i = 0; i < opts->profile_count; i++) {
+            const char *name = opts->profiles[i];
+            if (string_array_contains(selection, name) ||
+                string_array_contains(&missing, name)) {
+                continue;
+            }
+
+            string_array_push(
+                string_array_contains(remote_names, name) ? selection : &missing, name
+            );
+        }
+        if (missing.count > 0) {
+            return error_create(
+                ERR_NOT_FOUND, "%s '%s' %s not on remote '%s', which holds %s",
+                missing.count == 1 ? "Profile" : "Profiles",
+                string_array_join(arena, &missing, "', '"),
+                missing.count == 1 ? "is" : "are", remote_name,
+                remote_names->count > 0
+                    ? string_array_join(arena, remote_names, ", ") : "no profiles"
+            );
+        }
+        return NULL;
+    }
+
+    /* Hub mode: every branch the remote advertises, seeded in the convention's
+     * order: the remote's listing has none of its own, and initialize_state enables
+     * in the order the selection has. Named profiles (-p) keep the order typed;
+     * detection sorts its own answer. A remote that holds none is said here, in
+     * profile fetch --all's words, and the clone lands its epoch alone. */
+    if (opts->all_profiles) {
+        string_array_clone(remote_names, arena, selection);
+        profile_order(selection);
+        if (selection->count == 0) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_warning(
+                out, OUTPUT_NORMAL, "Remote '%s' holds no profiles", remote_name
+            );
+        }
+        return NULL;
+    }
+
+    /* Default: the profiles this machine layers, matched by name among the branches
+     * the remote advertises, each shown as detected */
+    output_section(out, OUTPUT_NORMAL, "Auto-detecting profiles for this system");
+    *selection = profile_detect(arena, remote_names);
+    for (size_t i = 0; i < selection->count; i++) {
+        output_info(out, OUTPUT_NORMAL, "  • %s", selection->entries[i]);
+    }
+    if (selection->count > 0) return NULL;
+
+    /* None detected, so none is fetched: the remote's profiles listed as guidance,
+     * under the title profile list gives the remote's not fetched here
+     * (cmds/profile.c profile_list), with the two verbs that take one — none is
+     * here yet, and enable refuses a profile whose branch is not (cmds/profile.c
+     * profile_enable) */
+    output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
+    if (remote_names->count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
+        for (size_t i = 0; i < remote_names->count; i++) {
+            output_info(out, OUTPUT_NORMAL, "  • %s", remote_names->entries[i]);
+        }
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta profile fetch <name>', then 'dotta profile enable <name>'"
+        );
+    }
+
+    return NULL;
+}
+
+/**
+ * Make the selected profiles local, and say what landed
+ *
+ * The one fetch has run (sys/remote.h remote_fetch): each selected profile, a
+ * branch the remote advertised (select_profiles), stands under
+ * refs/remotes/<remote>. Each becomes a local branch at that commit; one that
+ * cannot is warned about by name and skipped, so one profile costs itself and
+ * not the clone. The warnings are one block, beneath whatever stood: its boundary
+ * is asked here, and paid by the first of them or, where none prints, by the
+ * summary's line — what landed, said alike whichever arm selected, and nothing
+ * where the selection was empty, which said why where it was made.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (typically "origin")
- * @param profiles Array of profile names to make local, each once (may be NULL
- *                 when count is 0: the entries of an empty listing, a remote
- *                 with no branch)
- * @param count Number of profiles
- * @param out Output context for messages
- * @param landed Array the names made local are pushed to, in order (must not be
- *               NULL)
+ * @param selection The profiles to make local, each once (must not be NULL)
+ * @param arena Arena the names made local live in (must not be NULL)
+ * @param out Output context for messages (must not be NULL)
+ * @return The names made local, in the selection's order
  */
-static void land_profiles(
+static string_array_t land_profiles(
     git_repository *repo,
     const char *remote_name,
-    char **profiles,
-    size_t count,
-    output_t *out,
-    string_array_t *landed
+    const string_array_t *selection,
+    arena_t *arena,
+    output_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(selection);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
-    CHECK_NULL(landed);
+
+    string_array_t landed;
+    string_array_init(&landed, arena, selection->count);
 
     output_gap(out, OUTPUT_NORMAL);
-    for (size_t i = 0; i < count; i++) {
-        const char *profile = profiles[i];
+    for (size_t i = 0; i < selection->count; i++) {
+        const char *profile = selection->entries[i];
 
         /* The local branch, created at the remote's commit: each name comes once,
          * into a store the clone just made. A name that fails is warned about
@@ -90,15 +211,28 @@ static void land_profiles(
             continue;
         }
 
-        string_array_push(landed, profile);
+        string_array_push(&landed, profile);
     }
+
+    /* What landed, said once whichever arm selected: a selection none of which
+     * landed says so beneath its warnings, an empty one said why already */
+    if (landed.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Fetched %zu profile%s",
+            landed.count, landed.count == 1 ? "" : "s"
+        );
+    } else if (selection->count > 0) {
+        output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
+    }
+
+    return landed;
 }
 
 /**
  * Initialize state with the profiles clone enables
  *
  * Creates the database whatever `profiles` holds, enables exactly the names given
- * — the caller decided which fetched profiles this machine can place — and names
+ * — the caller decided which landed profiles this machine can place — and names
  * them when there are any.
  *
  * @param repo Repository
@@ -151,8 +285,8 @@ static error_t initialize_state(
 
     /* The names enabled, when there are any: a run that enabled nothing said
      * why per profile above, and has no list to print. The state is a phase of
-     * its own, its line the fetch's summary's next where nothing stands between
-     * them. */
+     * its own, its line the land's summary's next where nothing stands between
+     * them (land_profiles). */
     if (profiles->count > 0) {
         output_success(
             out, OUTPUT_NORMAL, "Initialized enabled profiles: %s",
@@ -307,11 +441,20 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         goto cleanup;
     }
 
-    /* One fetch, with progress: every branch the remote advertises, each landing
-     * as a remote-tracking ref, and the epoch, its objects for the adopt to judge.
-     * No local branch is made here — that is each arm's, for the names it chose
-     * off the advertisement. */
-    err = remote_fetch(remote, remote_branches(remote), EPOCH_REF, NULL);
+    /* The profiles the clone lands, selected off the advertisement before anything
+     * is fetched: a name the line gives that the remote lacks refuses the clone
+     * here, nothing downloaded */
+    string_array_t selection;
+    err = select_profiles(opts, "origin", remote_branches(remote), ctx->arena, out, &selection);
+    if (err) goto cleanup;
+
+    /* One fetch, with progress: each selected profile, landing as a remote-tracking
+     * ref, and the epoch, its objects for the adopt to judge. The remote's other
+     * branches stay there, their names kept by the open for completion's offers
+     * (sys/remote.h remote_last_branches) — on a path remote their objects arrive
+     * all the same, unnamed (sys/remote.h). No local branch is made here: that
+     * is the land's, below. */
+    err = remote_fetch(remote, &selection, EPOCH_REF, NULL);
     if (err) goto cleanup;
 
     /* The epoch, installed once its commit is proved (infra/epoch.h epoch_adopt):
@@ -330,7 +473,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             "%s; encryption operations fail until a valid epoch is fetched",
             error_line(err)
         );
-        /* Said: the error is dropped here, so the arms below meet a clone with
+        /* Said: the error is dropped here, so what follows meets a clone with
          * no failure in hand rather than one the next assignment overwrites */
         err = NULL;
     }
@@ -338,112 +481,10 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* Any other failure is the install's own, naming the act and the remote */
     if (err) goto cleanup;
 
-    /* Determine which profiles to fetch */
-    string_array_t fetched_profiles;
-    string_array_init(&fetched_profiles, ctx->arena, 0);
+    /* The selection made local, and what landed said once */
+    const string_array_t landed = land_profiles(repo, "origin", &selection, ctx->arena, out);
 
-    if (opts->profiles && opts->profile_count > 0) {
-        /* Explicit profile management: the names the line gave, each once — a
-         * name given twice is one profile, kept where it was first given, as
-         * the scope takes it (core/scope.h scope_build) */
-        string_array_t specified;
-        string_array_init(&specified, ctx->arena, opts->profile_count);
-        for (size_t i = 0; i < opts->profile_count; i++) {
-            if (string_array_contains(&specified, opts->profiles[i])) continue;
-            string_array_push(&specified, opts->profiles[i]);
-        }
-
-        land_profiles(
-            repo, "origin", specified.entries, specified.count, out, &fetched_profiles
-        );
-
-        if (fetched_profiles.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Fetched %zu of %zu specified profile%s",
-                fetched_profiles.count, specified.count, specified.count == 1 ? "" : "s"
-            );
-        } else {
-            output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
-        }
-
-    } else if (opts->all_profiles) {
-        /* Hub mode: every branch the remote advertised, which the one fetch
-         * brought, made local */
-        const string_array_t *remote_names = remote_branches(remote);
-        land_profiles(
-            repo, "origin", remote_names->entries, remote_names->count, out,
-            &fetched_profiles
-        );
-
-        /* Every fetched profile, seeded in the convention's order: the remote's
-         * listing has none of its own, and initialize_state enables in the order
-         * this list has. Named profiles (-p) keep the order typed; detection
-         * sorts its own answer. */
-        profile_order(&fetched_profiles);
-
-        if (fetched_profiles.count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Fetched %zu profile%s",
-                fetched_profiles.count, fetched_profiles.count == 1 ? "" : "s"
-            );
-        } else {
-            output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
-        }
-
-    } else {
-        /* Default: auto-detect profiles for this machine */
-        output_section(
-            out, OUTPUT_NORMAL, "Auto-detecting profiles for this system"
-        );
-
-        /* Name-based detection against every branch the remote advertised, which
-         * the one fetch brought */
-        const string_array_t *remote_names = remote_branches(remote);
-        string_array_t detected_profiles = profile_detect(ctx->arena, remote_names);
-
-        if (detected_profiles.count > 0) {
-            /* Show detected profiles */
-            for (size_t i = 0; i < detected_profiles.count; i++) {
-                output_info(out, OUTPUT_NORMAL, "  • %s", detected_profiles.entries[i]);
-            }
-
-            /* Make the detected profiles local */
-            land_profiles(
-                repo, "origin", detected_profiles.entries, detected_profiles.count,
-                out, &fetched_profiles
-            );
-
-            if (fetched_profiles.count > 0) {
-                output_success(
-                    out, OUTPUT_NORMAL, "Fetched %zu profile%s",
-                    fetched_profiles.count, fetched_profiles.count == 1 ? "" : "s"
-                );
-            } else {
-                output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
-            }
-
-        } else {
-            /* No profiles detected, so none was fetched: the remote's profiles
-             * listed as guidance, under the title profile list gives the remote's
-             * not fetched here (cmds/profile.c profile_list), with the two verbs
-             * that take one — none is here yet, and enable refuses a profile
-             * whose branch is not (cmds/profile.c profile_enable) */
-            output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
-            if (remote_names->count > 0) {
-                output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
-                for (size_t i = 0; i < remote_names->count; i++) {
-                    output_info(out, OUTPUT_NORMAL, "  • %s", remote_names->entries[i]);
-                }
-                output_gap(out, OUTPUT_NORMAL);
-                output_hint(
-                    out, OUTPUT_NORMAL,
-                    "Run 'dotta profile fetch <name>', then 'dotta profile enable <name>'"
-                );
-            }
-        }
-    }
-
-    /* The profiles to enable: every fetched one whose claims this machine can
+    /* The profiles to enable: every landed one whose claims this machine can
      * place. A profile that needs a target is enabled only with one, and clone
      * cannot take one (enable's --target names a single profile): it is left
      * fetched and disabled, named here with the command that enables it. The
@@ -454,8 +495,8 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * initialize_state did for a portable profile and now does for every one. */
     string_array_t to_enable;
     string_array_init(&to_enable, ctx->arena, 0);
-    for (size_t i = 0; i < fetched_profiles.count; i++) {
-        const char *name = fetched_profiles.entries[i];
+    for (size_t i = 0; i < landed.count; i++) {
+        const char *name = landed.entries[i];
         profile_t *profile = NULL;
         bool needs_target = false;
         err = profile_load(repo, name, &profile);
@@ -471,7 +512,8 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             );
             output_hint(
                 out, OUTPUT_NORMAL,
-                "Run 'dotta profile enable %s --target /path' after setup", name
+                "Run 'dotta profile enable %s --target /path' after setup",
+                name
             );
             continue;
         }
@@ -495,7 +537,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Bootstrap detection and execution.
      *
-     * Single-pass filter: walk fetched_profiles once, collect those with a
+     * Single-pass filter: walk the landed profiles once, collect those with a
      * .bootstrap script into `bootstrap_found`, then display, prompt, and
      * (conditionally) fire; what the run did is its receipt. */
     string_array_t bootstrap_found;
@@ -503,12 +545,11 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     bool run_bootstrap = false;
     bootstrap_receipt_t bootstrap = { 0 };
 
-    /* Check bootstrap scripts in all fetched profiles */
-    if (opts->bootstrap_mode != CLONE_BOOTSTRAP_SKIP &&
-        fetched_profiles.count > 0) {
-        /* Check if any fetched profiles have bootstrap scripts */
-        for (size_t i = 0; i < fetched_profiles.count; i++) {
-            const char *profile = fetched_profiles.entries[i];
+    /* Check bootstrap scripts in all landed profiles */
+    if (opts->bootstrap_mode != CLONE_BOOTSTRAP_SKIP && landed.count > 0) {
+        /* Check if any landed profiles have bootstrap scripts */
+        for (size_t i = 0; i < landed.count; i++) {
+            const char *profile = landed.entries[i];
             if (!bootstrap_exists(repo, profile)) continue;
             string_array_push(&bootstrap_found, profile);
         }
@@ -578,7 +619,8 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     if (run_bootstrap) {
         if (bootstrap.stopped) {
             output_warning(
-                out, OUTPUT_NORMAL, "Bootstrap stopped at profile '%s'", bootstrap.stopped
+                out, OUTPUT_NORMAL, "Bootstrap stopped at profile '%s'",
+                bootstrap.stopped
             );
         } else {
             output_success(out, OUTPUT_NORMAL, "Bootstrap complete");
@@ -744,13 +786,16 @@ const args_command_t spec_clone = {
         "  (default)       Auto-detect profiles for this system\n"
         "                  (global, <os>, hosts/<hostname> and variants).\n"
         "  --all           Hub mode: fetch every remote profile.\n"
-        "  -p <name>       Fetch specific profiles explicitly (repeatable).\n",
+        "  -p <name>       Fetch specific profiles explicitly (repeatable).\n"
+        "                  A name the remote lacks refuses the clone.\n",
     .notes       =
         "Profile Behavior:\n"
-        "  Fetched profiles are enabled automatically. Run '%s profile\n"
-        "  list' to inspect enabled vs available profiles, and '%s\n"
-        "  profile fetch <name>', then '%s profile enable <name>', to\n"
-        "  add one later.\n",
+        "  Only the selected profiles are fetched. Each is enabled, except\n"
+        "  one holding custom/ paths, which needs a target first.\n"
+        "\n"
+        "  The remote's other profiles stay on the remote. List them with\n"
+        "  '%s profile list --all', and bring one later with\n"
+        "  '%s profile fetch <name>' and '%s profile enable <name>'.\n",
     .examples    =
         "  %s clone git@github.com:user/dotfiles.git    # Auto-detect profiles\n"
         "  %s clone <url> --all                         # Hub mode\n"
@@ -759,7 +804,7 @@ const args_command_t spec_clone = {
     .epilogue    =
         "Next steps:\n"
         "  %s profile list             # View enabled profiles\n"
-        "  %s profile enable <name>    # Enable additional profiles\n"
+        "  %s profile fetch <name>     # Fetch another profile\n"
         "  %s bootstrap                # Run bootstrap scripts manually\n"
         "  %s apply                    # Deploy profiles to the filesystem\n",
     .opts_size   = sizeof(cmd_clone_options_t),

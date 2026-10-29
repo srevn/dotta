@@ -170,8 +170,8 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
     }
 
     /* The remote's profiles not fetched here, if asked, under the title a clone
-     * that detects none gives them too (cmds/clone.c cmd_clone): none where the
-     * remote could not be asked, or holds nothing this machine lacks */
+     * that detects none gives them too (cmds/clone.c select_profiles): none where
+     * the remote could not be asked, or holds nothing this machine lacks */
     string_array_t remote_only = { 0 };
     if (opts->show_remote) {
         error_t remote_err = remote_default(repo, ctx->arena, &remote_name);
@@ -287,9 +287,10 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
      * remote holds under --all, else the ones the line names (profile_post_parse),
      * each once — a name given twice is decided once, as enable and disable take
      * it. Every name the remote does not hold is refused together before anything
-     * is fetched: a fetch of named branches is whole or nothing, as git's is.
-     * The names the remote does hold are in hand, and the refusal says them:
-     * what the remote holds is the rest of the fact. */
+     * is fetched: a fetch of named branches is whole or nothing, as git's is,
+     * and as a clone's (cmds/clone.c select_profiles). The names the remote does
+     * hold are in hand, and the refusal says them: what the remote holds is the
+     * rest of the fact. */
     string_array_t selection;
     if (opts->all_profiles) {
         if (remote_names->count == 0) {
@@ -408,8 +409,8 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     }
 
     /* The run's summary, beneath the table, in clone's words (cmds/clone.c
-     * cmd_clone): every profile the fetch brought that the run could make local
-     * or read, or none */
+     * land_profiles): every profile the fetch brought that the run could make
+     * local or read, or none */
     size_t fetched = selection.count - failed;
     if (fetched > 0) {
         output_success(

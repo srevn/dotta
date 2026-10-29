@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "base/arena.h"
@@ -200,8 +201,27 @@ error_t remote_open(
     size_t count = 0;
     if (rc == 0) rc = git_remote_ls(&heads, &count, git);
     if (rc < 0) {
-        /* The sentence before the free, which closes what the connect opened */
-        error_t err = error_git(rc, "Cannot reach remote '%s'", name);
+        /* The sentence before the free, which closes what the connect opened:
+         * libgit2's cause, but where it read the URL as a path and found no
+         * directory there. A URL with no ':' is a path to libgit2 only where a
+         * directory stands, and otherwise names no transport at all, "unsupported
+         * URL protocol" (lib/libgit2/src/libgit2/transport.c transport_find_fn),
+         * so there the cause is what libgit2 found, looked at as it looks — a
+         * stat through a link, as the invoker: a raw call (sys/filesystem.h) —
+         * and the path is said, which carries no credential. The open's connect
+         * alone chooses a transport: a push's reuses it (remote.c
+         * git_remote_connect_ext), and a path gone since reads libgit2's words,
+         * which name it. */
+        const char *url = git_remote_url(git);
+        struct stat st;
+        error_t err;
+        if (url && !strchr(url, ':') && (stat(url, &st) != 0 || !S_ISDIR(st.st_mode))) {
+            err = error_create(
+                ERR_NOT_FOUND, "Cannot reach remote '%s': no directory at '%s'", name, url
+            );
+        } else {
+            err = error_git(rc, "Cannot reach remote '%s'", name);
+        }
         remote_free(remote);
         return err;
     }

@@ -96,10 +96,12 @@ error_t remote_default(git_repository *repo, arena_t *arena, const char **out);
  *
  * Every failure is the session's whole, nothing kept: a name Git refuses or no
  * remote by it, a remote with no URL, the connect and the listing, each "Cannot
- * reach remote '<name>'" over libgit2's cause, read before anything closes. The
- * branch names the listing held are kept once it is copied (remote_last_branches),
- * and a keep that fails is no failure of the open's: completion alone reads them,
- * and the next open keeps them again.
+ * reach remote '<name>'" over libgit2's cause, read before anything closes —
+ * save a URL libgit2 reads as a path where no directory stands, whose cause is
+ * "no directory at '<url>'" (ERR_NOT_FOUND), where libgit2's names a protocol.
+ * The branch names the listing held are kept once it is copied
+ * (remote_last_branches), and a keep that fails is no failure of the open's:
+ * completion alone reads them, and the next open keeps them again.
  *
  * Readers: cmds/sync.c cmd_sync; cmds/status.c status_remote; cmds/profile.c
  * profile_fetch and profile_list; cmds/clone.c cmd_clone; cmds/remove.c

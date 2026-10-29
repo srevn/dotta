@@ -1150,36 +1150,6 @@ void gitops_blob_view_close(gitops_blob_view_t *view) {
 }
 
 /**
- * Read blob content by OID
- */
-error_t gitops_read_blob_content(
-    git_repository *repo, const git_oid *oid, void **out_content,
-    size_t *out_size
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(oid);
-    CHECK_NULL(out_content);
-    CHECK_NULL(out_size);
-
-    gitops_blob_view_t view;
-    error_t err = gitops_blob_view_open(repo, oid, &view);
-    if (err) return err;
-
-    void *content = heap_alloc(view.size + 1);
-
-    if (view.size > 0) {
-        memcpy(content, view.data, view.size);
-    }
-    ((char *) content)[view.size] = '\0';
-
-    *out_content = content;
-    *out_size = view.size;
-
-    gitops_blob_view_close(&view);
-    return NULL;
-}
-
-/**
  * Get tree from commit OID
  */
 error_t gitops_get_tree_from_commit(

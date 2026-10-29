@@ -590,12 +590,8 @@ git_filemode_t gitops_type_filemode(path_type_t type);
  *
  * Holds an open git_blob handle and exposes its raw content without copying.
  * The `data` pointer is owned by libgit2's object cache and is valid only between
- * gitops_blob_view_open() and gitops_blob_view_close().
- *
- * Use this when you only need to inspect or stream the bytes through another
- * consumer (e.g. magic header check, decryption pipeline). Use
- * gitops_read_blob_content() when you need an owned, null-terminated copy for
- * parsing.
+ * gitops_blob_view_open() and gitops_blob_view_close(): a reader that keeps the
+ * bytes past the close copies what it keeps.
  *
  * The `_handle` field is opaque; do not touch it directly.
  */
@@ -631,29 +627,6 @@ error_t gitops_blob_view_open(
  * @param view View to close (can be NULL)
  */
 void gitops_blob_view_close(gitops_blob_view_t *view);
-
-/**
- * Read blob content by OID
- *
- * Looks up a blob by OID, copies its content into a caller-owned null-terminated
- * buffer. The returned size is the raw blob size (not including the null
- * terminator).
- *
- * For callers that only need to inspect or stream the bytes without owning a
- * copy, prefer gitops_blob_view_open() to avoid the extra allocation and memcpy.
- *
- * @param repo Repository (must not be NULL)
- * @param oid Blob OID (must not be NULL)
- * @param out_content Content buffer (must not be NULL, caller must free)
- * @param out_size Content size in bytes (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_read_blob_content(
-    git_repository *repo,
-    const git_oid *oid,
-    void **out_content,
-    size_t *out_size
-);
 
 /**
  * Load the commit a reference names

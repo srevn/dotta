@@ -302,11 +302,11 @@ static error_t ignore_edit(
      * bytes the branch holds — and the receipt says which. An edit that leaves
      * a NUL is refused before it is staged, changed or not. */
     commit_msg = heap_str_format("Update %s .dottaignore", dottaignore->layer);
-    bool committed = false;
+    git_oid commit = GIT_OID_SHA1_ZERO;
     err = ignore_blob_write(stage, file.data, file.size);
     if (!err) {
         err = stage_commit(
-            stage, commit_msg, commit_action_word(COMMIT_ACTION_IGNORE), &committed
+            stage, commit_msg, commit_action_word(COMMIT_ACTION_IGNORE), &commit
         );
     }
 
@@ -322,7 +322,7 @@ static error_t ignore_edit(
     }
     unlink(kept);
 
-    if (committed) {
+    if (!git_oid_is_zero(&commit)) {
         output_success(
             out, OUTPUT_NORMAL, "Updated %s .dottaignore", dottaignore->layer
         );

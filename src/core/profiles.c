@@ -2134,14 +2134,14 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_prune
 }
 
 error_t profile_commit(
-    profile_draft_t *draft, const commit_words_t *words, bool *out_committed, size_t *out_pruned
+    profile_draft_t *draft, const commit_words_t *words, git_oid *out_commit, size_t *out_pruned
 ) {
     CHECK_NULL(draft);
     CHECK_NULL(words);
 
-    /* Nothing committed until the tree write answers one, and nothing pruned
-     * until the prune counts it: a return before either says so */
-    if (out_committed) *out_committed = false;
+    /* No commit until the tree write answers one, and nothing pruned until the
+     * prune counts it: a return before either says so */
+    if (out_commit) *out_commit = (git_oid) GIT_OID_SHA1_ZERO;
     if (out_pruned) *out_pruned = 0;
 
     /* Nothing an edit moved: nothing prunes, nothing is saved, no message is
@@ -2178,12 +2178,12 @@ error_t profile_commit(
     if (err) return err;
 
     /* One commit, the tree and the sheet in one tree write, naming its writer's
-     * action; whether it landed the write's own answer: none where the tree is
-     * the one the stage opened, and a head another writer moved or deleted since
-     * the open is refused (sys/stage.h stage_commit) */
+     * action; the commit it made, the write's own answer: none where the tree
+     * is the one the stage opened, and a head another writer moved or deleted
+     * since the open is refused (sys/stage.h stage_commit) */
     return stage_commit(
         draft->stage, commit_message(draft->arena, words, draft->base->name, &changes),
-        commit_action_word(words->action), out_committed
+        commit_action_word(words->action), out_commit
     );
 }
 

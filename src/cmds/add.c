@@ -2582,18 +2582,18 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * what the profile already holds among them. A commit whose edits moved nothing
      * — a --force re-capture of what the profile already had, byte for byte —
      * makes none, and the summary says so (core/profiles.h profile_commit). Its
-     * two outs: whether it landed, which the receipt reads, and how many
-     * derivations its prune took, which the line below says; the record of each
-     * is the next apply's to decide. */
+     * two outs: the commit it made, Git's null id where none landed, which the
+     * receipt reads, and how many derivations its prune took, which the line
+     * below says; the record of each is the next apply's to decide. */
     const commit_words_t words = {
         .action     = COMMIT_ACTION_ADD,
         .title      = config->commit_title,
         .body       = config->commit_body,
         .custom_msg = opts->message,
     };
-    bool committed = false;
+    git_oid commit = GIT_OID_SHA1_ZERO;
     size_t pruned = 0;
-    err = profile_commit(draft, &words, &committed, &pruned);
+    err = profile_commit(draft, &words, &commit, &pruned);
     if (err) goto cleanup;
     if (pruned > 0) {
         output_info(
@@ -2612,7 +2612,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * directories beneath them, or on a ✓ line of their own when they are all
      * it took. Whichever arm, the receipt is the run's summary, a block of its
      * own beneath the trace. */
-    if (!committed) {
+    if (git_oid_is_zero(&commit)) {
         char counts[64];
         output_format_counts(
             walk.files.count, walk.directories.count, counts, sizeof(counts)

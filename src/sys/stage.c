@@ -564,14 +564,14 @@ error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out) {
 }
 
 error_t stage_commit(
-    stage_t *st, const char *message, const char *action, bool *out_committed
+    stage_t *st, const char *message, const char *action, git_oid *out_commit
 ) {
     CHECK_NULL(st);
     CHECK_NULL(message);
     CHECK_NULL(action);
 
-    if (out_committed) {
-        *out_committed = false;
+    if (out_commit) {
+        *out_commit = (git_oid) GIT_OID_SHA1_ZERO;
     }
 
     git_oid tree_oid;
@@ -644,8 +644,10 @@ error_t stage_commit(
         );
     }
 
-    if (out_committed) {
-        *out_committed = true;
+    /* The commit the ref now names, by the id it was written under: the ref read
+     * again could answer another writer's commit, made once the lock was let go */
+    if (out_commit) {
+        git_oid_cpy(out_commit, &commit_oid);
     }
     return NULL;
 }

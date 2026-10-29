@@ -1433,11 +1433,11 @@ error_t profile_changes(
  * it touched, a re-capture of what the profile holds among them; then one commit,
  * naming the writer's action (sys/stage.h stage_commit: a tree equal to the opened
  * one is none, a head another writer moved since the open is refused ERR_CONFLICT,
- * and one deleted since in Git's words). One commit a draft. Whether it landed
- * is answered as sys/stage answers it: false where the gate stops it, and past
- * the gate the tree write's own answer — true where an edit the gate saw stands
- * past the prune, since it moved a content entry or a claim and a sheet whose
- * claims moved spells other bytes, and false where the prune took back the only
+ * and one deleted since in Git's words). One commit a draft, answered as sys/stage
+ * answers it: Git's null id where the gate stops it, and past the gate the tree
+ * write's own answer — the commit made where an edit the gate saw stands past
+ * the prune, since it moved a content entry or a claim and a sheet whose claims
+ * moved spells other bytes, and the null id where the prune took back the only
  * edits the gate saw: a climb's rungs nothing tracked stands beneath, authored
  * and pruned in one draft, whose message no commit carries.
  *
@@ -1450,8 +1450,8 @@ error_t profile_changes(
  * @param draft The draft (must not be NULL)
  * @param words What the writer says of the commit: its action, the templates,
  *              its -m, a revert's target (must not be NULL; borrowed for the call)
- * @param out_committed Whether a commit was made (optional, can be NULL; false
- *                      where nothing moved, or on a failure)
+ * @param out_commit The commit made (optional, can be NULL; Git's null id where
+ *                   nothing moved, or on a failure)
  * @param out_pruned How many derivations the prune took but a claim the base
  *                   tracked (optional, can be NULL; 0 where nothing moved)
  * @return Error or NULL on success
@@ -1459,7 +1459,7 @@ error_t profile_changes(
 error_t profile_commit(
     profile_draft_t *draft,
     const commit_words_t *words,
-    bool *out_committed,
+    git_oid *out_commit,
     size_t *out_pruned
 );
 

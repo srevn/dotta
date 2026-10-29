@@ -135,9 +135,9 @@ static error_t bootstrap_edit(
                 : "Update bootstrap script for %s profile",
         profile
     );
-    bool committed = false;
+    git_oid commit = GIT_OID_SHA1_ZERO;
     err = stage_commit(
-        stage, commit_msg, commit_action_word(COMMIT_ACTION_BOOTSTRAP), &committed
+        stage, commit_msg, commit_action_word(COMMIT_ACTION_BOOTSTRAP), &commit
     );
     if (err) goto cleanup;
 
@@ -148,7 +148,7 @@ static error_t bootstrap_edit(
             out, OUTPUT_NORMAL,
             "Created bootstrap script for profile '%s'", profile
         );
-    } else if (committed) {
+    } else if (!git_oid_is_zero(&commit)) {
         output_success(
             out, OUTPUT_NORMAL,
             "Updated and committed bootstrap script for profile '%s'",

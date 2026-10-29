@@ -147,7 +147,7 @@ static error_t update_capture(
  */
 typedef struct {
     const char *profile;               /* Borrowed from the enabled set */
-    bool committed;                    /* Whether the commit landed: the commit's own answer */
+    git_oid oid;                       /* The commit, Git's null id where none landed: its own answer */
     state_record_t *captured;          /* What each capture committed, as the record keeps it */
     size_t captured_count;
     const workspace_item_t **deleted;  /* The DELETED items the deletions took (the workspace's) */
@@ -389,11 +389,10 @@ static void update_partition(
  * where a claim moved.
  *
  * Success means committed or untouched, and the bookkeeping says which
- * (commit->committed, the commit's own answer): a walk whose edits moved nothing
- * — none at all, or captures that put back what the profile holds — commits
- * nothing. A mid-walk failure returns with the draft part-edited: the executor
- * stops the run there, and a draft that is never committed changes nothing in
- * the repository.
+ * (commit->oid, the commit's own answer): a walk whose edits moved nothing —
+ * none at all, or captures that put back what the profile holds — commits nothing.
+ * A mid-walk failure returns with the draft part-edited: the executor stops the
+ * run there, and a draft that is never committed changes nothing in the repository.
  *
  * @param ctx Dispatch context (must not be NULL; the capture reads the key and
  *            the encryption policy off it, the climb the mount table)
@@ -676,8 +675,8 @@ static error_t update_profile(
      * the bookkeeping, which is the record's and the run line's. Its prune takes
      * what nothing stands on any longer, counted for the line below: the claim
      * leaves the view by this commit, and its record is the next apply's to decide.
-     * And whether it landed, the commit's own answer, false for captures that
-     * put back what the profile holds, which a hook rewriting a file between
+     * And the commit it made, the commit's own answer, Git's null id for captures
+     * that put back what the profile holds, which a hook rewriting a file between
      * the decision and the capture makes */
     const commit_words_t words = {
         .action     = COMMIT_ACTION_UPDATE,
@@ -686,7 +685,7 @@ static error_t update_profile(
         .custom_msg = opts->message,
     };
     size_t pruned = 0;
-    error_t err = profile_commit(draft, &words, &commit->committed, &pruned);
+    error_t err = profile_commit(draft, &words, &commit->oid, &pruned);
     if (err) return err;
 
     if (pruned > 0) {
@@ -998,7 +997,7 @@ static error_t update_execute(
          * bookkeeping: the walk's lists say what it edited, and edits that left
          * both documents as the draft opened them are no commit — nothing to
          * report, nothing to record */
-        if (!bookkeeping.committed) continue;
+        if (git_oid_is_zero(&bookkeeping.oid)) continue;
 
         /* The commit landed: its bookkeeping is the record write's now, the
          * caller's whatever a later profile meets */

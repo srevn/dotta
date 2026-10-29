@@ -427,31 +427,36 @@ error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out);
  * The tree, and — when it differs from the opened one — one commit
  *
  * The index is written as a tree. A tree equal to the opened one is not committed:
- * nothing moves, `*out_committed` is false. Otherwise one commit with the opened
- * head as its parent (a root for an orphan's stage) and the action in its header
- * (sys/gitops.h gitops_create_commit), written apart from the ref, then the ref
- * written to it only from what the open read (gitops_write_reference): a head
- * that moved, or a ref that appeared, reads as ERR_CONFLICT naming the ref; a
- * head deleted since, and every other refusal of the write, in Git's words; each
- * says nothing was committed, and the object stays loose. The reflog line is
- * "dotta <action>: <summary>", the action the header's and the summary the
+ * nothing moves, and the commit answered is Git's null id. Otherwise one commit
+ * with the opened head as its parent (a root for an orphan's stage) and the action
+ * in its header (sys/gitops.h gitops_create_commit), written apart from the ref,
+ * then the ref written to it only from what the open read (gitops_write_reference):
+ * a head that moved, or a ref that appeared, reads as ERR_CONFLICT naming the
+ * ref; a head deleted since, and every other refusal of the write, in Git's words;
+ * each says nothing was committed, and the object stays loose. The reflog line
+ * is "dotta <action>: <summary>", the action the header's and the summary the
  * commit's, a root's alike (gitops_write_reference).
+ *
+ * The commit is answered to the caller that asks, and only once its ref names
+ * it: the id the object was written under, never the ref read again, which another
+ * writer may move the moment the write lets its lock go.
  *
  * @param st Stage (must not be NULL)
  * @param message Commit message (must not be NULL)
  * @param action The word its writer names the commit's action by, in its header
  *               and its reflog line (must not be NULL: every commit a stage writes
  *               names one; the words are infra/commit.h commit_action_word's)
- * @param out_committed Whether a commit was made — for the callers that must
- *                      say "nothing changed" and cannot know before staging
- *                      (optional, can be NULL)
+ * @param out_commit The commit made; Git's null id where none was — the tree
+ *                   the opened one, or a refusal — so a caller that must say
+ *                   "nothing changed", and cannot know before staging, reads it
+ *                   here (optional, can be NULL)
  * @return Error or NULL on success
  */
 error_t stage_commit(
     stage_t *st,
     const char *message,
     const char *action,
-    bool *out_committed
+    git_oid *out_commit
 );
 
 /**

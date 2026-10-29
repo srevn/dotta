@@ -36,7 +36,7 @@ typedef enum {
  * Transfer context.
  *
  * Owns the full lifecycle of a network session against one remote:
- *   - Progress reporting (the op's frames, through the output layer)
+ *   - Progress reporting (the op's frames, drawn once an object moved)
  *   - Session stats (cumulative objects/bytes across all ops)
  *   - The remote's words (a push's side band, an op's at a time)
  *   - Credential identity (URL, cached username/password)
@@ -606,9 +606,12 @@ int transfer_progress_callback(
     };
 
     /* Then a frame of the op's progress line, each drawn over the last, a
-     * terminal's alone at OUTPUT_NORMAL (base/output.h output_progress) */
+     * terminal's alone at OUTPUT_NORMAL (base/output.h output_progress) — and
+     * none before an object moved: the report the pack's header brings, its total
+     * and no object yet (indexer.c git_indexer_append), draws nothing */
     unsigned int total = stats->total_objects;
     unsigned int received = stats->received_objects;
+    if (received == 0) return 0;
 
     if (total > 0) {
         /* Show receiving progress with percentage and bytes */
@@ -621,7 +624,7 @@ int transfer_progress_callback(
             ctx->output, OUTPUT_NORMAL, "Receiving objects: %3d%% (%u/%u), %s",
             percent, received, total, bytes_str
         );
-    } else if (received > 0) {
+    } else {
         /* Don't know total yet, just show count */
         char bytes_str[32];
         output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
@@ -656,8 +659,12 @@ int transfer_push_progress_callback(
         .bytes = ctx->local_transport ? 0 : bytes,
     };
 
-    /* Then a frame of the op's progress line, as a fetch's is
-     * (transfer_progress_callback) */
+    /* Then a frame of the op's progress line, as a fetch's is, none before an
+     * object is sent (transfer_progress_callback): a deletion sends none, and
+     * its report, nothing sent of nothing to send (transports/smart_protocol.c
+     * git_smart__push), draws nothing */
+    if (current == 0) return 0;
+
     if (total > 0) {
         int percent = (current * 100) / total;
 

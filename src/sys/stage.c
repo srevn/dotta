@@ -142,12 +142,6 @@ const git_tree *stage_tree(const stage_t *st) {
     return st->tree;
 }
 
-git_index *stage_index(stage_t *st) {
-    CHECK_NULL(st);
-
-    return st->index;
-}
-
 /**
  * Git's type for what a mode word says stands at a name: a gitlink's is a commit,
  * a directory's a tree, and every other mode's a blob
@@ -230,6 +224,42 @@ static error_t stage_admit_path(git_index *index, const char *path) {
 }
 
 /**
+ * Whether `index` holds an entry beneath `path`: one the name and a separator
+ * begin, at any depth
+ *
+ * The separator is the boundary: an entry at the name itself is not beneath it,
+ * nor one at a sibling the name merely prefixes ("x.bak" and "x0" beside "x").
+ * The index is sorted, so one prefix probe answers (lib/libgit2/src/libgit2/index.c
+ * git_index_find_prefix).
+ *
+ * Readers: stage_put_entry, a directory where the file goes; stage_holds_beneath,
+ * the stage's question of its own index, so the put's refusal and the prune's
+ * answer cannot part.
+ */
+static error_t stage_beneath(git_index *index, const char *path, bool *out) {
+    size_t len = strlen(path);
+    char *prefix = heap_alloc(len + 2);
+    memcpy(prefix, path, len);
+    prefix[len] = '/';
+    prefix[len + 1] = '\0';
+
+    int rc = git_index_find_prefix(NULL, index, prefix);
+    free(prefix);
+
+    /* Not tidiness: a failure read as nothing beneath would admit a blob the
+     * index then makes room for by dropping an entry, and let the prune take a
+     * derivation something stands beneath. The linked libgit2 is whichever one
+     * pkg-config found at or above 1.9, and its contract here is "0 or an error
+     * code", GIT_ENOTFOUND where no entry begins with the prefix. */
+    if (rc != 0 && rc != GIT_ENOTFOUND) {
+        return error_git(rc, "Failed to search the tree beneath '%s'", path);
+    }
+
+    *out = rc == 0;
+    return NULL;
+}
+
+/**
  * Put an entry into `index`: the mode, the shape, the two collisions, then
  * libgit2's add
  *
@@ -264,33 +294,19 @@ static error_t stage_put_entry(git_index *index, const git_index_entry *entry) {
     error_t err = stage_admit_path(index, path);
     if (err) return err;
 
-    /* A directory where the file goes: any entry beneath the path. The index is
-     * sorted, so one prefix probe answers. */
-    size_t len = strlen(path);
-    char *beneath = heap_alloc(len + 2);
-    memcpy(beneath, path, len);
-    beneath[len] = '/';
-    beneath[len + 1] = '\0';
-
-    int rc = git_index_find_prefix(NULL, index, beneath);
-    free(beneath);
-
-    if (rc == 0) {
+    /* A directory where the file goes: any entry beneath the path */
+    bool beneath = false;
+    err = stage_beneath(index, path, &beneath);
+    if (err) return err;
+    if (beneath) {
         return error_create(
-            ERR_CONFLICT, "Cannot stage '%s': it is a directory in this tree",
-            path
+            ERR_CONFLICT,
+            "Cannot stage '%s': it is a directory in this tree", path
         );
-    }
-    if (rc != GIT_ENOTFOUND) {
-        /* Not tidiness: reading "no conflict" out of a failure to look admits a
-         * blob the index would then make room for by dropping an entry. The linked
-         * libgit2 is whichever one pkg-config found at or above 1.9, and its
-         * contract here is "0 or an error code". */
-        return error_git(rc, "Failed to search the tree beneath '%s'", path);
     }
 
     /* The same path already an entry: replaced — the upsert every writer wants. */
-    rc = git_index_add(index, entry);
+    int rc = git_index_add(index, entry);
     if (rc == 0) return NULL;
 
     /* The index class is exact here: the mode is checked above and both collisions
@@ -298,8 +314,8 @@ static error_t stage_put_entry(git_index *index, const git_index_entry *entry) {
     const git_error *cause = git_error_last();
     if (cause->klass == GIT_ERROR_INDEX) {
         return error_create(
-            ERR_CONFLICT, "Cannot stage '%s': Git refuses the name (%s)", path,
-            cause->message
+            ERR_CONFLICT, "Cannot stage '%s': Git refuses the name (%s)",
+            path, cause->message
         );
     }
 
@@ -445,6 +461,15 @@ error_t stage_remove(stage_t *st, const char *path) {
     }
 
     return NULL;
+}
+
+error_t stage_holds_beneath(const stage_t *st, const char *path, bool *out) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+    CHECK_NULL(out);
+
+    /* The put's own search, of the index every edit so far has left (stage_beneath) */
+    return stage_beneath(st->index, path, out);
 }
 
 /**

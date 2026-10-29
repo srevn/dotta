@@ -1424,11 +1424,11 @@ error_t profile_changes(
  * The commit
  *
  * Where no edit moved the tree or the sheet (profile_changed), nothing: no prune,
- * no save, no message, no commit. Otherwise the prune, against the index the
- * commit will record, counted where a count is asked — every derivation it takes
- * but a claim the base tracked, whose removal the writer names; the sheet saved
- * where its claims are no longer the base's; the message, the writer's words
- * over what the commit changes of the profile's explicit claims (profile_changes,
+ * no save, no message, no commit. Otherwise the prune, against the tree the commit
+ * will record, counted where a count is asked — every derivation it takes but a
+ * claim the base tracked, whose removal the writer names; the sheet saved where
+ * its claims are no longer the base's; the message, the writer's words over what
+ * the commit changes of the profile's explicit claims (profile_changes,
  * infra/commit.h commit_message) — never the writer's own lists, which hold what
  * it touched, a re-capture of what the profile holds among them; then one commit,
  * naming the writer's action (sys/stage.h stage_commit: a tree equal to the opened

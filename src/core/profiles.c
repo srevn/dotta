@@ -2052,26 +2052,25 @@ error_t profile_changes(
  * it (profile_remove, core/metadata.h) — so the pass reads one field and asks
  * one question of what is left:
  *
- *   Is anything tracked beneath it? The profile's tracked set is the index's
- *   paths and the copy's own tracked claims together. The index names every path
- *   a tree can hold and is the sole authority for those — deliberately not the
- *   sheet's items, which are sparse by design (a symlink carries an item only
- *   where its owner is one absence would misstate), so a directory whose only
- *   tracked content is an item-less symlink has the index's entry beneath it
- *   and survives. What no index can name is an empty directory, and only a tracked
- *   claim names one — a derivation keeps nothing standing, since it survives
- *   solely by what stands beneath it and would otherwise hold a doomed chain
- *   alive one command per rung.
+ *   Is anything tracked beneath it? The profile's tracked set is the tree's paths
+ *   and the copy's own tracked claims together. The tree is the sole authority
+ *   for every path it can hold — deliberately not the sheet's items, which are
+ *   sparse by design (a symlink carries an item only where its owner is one absence
+ *   would misstate), so a directory whose only tracked content is an item-less
+ *   symlink has the tree's entry beneath it and survives. What no tree can hold
+ *   is an empty directory, and only a tracked claim names one — a derivation
+ *   keeps nothing standing, since it survives solely by what stands beneath it
+ *   and would otherwise hold a doomed chain alive one command per rung.
  *
- * What stands beneath is judged against the stage's index past every edit — the
- * tree the commit will record — so the prune sees the commit's exact tracked
- * set and lands in the same commit as the removals that left a derivation nothing
- * beneath it. Such a derivation has no role in any downstream pipeline: the view
- * would claim it as an [ancestor] row over an emptied subtree, and divergence
- * detection has nothing to compare against — typically the tail of an ancestry
- * whose leaf has just gone (`dotta add ~/dir/f.conf`, then `dotta remove` of
- * that file). One forward pass decides each derivation where it meets it and
- * removes it there: a decision reads the index and the tracked claims alone,
+ * What stands beneath is asked of the tree the commit will record, past every
+ * edit (sys/stage.h stage_holds_beneath), so the prune sees the commit's exact
+ * tracked set and lands in the same commit as the removals that left a derivation
+ * nothing beneath it. Such a derivation has no role in any downstream pipeline:
+ * the view would claim it as an [ancestor] row over an emptied subtree, and
+ * divergence detection has nothing to compare against — typically the tail of
+ * an ancestry whose leaf has just gone (`dotta add ~/dir/f.conf`, then `dotta
+ * remove` of that file). One forward pass decides each derivation where it meets
+ * it and removes it there: a decision reads the tree and the tracked claims alone,
  * and the prune moves neither, so a removal changes no later decision.
  *
  * The count is of the paths the commit lets go that the writer did not name: a
@@ -2084,12 +2083,9 @@ error_t profile_changes(
  * @param draft The draft
  * @param out_pruned Counts each derivation pruned but a claim the base tracked;
  *                   NULL where the writer counts none
- * @return Error or NULL on success: a failed look at the index, which must not
- *         prune
+ * @return Error or NULL on success: a failed look at the tree, which must not prune
  */
 static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_pruned) {
-    git_index *index = stage_index(draft->stage);
-
     metadata_items_t directories = metadata_items(draft->sheet, PATH_KIND_DIRECTORY);
     for (size_t d = 0; d < directories.count;) {
         const metadata_item_t *dir = directories.entries[d];
@@ -2108,19 +2104,15 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_prune
         /* Half of what stands beneath: any path under the directory that a tree
          * can hold. The sheet's items are not the universe there — a symlink
          * tracked without elevation carries no item, yet still stands beneath
-         * its parent — so the index is the authority. It is sorted, so one prefix
-         * probe answers, the prefix spelled into the draft's arena; a failed
-         * look must not prune. */
-        int rc = git_index_find_prefix(
-            NULL, index, arena_str_format(draft->arena, "%s/", dir->key)
-        );
-        if (rc != 0 && rc != GIT_ENOTFOUND) {
-            return error_git(rc, "Cannot search the tree beneath '%s'", dir->key);
-        }
+         * its parent — so the tree the commit will record is the authority; a
+         * failed look must not prune. */
+        bool beneath = false;
+        error_t err = stage_holds_beneath(draft->stage, dir->key, &beneath);
+        if (err) return err;
 
         /* And the other half: the one path a tree cannot hold. With either beneath
          * it, the derivation stands, and the cursor moves past it. */
-        if (rc == 0 || profile_tracked_beneath(draft->sheet, dir->key)) {
+        if (beneath || profile_tracked_beneath(draft->sheet, dir->key)) {
             d++;
             continue;
         }
@@ -2159,14 +2151,14 @@ error_t profile_commit(
     error_t err = profile_changed(draft, &changed);
     if (err || !changed) return err;
 
-    /* The prune, against the stage's index — the tree the commit will record,
-     * the removed file claims gone from it (the judge's own contract,
-     * profile_prune_ancestors): removing a file may leave the derived claim above
-     * it with nothing tracked beneath, and removing a directory claim leaves
-     * the derivation it was. The index answers that for every path a tree can
-     * hold — never the sheet's items, which omit unelevated symlinks — and the
-     * copy's own tracked claims answer it for the one path it cannot, an empty
-     * directory. What it takes is counted for a writer that asks. */
+    /* The prune, against the tree the commit will record, the removed file claims
+     * gone from it (the judge's own contract, profile_prune_ancestors): removing
+     * a file may leave the derived claim above it with nothing tracked beneath,
+     * and removing a directory claim leaves the derivation it was. The tree answers
+     * that for every path it can hold — never the sheet's items, which omit
+     * unelevated symlinks — and the copy's own tracked claims answer it for the
+     * one path it cannot, an empty directory. What it takes is counted for a
+     * writer that asks. */
     err = profile_prune_ancestors(draft, out_pruned);
     if (err) return err;
 

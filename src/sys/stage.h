@@ -149,19 +149,6 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 const git_tree *stage_tree(const stage_t *st);
 
 /**
- * The index as the stage stands: the tree the commit would record
- *
- * Read it — the prune's judge, whether anything stands beneath a derivation
- * (core/profiles.c profile_prune_ancestors), its one reader. Write it only through
- * the verbs below, which is what keeps the collision rule true. Borrowed; valid
- * until stage_free. Non-const because libgit2's own readers of an index are.
- *
- * @param st Stage (must not be NULL)
- * @return The index
- */
-git_index *stage_index(stage_t *st);
-
-/**
  * The tree one writer intends: the ref's own entries, and every blob admitted
  * since (opaque)
  *
@@ -338,6 +325,27 @@ error_t stage_put_blob(
  * @return Error or NULL on success
  */
 error_t stage_remove(stage_t *st, const char *path);
+
+/**
+ * Whether the tree the commit would record holds anything beneath `path`: an
+ * entry the name and a separator begin, at any depth
+ *
+ * The question every put asks before it adds an entry — a directory where the
+ * file goes — asked of the tree the puts and removals so far leave, by the one
+ * search the put makes, so this answer and the put's refusal cannot part. An
+ * entry at the name itself is not beneath it, nor one at a sibling the name merely
+ * prefixes ("x.bak" and "x0" beside "x"). Nothing is written.
+ *
+ * Reader: core/profiles.c profile_prune_ancestors, whether anything a tree can
+ * hold stands beneath a derivation.
+ *
+ * @param st Stage (must not be NULL)
+ * @param path Tree path (must not be NULL)
+ * @param out Whether an entry stands beneath it (must not be NULL; written on
+ *            success alone)
+ * @return Error or NULL on success: a search of the tree that could not be made
+ */
+error_t stage_holds_beneath(const stage_t *st, const char *path, bool *out);
 
 /**
  * Whether the puts and removals so far move the tree from the one the stage opened

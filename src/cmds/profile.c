@@ -27,6 +27,7 @@
 #include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
+#include "sys/remote.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
 
@@ -44,11 +45,10 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
-    /* Resource tracking for cleanup. remote_name/remote_url are arena-borrowed
-     * when the --remote branch resolves them. */
+    /* Resource tracking for cleanup: the remote, met where --remote asks for
+     * its profiles, its name the command arena's */
     const char *remote_name = NULL;
-    const char *remote_url = NULL;
-    transfer_context_t *xfer = NULL;
+    remote_t *remote = NULL;
     error_t err = NULL;
 
     /* The enabled rows, where the handle holds them: a listing moves none of
@@ -174,9 +174,7 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
      * remote could not be asked, or holds nothing this machine lacks */
     string_array_t remote_only = { 0 };
     if (opts->show_remote) {
-        error_t remote_err = gitops_resolve_default_remote(
-            repo, ctx->arena, &remote_name, &remote_url
-        );
+        error_t remote_err = remote_default(repo, ctx->arena, &remote_name);
         if (remote_err) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
@@ -184,27 +182,20 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
                 error_line(remote_err)
             );
         } else {
-            /* Create transfer context for credentials */
-            xfer = transfer_context_create(out, remote_url);
-
-            /*
-             * Query remote server for available branches (network operation)
-             * This contacts the remote server to get the current list of profiles,
-             * ensuring we see newly added profiles that haven't been fetched yet.
-             */
-            string_array_t remote_branches;
-            remote_err = gitops_list_remote_branches(
-                repo, remote_name, xfer, ctx->arena, &remote_branches
-            );
+            /* What the remote holds now, its open's listing (sys/remote.h
+             * remote_branches): a profile added there since the last fetch is
+             * seen too */
+            remote_err = remote_open(repo, remote_name, "profile list", out, &remote);
             if (remote_err) {
                 output_gap(out, OUTPUT_NORMAL);
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(remote_err));
-            } else if (remote_branches.count > 0) {
+            } else {
                 /* Filter out branches that already exist locally */
-                string_array_init(&remote_only, ctx->arena, remote_branches.count);
-                for (size_t ri = 0; ri < remote_branches.count; ri++) {
-                    if (!string_array_contains(&profiles, remote_branches.entries[ri])) {
-                        string_array_push(&remote_only, remote_branches.entries[ri]);
+                const string_array_t *remote_names = remote_branches(remote);
+                string_array_init(&remote_only, ctx->arena, remote_names->count);
+                for (size_t ri = 0; ri < remote_names->count; ri++) {
+                    if (!string_array_contains(&profiles, remote_names->entries[ri])) {
+                        string_array_push(&remote_only, remote_names->entries[ri]);
                     }
                 }
 
@@ -245,8 +236,9 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
     }
 
 cleanup:
-    /* Cleanup all resources. remote_name/remote_url are arena-borrowed. */
-    transfer_context_free(xfer);
+    /* The remote, where --remote met it: its free commits the credential helper's
+     * verdict (sys/remote.h remote_free) */
+    remote_free(remote);
 
     return err;
 }
@@ -269,27 +261,27 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
-    /* Resource tracking for cleanup. remote_name/remote_url are arena-borrowed. */
+    /* Resource tracking for cleanup: the remote, met once, its name the command
+     * arena's */
     const char *remote_name = NULL;
-    const char *remote_url = NULL;
-    transfer_context_t *xfer = NULL;
+    remote_t *remote = NULL;
     error_t err = NULL;
 
-    /* Detect remote (name + URL — URL feeds the credential helper). Its refusal
-     * says which absence it met, none or several, and stands alone. */
-    err = gitops_resolve_default_remote(repo, ctx->arena, &remote_name, &remote_url);
+    /* Which remote. Its refusal says which absence it met, none or several, and
+     * stands alone. */
+    err = remote_default(repo, ctx->arena, &remote_name);
     if (err) goto cleanup;
 
-    /* Create transfer context for progress reporting and credentials */
-    xfer = transfer_context_create(out, remote_url);
-
-    /* What the remote holds, asked once: every profile --all fetches, and the
-     * pre-flight the names the line gives are held to. Asked before the fetch's
-     * progress line, which is drawn around the fetch alone (base/output.h
-     * output_progress). */
-    string_array_t remote_branches;
-    err = gitops_list_remote_branches(repo, remote_name, xfer, ctx->arena, &remote_branches);
+    /* The remote, met once (sys/remote.h): its open's listing is what the remote
+     * holds, asked once — every profile --all fetches, and the pre-flight the
+     * names the line gives are held to — and its one fetch brings the selection.
+     * Over the contact a progress line, a terminal's alone (base/output.h
+     * output_progress), drawn before the open and taken down once the fetch is
+     * done: a refusal between them stands on a row of its own. */
+    output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+    err = remote_open(repo, remote_name, "profile fetch", out, &remote);
     if (err) goto cleanup;
+    const string_array_t *remote_names = remote_branches(remote);
 
     /* The selection, in the order it is fetched and reported: every profile the
      * remote holds under --all, else the ones the line names (profile_post_parse),
@@ -300,11 +292,11 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
      * what the remote holds is the rest of the fact. */
     string_array_t selection;
     if (opts->all_profiles) {
-        if (remote_branches.count == 0) {
+        if (remote_names->count == 0) {
             err = error_create(ERR_NOT_FOUND, "Remote '%s' holds no profiles", remote_name);
             goto cleanup;
         }
-        selection = remote_branches;
+        selection = *remote_names;
     } else {
         string_array_t missing;
         string_array_init(&selection, ctx->arena, opts->profile_count);
@@ -317,7 +309,7 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
             }
 
             string_array_push(
-                string_array_contains(&remote_branches, name) ? &selection : &missing, name
+                string_array_contains(remote_names, name) ? &selection : &missing, name
             );
         }
         if (missing.count > 0) {
@@ -326,8 +318,8 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
                 missing.count == 1 ? "Profile" : "Profiles",
                 string_array_join(ctx->arena, &missing, "', '"),
                 missing.count == 1 ? "is" : "are", remote_name,
-                remote_branches.count > 0
-                    ? string_array_join(ctx->arena, &remote_branches, ", ")
+                remote_names->count > 0
+                    ? string_array_join(ctx->arena, remote_names, ", ")
                     : "no profiles"
             );
             goto cleanup;
@@ -335,36 +327,31 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     }
 
     /* One fetch brings the selection, as sync's brings its scope (cmds/sync.c
-     * sync_fetch): one negotiation and one pack for every profile, so what can
+     * cmd_sync): one negotiation and one pack for every profile, so what can
      * still fail profile by profile is the profile's own, below — a name a branch
-     * here bars among them, which the fetch passes over (sys/gitops.h
-     * gitops_fetch_branches) and its row refuses by both names. A progress line
-     * while it runs, a terminal's alone (base/output.h output_progress), and
-     * its failure the run's, naming the act and the remote, or the tracking ref
-     * it would take out of a name's way. */
-    output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
-
-    const transfer_stats_t mark = transfer_stats(xfer);
-    err = gitops_fetch_branches(repo, remote_name, &selection, xfer);
+     * here bars among them, which the fetch passes over (sys/remote.h remote_fetch)
+     * and its row refuses by both names. Its failure is the run's, naming the
+     * act and the remote, or the tracking ref it read, took out of a name's way
+     * or wrote. */
+    transfer_wire_t received = { 0 };
+    err = remote_fetch(remote, &selection, NULL, &received);
 
     /* Taken down once the fetch is done, whichever way it went */
     output_clear_line(out);
     if (err) goto cleanup;
 
-    /* At verbose, the fetch done and what it moved: one op and one pack, so one
-     * wire, never a profile's (lib/libgit2/include/git2/indexer.h
-     * git_indexer_progress) — dim beside the line, and nothing where nothing
-     * moved. A fetch whose every name a branch here barred asked nothing of the
-     * remote, and the line says it fetched all the same, over the rows that refuse
-     * each name (stated: the fetch answers no word of what it asked) */
-    const transfer_wire_t received = transfer_stats_since(xfer, mark).received;
-    output_print(out, OUTPUT_VERBOSE, "{green}✓{reset} Fetched from '%s'", remote_name);
+    /* At verbose, what the fetch moved, where it moved anything, as sync says
+     * its own (cmds/sync.c cmd_sync): one op and one pack, so one wire, never a
+     * profile's (lib/libgit2/include/git2/indexer.h git_indexer_progress) — dim
+     * beside the line. An up-to-date fetch, or one whose every name a branch
+     * here barred, says nothing: the rows below say each name. */
     if (received.objects > 0) {
         char phrase[TRANSFER_PHRASE_MAX];
         transfer_wire_phrase(received, phrase, sizeof(phrase));
+        output_print(out, OUTPUT_VERBOSE, "{green}✓{reset} Fetched from '%s'", remote_name);
         output_print(out, OUTPUT_VERBOSE, " {dim}(%s){reset}", phrase);
+        output_endline(out, OUTPUT_VERBOSE);
     }
-    output_endline(out, OUTPUT_VERBOSE);
 
     /* The table, titled by the remote: a row a profile, in the selection's order,
      * in the grammar and the glyphs of sync's (cmds/sync.c sync_print_lead) */
@@ -447,9 +434,9 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     }
 
 cleanup:
-    /* The one handle the run holds: the transfer, whose close commits the
-     * credential decision (sys/transfer.h) */
-    transfer_context_free(xfer);
+    /* The one handle the run holds: the remote, whose free commits the credential
+     * helper's verdict (sys/remote.h remote_free) */
+    remote_free(remote);
 
     return err;
 }

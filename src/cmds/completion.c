@@ -34,6 +34,7 @@
 #include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/remote.h"
 #include "sys/upstream.h"
 
 /* Emission limits */
@@ -77,7 +78,7 @@ void completion_profiles(
 
     if (set == COMPLETION_ALL) {
         const char *remote_name = NULL;
-        err = gitops_resolve_default_remote(repo, ctx->arena, &remote_name, NULL);
+        err = remote_default(repo, ctx->arena, &remote_name);
         if (err) return;  /* no remote configured: nothing to download */
         string_array_t remote_branches;
         err = upstream_discover_branches(repo, remote_name, ctx->arena, &remote_branches);
@@ -102,10 +103,13 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
         const char *name = remotes.strings[i];
 
         /* A remote with no URL is described by its kind, and so is one whose
-         * lookup fails: that error is dropped, one per such remote */
+         * lookup fails; the URL is read off the configuration as it stands, before
+         * the remote goes */
+        git_remote *remote = NULL;
         const char *url = NULL;
-        (void) gitops_get_remote_url(repo, name, ctx->arena, &url);
+        if (git_remote_lookup(&remote, repo, name) == 0) url = git_remote_url(remote);
         fprintf(out, "%s\t%s\n", name, url ? url : "Remote");
+        git_remote_free(remote);
     }
 
     git_strarray_dispose(&remotes);

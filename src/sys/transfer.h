@@ -1,18 +1,20 @@
 /**
- * transfer.h - Unified transfer context for network operations
+ * transfer.h - What libgit2 calls back into while one network op runs
  *
- * Provides an opaque context for Git network operations (clone, fetch, push,
- * delete) that encapsulates credential session identity, progress reporting,
- * what its ops moved on the wire, and the remote's words a push's side band
- * carries.
+ * libgit2 hands every callback of an op one pointer (git_remote_callbacks'
+ * payload), so what they share is one context, one a session: the credential
+ * session — asked once, its answer cached for the session's later ops, refused
+ * at the second ask within one op, judged by the ops it served and committed to
+ * the helper once, at the free; the op's progress — its counts drawn as
+ * base/output's progress line while objects move, a push that sends nothing drawing
+ * none, the frame taken down at the op's end; what the op moved, answered there;
+ * the remote's words a push's side band carries, said by the hooks' rule; and a
+ * ref the remote refused, the push's failure in the remote's words.
  *
- * Design principles:
- * - Single context per command-level network session (one remote, N ops)
- * - Opaque: struct body is private to transfer.c
- * - Encapsulates credential session state and identity
- * - Type-safe payload for libgit2 callbacks
- * - Commits exactly one approve/reject decision to the credential helper at session
- *   teardown (based on classified op outcomes)
+ * Created by the session alone (sys/remote.h remote_open), which wraps each libgit2
+ * network call it makes in transfer_op_begin and transfer_op_end, and freed by
+ * it. tests/test-transfer.c asks each callback as libgit2 asks it, on a context
+ * made with no network.
  */
 
 #ifndef DOTTA_TRANSFER_H
@@ -36,25 +38,6 @@ typedef struct {
 } transfer_wire_t;
 
 /**
- * Cumulative transfer metrics for a session: what it received and what it sent.
- *
- * Every op that succeeded folds what it moved into its direction's at its end
- * (transfer_op_end): a fetch into received, a push into sent. A failed op folds
- * nothing, and an op that moved nothing — an up-to-date fetch, a connect that
- * lists the remote's heads — adds nothing: the intent is "what moved", not "how
- * many syscalls". The fold is the counters' one writer and only adds, so the
- * difference of two readings is what the ops between them moved.
- *
- * Fed by the libgit2 progress callbacks TTY-independently, so metrics are accurate
- * on pipes and logs, not just interactive terminals. Read by value
- * (transfer_stats), and over an interval (transfer_stats_since).
- */
-typedef struct {
-    transfer_wire_t received;   /* Every fetch's */
-    transfer_wire_t sent;       /* Every push's */
-} transfer_stats_t;
-
-/**
  * Create a transfer context.
  *
  * @param output The run's output, borrowed for the session (must not be NULL)
@@ -71,27 +54,22 @@ transfer_context_t *transfer_context_create(output_t *output, const char *url);
  * once: approve on VALIDATED, reject on REJECTED, neither on NOT_ACQUIRED
  * (SSH/anonymous) or unresolved ACQUIRED. NULL-safe.
  */
-void transfer_context_free(transfer_context_t *ctx);
+void transfer_context_free(transfer_context_t *xfer);
 
 /**
  * Begin an op on this transfer session.
  *
  * Resets per-op scratch (anti-loop attempts, the op's wire, the remote's words).
- * Records the direction so transfer_op_end() knows which side of transfer_stats_t
- * to fold into on success.
  *
- * Pair with transfer_op_end() around each libgit2 network call (git_clone,
- * git_remote_fetch, git_remote_push, git_remote_connect).
+ * Pair with transfer_op_end() around each libgit2 network call (git_remote_connect,
+ * git_remote_download, git_remote_upload).
  *
- * NULL-safe.
- *
- * @param xfer      Transfer context (may be NULL)
- * @param direction GIT_DIRECTION_FETCH or GIT_DIRECTION_PUSH
+ * @param xfer Transfer context (must not be NULL)
  */
-void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
+void transfer_op_begin(transfer_context_t *xfer);
 
 /**
- * End an op on this transfer session.
+ * End an op on this transfer session, and answer what it moved.
  *
  * Takes down the frame the op drew (base/output.h output_clear_line), whichever
  * way the op went — libgit2 reports past an op's last count, so its end alone
@@ -115,35 +93,15 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
  *   VALIDATED     + anything     → VALIDATED      (terminal-absorbing)
  *   REJECTED      + anything     → REJECTED       (terminal-absorbing)
  *
- * NULL-safe.
+ * The op's wire is fed by the progress callbacks whatever the medium, so a pipe
+ * and a log count what a terminal draws.
  *
- * @param xfer    Transfer context (may be NULL)
+ * @param xfer Transfer context (must not be NULL)
  * @param rc libgit2 return code (0, GIT_EAUTH, or other negative)
+ * @return What the op moved: zero where it failed, and where it moved nothing —
+ *         a connect, an up-to-date fetch, a deletion's push
  */
-void transfer_op_end(transfer_context_t *xfer, int rc);
-
-/**
- * What the session has moved so far: its stats, by value — the mark an interval
- * is measured from (transfer_stats_since)
- *
- * NULL-safe (zero for NULL).
- */
-transfer_stats_t transfer_stats(const transfer_context_t *xfer);
-
-/**
- * What the session moved since `mark`, a reading transfer_stats gave of it: the
- * ops that succeeded between the two readings, each direction's
- *
- * Readers: cmds/sync.c sync_execute (a row's act), sync_fetch, and
- * sync_reconcile_epoch (the epoch's establish and adopt); cmds/profile.c
- * profile_fetch (its one fetch).
- *
- * NULL-safe, as transfer_stats is.
- */
-transfer_stats_t transfer_stats_since(
-    const transfer_context_t *xfer,
-    transfer_stats_t mark
-);
+transfer_wire_t transfer_op_end(transfer_context_t *xfer, int rc);
 
 #define TRANSFER_PHRASE_MAX 64 /* "%zu objects, " at a size_t's widest, a size output_format_size writes, and NUL */
 
@@ -175,15 +133,16 @@ void transfer_wire_phrase(
  * `direction`, and for a push the per-ref status (transfer_push_status_callback),
  * without which a ref the remote refused reads as pushed, and the side band
  * (transfer_push_sideband_callback), the remote's words. A fetch's side band is
- * left uninstalled: it carries the server's packing progress alone. The transfer
- * context is required — every gitops_* network primitive enforces this with
- * CHECK_NULL, so a NULL payload here would be a dotta-internal contract violation,
- * not a user-recoverable case.
+ * left uninstalled: it carries the server's packing progress alone.
  *
- * Ops with no byte transfer (e.g., git_remote_connect + git_remote_ls) may pass
- * GIT_DIRECTION_FETCH; the installed progress callback simply never fires.
+ * Readers: sys/remote.c remote_open (the connect), remote_fetch (the download)
+ * and remote_push (the push's connect and its upload).
  *
- * @param cb        Callbacks struct (caller must have initialized it)
+ * An op with no byte transfer — the session's open, git_remote_connect and
+ * git_remote_ls — passes GIT_DIRECTION_FETCH; the installed progress callback
+ * simply never fires.
+ *
+ * @param cb        Callbacks struct (must not be NULL; initialized by its caller)
  * @param xfer      Transfer context (must not be NULL)
  * @param direction GIT_DIRECTION_FETCH or GIT_DIRECTION_PUSH
  */
@@ -216,11 +175,12 @@ int transfer_credentials_callback(
  *
  * Each report recorded as the op's wire, then drawn as a frame of its progress
  * line once an object moved, its size where the transport counted one
- * (base/output.h output_progress).
+ * (base/output.h output_progress): the report a pack's header brings, its total
+ * and no object yet, draws nothing.
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  */
-int transfer_progress_callback(
+int transfer_fetch_progress_callback(
     const git_indexer_progress *stats,
     void *payload
 );
@@ -229,9 +189,9 @@ int transfer_progress_callback(
  * libgit2 push progress callback (payload = transfer_context_t *).
  *
  * Each report recorded as the op's wire, then drawn as a frame of its progress
- * line once an object was sent, its size where the transport counted one: a push
- * that sends nothing — a deletion — draws nothing, and a local push counts no
- * bytes.
+ * line once an object moved, its size where the transport counted one
+ * (base/output.h output_progress): a push that sends nothing — a deletion — draws
+ * nothing, and a local push counts no bytes.
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  */

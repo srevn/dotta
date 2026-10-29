@@ -536,8 +536,8 @@ void output_section(
  * a terminal nothing is drawn: a redirected report holds what an act did, never
  * that it ran.
  *
- * Readers: cmds/sync.c sync_fetch, cmds/profile.c profile_fetch, cmds/status.c
- * status_remote; sys/transfer.c transfer_progress_callback and
+ * Readers: cmds/sync.c cmd_sync, cmds/profile.c profile_fetch, cmds/status.c
+ * status_remote; sys/transfer.c transfer_fetch_progress_callback and
  * transfer_push_progress_callback, the frames.
  *
  * @param ctx Output context (NULL: nothing)
@@ -563,7 +563,7 @@ void output_progress(
  * line written over the row leaves the row's longer tail beside it, where git
  * pads the row with spaces.
  *
- * Readers: cmds/sync.c sync_fetch, cmds/profile.c profile_fetch, cmds/status.c
+ * Readers: cmds/sync.c cmd_sync, cmds/profile.c profile_fetch, cmds/status.c
  * status_remote, once the fetch their line names is done; sys/transfer.c
  * transfer_op_end, and transfer_credentials_callback before a helper's fill,
  * which may ask at the terminal past the layer; and the layer's own, before every

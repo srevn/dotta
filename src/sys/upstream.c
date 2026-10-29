@@ -49,10 +49,9 @@ error_t upstream_analyze_profile(
      * a packed-refs that will not parse is the analysis's failure, never a branch
      * or a remote branch that is not there. A symbolic branch is read through
      * to the one it names. */
-    git_oid local_oid;
-    err = gitops_reference_oid(repo, local_refname, &local_oid);
+    err = gitops_reference_oid(repo, local_refname, &out->local);
     if (err) return err;
-    if (git_oid_is_zero(&local_oid)) {
+    if (git_oid_is_zero(&out->local)) {
         out->state = UPSTREAM_NO_LOCAL;
         return NULL;
     }
@@ -66,7 +65,7 @@ error_t upstream_analyze_profile(
     }
 
     /* Check if identical */
-    if (git_oid_equal(&local_oid, &remote_oid)) {
+    if (git_oid_equal(&out->local, &remote_oid)) {
         out->state = UPSTREAM_UP_TO_DATE;
         return NULL;
     }
@@ -74,7 +73,7 @@ error_t upstream_analyze_profile(
     /* Calculate ahead/behind */
     size_t ahead = 0, behind = 0;
     int rc = git_graph_ahead_behind(
-        &ahead, &behind, repo, &local_oid, &remote_oid
+        &ahead, &behind, repo, &out->local, &remote_oid
     );
     if (rc < 0) {
         return error_git(
@@ -234,11 +233,11 @@ error_t upstream_ensure_tracking_branch(
      * blocker is a branch here the remote does not hold: one never pushed, standing
      * where a fetched one would go, or one the remote no longer holds, whose
      * tracking ref stood in the fetched name's way and barred its fetch
-     * (sys/gitops.h gitops_fetch_branches). Refused by name, ahead of the ref
-     * write whose own message names only one of the two, and of the barred name's
-     * tracking ref, which no fetch wrote. The listing the blocker is read from
-     * is a frame of this call's own: what the call answers is no memory, and
-     * the refusal copies the name. */
+     * (sys/remote.h remote_fetch). Refused by name, ahead of the ref write whose
+     * own message names only one of the two, and of the barred name's tracking
+     * ref, which no fetch wrote. The listing the blocker is read from is a frame
+     * of this call's own: what the call answers is no memory, and the refusal
+     * copies the name. */
     arena_t *frame = arena_create(0);
     const char *blocker = NULL;
     err = gitops_branch_blocker(repo, branch_name, frame, &blocker);

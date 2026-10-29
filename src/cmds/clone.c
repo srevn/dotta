@@ -2,10 +2,11 @@
  * clone.c - Clone dotta repository implementation
  *
  * The clone is init with a remote: the bare store created and declared
- * (utils/repo.h), the remote added, one fetch of everything it has, the epoch
- * taken as the identity gate, and the chosen profiles made local from what landed.
- * No `git_clone`: that call creates a local branch for the remote's HEAD whatever
- * was asked for, and dotta's store has no branch nobody asked for.
+ * (utils/repo.h), the remote added and met once (sys/remote.h) — its advertisement
+ * of the epoch the identity gate, then one fetch of every branch it advertises
+ * and of the epoch, the epoch adopted — and the chosen profiles made local from
+ * what landed. No `git_clone`: that call creates a local branch for the remote's
+ * HEAD whatever was asked for, and dotta's store has no branch nobody asked for.
  *
  * Smart profile management
  * - Auto-detects relevant profiles by default
@@ -34,7 +35,7 @@
 #include "sys/bootstrap.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
-#include "sys/transfer.h"
+#include "sys/remote.h"
 #include "sys/upstream.h"
 #include "utils/bootstrap.h"
 #include "utils/repo.h"
@@ -42,12 +43,12 @@
 /**
  * Make the chosen profiles local
  *
- * The one fetch has run (gitops_fetch_remote): every branch the remote has stands
- * under refs/remotes/<remote>. Each chosen name becomes a local branch at that
- * commit; a name the remote does not have is warned about by name and skipped,
- * so a `-p` typo costs one profile and not the clone. The warnings are one block,
- * beneath whatever stood: its boundary is asked here, and paid by the first of
- * them or, where none prints, by the line the caller says next.
+ * The one fetch has run (sys/remote.h remote_fetch): every branch the remote
+ * advertised stands under refs/remotes/<remote>. Each chosen name becomes a local
+ * branch at that commit; a name the remote does not have is warned about by name
+ * and skipped, so a `-p` typo costs one profile and not the clone. The warnings
+ * are one block, beneath whatever stood: its boundary is asked here, and paid
+ * by the first of them or, where none prints, by the line the caller says next.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (typically "origin")
@@ -221,7 +222,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     const char *elsewhere = NULL;
     bool path_preexisted = false;
     bool clone_landed = false;
-    transfer_context_t *xfer = NULL;
+    remote_t *remote = NULL;
 
     /* Where the repository goes: the positional when one was given, this machine's
      * configured location otherwise — one answer, expanded, absolute and with
@@ -234,9 +235,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     output_section(out, OUTPUT_NORMAL, "Cloning dotta repository");
     output_info(out, OUTPUT_NORMAL, "  URL: %s", opts->url);
     output_info(out, OUTPUT_NORMAL, "  Path: %s", local_path);
-
-    /* Create transfer context for progress reporting and credentials */
-    xfer = transfer_context_create(out, opts->url);
 
     /* The place the clone lands must be absent or an empty directory. What stands
      * there is somebody's: a repository would be taken by the init below, and
@@ -268,39 +266,36 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     err = repo_declare_store(repo);
     if (err) goto cleanup;
 
-    git_remote *remote = NULL;
-    int rc = git_remote_create(&remote, repo, "origin", opts->url);
+    git_remote *origin = NULL;
+    int rc = git_remote_create(&origin, repo, "origin", opts->url);
     if (rc < 0) {
         err = error_git(rc, "Cannot add remote 'origin'");
         goto cleanup;
     }
-    git_remote_free(remote);
+    git_remote_free(origin);
 
-    /* One fetch of everything the remote has, with progress: every branch lands
-     * as a remote-tracking ref, and the profile arms below read them from there.
-     * No local branch is made here — that is each arm's, for the names it chose.
-     * Its refusal names the act and the remote, under the section that printed
-     * the URL; the URL goes in no sentence, since one may carry a password. */
-    err = gitops_fetch_remote(repo, "origin", xfer);
+    /* The remote, met once (sys/remote.h): its refusal names the act and the
+     * remote, under the section that printed the URL; the URL goes in no sentence,
+     * since one may carry a password. */
+    err = remote_open(repo, "origin", commit_action_word(COMMIT_ACTION_CLONE), out, &remote);
     if (err) goto cleanup;
 
-    /* Identity gate + epoch acquisition. refs/dotta/epoch is the one unconditional,
-     * synced dotta artifact — the fetch above does not carry it, the default
-     * refspec covers refs/heads alone — so a remote that does not advertise it
-     * is not a dotta repository: refuse before any local materialization below
-     * (the record, the local branches, the baseline). The ref also carries the
-     * repository's epoch; without it, every encrypted blob is undecryptable. */
-    err = epoch_fetch(repo, "origin", COMMIT_ACTION_CLONE, xfer);
-    if (error_code(err) == ERR_NOT_FOUND) {
+    /* Identity gate, off the advertisement and before any download.
+     * refs/dotta/epoch is the one unconditional, synced dotta artifact, so a
+     * remote that does not advertise it is not a dotta repository: refuse before
+     * any local materialization below (the objects, the record, the local branches,
+     * the baseline). The ref also carries the repository's epoch; without it,
+     * every encrypted blob is undecryptable. The verdict is the reconcile's own,
+     * over a store that holds no epoch: the adopt, wherever the remote advertises
+     * one (infra/epoch.h epoch_resolve). */
+    epoch_decision_t decision;
+    err = epoch_resolve(repo, remote, &decision);
+    if (err) goto cleanup;
+    if (git_oid_is_zero(&decision.advertised)) {
         /* Split the diagnostic: an empty remote holds nothing to clone, and a
          * ref-bearing one is not dotta's until a machine that holds the repository
-         * syncs to it — the one way to the ref the fact cannot imply. On a listing
-         * failure fall through to the foreign diagnostic. */
-        string_array_t remote_refs;
-        error_t list_err = gitops_list_remote_tracking(
-            repo, "origin", ctx->arena, &remote_refs
-        );
-        if (!list_err && remote_refs.count == 0) {
+         * syncs to it — the one way to the ref the fact cannot imply */
+        if (remote_branches(remote)->count == 0) {
             err = error_create(ERR_NOT_FOUND, "Remote is empty: nothing to clone");
         } else {
             err = error_create(
@@ -311,15 +306,24 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         }
         goto cleanup;
     }
+
+    /* One fetch, with progress: every branch the remote advertises, each landing
+     * as a remote-tracking ref, and the epoch, its objects for the adopt to judge.
+     * No local branch is made here — that is each arm's, for the names it chose
+     * off the advertisement. */
+    err = remote_fetch(remote, remote_branches(remote), EPOCH_REF, NULL);
+    if (err) goto cleanup;
+
+    /* The epoch, installed once its commit is proved (infra/epoch.h epoch_adopt):
+     * one it could not adopt installs nothing, so no garbage ref persists. The
+     * advertised ref establishes identity (the gate above), but its payload is
+     * a crypto concern: warn-and-continue, a plaintext clone is still fine, only
+     * encryption is unavailable until a valid epoch arrives — which a sync brings
+     * from the remote, and never an init here, which mints one the remote's would
+     * not reconcile with, or refuses over the ciphertext this clone just
+     * fetched. */
+    err = epoch_adopt(repo, &decision, "origin", COMMIT_ACTION_CLONE);
     if (error_code(err) == ERR_CRYPTO) {
-        /* An epoch the fetch could not adopt — epoch_fetch installs only what
-         * it proved, so no garbage ref persists. The advertised ref establishes
-         * identity (the gate above), but its payload is a crypto concern:
-         * warn-and-continue, a plaintext clone is still fine, only encryption
-         * is unavailable until a valid epoch arrives — which a sync brings from
-         * the remote, and never an init here, which mints one the remote's would
-         * not reconcile with, or refuses over the ciphertext this clone just
-         * fetched. */
         output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL,
@@ -331,7 +335,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         err = NULL;
     }
 
-    /* Any other failure is the fetch's own, naming the act and the remote */
+    /* Any other failure is the install's own, naming the act and the remote */
     if (err) goto cleanup;
 
     /* Determine which profiles to fetch */
@@ -363,16 +367,11 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         }
 
     } else if (opts->all_profiles) {
-        /* Hub mode: every branch the one fetch brought, made local. A listing
-         * that fails ends the clone, and the all-or-nothing rule rolls the store
-         * back (cleanup): read as "fetched nothing", it handed the rest of the
-         * run an answer it never got. */
-        string_array_t remote_branches;
-        err = gitops_list_remote_tracking(repo, "origin", ctx->arena, &remote_branches);
-        if (err) goto cleanup;
-
+        /* Hub mode: every branch the remote advertised, which the one fetch
+         * brought, made local */
+        const string_array_t *remote_names = remote_branches(remote);
         land_profiles(
-            repo, "origin", remote_branches.entries, remote_branches.count, out,
+            repo, "origin", remote_names->entries, remote_names->count, out,
             &fetched_profiles
         );
 
@@ -397,14 +396,10 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             out, OUTPUT_NORMAL, "Auto-detecting profiles for this system"
         );
 
-        /* Every branch the one fetch brought: a listing that fails ends the clone,
-         * as hub mode's does, never read as "no profiles auto-detected" */
-        string_array_t remote_branches;
-        err = gitops_list_remote_tracking(repo, "origin", ctx->arena, &remote_branches);
-        if (err) goto cleanup;
-
-        /* Name-based detection against remote branches */
-        string_array_t detected_profiles = profile_detect(ctx->arena, &remote_branches);
+        /* Name-based detection against every branch the remote advertised, which
+         * the one fetch brought */
+        const string_array_t *remote_names = remote_branches(remote);
+        string_array_t detected_profiles = profile_detect(ctx->arena, remote_names);
 
         if (detected_profiles.count > 0) {
             /* Show detected profiles */
@@ -434,10 +429,10 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
              * that take one — none is here yet, and enable refuses a profile
              * whose branch is not (cmds/profile.c profile_enable) */
             output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
-            if (remote_branches.count > 0) {
+            if (remote_names->count > 0) {
                 output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
-                for (size_t i = 0; i < remote_branches.count; i++) {
-                    output_info(out, OUTPUT_NORMAL, "  • %s", remote_branches.entries[i]);
+                for (size_t i = 0; i < remote_names->count; i++) {
+                    output_info(out, OUTPUT_NORMAL, "  • %s", remote_names->entries[i]);
                 }
                 output_gap(out, OUTPUT_NORMAL);
                 output_hint(
@@ -630,10 +625,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
 
 cleanup:
-    /* Cleanup resources */
-    if (xfer) {
-        transfer_context_free(xfer);
-    }
+    /* The remote first, which borrows the store: its free commits the credential
+     * helper's verdict (sys/remote.h remote_free) */
+    remote_free(remote);
     if (repo) {
         gitops_close_repository(repo);
     }

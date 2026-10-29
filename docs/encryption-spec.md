@@ -132,7 +132,7 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
 
 `lanes = 1` is forced by Monocypher's single-threaded implementation. With `lanes = 1`, `memory × passes` is the primary memory-hardness metric.
 
-**Parameter bounds** (enforced by `kdf_validate_params` at `epoch_load` and `epoch_fetch`):
+**Parameter bounds** (enforced by `kdf_validate_params` at `epoch_load` and `epoch_adopt`):
 - `memory_mib` ∈ [8, 4096]. The 8 MiB floor is dotta's minimum operational security bound; the 4096 MiB ceiling is an allocation limit defending against hostile refs.
 - `passes` ∈ [1, 20].
 
@@ -159,21 +159,20 @@ The epoch structure guarantees that every input to key derivation except the pas
 |---------------------------------|------------------------------------------------|
 | Minted                          | `dotta init --strength <preset>` via `epoch_init` |
 | Loaded & Validated              | `main.c::open_run` via `epoch_load` |
-| Fetched & Reconciled            | `dotta clone` and `dotta sync` via `epoch_fetch` / `epoch_resolve` |
+| Adopted & Reconciled            | `dotta clone` and `dotta sync` via `epoch_resolve` / `epoch_adopt`, over the command's one fetch |
 | Inspected (raw)                 | `dotta git show refs/dotta/epoch:salt`, `dotta git show refs/dotta/epoch:params` |
 | Inspected (CLI)                 | `dotta key status -v` (prints MiB, passes, and preset name) |
 
 ### Sync reconcile
 
-`epoch_resolve` is a pure fact-finder: it connects, lists the remote and compares **commit OIDs** (zero object transfer). The epoch only ever propagates by force-fetch, which copies the exact remote commit, so a converged local ref shares the remote's OID byte-for-byte. Two independently minted epochs hold different random bytes in different commits, hence different OIDs.
+`epoch_resolve` is a pure fact-finder: it reads the remote's epoch off the advertisement the command's session already listed (`sys/remote.h`) and compares **commit OIDs** — no connection of its own, zero object transfer. The epoch only ever propagates by an adopt, which installs the exact remote commit, so a converged local ref shares the remote's OID byte-for-byte. Two independently minted epochs hold different random bytes in different commits, hence different OIDs. Sync reconciles after its one fetch, which asks for the epoch's ref whenever the remote advertises it — free where the two agree — and before any profile acts: the census walks local branches, which the fetch leaves and a pull moves.
 
-| Decision | Condition | `cmd_sync` does |
+| Verdict | Condition | `cmd_sync` does |
 |---|---|---|
 | `EQUAL` | same OID | nothing |
-| `UNREACHABLE` | transport failure | skip, best-effort |
-| `ESTABLISH` | remote has none, the local ref yields an epoch | push the ref |
+| `ESTABLISH` | remote has none, the local ref yields an epoch | push the ref, as a create: refused where another machine established one since |
 | `NO_LOCAL_EPOCH` | remote has none, the local ref yields none | nothing to publish |
-| `ADOPT` | divergent, and nothing here depends on the bytes at the local ref | fetch |
+| `ADOPT` | divergent, and nothing here depends on the bytes at the local ref | adopt the remote's |
 | `CONFLICT` | divergent, the local epoch keys reachable ciphertext | warn; plaintext profiles still sync |
 | `DAMAGED` | divergent, the local ref yields no epoch over ciphertext it may key | warn with the restore remedy; no git op |
 
@@ -183,17 +182,17 @@ The census walks the **full history** of every local branch, not just the heads 
 
 - **The ref yields an epoch.** Attribution is by fingerprint: only ciphertext that epoch keys argues against replacing it; foreign-keyed blobs (pulled from a remote under its own epoch) argue *for* converging. Found → `CONFLICT`, clean → `ADOPT`.
 - **The ref stands and yields no epoch.** Its salt blob may be intact and may be the only copy of what keys this repository — but with the pair unreadable no fingerprint can be matched against anything, so the census asks for *any* ciphertext, any fingerprint, any version. Found → `DAMAGED`, clean → `ADOPT`. This is the same census `epoch_init` runs over the identical state, and on the found side it reaches the same verdict and prints the same remedy: restore the ref, do not replace it.
-- **The ref is absent.** No census: the bytes are already gone, so nothing this decision licenses can make it worse, and the remote's epoch may be exactly the root that keys whatever is here. → `ADOPT`. (`epoch_init` *does* census this state, because a mint introduces a **new** root that would orphan the ciphertext, where a fetch installs the remote's.)
+- **The ref is absent.** No census: the bytes are already gone, so nothing this verdict licenses can make it worse, and the remote's epoch may be exactly the root that keys whatever is here. → `ADOPT`. (`epoch_init` *does* census this state, because a mint introduces a **new** root that would orphan the ciphertext, where an adopt installs the remote's.)
 
 Three routes reach one `ADOPT`, and the line `cmd_sync` prints for it names the act, never the census: only the third route ran a census it could attribute, so a success claiming "no local ciphertext depended on the replaced one" would describe work the other two did not do.
 
-The census **fails closed by returning**: one that cannot finish — a branch listing that cannot be this repository's, a history that will not walk, an unattributable format version — is an error, never a verdict, and it is the only error `epoch_resolve` produces beyond a NULL argument. Sync renders its cause under a line of its own and continues; no git op runs.
+The census **fails closed by returning**: one that cannot finish — a branch listing that cannot be this repository's, a history that will not walk, an unattributable format version — is an error, never a verdict. It is one of the two errors `epoch_resolve` produces beyond a NULL argument, the other the local ref that would not read. Sync renders either's cause under a line of its own and continues; no git op runs. A remote that cannot be reached never reaches the verdict: the command's session fails at its open, the run's error.
 
-The epoch is machinery, and sync's output treats it that way: five of the seven verdicts are a verbose line or nothing, and the two that speak at normal verbosity are the two the user must act on — `CONFLICT` and `DAMAGED` — each one line of finding and one of remedy.
+The epoch is machinery, and sync's output treats it that way: four of the six verdicts are a verbose line or nothing, and the two that speak at normal verbosity are the two the user must act on — `CONFLICT` and `DAMAGED` — each one line of finding and one of remedy.
 
 Two ways the walk could report an absence it had not proved are closed. A revwalk that ends on an unreadable object returns that error instead of reading as a finished history. And the branch listing it walks is complete or an error at its producer (`sys/gitops.h`): libgit2's filesystem refdb *skips* a loose ref it cannot open or parse rather than reporting it and reads an unreadable `refs/heads` as empty, so every listing reads the loose store itself after the enumeration and looks up each ref file — the refusal is Git's own for the ref, or the walk's for the directory. The census inherits the guarantee and holds no proof of its own.
 
-`epoch_fetch` is the acquisition boundary, and it is transactional: obtain, prove, install. The remote's advertisement names a commit; a refspec with no destination downloads its objects without storing a ref for them; both blobs are validated at that commit; and only then is `refs/dotta/epoch` pointed at it. A malformed epoch returns `ERR_CRYPTO` with the local ref untouched — there is nothing to roll back, because a corrupt remote epoch never stood there to be mistaken for canonical later.
+The acquisition is transactional: obtain, prove, install. The remote's advertisement names a commit; the command's one fetch, which names the epoch's ref, downloads its objects on the connection that listed it and stores no ref for them; `epoch_adopt` validates both blobs at that commit, and only then points `refs/dotta/epoch` at it. A malformed epoch returns `ERR_CRYPTO` with the local ref untouched — there is nothing to roll back, because a corrupt remote epoch never stood there to be mistaken for canonical later.
 
 ## SIV construction (cipher format v9)
 
@@ -640,8 +639,8 @@ Validation is performed at the boundary where parameters enter the system:
 |---|---|---|---|
 | `session_timeout` | Config load | `-1`, `0`, or `1..INT32_MAX` | `ERR_INVALID_ARG` |
 | `auto_encrypt[i]` | Config load, enabled or not | A string with no NUL, making one gitignore rule | `ERR_INVALID_ARG` (the value), `ERR_VALIDATION` (the rule) |
-| `epoch.memory_mib` | `epoch_load` / `epoch_fetch` | `8..4096` | `ERR_CRYPTO` |
-| `epoch.passes` | `epoch_load` / `epoch_fetch` | `1..20` | `ERR_CRYPTO` |
+| `epoch.memory_mib` | `epoch_load` / `epoch_adopt` | `8..4096` | `ERR_CRYPTO` |
+| `epoch.passes` | `epoch_load` / `epoch_adopt` | `1..20` | `ERR_CRYPTO` |
 
 ### Hardcoded constants
 
@@ -685,7 +684,7 @@ Validation is performed at the boundary where parameters enter the system:
 | SIV encrypt/decrypt + format | `src/crypto/cipher` | `cipher_encrypt`, `cipher_decrypt`, `cipher_read_header` |
 | Unlock proof & key manager | `src/crypto/keymgr` | `keymgr_create`, `keymgr_encrypt`, `keymgr_decrypt`, `keymgr_set`, `keymgr_clear`, `keymgr_cached`, `keymgr_epoch`, `keymgr_witness`, `keymgr_free` |
 | On-disk epoch session cache | `src/crypto/session` | `session_save`, `session_load`, `session_clear` |
-| Repository epoch lifecycle & census | `src/infra/epoch` | `epoch_init`, `epoch_load`, `epoch_push`, `epoch_fetch`, `epoch_resolve`, `epoch_find_ciphertext`, `epoch_walk` |
+| Repository epoch lifecycle & census | `src/infra/epoch` | `epoch_init`, `epoch_load`, `epoch_resolve`, `epoch_adopt`, `epoch_find_ciphertext` |
 | Content abstraction & cache | `src/infra/content` | `content_cache_*`, `content_classify*`, `content_capture_file`, `content_capture_link` |
 | Memory protection | `src/base/secure` | `secure_alloc`, `secure_free`, `secure_wipe` |
 | Passphrase acquisition | `src/sys/passphrase` | `passphrase_prompt`, `passphrase_from_env` |

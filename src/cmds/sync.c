@@ -24,6 +24,7 @@
 #include "infra/epoch.h"
 #include "infra/label.h"
 #include "sys/gitops.h"
+#include "sys/remote.h"
 #include "sys/resolve.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
@@ -38,11 +39,11 @@
  * One verdict a row, decided once from what the analysis read and the run's options
  * (sync_decide), and read by the preview, the question, the act and the receipt:
  * none decides again, core/cleanup.h's stance. Each names one mechanism — a push
- * and a force push the transfer's (sys/gitops.h), a pull the fast-forward
- * (sync_fast_forward), a rebase, a merge and a reset sys/resolve's. A force push
- * and a reset discard the other side's commits, and a run's are of one kind,
- * its strategy's: ours force pushes, theirs resets. A person confirms them where
- * the configuration asks (cmd_sync).
+ * and a force push the session's, one update leased on the head this sync read
+ * (sync_push), a pull the fast-forward (sync_fast_forward), a rebase, a merge
+ * and a reset sys/resolve's. A force push and a reset discard the other side's
+ * commits, and a run's are of one kind, its strategy's: ours force pushes, theirs
+ * resets. A person confirms them where the configuration asks (cmd_sync).
  *
  * None is a row with nothing to carry out: the sides agree, there is no local
  * branch, warn leaves a divergence to the user, or the user's word withheld the
@@ -187,69 +188,6 @@ static void sync_print_wire(output_t *out, transfer_wire_t wire) {
     char phrase[TRANSFER_PHRASE_MAX];
     transfer_wire_phrase(wire, phrase, sizeof(phrase));
     output_print(out, OUTPUT_VERBOSE, " {dim}(%s){reset}", phrase);
-}
-
-/**
- * Fetch the scope's profiles from the remote: a progress line on a terminal while
- * the fetch runs, and at verbose said once it lands, with what it moved
- *
- * Operates on the scope's profiles (scope_profiles): fetching is driven by what
- * the user asked for. `dotta sync -p work` fetches only `work`, not every enabled
- * profile. Precedence-adjacent work (the Manifest block) still uses the full
- * enabled set — different role, different accessor.
- *
- * Each is asked for whether or not the remote has been seen to hold it: the
- * analysis reads a profile through its remote-tracking ref (sys/upstream.h
- * upstream_analyze_profile), so one the remote holds and no fetch here ever asked
- * for would read as never pushed — and one the remote does not hold costs the
- * fetch nothing (sys/gitops.h gitops_fetch_branches).
- *
- * Nothing here asks whether the remote stands: the fetch looks it up before any
- * use and refuses it in Git's words, as every verb that takes a remote name does
- * (sys/gitops.h gitops_resolve_default_remote).
- */
-static error_t sync_fetch(
-    const dotta_ctx_t *ctx,
-    const char *remote_name,
-    const scope_t *scope,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(scope);
-
-    output_t *out = ctx->out;
-
-    /* While the fetch runs, a progress line: a terminal's alone, drawn over by
-     * transfer's frames while objects move (sys/transfer.h transfer_op_end),
-     * and never a line of the report (base/output.h output_progress) */
-    output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
-
-    /* Perform batched fetch - single network operation for all branches */
-    const transfer_stats_t mark = transfer_stats(xfer);
-    error_t err = gitops_fetch_branches(
-        ctx->run.repo, remote_name, scope_profiles(scope), xfer
-    );
-
-    /* Taken down once the fetch is done, whichever way it went */
-    output_clear_line(out);
-
-    /* The fetch's own error, which names the remote and the act: a refused
-     * credential in the words the transfer's callback set for what was offered
-     * (sys/transfer.c transfer_credentials_callback), any other failure — a ref
-     * write as well as a network — in libgit2's; or a tracking ref the fetch
-     * read or took out of a name's way first, naming the ref (sys/gitops.h
-     * gitops_fetch_branches) */
-    if (err) return err;
-
-    /* At verbose, the fetch done and what it moved: one op and one pack, so one
-     * wire, never a profile's (lib/libgit2/include/git2/indexer.h
-     * git_indexer_progress) */
-    output_print(out, OUTPUT_VERBOSE, "{green}✓{reset} Fetched from '%s'", remote_name);
-    sync_print_wire(out, transfer_stats_since(xfer, mark).received);
-    output_endline(out, OUTPUT_VERBOSE);
-
-    return NULL;
 }
 
 /**
@@ -502,6 +440,27 @@ static error_t sync_fast_forward(
 }
 
 /**
+ * Push a profile's branch: `target` onto the remote's, leased on the head the
+ * open's listing named there — Git's null id where the remote held none, a create
+ * — so the push lands only over the remote this sync read (sys/remote.h
+ * remote_push); what it sent is the row's
+ *
+ * Every push the run makes, whichever verdict calls for it: a push's and a force
+ * push's the head the analysis read (upstream_info_t.local), a resolution's its
+ * result. A refusal is the push's own, naming the ref and the remote: the remote
+ * moved since the open, or refused the ref in its own words.
+ */
+static error_t sync_push(remote_t *remote, sync_row_t *row, const git_oid *target) {
+    char ref[DOTTA_REFNAME_MAX];
+    error_t err = gitops_branch_refname(ref, sizeof(ref), row->profile);
+    if (err) return err;
+
+    git_oid advertised;
+    remote_advertised(remote, ref, &advertised);
+    return remote_push(remote, ref, target, &advertised, &row->sent);
+}
+
+/**
  * Roll a resolution back to the head the branch stood at before it, after its
  * `step` — "verification" or "push" — failed: the row rolled back, or, where
  * the rollback fails, the run's error, naming the step — the branch left where
@@ -669,7 +628,7 @@ done:
  * where one is owed, unless --no-push withheld it
  *
  * A step that fails is the row's, its cause as it stands: each names its act
- * and its branch (sys/resolve.h, sys/gitops.h). The resolution runs in memory
+ * and its branch (sys/resolve.h, sys/remote.h). The resolution runs in memory
  * and moves the branch alone, never HEAD, so one that fails leaves the branch
  * where it stood — a commit another writer landed meanwhile refuses it; a
  * verification or a push that fails after it rolls the branch back, from the
@@ -687,7 +646,7 @@ static error_t sync_resolve(
     git_repository *repo,
     const char *remote_name,
     sync_row_t *row,
-    transfer_context_t *xfer
+    remote_t *remote
 ) {
     /* The context keeps the two heads the resolution integrates — the branch's,
      * every write's expectation and the rollback's target, and the remote's —
@@ -721,7 +680,7 @@ static error_t sync_resolve(
         row->outcome = SYNC_OUTCOME_UP_TO_DATE;
     } else {
         if (row->withheld != SYNC_VERDICT_PUSH) {
-            err = gitops_push_branch(repo, remote_name, row->profile, xfer);
+            err = sync_push(remote, row, &resolve.resolved_oid);
             if (err) {
                 row->error = err;
                 return sync_rollback(&resolve, row, "push");
@@ -783,31 +742,30 @@ static error_t sync_execute(
     git_repository *repo,
     const char *remote_name,
     sync_rows_t *rows,
-    transfer_context_t *xfer
+    remote_t *remote
 ) {
     CHECK_NULL(arena);
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(rows);
+    CHECK_NULL(remote);
 
     for (size_t i = 0; i < rows->count; i++) {
         sync_row_t *row = &rows->entries[i];
 
-        /* What the act sent is what the session sent across it: a push's, where
-         * one landed — a pull and a reset move a branch here and send nothing */
-        const transfer_stats_t mark = transfer_stats(xfer);
-
+        /* What the act sent is its push's, written where one landed (sync_push):
+         * a pull and a reset move a branch here and send nothing */
         switch (row->verdict) {
             case SYNC_VERDICT_NONE:
                 break;
 
             case SYNC_VERDICT_PUSH:
-                row->error = gitops_push_branch(repo, remote_name, row->profile, xfer);
-                row->outcome = row->error ? SYNC_OUTCOME_FAILED : SYNC_OUTCOME_DONE;
-                break;
-
+            /* The local commits onto the remote's head this sync read, or the
+             * branch where the remote held none */
             case SYNC_VERDICT_FORCE_PUSH:
-                row->error = gitops_force_push_branch(repo, remote_name, row->profile, xfer);
+                /* ours: the same push, over the remote's commits this sync read
+                 * — leased on that head, as every push is */
+                row->error = sync_push(remote, row, &row->upstream.local);
                 row->outcome = row->error ? SYNC_OUTCOME_FAILED : SYNC_OUTCOME_DONE;
                 break;
 
@@ -826,7 +784,7 @@ static error_t sync_execute(
             case SYNC_VERDICT_MERGE: {
                 /* A rollback that fails stops the run, and the row sent nothing:
                  * its push failed, or none ran */
-                error_t err = sync_resolve(arena, repo, remote_name, row, xfer);
+                error_t err = sync_resolve(arena, repo, remote_name, row, remote);
                 if (err) return err;
                 break;
             }
@@ -835,8 +793,6 @@ static error_t sync_execute(
                 sync_reset(repo, remote_name, row);
                 break;
         }
-
-        row->sent = transfer_stats_since(xfer, mark).sent;
     }
 
     return NULL;
@@ -1413,19 +1369,20 @@ static void sync_print_epoch_damaged(output_t *out, const char *remote_name) {
 
 /**
  * Apply the CLI gates to epoch_resolve's verdict, print the outcome, and run
- * the chosen git action (establish via epoch_push, adopt via epoch_fetch). The
- * fact-finding already happened in infra/epoch; this layer is pure policy and
- * printing.
+ * the chosen git action (establish by the session's push, adopt by epoch_adopt
+ * over the objects the run's one fetch brought). The fact-finding already happened
+ * in infra/epoch; this layer is pure policy and printing.
  *
- * Runs before any profile acts: its census walks the local branches (infra/epoch.c
- * epoch_walk), which a pull moves and the fetch does not. Every outcome is
- * best-effort — a warning and the rest of the sync — which is why nothing here
- * is returned: the two errors the resolve produces, a local ref that would not
- * read and a census that could not finish, are verdicts to print, not a run to
- * fail.
+ * Runs after the fetch and before any profile acts: its verdict reads the open's
+ * listing (sys/remote.h remote_advertised), and its census walks the local branches
+ * (infra/epoch.c epoch_walk), which a pull moves and the fetch does not. Every
+ * outcome is best-effort — a warning and the rest of the sync — which is why
+ * nothing here is returned: the two errors the resolve produces, a local ref
+ * that would not read and a census that could not finish, are verdicts to print,
+ * not a run to fail.
  *
- * The epoch is machinery, so it says as little as it can get away with. Five of
- * the seven verdicts are a verbose line or nothing at all: dotta either did the
+ * The epoch is machinery, so it says as little as it can get away with. Four of
+ * the six verdicts are a verbose line or nothing at all: dotta either did the
  * right thing or had nothing to do, and neither is the user's business at NORMAL.
  * What speaks up is what the user has to act on — a divergence over ciphertext,
  * a ref that cannot be read over ciphertext, and a resolve that could not decide
@@ -1434,15 +1391,15 @@ static void sync_print_epoch_damaged(output_t *out, const char *remote_name) {
  */
 static void sync_reconcile_epoch(
     const dotta_ctx_t *ctx,
+    remote_t *remote,
     const char *remote_name,
-    transfer_context_t *xfer,
     const cmd_sync_options_t *opts
 ) {
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
-    epoch_reconcile_t decision;
-    error_t err = epoch_resolve(repo, remote_name, xfer, &decision);
+    epoch_decision_t decision;
+    error_t err = epoch_resolve(repo, remote, &decision);
     if (err) {
         /* No decision: the local ref would not read, or the census could not
          * finish — each error says which, in its own words (infra/epoch.h
@@ -1461,13 +1418,7 @@ static void sync_reconcile_epoch(
      * printer, each asking its own. At normal no verbose debt is owed, so a silent
      * outcome leaves the report as it found it. */
     output_gap(out, OUTPUT_VERBOSE);
-    switch (decision) {
-        case EPOCH_RECONCILE_UNREACHABLE:
-            /* The authoritative "remote unreachable" error comes from the fetch
-             * phase that runs next. */
-            output_info(out, OUTPUT_VERBOSE, "Skipped epoch sync (remote unreachable)");
-            return;
-
+    switch (decision.verdict) {
         case EPOCH_RECONCILE_EQUAL:
             output_info(out, OUTPUT_VERBOSE, "Repository epoch up to date");
             return;
@@ -1499,12 +1450,19 @@ static void sync_reconcile_epoch(
                 );
                 return;
             }
-            /* The push's failure names its act, the ref and the remote, then
-             * libgit2's reason (infra/epoch.c epoch_push): printed whole, beneath
-             * the remote's words where it sent any (sys/transfer.h
-             * transfer_op_end) */
-            const transfer_stats_t mark = transfer_stats(xfer);
-            err = epoch_push(repo, remote_name, xfer);
+
+            /* The local epoch's commit, the one the verdict judged, pushed where
+             * the remote held none: a create, so `dotta init` → `dotta remote
+             * add` → `dotta sync` ships the epoch with no hand's push, before
+             * any profile's. Two machines that minted their own and race to one
+             * remote meet here — the second's push finds the first's epoch in
+             * its own listing and is refused, changed by another writer, and
+             * its next sync reconciles the two. The failure names its act, the
+             * ref and the remote, then the cause (sys/remote.h remote_push):
+             * printed whole, beneath the remote's words where it sent any
+             * (sys/transfer.h transfer_op_end) */
+            transfer_wire_t sent = { 0 };
+            err = remote_push(remote, EPOCH_REF, &decision.local, &decision.advertised, &sent);
             if (err) {
                 output_gap(out, OUTPUT_NORMAL);
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
@@ -1514,7 +1472,7 @@ static void sync_reconcile_epoch(
                 out, OUTPUT_VERBOSE,
                 "{green}✓{reset} Established repository epoch on remote"
             );
-            sync_print_wire(out, transfer_stats_since(xfer, mark).sent);
+            sync_print_wire(out, sent);
             output_endline(out, OUTPUT_VERBOSE);
             return;
         }
@@ -1551,27 +1509,21 @@ static void sync_reconcile_epoch(
                 return;
             }
 
-            const transfer_stats_t mark = transfer_stats(xfer);
-            err = epoch_fetch(repo, remote_name, COMMIT_ACTION_SYNC, xfer);
+            /* The objects are the fetch's, which named the epoch and said what
+             * it moved: the adopt moves nothing on the wire. Every failure names
+             * its act and leaves the local ref standing — one it could not adopt
+             * was judged before it was installed — so each is printed whole, as
+             * clone prints it */
+            err = epoch_adopt(repo, &decision, remote_name, COMMIT_ACTION_SYNC);
             if (err) {
-                /* Every failure of the fetch names its act and leaves the local
-                 * ref standing — one it could not adopt was judged before it
-                 * was installed — so each is printed whole, as clone prints it */
                 output_gap(out, OUTPUT_NORMAL);
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
                 return;  /* best-effort */
             }
-
-            /* What the probe and the download moved — over a local remote every
-             * object of the remote's this store lacks, the epoch's among them:
-             * libgit2's local transport packs every advertised ref, never the
-             * wants alone (lib/libgit2/src/libgit2/transports/local.c
-             * local_download_pack) */
             output_print(
                 out, OUTPUT_VERBOSE,
                 "{green}✓{reset} Adopted repository epoch from remote"
             );
-            sync_print_wire(out, transfer_stats_since(xfer, mark).received);
             output_endline(out, OUTPUT_VERBOSE);
 
             /* What the old epoch's session file holds is not this run's to remove:
@@ -1675,8 +1627,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     manifest_t *after = NULL;                  /* The view after the Git phase */
     scope_t *scope = NULL;
     const char *remote_name = NULL;
-    const char *remote_url = NULL;
-    transfer_context_t *xfer = NULL;
+    remote_t *remote = NULL;                   /* The remote, met once */
 
     /* Build operation scope
      *
@@ -1696,12 +1647,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = scope_require_enabled(state, scope_enabled(scope), ctx->arena);
     if (err) goto cleanup;
 
-    /* Auto-detect remote early — fail fast, before the hook and the network.
-     * URL is resolved alongside the name; the credential helper consumes it when
-     * transfer_context_create runs further down. */
-    err = gitops_resolve_default_remote(
-        repo, ctx->arena, &remote_name, &remote_url
-    );
+    /* Which remote, early — fail fast, before the hook and the network; its URL
+     * is the open's to read (sys/remote.h remote_default) */
+    err = remote_default(repo, ctx->arena, &remote_name);
     if (err) goto cleanup;
 
     /* Build the hook invocation. Same struct is reused for both pre-sync (here)
@@ -1728,18 +1676,50 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
-    /* Create transfer context for progress reporting and what each op moved.
-     * URL was resolved alongside the remote name above; it feeds the credential
-     * helper here */
-    xfer = transfer_context_create(out, remote_url);
+    /* The remote, met once (sys/remote.h): the open's listing is the epoch's
+     * verdict and every push's expectation, and its one fetch brings the scope's
+     * profiles and the epoch. Over the contact a progress line, a terminal's
+     * alone, drawn over by transfer's frames while objects move (sys/transfer.h
+     * transfer_op_end) and never a line of the report (base/output.h
+     * output_progress), taken down once the fetch is done, whichever way it went.
+     * Nothing here asks whether the remote stands: the open looks it up before
+     * any use and refuses it in Git's words. Either's failure is the run's, said
+     * once, before any verdict, naming the act and the remote — a refused
+     * credential in the words transfer's callback set for what was offered
+     * (sys/transfer.c transfer_credentials_callback), any other failure in
+     * libgit2's — or the tracking ref the fetch read, took out of a name's way
+     * or wrote, naming it (sys/remote.h remote_fetch).
+     *
+     * The fetch asks for the scope's profiles (scope_profiles): fetching is driven
+     * by what the user asked for — `dotta sync -p work` fetches only `work` —
+     * where the Manifest block still reads the whole enabled set, a different
+     * role and a different accessor. Each is asked for whether or not the remote
+     * has been seen to hold it: the analysis reads a profile through its
+     * remote-tracking ref (sys/upstream.h upstream_analyze_profile), so one the
+     * remote holds and no fetch here ever asked for would read as never pushed,
+     * and one the remote does not advertise costs the fetch nothing. The epoch's
+     * ref beside them, whenever the remote advertises it: its objects are the
+     * reconcile's to judge, and nothing moves where the two agree. */
+    output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+    transfer_wire_t received = { 0 };
+    err = remote_open(repo, remote_name, commit_action_word(COMMIT_ACTION_SYNC), out, &remote);
+    if (!err) err = remote_fetch(remote, scope_profiles(scope), EPOCH_REF, &received);
+    output_clear_line(out);
+    if (err) goto cleanup;
+
+    /* At verbose, what the fetch moved, where it moved anything (an up-to-date
+     * fetch says nothing): one op and one pack, so one wire, never a profile's
+     * (lib/libgit2/include/git2/indexer.h git_indexer_progress) */
+    if (received.objects > 0) {
+        output_print(out, OUTPUT_VERBOSE, "{green}✓{reset} Fetched from '%s'", remote_name);
+        sync_print_wire(out, received);
+        output_endline(out, OUTPUT_VERBOSE);
+    }
 
     /* Reconcile the repository epoch with the remote, before any profile acts:
      * its census reads the local branches, which the fetch leaves and a pull
-     * moves. */
-    sync_reconcile_epoch(ctx, remote_name, xfer, opts);
-
-    err = sync_fetch(ctx, remote_name, scope, xfer);
-    if (err) goto cleanup;
+     * moves, and an adopt the objects the fetch brought. */
+    sync_reconcile_epoch(ctx, remote, remote_name, opts);
 
     /* The run, decided whole before any profile acts: each profile's state against
      * the remote, then its verdict and what the user's word withholds of it —
@@ -1798,7 +1778,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * lock is never held across network IO. Nothing catches up afterwards either:
      * the view is computed, and the block that follows only reports what the
      * act did to it. */
-    err = sync_execute(ctx->arena, repo, remote_name, &rows, xfer);
+    err = sync_execute(ctx->arena, repo, remote_name, &rows, remote);
 
     /* The receipt, once every act is done, a row for every profile — a run a
      * failed rollback stopped among them, which then ends in that error */
@@ -2034,11 +2014,11 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = sync_failure(ctx->arena, &rows);
 
 cleanup:
-    /* The one handle the run holds: the transfer, whose close commits the
-     * credential decision (sys/transfer.h). state is borrowed from the dispatcher,
-     * and sync opens no transaction and writes nothing; the rows are the command
-     * arena's. */
-    transfer_context_free(xfer);
+    /* The one handle the run holds: the remote, whose free commits the credential
+     * helper's verdict (sys/remote.h remote_free). state is borrowed from the
+     * dispatcher, and sync opens no transaction and writes nothing; the rows
+     * are the command arena's. */
+    remote_free(remote);
 
     return err;
 }

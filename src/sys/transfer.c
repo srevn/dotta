@@ -1,5 +1,6 @@
 /**
- * transfer.c - Unified transfer context for network operations
+ * transfer.c - What libgit2 calls back into while one network op runs:
+ * implementation
  */
 
 #include "sys/transfer.h"
@@ -35,31 +36,27 @@ typedef enum {
 /**
  * Transfer context.
  *
- * Owns the full lifecycle of a network session against one remote:
+ * What libgit2 calls back into for the ops of one session against one remote:
  *   - Progress reporting (the op's frames, drawn once an object moved)
- *   - Session stats (cumulative objects/bytes across all ops)
+ *   - What the op moved (its wire, answered at its end)
  *   - The remote's words (a push's side band, an op's at a time)
  *   - Credential identity (URL, cached username/password)
  *   - Credential state machine (acquisition → validation / rejection)
  *
  * Per-op counters (op_attempts, op scratch) are reset by transfer_op_begin;
- * transfer_op_end folds the scratch, says the remote's words it kept, and advances
- * the credential state machine on the op's return code. The cached credentials
- * are filled at most once per session by the first successful helper fill
- * (cache-once identity pinning).
+ * transfer_op_end answers the scratch's wire, says the remote's words it kept,
+ * and advances the credential state machine on the op's return code. The cached
+ * credentials are filled at most once per session by the first successful helper
+ * fill (cache-once identity pinning).
  */
 struct transfer_context_s {
     output_t *output;               /* Borrowed. */
 
-    /* Cumulative session stats (TTY-independent) */
-    transfer_stats_t stats;
-
     /* Per-op scratch. Written by the callbacks as the op runs: the progress
-     * callbacks' counts, folded into `stats` by transfer_op_end on success, and
-     * the remote's words, said by the side band's callback or by transfer_op_end.
-     * Reset by transfer_op_begin. */
+     * callbacks' counts, answered by transfer_op_end where the op succeeded,
+     * and the remote's words, said by the side band's callback or by
+     * transfer_op_end. Reset by transfer_op_begin. */
     struct {
-        git_direction direction;    /* Op direction (fetch/push). */
         transfer_wire_t wire;       /* What it moved: the callbacks' latest counts. */
         buffer_t sideband;          /* The remote's words not yet said: under -v the
                                      * line still open, else every byte, to
@@ -83,7 +80,6 @@ struct transfer_context_s {
  * (cached-cred replays, terminal states) do not regress the state.
  */
 static void transfer_mark_cred_acquired(transfer_context_t *xfer) {
-    if (!xfer) return;
     if (xfer->credential_state == CRED_STATE_NOT_ACQUIRED) {
         xfer->credential_state = CRED_STATE_ACQUIRED;
     }
@@ -93,7 +89,7 @@ static void transfer_mark_cred_acquired(transfer_context_t *xfer) {
  * Securely replace a heap-allocated secret with a new heap-allocated value.
  *
  * Wipes and frees the old buffer (if any), then installs the new pointer. `*slot`
- * is a field slot (e.g., `&ctx->username`). Ownership of `incoming` transfers
+ * is a field slot (e.g., `&xfer->username`). Ownership of `incoming` transfers
  * to the slot; the caller must NOT free it after this call.
  */
 static void secure_replace(char **slot, char *incoming) {
@@ -106,13 +102,13 @@ static void secure_replace(char **slot, char *incoming) {
 transfer_context_t *transfer_context_create(output_t *output, const char *url) {
     CHECK_NULL(output);
 
-    transfer_context_t *ctx = heap_calloc(1, sizeof(*ctx));
+    transfer_context_t *xfer = heap_calloc(1, sizeof(*xfer));
 
-    ctx->url = heap_strdup(url);
-    ctx->output = output;
+    xfer->url = heap_strdup(url);
+    xfer->output = output;
     /* All other fields zero-initialized by heap_calloc. */
 
-    return ctx;
+    return xfer;
 }
 
 /**
@@ -127,37 +123,36 @@ transfer_context_t *transfer_context_create(output_t *output, const char *url) {
  * to say about approve/reject" (a non-zero exit from a read-only helper) is
  * intentionally not surfaced.
  */
-static void transfer_commit_credential_decision(transfer_context_t *ctx) {
-    if (ctx->credential_state != CRED_STATE_VALIDATED &&
-        ctx->credential_state != CRED_STATE_REJECTED) {
+static void transfer_commit_credential_decision(transfer_context_t *xfer) {
+    if (xfer->credential_state != CRED_STATE_VALIDATED &&
+        xfer->credential_state != CRED_STATE_REJECTED) {
         return;
     }
-    if (!ctx->url || !ctx->username || !ctx->password) {
+    if (!xfer->url || !xfer->username || !xfer->password) {
         return;
     }
 
     credential_url_t u = { 0 };
-    error_t err = credential_url_parse(ctx->url, &u);
+    error_t err = credential_url_parse(xfer->url, &u);
     if (err) {
-        /* URL came from gitops_get_remote_url, so a parse failure here is an
-         * internal correctness issue rather than user-actionable. Surface
-         * verbose-only. */
+        /* URL came from the session's open (sys/remote.c remote_open), the remote's
+         * as libgit2 resolved it, so a parse failure here is an internal
+         * correctness issue rather than user-actionable. Surface verbose-only. */
         output_print(
-            ctx->output, OUTPUT_VERBOSE,
-            "credential helper: skipping commit — %s\n",
+            xfer->output, OUTPUT_VERBOSE, "credential helper: skipping commit — %s\n",
             error_line(err)
         );
         return;
     }
 
-    err = ctx->credential_state == CRED_STATE_VALIDATED
-        ? credential_helper_approve(&u, ctx->username, ctx->password)
-        : credential_helper_reject(&u, ctx->username, ctx->password);
+    err = xfer->credential_state == CRED_STATE_VALIDATED
+        ? credential_helper_approve(&u, xfer->username, xfer->password)
+        : credential_helper_reject(&u, xfer->username, xfer->password);
 
     /* In the refusal's own words: they name the helper ('git credential approve',
      * or reject), so nothing leads them */
     if (err) {
-        output_warning(ctx->output, OUTPUT_NORMAL, "%s", error_line(err));
+        output_warning(xfer->output, OUTPUT_NORMAL, "%s", error_line(err));
     }
 
     credential_url_deinit(&u);
@@ -166,20 +161,20 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
 /**
  * Free transfer context
  */
-void transfer_context_free(transfer_context_t *ctx) {
-    if (!ctx) return;
+void transfer_context_free(transfer_context_t *xfer) {
+    if (!xfer) return;
 
-    transfer_commit_credential_decision(ctx);
+    transfer_commit_credential_decision(xfer);
 
-    if (ctx->username) {
-        buffer_secure_free(ctx->username, strlen(ctx->username) + 1);
+    if (xfer->username) {
+        buffer_secure_free(xfer->username, strlen(xfer->username) + 1);
     }
-    if (ctx->password) {
-        buffer_secure_free(ctx->password, strlen(ctx->password) + 1);
+    if (xfer->password) {
+        buffer_secure_free(xfer->password, strlen(xfer->password) + 1);
     }
-    free(ctx->url);
-    buffer_deinit(&ctx->op.sideband);
-    free(ctx);
+    free(xfer->url);
+    buffer_deinit(&xfer->op.sideband);
+    free(xfer);
 }
 
 /**
@@ -217,7 +212,8 @@ static void transfer_print_sideband(transfer_context_t *xfer, output_verbosity_t
          * sanitizer ends it as well */
         if (start < end) {
             output_print(
-                xfer->output, level, "remote: %.*s\n", (int) (end - start), start
+                xfer->output, level, "remote: %.*s\n",
+                (int) (end - start), start
             );
         }
     }
@@ -236,23 +232,23 @@ static void transfer_print_sideband(transfer_context_t *xfer, output_verbosity_t
 }
 
 /**
- * Begin an op — reset per-op scratch and record direction.
+ * Begin an op — reset per-op scratch.
  */
-void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
-    if (!xfer) return;
+void transfer_op_begin(transfer_context_t *xfer) {
+    CHECK_NULL(xfer);
+
     xfer->op_attempts = 0;
-    xfer->op.direction = direction;
     xfer->op.wire = (transfer_wire_t){ 0 };
     buffer_clear(&xfer->op.sideband);
     xfer->op.sideband_dropped = 0;
 }
 
 /**
- * End an op — take its frame down, fold stats, advance the credential state
- * machine.
+ * End an op — take its frame down, say the remote's words, advance the credential
+ * state machine, and answer what it moved.
  */
-void transfer_op_end(transfer_context_t *xfer, int rc) {
-    if (!xfer) return;
+transfer_wire_t transfer_op_end(transfer_context_t *xfer, int rc) {
+    CHECK_NULL(xfer);
 
     /* The frame the op drew is taken down here, once, whichever way it went. A
      * callback cannot tell its last call from one libgit2 makes after it — the
@@ -281,67 +277,29 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
         transfer_print_sideband(xfer, OUTPUT_NORMAL);
     }
 
-    /* Fold what the op moved into its direction's. An op that failed folds nothing,
-     * and one that moved nothing — connect+ls (list_remote_branches), an up-to-date
-     * fetch — adds nothing. */
-    if (rc == 0) {
-        if (xfer->op.direction == GIT_DIRECTION_PUSH) {
-            xfer->stats.sent.objects += xfer->op.wire.objects;
-            xfer->stats.sent.bytes += xfer->op.wire.bytes;
-        } else {
-            xfer->stats.received.objects += xfer->op.wire.objects;
-            xfer->stats.received.bytes += xfer->op.wire.bytes;
-        }
-    }
-
-    if (xfer->credential_state != CRED_STATE_ACQUIRED) {
-        /* NOT_ACQUIRED (no helper fill) and terminal states (VALIDATED, REJECTED)
-         * absorb any outcome without transitioning. */
-        return;
-    }
-
-    /* The helper's pair, judged by the op it served. An op that succeeded validates
-     * it. GIT_EAUTH, libgit2's auth-failure code, rejects it definitively: the
-     * credential callback returns it when it gives up
-     * (transfer_credentials_callback), and libgit2 where a remote asks for
+    /* The helper's pair, judged by the op it served — where one was filled and
+     * no verdict reached yet: NOT_ACQUIRED (no helper fill) and the terminal
+     * states (VALIDATED, REJECTED) absorb any outcome without transitioning. An
+     * op that succeeded validates it. GIT_EAUTH, libgit2's auth-failure code,
+     * rejects it definitively: the credential callback returns it when it gives
+     * up (transfer_credentials_callback), and libgit2 where a remote asks for
      * credentials no callback could give (transports/http.c handle_auth,
      * transports/ssh_libssh2.c request_creds). Any other failure leaves the
      * identity pending, for a later op to validate or reject: a network hiccup,
      * a run that exhausts libgit2's own replay budget — GIT_ERROR, "the exact
      * cause is unclear" in its words (transports/http.c http_stream_read) — and
      * the auth failures some TLS and SSH paths surface as other errors. */
-    if (rc == 0) {
-        xfer->credential_state = CRED_STATE_VALIDATED;
-    } else if (rc == GIT_EAUTH) {
-        xfer->credential_state = CRED_STATE_REJECTED;
+    if (xfer->credential_state == CRED_STATE_ACQUIRED) {
+        if (rc == 0) {
+            xfer->credential_state = CRED_STATE_VALIDATED;
+        } else if (rc == GIT_EAUTH) {
+            xfer->credential_state = CRED_STATE_REJECTED;
+        }
     }
-}
 
-/**
- * What the session has moved so far, by value
- */
-transfer_stats_t transfer_stats(const transfer_context_t *xfer) {
-    return xfer ? xfer->stats : (transfer_stats_t){ 0 };
-}
-
-/**
- * What the session moved since `mark`
- */
-transfer_stats_t transfer_stats_since(const transfer_context_t *xfer, transfer_stats_t mark) {
-    const transfer_stats_t now = transfer_stats(xfer);
-
-    /* The fold only adds (transfer_op_end), so no reading of a session stands
-     * below an earlier one: each difference is what the ops between them moved */
-    return (transfer_stats_t){
-        .received = {
-            .objects = now.received.objects - mark.received.objects,
-            .bytes   = now.received.bytes - mark.received.bytes,
-        },
-        .sent = {
-            .objects = now.sent.objects - mark.sent.objects,
-            .bytes   = now.sent.bytes - mark.sent.bytes,
-        },
-    };
+    /* What the op moved, where it succeeded: one that failed moved nothing a
+     * caller may count, whatever its callbacks recorded on the way */
+    return rc == 0 ? xfer->op.wire : (transfer_wire_t){ 0 };
 }
 
 /**
@@ -375,7 +333,8 @@ void transfer_wire_phrase(transfer_wire_t wire, char *buffer, size_t buffer_size
 void transfer_configure_callbacks(
     git_remote_callbacks *cb, transfer_context_t *xfer, git_direction direction
 ) {
-    if (!cb) return;
+    CHECK_NULL(cb);
+    CHECK_NULL(xfer);
 
     cb->credentials = transfer_credentials_callback;
     cb->payload = xfer;
@@ -385,7 +344,7 @@ void transfer_configure_callbacks(
         cb->push_update_reference = transfer_push_status_callback;
         cb->sideband_progress = transfer_push_sideband_callback;
     } else {
-        cb->transfer_progress = transfer_progress_callback;
+        cb->transfer_progress = transfer_fetch_progress_callback;
     }
 }
 
@@ -429,7 +388,7 @@ int transfer_credentials_callback(
     git_credential **out, const char *url, const char *username_from_url,
     unsigned int allowed_types, void *payload
 ) {
-    transfer_context_t *ctx = (transfer_context_t *) payload;
+    transfer_context_t *xfer = (transfer_context_t *) payload;
 
     /* A refusal is worded where it is decided. libgit2 hands a callback's code
      * up with no sentence of its own (transports/http.c handle_auth,
@@ -437,7 +396,7 @@ int transfer_credentials_callback(
      * be a lookup that succeeded (remote.c lookup_redirect_config's value "not
      * found"). The session is REJECTED only once the helper's pair was refused:
      * no other offer moves it out of NOT_ACQUIRED. */
-    if (ctx->credential_state == CRED_STATE_REJECTED) {
+    if (xfer->credential_state == CRED_STATE_REJECTED) {
         (void) git_error_set_str(
             GIT_ERROR_CALLBACK,
             "the remote refused the credentials the git credential helper gave"
@@ -450,10 +409,10 @@ int transfer_credentials_callback(
      * before this call (transports/ssh_libssh2.c ssh_agent_auth), and those stand;
      * else it was the helper's pair, or with none the anonymous one, which the
      * remote answered by asking again. */
-    if (ctx->op_attempts++ > 0) {
+    if (xfer->op_attempts++ > 0) {
         if (!(allowed_types & GIT_CREDENTIAL_SSH_KEY)) {
             (void) git_error_set_str(
-                GIT_ERROR_CALLBACK, ctx->username
+                GIT_ERROR_CALLBACK, xfer->username
                     ? "the remote refused the credentials the git credential helper gave"
                     : "the remote requires credentials, and no git credential helper gave any"
             );
@@ -475,8 +434,8 @@ int transfer_credentials_callback(
          * realistic cause), fall through to the libgit2 default rather than
          * re-prompting the helper — the user already authed once, surprising
          * them with a fresh prompt mid-session is worse than a passthrough. */
-        if (ctx->username && ctx->password) {
-            if (credential_make_userpass(out, ctx->username, ctx->password) == 0) {
+        if (xfer->username && xfer->password) {
+            if (credential_make_userpass(out, xfer->username, xfer->password) == 0) {
                 return 0;
             }
             return credential_make_default(out) == 0 ? 0 : GIT_PASSTHROUGH;
@@ -492,7 +451,7 @@ int transfer_credentials_callback(
 
         if (err) {
             output_print(
-                ctx->output, OUTPUT_VERBOSE,
+                xfer->output, OUTPUT_VERBOSE,
                 "credential URL parse: %s\n", error_line(err)
             );
         } else {
@@ -501,7 +460,7 @@ int transfer_credentials_callback(
              * layer, which sees none of it: the progress line that stands, a
              * caller's around the op, is taken down first, so the prompt stands
              * on a row of its own */
-            output_clear_line(ctx->output);
+            output_clear_line(xfer->output);
             err = credential_helper_fill(
                 &u, username_from_url, &fresh_user, &fresh_pass
             );
@@ -511,7 +470,7 @@ int transfer_credentials_callback(
                 /* Exec failure / timeout / malformed response — surface to the
                  * user so they can diagnose helper issues, in the refusal's own
                  * words: they name the helper ('git credential fill'). */
-                output_warning(ctx->output, OUTPUT_NORMAL, "%s", error_line(err));
+                output_warning(xfer->output, OUTPUT_NORMAL, "%s", error_line(err));
             }
         }
 
@@ -522,9 +481,9 @@ int transfer_credentials_callback(
                  * the new one (defensive — the REJECTED fast-fail above makes
                  * re-entry impossible today, but a future code-path change must
                  * not silently leak secrets through an overwrite). */
-                secure_replace(&ctx->username, fresh_user);
-                secure_replace(&ctx->password, fresh_pass);
-                transfer_mark_cred_acquired(ctx);
+                secure_replace(&xfer->username, fresh_user);
+                secure_replace(&xfer->password, fresh_pass);
+                transfer_mark_cred_acquired(xfer);
                 return 0;
             }
             discard_obtained_credentials(fresh_user, fresh_pass);
@@ -541,91 +500,85 @@ int transfer_credentials_callback(
 }
 
 /**
- * Draw a frame of the op's progress line: the objects moved, of their total where
- * one is known, and their size where the transport counted one
+ * Draw a frame of the op's progress line: the objects its wire moved, of their
+ * total where one is known, and their size where the transport counted one
  *
- * A fetch's and a push's alike, each frame drawn over the last, a terminal's
- * alone at OUTPUT_NORMAL (base/output.h output_progress). None is drawn before
- * an object moved: neither the report a fetch's pack header brings, its total
- * and no object yet (indexer.c git_indexer_append), nor a deletion's, nothing
- * sent of nothing to send (transports/smart_protocol.c git_smart__push). A size
- * of nothing is left unsaid, as a wire's phrase leaves it (transfer_wire_phrase):
- * a local push counts no bytes (pack-objects.c git_packbuilder_write).
+ * A fetch's and a push's alike, off the wire its callback has just recorded,
+ * each frame drawn over the last, a terminal's alone at OUTPUT_NORMAL
+ * (base/output.h output_progress). None is drawn before an object moved: neither
+ * the report a fetch's pack header brings, its total and no object yet (indexer.c
+ * git_indexer_append), nor a deletion's, nothing sent of nothing to send
+ * (transports/smart_protocol.c git_smart__push). A size of nothing is left unsaid,
+ * as a wire's phrase leaves it (transfer_wire_phrase): a local push counts no
+ * bytes (pack-objects.c git_packbuilder_write).
  */
 static void transfer_draw(
-    const transfer_context_t *xfer, const char *title,
-    unsigned int moved, unsigned int total, size_t bytes
+    const transfer_context_t *xfer, const char *title, unsigned int total
 ) {
-    if (moved == 0) return;
+    const transfer_wire_t *wire = &xfer->op.wire;
+    if (wire->objects == 0) return;
 
     char size[32];
-    output_format_size(bytes, size, sizeof(size));
+    output_format_size(wire->bytes, size, sizeof(size));
 
-    if (total > 0 && bytes > 0) {
+    if (total > 0 && wire->bytes > 0) {
         output_progress(
-            xfer->output, OUTPUT_NORMAL, "%s: %3u%% (%u/%u), %s",
-            title, moved * 100 / total, moved, total, size
+            xfer->output, OUTPUT_NORMAL, "%s: %3zu%% (%zu/%u), %s",
+            title, wire->objects * 100 / total, wire->objects, total, size
         );
     } else if (total > 0) {
         output_progress(
-            xfer->output, OUTPUT_NORMAL, "%s: %3u%% (%u/%u)",
-            title, moved * 100 / total, moved, total
+            xfer->output, OUTPUT_NORMAL, "%s: %3zu%% (%zu/%u)",
+            title, wire->objects * 100 / total, wire->objects, total
         );
-    } else if (bytes > 0) {
+    } else if (wire->bytes > 0) {
         output_progress(
-            xfer->output, OUTPUT_NORMAL, "%s: %u, %s",
-            title, moved, size
+            xfer->output, OUTPUT_NORMAL, "%s: %zu, %s",
+            title, wire->objects, size
         );
     } else {
         output_progress(
-            xfer->output, OUTPUT_NORMAL, "%s: %u",
-            title, moved
+            xfer->output, OUTPUT_NORMAL, "%s: %zu",
+            title, wire->objects
         );
     }
 }
 
 /**
- * Transfer progress callback for fetch operations
+ * A fetch's progress: the op's wire, then a frame of its line
  */
-int transfer_progress_callback(
+int transfer_fetch_progress_callback(
     const git_indexer_progress *stats, void *payload
 ) {
-    if (!stats || !payload) return 0;
+    transfer_context_t *xfer = (transfer_context_t *) payload;
 
-    transfer_context_t *ctx = (transfer_context_t *) payload;
-
-    /* Record latest values for the stats fold at op_end. TTY-independent: running
-     * in a pipe or over a log must still produce correct totals. */
-    ctx->op.wire = (transfer_wire_t){
+    /* The op's wire, its latest counts, answered at its end (transfer_op_end)
+     * whatever the medium: a pipe or a log counts what a terminal draws */
+    xfer->op.wire = (transfer_wire_t){
         .objects = stats->received_objects,
         .bytes = stats->received_bytes,
     };
 
-    transfer_draw(
-        ctx, "Receiving objects", stats->received_objects,
-        stats->total_objects, stats->received_bytes
-    );
+    transfer_draw(xfer, "Receiving objects", stats->total_objects);
     return 0;
 }
 
 /**
- * Push transfer progress callback for push operations
+ * A push's progress: the op's wire, then a frame of its line
  */
 int transfer_push_progress_callback(
     unsigned int current, unsigned int total, size_t bytes, void *payload
 ) {
-    if (!payload) return 0;
+    transfer_context_t *xfer = (transfer_context_t *) payload;
 
-    transfer_context_t *ctx = (transfer_context_t *) payload;
-
-    /* Record latest values for the stats fold at op_end, as a fetch's are: the
-     * bytes as the transport counted them, none for a local push */
-    ctx->op.wire = (transfer_wire_t){
+    /* The op's wire, its latest counts, answered at its end (transfer_op_end)
+     * whatever the medium: a pipe or a log counts what a terminal draws */
+    xfer->op.wire = (transfer_wire_t){
         .objects = current,
         .bytes = bytes,
     };
 
-    transfer_draw(ctx, "Sending objects", current, total, bytes);
+    transfer_draw(xfer, "Sending objects", total);
     return 0;
 }
 
@@ -644,7 +597,7 @@ int transfer_push_status_callback(
      * worded here in libgit2's own slot, which a non-zero return keeps (push.c
      * git_push_status_foreach, util/errors.h git_error_set_after_callback). The
      * reason is the remote's as it stands: every push dotta makes moves one ref,
-     * which its caller's words name (sys/gitops.c gitops_push_branch). */
+     * which its caller's words name (sys/remote.c remote_push). */
     if (!status) return 0;
 
     (void) git_error_set_str(GIT_ERROR_CALLBACK, status);
@@ -656,10 +609,10 @@ int transfer_push_status_callback(
  * end or said as they come
  */
 int transfer_push_sideband_callback(const char *str, int len, void *payload) {
-    if (!payload || len <= 0) return 0;
+    if (len <= 0) return 0;
 
-    transfer_context_t *ctx = (transfer_context_t *) payload;
-    buffer_t *kept = &ctx->op.sideband;
+    transfer_context_t *xfer = (transfer_context_t *) payload;
+    buffer_t *kept = &xfer->op.sideband;
 
     /* A packet is cut wherever the remote's writes were, so it is read up to
      * each newline in turn, and to its end, each part kept to the bound with
@@ -673,7 +626,7 @@ int transfer_push_sideband_callback(const char *str, int len, void *payload) {
         size_t room = TRANSFER_SIDEBAND_MAX - kept->size;
         size_t keep = n < room ? n : room;
         buffer_append(kept, at, keep);
-        ctx->op.sideband_dropped += n - keep;
+        xfer->op.sideband_dropped += n - keep;
 
         /* Under -v a line is said once the remote ends it, as a hook's output
          * is under -v (utils/hooks.c hook_fire, PROCESS_OUTPUT_INHERIT) — a slow
@@ -682,8 +635,8 @@ int transfer_push_sideband_callback(const char *str, int len, void *payload) {
          * and libgit2's closing report draws it again beneath the remote's lines
          * (transports/smart_protocol.c git_smart__push), for the op's end to
          * take down */
-        if (newline && output_is_verbose(ctx->output)) {
-            transfer_print_sideband(ctx, OUTPUT_VERBOSE);
+        if (newline && output_is_verbose(xfer->output)) {
+            transfer_print_sideband(xfer, OUTPUT_VERBOSE);
         }
 
         at = next;

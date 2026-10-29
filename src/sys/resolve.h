@@ -16,10 +16,9 @@
  * and the remote-tracking head, not the heads the caller's analysis decided from:
  * a commit landed on either between the two is in what a rebase or a merge
  * resolves, and a reset to the remote discards the branch's and lands on the
- * remote's. The remote-tracking head is read nowhere after: a push writes the
- * ref past the head a resolution integrated (lib/libgit2/src/libgit2/push.c
- * git_push_update_tips, through the remote's fetch refspec), so a reader of what
- * was integrated reads the context, never the ref.
+ * remote's. The remote-tracking head is read nowhere after: a push that lands
+ * moves the ref past the head a resolution integrated (sys/remote.h remote_push),
+ * so a reader of what was integrated reads the context, never the ref.
  */
 
 #ifndef DOTTA_RESOLVE_H

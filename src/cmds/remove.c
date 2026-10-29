@@ -29,7 +29,7 @@
 #include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
-#include "sys/transfer.h"
+#include "sys/remote.h"
 #include "sys/upstream.h"
 #include "utils/hooks.h"
 
@@ -1184,7 +1184,6 @@ static error_t remove_profile(
     git_tree *tree = NULL;
     profile_t *profile = NULL;
     const char *remote_name = NULL;
-    const char *remote_url = NULL;
 
     /* The branch's head, read once and first: what the deletion says before it
      * acts is said of this commit, and the delete takes the branch only where
@@ -1287,14 +1286,11 @@ static error_t remove_profile(
 
     /* The remote, resolved up-front for two readers: where the profile stands
      * against it, said before the act — in the dry run too, which previews what
-     * the deletion says before it acts — and the deletion's push below, whose
-     * credential helper reads the URL (its transfer context). No remote configured
-     * is an answer — the profile is this repository's alone, nothing pushed
-     * (sys/gitops.h names this read) — and every other failure is the run's,
-     * joined below with the upstream's own. */
-    err = gitops_resolve_default_remote(
-        repo, ctx->arena, &remote_name, &remote_url
-    );
+     * the deletion says before it acts — and the deletion's push below. No remote
+     * configured is an answer — the profile is this repository's alone, nothing
+     * pushed (sys/remote.h names this read) — and every other failure is the
+     * run's, joined below with the upstream's own. */
+    err = remote_default(repo, ctx->arena, &remote_name);
     if (error_code(err) == ERR_NOT_FOUND) {
         err = NULL;
     } else if (!err) {
@@ -1450,21 +1446,35 @@ static error_t remove_profile(
             remote_name
         );
 
-        /* remote_url was resolved alongside remote_name above. NULL is legal —
-         * unauthenticated paths still work, helper approve/reject become no-ops. */
-        transfer_context_t *del_xfer = transfer_context_create(out, remote_url);
-        error_t push_err = gitops_delete_remote_branch(
-            repo, remote_name, opts->profile, del_xfer
-        );
-        transfer_context_free(del_xfer);
+        /* The remote, met once (sys/remote.h): where its listing names the branch,
+         * the deletion is pushed, leased on that head, which a branch moved there
+         * since refuses; where it names none, there is nothing there to delete,
+         * and nothing is pushed */
+        char ref[DOTTA_REFNAME_MAX];
+        remote_t *remote = NULL;
+        error_t push_err = gitops_branch_refname(ref, sizeof(ref), opts->profile);
+        if (!push_err) {
+            push_err = remote_open(
+                repo, remote_name, commit_action_word(COMMIT_ACTION_REMOVE), out, &remote
+            );
+        }
+        if (!push_err) {
+            git_oid advertised;
+            remote_advertised(remote, ref, &advertised);
+            if (!git_oid_is_zero(&advertised)) {
+                const git_oid none = GIT_OID_SHA1_ZERO;
+                push_err = remote_push(remote, ref, &none, &advertised, NULL);
+            }
+        }
+        remote_free(remote);
         if (push_err) {
             /* Non-fatal: the branch is gone here, as the success line above says,
              * and what failed is the remote's half, which other machines learn
-             * the deletion from. Warned in its own words, which name the profile
-             * and the remote (sys/gitops.c gitops_delete_remote_branch), and
-             * the push by hand its remedy — through dotta git, which runs git
-             * on the store (cmds/git.h cmd_git), where a git typed in a shell
-             * acts on whatever repository the shell stands in. */
+             * the deletion from. Warned in its own words, which name the ref
+             * and the remote (sys/remote.h remote_open, remote_push), and the
+             * push by hand its remedy — through dotta git, which runs git on
+             * the store (cmds/git.h cmd_git), where a git typed in a shell acts
+             * on whatever repository the shell stands in. */
             output_warning(out, OUTPUT_NORMAL, "%s", error_line(push_err));
             output_hint(
                 out, OUTPUT_NORMAL,

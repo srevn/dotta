@@ -1,11 +1,11 @@
 /**
  * upstream.h - A branch against its remote
  *
- * Read off the remote-tracking refs the last fetch left, and nothing here contacts
- * the remote: a branch's state against its remote (upstream_analyze_profile)
- * and the face every screen gives that state — its glyph, its colour and its
- * phrase — then the remote's branches made local (upstream_discover_branches,
- * upstream_ensure_tracking_branch).
+ * Read off the remote-tracking refs the session's last fetch wrote (sys/remote.h
+ * remote_fetch), and nothing here contacts the remote: a branch's state against
+ * its remote (upstream_analyze_profile) and the face every screen gives that
+ * state — its glyph, its colour and its phrase — then the remote's branches made
+ * local (upstream_discover_branches, upstream_ensure_tracking_branch).
  */
 
 #ifndef DOTTA_UPSTREAM_H
@@ -36,15 +36,19 @@ typedef enum {
 } upstream_state_t;
 
 /**
- * Sync state plus commit counts.
+ * Sync state plus commit counts, and the branch's head as the analysis read it.
  *
  * `ahead` and `behind` are meaningful only when state is one of LOCAL_AHEAD /
  * REMOTE_AHEAD / DIVERGED / UP_TO_DATE; for NO_REMOTE and NO_LOCAL they are zero.
+ * `local` is the head every state was read from, Git's null id for NO_LOCAL:
+ * what a push of the branch sends (cmds/sync.c sync_push), never a second read
+ * of it.
  */
 typedef struct {
     upstream_state_t state;
     size_t ahead;
     size_t behind;
+    git_oid local;
 } upstream_info_t;
 
 /**
@@ -136,8 +140,8 @@ void upstream_state_phrase(
  * and you want to see what's available to create local branches from.
  *
  * **Limitation**: If a remote was just added without fetching, this returns empty
- * because no remote tracking refs exist yet. Use gitops_list_remote_branches()
- * instead to query the actual server.
+ * because no remote tracking refs exist yet. The remote's own listing is the
+ * session's (sys/remote.h remote_branches).
  *
  * **Use cases:**
  * - After git clone, to show unfetched profiles
@@ -163,8 +167,9 @@ error_t upstream_discover_branches(
  *
  * A local branch of the name exists after the call. One already here is left as
  * it is: a fetch moves the remote-tracking ref and never the local branch — merging
- * the two is sync's, through sys/resolve. One absent is created at the remote's
- * commit.
+ * the two is sync's, through sys/resolve. One absent is created at the commit
+ * its remote-tracking ref names, as the session's fetch wrote it (sys/remote.h
+ * remote_fetch).
  *
  * Refuses with ERR_CONFLICT, naming both branches, when the local ref namespace
  * cannot hold the name beside one already there (`gitops_branch_blocker`) — a

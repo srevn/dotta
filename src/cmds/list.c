@@ -30,6 +30,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/remote.h"
 #include "sys/stats.h"
 #include "sys/upstream.h"
 
@@ -167,7 +168,7 @@ static error_t list_profiles(
     const char *remote_name = NULL;
     bool show_remote = false;
     if (opts->remote) {
-        err = gitops_resolve_default_remote(repo, ctx->arena, &remote_name, NULL);
+        err = remote_default(repo, ctx->arena, &remote_name);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",

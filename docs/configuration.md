@@ -40,7 +40,7 @@ auto_pull = true              # Auto-pull when remote is ahead
 diverged_strategy = "warn"    # warn, rebase, merge, ours, theirs
 ```
 
-`dotta sync --diverged <strategy>` overrides the setting for one run. `ours` and `theirs` are destructive, and act on a branch that is only behind or only ahead as well: `ours` force-pushes over the newer remote commits, `theirs` resets the local ones away.
+`dotta sync --diverged <strategy>` overrides the setting for one run. `ours` and `theirs` are destructive, and act on a branch that is only behind or only ahead as well: `ours` force-pushes over the newer remote commits — only those this sync read, so a remote that moved since refuses the push — and `theirs` resets the local ones away.
 
 ### [encryption]
 

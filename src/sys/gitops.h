@@ -46,11 +46,12 @@
  * char[1024] (lib/libgit2/src/libgit2/refs.h GIT_REFNAME_MAX), and refuses one
  * that does not fit ("the provided buffer is too short to hold the normalization").
  * So a name this buffer cannot hold is one no lookup could read, and the bound
- * is the library's, never one of dotta's own. A refspec joins two names, a ':'
- * between them and the force's '+' before.
+ * is the library's, never one of dotta's own. A refspec joins a source and a
+ * name, a ':' between them and the force's '+' before; a push's source is an
+ * id, or nothing.
  */
 #define DOTTA_REFNAME_MAX 1024                        /* a name, and its NUL */
-#define DOTTA_REFSPEC_MAX (2 * DOTTA_REFNAME_MAX + 1) /* [+]<name>:<name>, and NUL */
+#define DOTTA_REFSPEC_MAX (2 * DOTTA_REFNAME_MAX + 1) /* [+]<source>:<name>, and NUL */
 
 #define DOTTA_MESSAGE_MAX 512                         /* For commit messages */
 
@@ -121,9 +122,11 @@ error_t gitops_get_signature(git_signature **out, git_repository *repo);
  *                    repository libgit2 would not open whose .git or HEAD stands,
  *                    and a look at either that could not answer.
  *
- * The handle opened signs the reflog lines libgit2 writes itself — a fetch's, a
- * push's, a reference write handed no signature — with the signature dotta's
- * commits carry (gitops_get_signature), so a line names whom a commit here names.
+ * The handle opened signs the reflog lines libgit2 writes — every reference
+ * write's, which no call of libgit2's hands a signature: dotta's own
+ * (gitops_write_reference), a remote rename's (cmds/remote.c remote_rename) —
+ * with the signature dotta's commits carry (gitops_get_signature), so a line
+ * names whom a commit here names.
  *
  * @param out Repository handle (must not be NULL)
  * @param path Repository path (must not be NULL)
@@ -271,6 +274,23 @@ error_t gitops_branch_exists(git_repository *repo, const char *name, bool *exist
 error_t gitops_branch_blocker(
     git_repository *repo, const char *name, arena_t *arena, const char **out
 );
+
+/**
+ * Whether two reference names nest: one a folder the other lives in
+ *
+ * Git's namespace is a directory tree, and one path cannot be both a name and a
+ * folder of names (lib/libgit2/src/libgit2/refdb_fs.c reference_path_available),
+ * so of two nested names the namespace holds one, never both. Equal names are
+ * not nested: that is a lookup's question, and its answer a different one.
+ *
+ * Readers: gitops_branch_blocker, a branch in a name's way; sys/remote.c
+ * remote_fetch, a tracking ref in a fetched name's way.
+ *
+ * @param a A reference name, or a name beneath one namespace (must not be NULL)
+ * @param b Another, spelled alike (must not be NULL)
+ * @return Whether they nest
+ */
+bool gitops_nested(const char *a, const char *b);
 
 /**
  * List the references under a namespace
@@ -667,249 +687,19 @@ error_t gitops_load_branch_commit(
     git_commit **out
 );
 
-/* Forward declaration for transfer context */
-typedef struct transfer_context_s transfer_context_t;
-
-/**
- * Fetch everything a remote has, under its own refspecs
- *
- * `git fetch <remote>`: the refspec the remote was created with — every branch
- * under refs/heads to refs/remotes/<remote>, for one `git_remote_create` made —
- * and nothing else. Every branch the remote has lands as a remote-tracking ref;
- * no local branch is made and HEAD is not touched; the refs under refs/dotta
- * are not under the refspec and do not come (the epoch has its own fetch,
- * infra/epoch). The clone's one round trip; a name the remote lacks is not an
- * error of the fetch, so what landed is read afterwards
- * (gitops_list_remote_tracking).
- *
- * Neither fetch here prunes: a remote-tracking ref whose branch the remote no
- * longer holds stays — the remote as this store last saw it — whatever fetch.prune
- * or remote.<remote>.prune says (lib/libgit2/src/libgit2/remote.c git_remote_fetch,
- * lookup_remote_prune_config). A prune is a hand's, `dotta git fetch --prune`:
- * git's own, which no option here reaches.
- *
- * Nothing is taken out of a fetched name's way, as gitops_fetch_branches takes
- * a tracking ref out: the one reader, cmds/clone.c cmd_clone, fetches into a
- * store it just created, which holds no tracking ref, and a remote holds no two
- * names that nest.
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (e.g., "origin") (must not be NULL)
- * @param xfer Transfer context for credentials and progress (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_fetch_remote(
-    git_repository *repo,
-    const char *remote_name,
-    transfer_context_t *xfer
-);
-
-/**
- * Fetch multiple branches from remote in a single operation
- *
- * Performs a batched fetch of multiple branches, significantly reducing network
- * overhead compared to fetching each branch individually. A branch the remote
- * lacks is not an error of the fetch: its refspec matches no head the remote
- * advertises, so nothing is wanted for it and no ref is written
- * (lib/libgit2/src/libgit2/fetch.c filter_wants, remote.c update_one_tip), and
- * what the remote held is read off the remote-tracking refs afterwards. Each
- * one follows its branch wherever the remote moved it, a force push included:
- * the refspecs are forced, as git's own for a tracking ref is, whatever fetch
- * refspec the remote's configuration holds, or none — and none is pruned where
- * the remote's branch went (gitops_fetch_remote).
- *
- * Git's namespace holds a name or the names beneath it, never both
- * (lib/libgit2/src/libgit2/refdb_fs.c reference_path_available), so a tracking
- * ref in a requested name's way — at a name the requested one continues, or beneath
- * it — would fail the whole fetch at its write, which libgit2 makes before any
- * prune (remote.c git_remote_fetch). Each is taken out first, from its read
- * (gitops_delete_reference), git's order (lib/git/builtin/fetch.c do_fetch prunes
- * before it fetches), a look's fetch as an act's, whether or not the remote holds
- * the requested name — which this fetch cannot tell. So every fetch reads the
- * remote's tracking refs whole first (gitops_list_remote_tracking), and one that
- * will not read refuses it. One beside a branch that stands here is never taken
- * out: it is that branch's counterpart, and its branch stands in the requested
- * name's way here too — so a name whose way it holds is barred: not fetched,
- * nothing written for it, as for a name the remote lacks. Where every name is
- * barred, nothing is asked of the remote.
- *
- * Readers: cmds/sync.c sync_fetch (every profile in the run's scope) and
- * cmds/status.c status_remote (every profile its section lists), each asking
- * for branches the remote may never have held, every one a branch here — and no
- * branch here is nested with another, so neither meets a barred name;
- * cmds/profile.c profile_fetch (the profiles the remote was just listed as holding,
- * gitops_list_remote_branches), whose names a branch here may bar.
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (e.g., "origin") (must not be NULL)
- * @param branches Branch names to fetch (must not be NULL, count > 0)
- * @param xfer Transfer context for credentials and progress (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_fetch_branches(
-    git_repository *repo,
-    const char *remote_name,
-    const string_array_t *branches,
-    transfer_context_t *xfer
-);
-
-/**
- * Push branch to remote
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param xfer Transfer context for credentials and progress (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_push_branch(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name,
-    transfer_context_t *xfer
-);
-
-/**
- * Force-push branch to remote (overwrites remote history).
- *
- * Identical to gitops_push_branch except the refspec is prefixed with '+', which
- * lifts libgit2's own fast-forward check (lib/libgit2/src/libgit2/push.c
- * queue_objects) and nothing more: the command a server reads names the old head
- * and the new alone (transports/smart_protocol.c gen_pktline), so a server that
- * refuses a non-fast-forward refuses it still (lib/git/builtin/receive-pack.c
- * update, receive.denyNonFastForwards). Used by sync's 'ours' divergence strategy.
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param xfer Transfer context for credentials and progress (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_force_push_branch(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name,
-    transfer_context_t *xfer
-);
-
-/**
- * Delete a branch from remote repository
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param xfer Transfer context for credentials and progress (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_delete_remote_branch(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name,
-    transfer_context_t *xfer
-);
-
-/**
- * List branches advertised by the remote server (network op).
- *
- * Connects to the remote and reads the advertised refs via git_remote_ls. Unlike
- * gitops_list_remote_tracking (which reads cached refs under
- * refs/remotes/<remote>/), this is authoritative — it sees branches added to
- * the server since the last fetch — but requires network and credentials.
- *
- * Filters results to refs under refs/heads/, excluding empty names.
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (must not be NULL)
- * @param xfer Transfer context for credentials and op lifecycle (must not be NULL)
- * @param arena Arena the listing lives in (must not be NULL)
- * @param out Branch names on remote (must not be NULL; left as it was on a failure)
- * @return Error or NULL on success
- */
-error_t gitops_list_remote_branches(
-    git_repository *repo,
-    const char *remote_name,
-    transfer_context_t *xfer,
-    arena_t *arena,
-    string_array_t *out
-);
-
-/**
- * Get URL for a remote
- *
- * The remote's URL, copied into the arena, or NULL where it has none: a remote
- * configured without a URL is legal — credentialed transfers tolerate one
- * (gitops_resolve_default_remote) — so its absence is an answer, never an error.
- * A lookup that fails — no such remote, a name Git refuses — is the error, in
- * Git's words, and leaves `*out_url` as it was.
- *
- * Readers: gitops_resolve_default_remote's URL, and the completion's description
- * of each configured remote (cmds/completion.c completion_remotes).
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (must not be NULL)
- * @param arena Arena the URL lives in (must not be NULL)
- * @param out_url The URL, the arena's, or NULL (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_get_remote_url(
-    git_repository *repo,
-    const char *remote_name,
-    arena_t *arena,
-    const char **out_url
-);
-
-/**
- * Resolve the default remote (name + optional URL) into arena.
- *
- * Selection strategy:
- *   1. Prefer "origin" if it exists.
- *   2. Otherwise use the only configured remote.
- *   3. Multiple remotes without "origin" → ERR_INVALID_ARG, naming the case.
- *   4. No remotes → ERR_NOT_FOUND, and nothing else is: a listing that fails,
- *      and a URL lookup that fails, are libgit2's errors (ERR_GIT). Read by
- *      cmds/remove.c remove_profile, as a profile that is this repository's alone,
- *      and cmds/status.c status_remote, as no section to print.
- *
- * When `out_url` is non-NULL, also looks up the remote's URL
- * (gitops_get_remote_url). A remote configured without a URL yields `*out_url =
- * NULL` and a successful return — credentialed transfers tolerate a NULL URL
- * (helper approve / reject become no-ops, SSH/anonymous still works), so this
- * stays a happy-path outcome rather than an error.
- *
- * The name is the configuration's, as git lists it, and nothing here judges it:
- * a name Git refuses — a hand-written `[remote ""]` among them — is refused by
- * the lookup of whichever verb takes it, in Git's words. Every verb that takes
- * a remote name looks it up before any other use of it, and none refuses one
- * ahead of that lookup.
- *
- * Outputs are arena-borrowed; the caller does not free them, and they remain
- * valid for the lifetime of the arena.
- *
- * @param repo     Repository (must not be NULL)
- * @param arena    Arena for output strings (must not be NULL)
- * @param out_name Remote name (must not be NULL; arena-borrowed on success)
- * @param out_url  Optional URL out-param (NULL skips URL lookup)
- * @return Error or NULL on success
- */
-error_t gitops_resolve_default_remote(
-    git_repository *repo,
-    arena_t *arena,
-    const char **out_name,
-    const char **out_url
-);
-
 /**
  * Write a reference, only from the state its writer read
  *
  * `refname` comes to name `target` only where it still stands as `expected` says
  * — git's update-ref <ref> <new> [<old>]:
  *   - an id: the head it must still name — the stage's commit, sync's resolutions
- *     and their rollback, its fast-forward;
+ *     and their rollback, its fast-forward, a remote-tracking ref the session
+ *     moves;
  *   - Git's null id: nothing, the name free — the stage's root, a tracking branch's
- *     create;
+ *     create, a remote-tracking ref the session writes first;
  *   - NULL: whatever stands — the epoch's install alone, the one write from no
  *     read, licensed by the census that found nothing the replaced epoch keys
- *     (infra/epoch.h epoch_fetch).
+ *     (infra/epoch.h epoch_adopt).
  * libgit2 compares under the reference's own lock, and asks Git's namespace
  * whatever the compare says (lib/libgit2/src/libgit2/refdb_fs.c
  * refdb_fs_backend__write: reference_path_available, then cmp_old_ref), so a
@@ -943,8 +733,9 @@ error_t gitops_resolve_default_remote(
  *
  * Readers: sys/stage.c stage_commit; sys/resolve.c resolve_rebase_inmemory,
  * resolve_merge_trees, resolve_theirs and resolve_rollback; cmds/sync.c
- * sync_fast_forward; sys/upstream.c upstream_ensure_tracking_branch; infra/epoch.c
- * epoch_fetch.
+ * sync_fast_forward; sys/upstream.c upstream_ensure_tracking_branch; sys/remote.c
+ * remote_fetch and remote_follow, a remote-tracking ref after a fetch and a push;
+ * infra/epoch.c epoch_adopt.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL)
@@ -992,8 +783,9 @@ error_t gitops_write_reference(
  * microseconds between this read and that lock is refused with the reflog gone,
  * the reference standing where its writer left it.
  *
- * Readers: gitops_delete_branch; gitops_fetch_branches, each tracking ref it
- * takes out of a fetched name's way, from the id it read there.
+ * Readers: gitops_delete_branch; sys/remote.c remote_fetch, each tracking ref
+ * it takes out of a fetched name's way, and remote_follow, a branch's tracking
+ * ref after its deletion's push, each from the id it read there.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL or empty)
@@ -1024,8 +816,9 @@ error_t gitops_delete_reference(
  * readers that act on a reference's absence as an answer: sys/upstream.c
  * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
  * sync_fast_forward (nothing fetched to fast-forward to), infra/epoch.c
- * epoch_resolve (no local epoch), gitops_fetch_branches (a tracking ref in a
- * fetched name's way gone since its listing, nothing to take out),
+ * epoch_resolve (no local epoch), sys/remote.c remote_fetch (a tracking ref in
+ * a fetched name's way gone since its listing, nothing to take out) and
+ * remote_follow (a pushed branch's tracking ref never written, a create),
  * gitops_reference_commit, which reads the commit at the id, and
  * gitops_resolve_reference_oid, which refuses it.
  *
@@ -1137,12 +930,11 @@ error_t gitops_branch_refname(
  * The one place a remote and a branch become `refs/remotes/<remote>/<branch>`,
  * sized and checked by gitops_build_refname, whose refusals name the whole
  * reference. The branch half is the caller's: a profile's name, held to the branch
- * rule where its own ref is built (gitops_branch_refname). A refspec joining
- * this name and the branch's fits DOTTA_REFSPEC_MAX by that constant's definition.
+ * rule where its own ref is built (gitops_branch_refname).
  *
  * Readers: cmds/sync.c sync_fast_forward, cmds/status.c status_print_remote,
- * sys/upstream.c upstream_analyze_profile, and this file's
- * gitops_resolve_remote_branch_oid and gitops_fetch_branches.
+ * sys/upstream.c upstream_analyze_profile, sys/remote.c remote_fetch and
+ * remote_follow, and this file's gitops_resolve_remote_branch_oid.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX

@@ -24,7 +24,7 @@
 #include "core/workspace.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
-#include "sys/transfer.h"
+#include "sys/remote.h"
 #include "sys/upstream.h"
 
 /**
@@ -1427,10 +1427,11 @@ typedef struct {
  * of its own section, as its siblings' are: no remote configured is no section
  * — said in its place where --remote asked for it — a remote the resolver could
  * not choose or read, and a listing --all could not make, are a warning in its
- * place and no section, and an empty set is no section, unsaid. The fetch, unless
- * --no-fetch, is the half's one write, each profile's remote-tracking ref: a
- * progress line at -v while it runs, on a terminal; its failure a warning at
- * -v; and the section then read from the refs at hand.
+ * place and no section, and an empty set is no section, unsaid. The contact,
+ * unless --no-fetch, is the half's one write, each profile's remote-tracking
+ * ref (sys/remote.h remote_fetch): a progress line at -v while it runs, on a
+ * terminal; its failure a warning at -v; and the section then read from the refs
+ * at hand.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options: --remote, --all and --no-fetch (must not be NULL)
@@ -1451,16 +1452,12 @@ static status_remote_t status_remote(
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
-    /* Detect remote (name + URL — URL feeds the credential helper when we fetch
-     * below). Both are the command arena's, so the name outlives this call in
-     * the value it returns. */
+    /* Which remote: its name the command arena's, so it outlives this call in
+     * the value it returns */
     const char *remote_name = NULL;
-    const char *remote_url = NULL;
-    error_t err = gitops_resolve_default_remote(
-        repo, ctx->arena, &remote_name, opts->no_fetch ? NULL : &remote_url
-    );
+    error_t err = remote_default(repo, ctx->arena, &remote_name);
     if (error_code(err) == ERR_NOT_FOUND) {
-        /* No remote configured (sys/gitops.h names this read): no section to
+        /* No remote configured (sys/remote.h names this read): no section to
          * print, and where --remote asked for one, the resolver's words in its
          * place, as remote's listing says them (cmds/remote.c) — the default
          * scope has no remote half to report */
@@ -1502,34 +1499,29 @@ static status_remote_t status_remote(
 
     if (profiles->count == 0) return (status_remote_t){ 0 };
 
-    /* Fetch if requested */
+    /* The contact, unless --no-fetch: the remote met once and the set fetched
+     * from it (sys/remote.h), its listing read by nothing else. While it runs,
+     * a progress line at -v: a terminal's alone, drawn over by transfer's frames
+     * while objects move (sys/transfer.h transfer_op_end), never a line of the
+     * report (base/output.h output_progress), and taken down once the fetch is
+     * done, whichever way it went */
     if (!opts->no_fetch) {
-        /* xfer is required by gitops network ops (credential state machine +
-         * approve/reject are needed even without verbose progress) */
-        transfer_context_t *xfer = transfer_context_create(out, remote_url);
-
-        /* While the fetch runs, a progress line at -v: a terminal's alone, drawn
-         * over by transfer's frames while objects move (sys/transfer.h
-         * transfer_op_end), and never a line of the report (base/output.h
-         * output_progress) */
         output_progress(out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name);
-
-        /* Perform batched fetch — single network op for all branches */
-        err = gitops_fetch_branches(repo, remote_name, profiles, xfer);
-
-        /* Taken down once the fetch is done, whichever way it went */
+        remote_t *remote = NULL;
+        err = remote_open(repo, remote_name, "status", out, &remote);
+        if (!err) err = remote_fetch(remote, profiles, NULL, NULL);
         output_clear_line(out);
 
         if (err) {
-            /* Non-fatal: warn and continue with status display. The fetch's failure
-             * names its act and the remote, or the tracking ref it read or took
-             * out of a name's way first (sys/gitops.h gitops_fetch_branches), a
+            /* Non-fatal: warn and continue with status display. Either's failure
+             * names its act and the remote, or the tracking ref the fetch read,
+             * took out of a name's way or wrote (sys/remote.h remote_fetch), a
              * block of its own. */
             output_gap(out, OUTPUT_VERBOSE);
             output_warning(out, OUTPUT_VERBOSE, "%s", error_line(err));
         }
 
-        transfer_context_free(xfer);
+        remote_free(remote);
     }
 
     return (status_remote_t){ .name = remote_name, .profiles = profiles };

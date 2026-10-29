@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -25,10 +26,9 @@
 #include "base/heap.h"
 #include "base/string.h"
 #include "sys/identity.h"
-#include "sys/transfer.h"
 
-#define GITOPS_ACTION_FIELD "dotta"   /* the key of a commit's action header: this file's alone */
-#define GITOPS_SYMREF_DEPTH 5         /* the links a write follows: refdb.c DEFAULT_NESTING_LEVEL */
+#define GITOPS_ACTION_FIELD "dotta"   /* the key of a commit's action header */
+#define GITOPS_SYMREF_DEPTH 5         /* the links a write follows */
 
 error_t gitops_init(void) {
     /* The one git failure error_git cannot read: git_error_last answers out of
@@ -87,8 +87,8 @@ error_t gitops_init(void) {
      * RLIMIT_NOFILE — leaves git's last resort, one. Checked: a refusal would
      * leave every pack a run reads open. */
     struct rlimit nofile;
-    const size_t packs = getrlimit(RLIMIT_NOFILE, &nofile) == 0 && nofile.rlim_cur > 25
-        ? (size_t) (nofile.rlim_cur - 25) : 1;
+    const size_t packs = getrlimit(RLIMIT_NOFILE, &nofile) == 0 &&
+        nofile.rlim_cur > 25 ? (size_t) (nofile.rlim_cur - 25) : 1;
     int rc = git_libgit2_opts(GIT_OPT_SET_MWINDOW_FILE_LIMIT, packs);
     if (rc < 0) {
         return error_git(rc, "Cannot limit the packs libgit2 holds open to %zu", packs);
@@ -127,11 +127,13 @@ error_t gitops_get_signature(git_signature **out, git_repository *repo) {
 }
 
 /*
- * The ident of every reflog line libgit2 signs itself — a fetch's, a push's, a
- * reference write handed no signature — set where gitops opens or creates the
- * handle: the signature dotta's commits carry (gitops_get_signature), which libgit2
- * reads ahead of user.name and user.email and their "unknown", for those lines
- * alone (lib/libgit2/src/libgit2/refs.c refs_configured_ident, its one reader).
+ * The ident of every reflog line libgit2 signs itself — every reference write's,
+ * which no call of libgit2's hands a signature: dotta's own
+ * (gitops_write_reference), a remote rename's (cmds/remote.c remote_rename) —
+ * set where gitops opens or creates the handle: the signature dotta's commits
+ * carry (gitops_get_signature), which libgit2 reads ahead of user.name and
+ * user.email and their "unknown", for those lines alone
+ * (lib/libgit2/src/libgit2/refs.c refs_configured_ident, its one reader).
  * Unchecked, as gitops_init's knobs are: a signature that cannot be made, or a
  * copy libgit2 cannot allocate, leaves libgit2's own chain standing, which changes
  * no answer dotta gives — `git log -g` alone shows a line's ident — and a commit
@@ -360,16 +362,13 @@ error_t gitops_branch_exists(
     return gitops_reference_exists(repo, refname, exists);
 }
 
-/*
- * Nested names: one is a folder the other lives in — the shorter matched whole,
- * with a '/' where the longer one continues past it — and Git's namespace holds
- * one of the two, never both (lib/libgit2/src/libgit2/refdb_fs.c
- * reference_path_available). Equal names are not nested, and the boundary test
- * says so on its own: the shorter length indexes the other name's terminator.
- * Readers: gitops_branch_blocker, a branch in a name's way; gitops_fetch_branches,
- * a tracking ref in a fetched name's way.
- */
-static bool gitops_nested(const char *a, const char *b) {
+bool gitops_nested(const char *a, const char *b) {
+    CHECK_NULL(a);
+    CHECK_NULL(b);
+
+    /* The shorter matched whole, with a '/' where the longer continues past it.
+     * Equal names are not nested, and the boundary test says so on its own: the
+     * shorter length indexes the other name's terminator. */
     size_t a_len = strlen(a);
     size_t b_len = strlen(b);
     size_t shorter = a_len < b_len ? a_len : b_len;
@@ -892,438 +891,6 @@ error_t gitops_load_branch_commit(
 }
 
 /**
- * Remote operations
- */
-error_t gitops_fetch_remote(
-    git_repository *repo, const char *remote_name, transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(xfer);
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_git(rc, "Cannot fetch from remote '%s'", remote_name);
-
-    /* Never pruning, whatever remote.<remote>.prune or fetch.prune says: left
-     * unspecified, the option is the configuration's (lib/libgit2/src/libgit2/
-     * remote.c git_remote_fetch, lookup_remote_prune_config) */
-    git_fetch_options fetch_opts;
-    git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
-    fetch_opts.prune = GIT_FETCH_NO_PRUNE;
-    transfer_configure_callbacks(
-        &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
-    );
-
-    /* No refspecs given: the remote's own, as configured. */
-    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    rc = git_remote_fetch(remote, NULL, &fetch_opts, NULL);
-    transfer_op_end(xfer, rc);
-
-    /* The sentence before the free: the free closes a transport the fetch may
-     * have left connected — it returns from its capability checks still connected
-     * (remote.c git_remote_fetch) — and a close that fails sets one of its own */
-    error_t err = rc < 0 ? error_git(rc, "Cannot fetch from remote '%s'", remote_name) : NULL;
-    git_remote_free(remote);
-    return err;
-}
-
-error_t gitops_fetch_branches(
-    git_repository *repo, const char *remote_name, const string_array_t *branches,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branches);
-    CHECK_NULL(xfer);
-    CHECK_ARG(branches->count > 0, "branches must not be empty");
-
-    /* Look up remote once */
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_git(rc, "Cannot fetch from remote '%s'", remote_name);
-
-    /* The refspecs, one per branch the fetch can write, and the tracking refs
-     * in their way, in a frame of this call's own — its answer is no memory —
-     * the refspecs in the one shape git_strarray reads: a string array's entries
-     * are an argv as they stand. The tracking refs are listed whole first, complete
-     * or an error, for the ones in a requested name's way (the header). */
-    arena_t *frame = arena_create(0);
-    string_array_t refspecs, blockers, remote_branches;
-    string_array_init(&refspecs, frame, branches->count);
-    string_array_init(&blockers, frame, 0);
-    error_t err = gitops_list_remote_tracking(repo, remote_name, frame, &remote_branches);
-    if (err) goto cleanup;
-
-    for (size_t i = 0; i < branches->count; i++) {
-        const char *branch = branches->entries[i];
-
-        /* Each refspec's halves, the branch's ref and the remote-tracking ref
-         * it lands at — +refs/heads/<branch>:refs/remotes/<remote>/<branch> —
-         * each spelled where every one is; two built names fit the refspec's
-         * buffer by its definition (DOTTA_REFSPEC_MAX). Forced, as git's own
-         * refspec for a tracking ref is: the ref follows the remote wherever
-         * its branch went, a force push included, where libgit2 skips a move no
-         * fast-forward makes under an unforced one (remote.c update_one_tip)
-         * and only a fetch refspec the remote's configuration holds would write
-         * it after (opportunistic_updates) */
-        char refname[DOTTA_REFNAME_MAX];
-        err = gitops_branch_refname(refname, sizeof(refname), branch);
-        if (err) goto cleanup;
-
-        char tracking[DOTTA_REFNAME_MAX];
-        err = gitops_remote_branch_refname(tracking, sizeof(tracking), remote_name, branch);
-        if (err) goto cleanup;
-
-        char refspec[DOTTA_REFSPEC_MAX];
-        err = gitops_build_refname(refspec, sizeof(refspec), "+%s:%s", refname, tracking);
-        if (err) goto cleanup;
-
-        /* Barred where a tracking ref in its way (gitops_nested) stands beside
-         * its own branch here: that branch's counterpart, never taken out, so
-         * the name is not fetched (the header) */
-        bool barred = false;
-        for (size_t j = 0; j < remote_branches.count && !barred; j++) {
-            if (!gitops_nested(remote_branches.entries[j], branch)) continue;
-            err = gitops_branch_exists(repo, remote_branches.entries[j], &barred);
-            if (err) goto cleanup;
-        }
-        if (barred) continue;
-
-        /* Otherwise each one in its way is taken out, once however many names
-         * it stands in the way of */
-        for (size_t j = 0; j < remote_branches.count; j++) {
-            const char *other = remote_branches.entries[j];
-            if (gitops_nested(other, branch) && !string_array_contains(&blockers, other)) {
-                string_array_push(&blockers, other);
-            }
-        }
-        string_array_push(&refspecs, refspec);
-    }
-
-    /* Every name barred: nothing to ask of the remote, where an empty list would
-     * fetch its configured refspecs (remote.c git_remote__download) */
-    if (refspecs.count == 0) goto cleanup;
-
-    /* Each one in the way taken out before the fetch writes anything, git's order
-     * (lib/git/builtin/fetch.c do_fetch prunes first, "to avoid F/D conflicts"),
-     * and from its read: one gone since the listing leaves nothing to take, one
-     * moved since its read refuses (gitops_delete_reference) */
-    for (size_t i = 0; i < blockers.count; i++) {
-        char tracking[DOTTA_REFNAME_MAX];
-        git_oid id;
-        err = gitops_remote_branch_refname(
-            tracking, sizeof(tracking), remote_name, blockers.entries[i]
-        );
-        if (!err) err = gitops_reference_oid(repo, tracking, &id);
-        if (!err && !git_oid_is_zero(&id)) err = gitops_delete_reference(repo, tracking, &id);
-        if (err) goto cleanup;
-    }
-
-    /* Never pruning, as every fetch here (gitops_fetch_remote): a tracking ref
-     * pruned under a profile the remote no longer holds reads its branch here
-     * as never pushed, which the next sync would push back */
-    git_fetch_options fetch_opts;
-    git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
-    fetch_opts.prune = GIT_FETCH_NO_PRUNE;
-    transfer_configure_callbacks(
-        &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
-    );
-
-    git_strarray refs = { refspecs.entries, refspecs.count };
-
-    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    rc = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
-    transfer_op_end(xfer, rc);
-
-    if (rc < 0) err = error_git(rc, "Cannot fetch from remote '%s'", remote_name);
-
-cleanup:
-    arena_free(frame);
-    git_remote_free(remote);
-    return err;
-}
-
-error_t gitops_push_branch(
-    git_repository *repo, const char *remote_name, const char *branch_name,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(xfer);
-
-    /* The refspec's halves are the branch's ref, spelled where every one is; a
-     * built name twice fits the refspec's buffer by its definition */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
-    if (err) return err;
-
-    char refspec[DOTTA_REFSPEC_MAX];
-    err = gitops_build_refname(refspec, sizeof(refspec), "%s:%s", refname, refname);
-    if (err) return err;
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_git(rc, "Cannot push '%s' to remote '%s'", branch_name, remote_name);
-
-    git_push_options push_opts;
-    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
-    transfer_configure_callbacks(
-        &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
-    );
-
-    char *refspecs[] = { refspec };
-    git_strarray refs = { refspecs, 1 };
-
-    transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
-    rc = git_remote_push(remote, &refs, &push_opts);
-    transfer_op_end(xfer, rc);
-
-    /* The sentence before the free (gitops_fetch_remote) */
-    err = rc < 0
-        ? error_git(rc, "Cannot push '%s' to remote '%s'", branch_name, remote_name)
-        : NULL;
-    git_remote_free(remote);
-    return err;
-}
-
-error_t gitops_force_push_branch(
-    git_repository *repo, const char *remote_name, const char *branch_name,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(xfer);
-
-    /* The refspec's halves are the branch's ref, spelled where every one is,
-     * and the '+' before them accepts a non-fast-forward update; the '+' and a
-     * built name twice fit the refspec's buffer by its definition */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
-    if (err) return err;
-
-    char refspec[DOTTA_REFSPEC_MAX];
-    err = gitops_build_refname(refspec, sizeof(refspec), "+%s:%s", refname, refname);
-    if (err) return err;
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) {
-        return error_git(rc, "Cannot force-push '%s' to remote '%s'", branch_name, remote_name);
-    }
-
-    git_push_options push_opts;
-    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
-    transfer_configure_callbacks(
-        &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
-    );
-
-    char *refspecs[] = { refspec };
-    git_strarray refs = { refspecs, 1 };
-
-    transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
-    rc = git_remote_push(remote, &refs, &push_opts);
-    transfer_op_end(xfer, rc);
-
-    /* The sentence before the free (gitops_fetch_remote) */
-    err = rc < 0
-        ? error_git(rc, "Cannot force-push '%s' to remote '%s'", branch_name, remote_name)
-        : NULL;
-    git_remote_free(remote);
-    return err;
-}
-
-error_t gitops_delete_remote_branch(
-    git_repository *repo, const char *remote_name, const char *branch_name,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(xfer);
-
-    /* The refspec's destination is the branch's ref, spelled where every one
-     * is, and its empty source deletes it there: ":refs/heads/<branch>", which
-     * fits the refspec's buffer by its definition */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
-    if (err) return err;
-
-    char refspec[DOTTA_REFSPEC_MAX];
-    err = gitops_build_refname(refspec, sizeof(refspec), ":%s", refname);
-    if (err) return err;
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) {
-        return error_git(rc, "Cannot delete '%s' from remote '%s'", branch_name, remote_name);
-    }
-
-    git_push_options push_opts;
-    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
-    transfer_configure_callbacks(
-        &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
-    );
-
-    char *refspecs[] = { refspec };
-    git_strarray refs = { refspecs, 1 };
-
-    transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
-    rc = git_remote_push(remote, &refs, &push_opts);
-    transfer_op_end(xfer, rc);
-
-    /* The sentence before the free (gitops_fetch_remote) */
-    err = rc < 0
-        ? error_git(rc, "Cannot delete '%s' from remote '%s'", branch_name, remote_name)
-        : NULL;
-    git_remote_free(remote);
-    return err;
-}
-
-error_t gitops_list_remote_branches(
-    git_repository *repo, const char *remote_name, transfer_context_t *xfer,
-    arena_t *arena, string_array_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(xfer);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_git(rc, "Cannot list the branches of remote '%s'", remote_name);
-
-    /* git_remote_connect + git_remote_ls transfer no byte payload, so the progress
-     * callback never fires; GIT_DIRECTION_FETCH keeps the credential path aligned
-     * with fetch semantics. */
-    git_remote_callbacks callbacks;
-    git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
-    transfer_configure_callbacks(&callbacks, xfer, GIT_DIRECTION_FETCH);
-
-    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    rc = git_remote_connect(
-        remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
-    );
-    transfer_op_end(xfer, rc);
-    if (rc < 0) {
-        /* The sentence before the free (gitops_fetch_remote) */
-        error_t err = error_git(rc, "Cannot list the branches of remote '%s'", remote_name);
-        git_remote_free(remote);
-        return err;
-    }
-
-    const git_remote_head **refs = NULL;
-    size_t refs_len = 0;
-    rc = git_remote_ls(&refs, &refs_len, remote);
-    if (rc < 0) {
-        /* The sentence before the disconnect and the free, as above */
-        error_t err = error_git(rc, "Cannot list the branches of remote '%s'", remote_name);
-        git_remote_disconnect(remote);
-        git_remote_free(remote);
-        return err;
-    }
-
-    static const char heads_prefix[] = "refs/heads/";
-    const size_t prefix_len = sizeof(heads_prefix) - 1;
-
-    string_array_t branches;
-    string_array_init(&branches, arena, 0);
-    for (size_t i = 0; i < refs_len; i++) {
-        const char *refname = refs[i]->name;
-
-        if (!str_starts_with(refname, heads_prefix)) {
-            continue;
-        }
-
-        const char *branch_name = refname + prefix_len;
-
-        if (*branch_name == '\0') {
-            continue;
-        }
-
-        string_array_push(&branches, branch_name);
-    }
-
-    git_remote_disconnect(remote);
-    git_remote_free(remote);
-
-    *out = branches;
-    return NULL;
-}
-
-error_t gitops_get_remote_url(
-    git_repository *repo, const char *remote_name, arena_t *arena,
-    const char **out_url
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_url);
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_git(rc, "Cannot read the URL of remote '%s'", remote_name);
-
-    /* Copied before the remote goes: the URL is the remote's, and NULL where it
-     * has none. */
-    *out_url = arena_strdup(arena, git_remote_url(remote));
-    git_remote_free(remote);
-
-    return NULL;
-}
-
-error_t gitops_resolve_default_remote(
-    git_repository *repo, arena_t *arena, const char **out_name,
-    const char **out_url
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_name);
-
-    *out_name = NULL;
-    if (out_url) *out_url = NULL;
-
-    git_strarray remotes = { 0 };
-    int rc = git_remote_list(&remotes, repo);
-    if (rc < 0) return error_git(rc, "Cannot list the remotes");
-
-    if (remotes.count == 0) {
-        git_strarray_dispose(&remotes);
-        return error_create(ERR_NOT_FOUND, "No remotes configured");
-    }
-
-    /* Select: "origin" wins; otherwise sole remote; otherwise ambiguous. */
-    const char *selected = NULL;
-    for (size_t i = 0; i < remotes.count; i++) {
-        if (strcmp(remotes.strings[i], "origin") == 0) {
-            selected = "origin";
-            break;
-        }
-    }
-    if (!selected && remotes.count == 1) {
-        selected = remotes.strings[0];
-    }
-    if (!selected) {
-        git_strarray_dispose(&remotes);
-        return error_create(ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found");
-    }
-
-    const char *name = arena_strdup(arena, selected);
-    git_strarray_dispose(&remotes);
-
-    /* URL is optional, and so is a remote's: one without a URL answers NULL. */
-    error_t err = out_url ? gitops_get_remote_url(repo, name, arena, out_url) : NULL;
-    if (err) return err;
-
-    *out_name = name;
-
-    return NULL;
-}
-
-/**
  * Reference operations
  */
 
@@ -1366,8 +933,8 @@ static error_t gitops_reference_terminal(
     }
 
     return error_create(
-        ERR_GIT, "Reference '%s' is a symbolic chain more than %d links deep", refname,
-        GITOPS_SYMREF_DEPTH
+        ERR_GIT, "Reference '%s' is a symbolic chain more than %d links deep",
+        refname, GITOPS_SYMREF_DEPTH
     );
 }
 
@@ -1446,9 +1013,7 @@ error_t gitops_write_reference(
      * the lock, would refuse every name that stands. The compare runs under the
      * terminal's lock, and Git's namespace is asked whatever it says (refdb_fs.c
      * refdb_fs_backend__write: reference_path_available, then cmp_old_ref). */
-    int rc = git_reference_create_matching(
-        NULL, repo, terminal, target, 1, expected, line
-    );
+    int rc = git_reference_create_matching(NULL, repo, terminal, target, 1, expected, line);
     free(line);
     if (rc == GIT_EMODIFIED) {
         return error_create(

@@ -1,14 +1,14 @@
 /**
  * epoch.c - The repository's epoch: implementation
  *
- * Six entry points:
+ * Five entry points:
  *   - epoch_init            — mint the salt beside the pair given + write
  *                             commit/tree/blobs (idempotent)
  *   - epoch_load            — walk ref → commit → tree → blobs, validate, copy
- *   - epoch_push            — push refs/dotta/epoch to a remote
- *   - epoch_fetch           — obtain, validate, then install refs/dotta/epoch
- *                             from a remote
- *   - epoch_resolve         — pure fact-finder for cmd_sync's epoch policy
+ *   - epoch_resolve         — pure fact-finder for cmd_sync's epoch policy, off
+ *                             the caller's session
+ *   - epoch_adopt           — prove the commit the caller's fetch brought, then
+ *                             install refs/dotta/epoch at it
  *   - epoch_find_ciphertext — the keymgr's witness source, over the census's walk
  *
  * Every entry point validates inputs, manages libgit2 object lifetimes via local
@@ -16,15 +16,11 @@
  * its own (`error_git`); a static trusts the entry point that called it and checks
  * nothing again. The module never holds resources across return.
  *
- * The push/fetch primitives speak libgit2 directly rather than going through
- * `sys/gitops::gitops_*_branches` — those build branch-specific `refs/heads/...`
- * refspecs internally, and "abstract over arbitrary refspec sync" is not yet a
- * recurring need (this is the only consumer). The acquisition side differs in
- * kind and not only in refspec: gitops fetches with `git_remote_fetch`, which
- * updates the heads a branch fetch is *for*, while `epoch_fetch` downloads the
- * objects and stores no ref, because it installs one only after judging them. A
- * second non-branch consumer would be the moment to extract a helper — of whichever
- * of the two shapes it turns out to want.
+ * The network is the caller's session's (sys/remote.h), never this module's:
+ * the verdict reads its advertisement, and the establish is the caller's push.
+ * The acquisition differs in kind from a branch's fetch, which writes its tracking
+ * ref at once: the caller's one fetch brings the epoch's objects and stores no
+ * ref for them, and `epoch_adopt` installs one only after judging them.
  *
  * Blob mode: both blobs are stored as regular files (GIT_FILEMODE_BLOB). The
  * mode is irrelevant to dotta — nothing checks out the tree — but using the
@@ -48,8 +44,8 @@
 #include "infra/content.h"
 #include "sys/entropy.h"
 #include "sys/gitops.h"
+#include "sys/remote.h"
 #include "sys/stage.h"
-#include "sys/transfer.h"
 
 /* The local-ciphertext census (defined with the reconcile machinery below);
  * epoch_init gates every fresh mint on it. */
@@ -136,9 +132,9 @@ static error_t epoch_read_tree(
  * Read the epoch from the commit at `oid`, validating both blobs.
  *
  * The ref is never consulted, which is exactly what its two readers need: the
- * acquisition boundary (epoch_fetch), judging bytes that sit in the object database
+ * acquisition boundary (epoch_adopt), judging bytes that sit in the object database
  * while `refs/dotta/epoch` still holds whatever it held — an object that is not
- * a commit, or a commit whose tree or blobs the transfer did not carry, refuses
+ * a commit, or a commit whose tree or blobs the fetch did not carry, refuses
  * here, before anything points at it — and the reconcile (epoch_resolve,
  * epoch_decide), judging the commit its one read of the ref named.
  */
@@ -312,239 +308,13 @@ error_t epoch_init(
     return NULL;
 }
 
-error_t epoch_push(
-    git_repository *repo, const char *remote_name, transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(xfer);
-
-    /* Skip the network round-trip when the local ref does not exist — `dotta
-     * init` populates it but a `dotta sync` on a freshly-cloned encryption-disabled
-     * repo may not have one yet. */
-    bool exists = false;
-    error_t err = gitops_reference_exists(repo, EPOCH_REF, &exists);
-    if (err) return err;
-    if (!exists) return NULL;
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_git(rc, "Cannot push '%s' to remote '%s'", EPOCH_REF, remote_name);
-
-    git_push_options push_opts;
-    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
-    transfer_configure_callbacks(
-        &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
-    );
-
-    /* Non-force refspec: an epoch push must be fast-forward. Two machines that
-     * independently `dotta init`ed and now race their epochs to the same remote
-     * will see the second one fail here — surfaced as a regular non-fast-forward
-     * Git error so the user understands they need to reconcile. */
-    char *refspecs[] = { EPOCH_REF ":" EPOCH_REF };
-    git_strarray refs = { refspecs, 1 };
-
-    transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
-    rc = git_remote_push(remote, &refs, &push_opts);
-    transfer_op_end(xfer, rc);
-
-    /* The act and the remote in its words, then libgit2's reason — a
-     * non-fast-forward, a rejected namespace, the credentials — read before the
-     * free as every transfer's is (sys/gitops.c gitops_fetch_remote): the whole
-     * of what cmd_sync's establish arm prints */
-    err = rc < 0
-        ? error_git(rc, "Cannot push '%s' to remote '%s'", EPOCH_REF, remote_name)
-        : NULL;
-    git_remote_free(remote);
-    return err;
-}
-
-/**
- * Probe the remote's advertised `refs/dotta/epoch`.
- *
- * Uses `git_remote_connect` + `git_remote_ls` so the absence diagnostic is "remote
- * does not advertise this ref" — distinct from "fetch failed for transport
- * reasons". `git_remote_ls` transfers no byte payload, so the connect uses FETCH
- * direction purely to align the credential path with whatever the caller does next.
- *
- * The advertised commit OID is the fact both callers came for, and it is copied
- * to `*out_oid` when — and only when — the ref is advertised, `*out_present`
- * being what says whether to read it. `epoch_inspect_remote` compares it against
- * the local ref without transferring a blob; `epoch_fetch` downloads it and,
- * once proved, installs it.
- *
- * The prober never owns the connection: it leaves the remote connected and the
- * caller's `git_remote_free` closes the transport. That is what lets `epoch_fetch`
- * download over the very connection that made the advertisement, so the OID it
- * validates is the one that connection named rather than whatever the remote's
- * ref has moved to since.
- *
- * Returns NULL with `*out_present` set; never surfaces "ref missing" as an error
- * code (that is the load-bearing return value of this predicate).
- */
-static error_t epoch_probe_remote(
-    git_remote *remote, transfer_context_t *xfer, bool *out_present,
-    git_oid *out_oid
-) {
-    *out_present = false;
-
-    git_remote_callbacks callbacks;
-    git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
-    transfer_configure_callbacks(&callbacks, xfer, GIT_DIRECTION_FETCH);
-
-    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    int rc = git_remote_connect(
-        remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
-    );
-    transfer_op_end(xfer, rc);
-    if (rc < 0) {
-        return error_git(rc, "Cannot list the references of remote '%s'", git_remote_name(remote));
-    }
-
-    const git_remote_head **heads = NULL;
-    size_t heads_len = 0;
-    rc = git_remote_ls(&heads, &heads_len, remote);
-    if (rc < 0) {
-        return error_git(rc, "Cannot list the references of remote '%s'", git_remote_name(remote));
-    }
-
-    for (size_t i = 0; i < heads_len; i++) {
-        if (heads[i] == NULL || heads[i]->name == NULL
-            || strcmp(heads[i]->name, EPOCH_REF) != 0) {
-            continue;
-        }
-        *out_present = true;
-        git_oid_cpy(out_oid, &heads[i]->oid);
-        break;
-    }
-
-    return NULL;
-}
-
-error_t epoch_fetch(
-    git_repository *repo, const char *remote_name, commit_action_t action,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(xfer);
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_git(rc, "Cannot fetch '%s' from remote '%s'", EPOCH_REF, remote_name);
-
-    /* Look before taking. The advertisement gives a clean ERR_NOT_FOUND surface
-     * for "this remote is not a dotta repository", where asking for a ref the
-     * remote lacks surfaces a generic Git error indistinguishable from real
-     * transport failure by code alone. The commit it names is the one this call
-     * acquires: the probe leaves the connection open and the download below runs
-     * on it, so nothing the remote does meanwhile can substitute another commit
-     * for the one that was judged. */
-    bool present = false;
-    git_oid advertised;
-    error_t err = epoch_probe_remote(remote, xfer, &present, &advertised);
-    if (err) {
-        git_remote_free(remote);
-        return err;
-    }
-    if (!present) {
-        git_remote_free(remote);
-        return error_create(
-            ERR_NOT_FOUND, "Remote '%s' does not advertise '%s'",
-            remote_name, EPOCH_REF
-        );
-    }
-
-    git_fetch_options fetch_opts;
-    git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
-
-    transfer_configure_callbacks(
-        &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
-    );
-
-    /* A refspec with no destination means "want these objects, store no ref for
-     * them", and `git_remote_download` — unlike `git_remote_fetch` — never updates
-     * heads, so it writes no FETCH_HEAD either. The remote epoch's bytes become
-     * readable at `advertised` while refs/dotta/epoch still holds whatever it
-     * held. */
-    char *refspecs[] = { EPOCH_REF };
-    git_strarray refs = { refspecs, 1 };
-
-    /* The download's sentence is read before the close: the download leaves the
-     * transport connected (remote.c git_remote_download disconnects nothing,
-     * where git_remote_push does before it returns), and freeing the remote writes
-     * a flush to a connection the remote may have reset (transports/smart.c
-     * git_smart__close), whose failure would be the sentence read. The act and
-     * the remote in its words, as epoch_push's: what the boundaries print whole
-     * (sync's adopt arm, clone's acquisition gate). */
-    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    rc = git_remote_download(remote, &refs, &fetch_opts);
-    transfer_op_end(xfer, rc);
-    err = rc < 0
-        ? error_git(rc, "Cannot fetch '%s' from remote '%s'", EPOCH_REF, remote_name)
-        : NULL;
-    git_remote_free(remote);
-    if (err) return err;
-
-    /* Judge the bytes while no ref names them. This is the epoch acquisition
-     * boundary, so it owns the "is this a well-formed epoch?" check — and there
-     * is nothing to undo when the answer is no, because a malformed remote epoch
-     * never stood in refs/dotta/epoch for a later inspect to read as canonical
-     * or a later load to surface as a deferred, cryptic decrypt failure. */
-    kdf_epoch_t fetched;
-    err = epoch_read_commit(repo, &advertised, &fetched);
-    /* The epoch is public — no wipe. */
-    if (err) {
-        /* One ERR_CRYPTO surface for every way the read can fail, so clone and
-         * sync route it alike — a wrap would keep the cause's code (ERR_CRYPTO
-         * or ERR_GIT) and split them. The ways are two kinds, and the code cannot
-         * tell them apart: bytes the read refused (a wrong size, a missing blob,
-         * a pair out of range, an object that is no commit), the remote's; and
-         * an object that would not load after a download that completed, this
-         * store's. So the words blame neither: the act that failed, and the root's
-         * — the blob the read refused, which object it was loading and the
-         * mechanism's sentence for it, one node as every libgit2 failure is
-         * (base/error.h error_git), or the bound the pair broke beneath the wrap
-         * naming the params blob. The act names the advertisement, where the
-         * reader names no ref (epoch_read_blob). A re-mint keeps one fact's words
-         * (base/error.h "Messages"). */
-        return error_create(
-            ERR_CRYPTO, "Cannot adopt the epoch remote '%s' advertises: %s",
-            remote_name, error_message(error_root(err))
-        );
-    }
-
-    /* Install, and only now: the one mutation this function makes, and its last
-     * step. The write is forced — the local ref is replaced wholesale by the
-     * remote's, the one ref write dotta makes from no read of what stands
-     * (sys/gitops.h gitops_write_reference) — which is safe because the only
-     * caller that reaches a *divergent* local epoch, `cmd_sync`'s adopt path,
-     * gates the fetch on the key-free census proving no reachable ciphertext
-     * (any commit, any branch) is keyed by the epoch being replaced. Clone reaches
-     * a missing (not divergent) local epoch, so there is nothing to overwrite.
-     * Deliberate epoch rotation remains unsupported end-to-end: a re-minted epoch
-     * cannot even be published (the push is non-force), and a clone whose
-     * ciphertext the old epoch keys lands on CONFLICT, not adopt. Its line names
-     * the caller's command. The write's failure names the ref, and the act and
-     * the remote are this call's to say. */
-    err = gitops_write_reference(
-        repo, EPOCH_REF, &advertised, NULL, commit_action_word(action),
-        "adopted from %s", remote_name
-    );
-    if (err) {
-        return error_wrap(err, "Cannot adopt the epoch remote '%s' advertises", remote_name);
-    }
-
-    return NULL;
-}
-
 /*
  * The ciphertext walk: every blob reachable from any local branch's full history
  * — disabled profiles included — classified key-free by its header
  * (content_classify is header-only, the epoch fingerprint is public), with every
  * ciphertext presented to a callback until it stops the walk. Two askers: the
  * census — "does the repository hold ciphertext keyed by a given epoch?", which
- * gates the divergent-epoch decision, because replacing an epoch that keys
+ * gates the divergent epoch's verdict, because replacing an epoch that keys
  * reachable ciphertext bricks it (deterministic SIV), and *reachable* means the
  * full history, not the heads: `dotta show`/`revert`/`diff` decrypt blobs at
  * any `@commit`, every one of them under the current epoch — and the keymgr's
@@ -941,13 +711,13 @@ error_t epoch_find_ciphertext(
  * `epoch_resolve` in the header; it is the caller's contract, not an internal.
  */
 static error_t epoch_decide(
-    git_repository *repo, const git_oid *local, epoch_reconcile_t *out_decision
+    git_repository *repo, const git_oid *local, epoch_reconcile_t *out
 ) {
     if (git_oid_is_zero(local)) {
         /* No bytes at the ref: nothing to make unreachable, and whatever this
          * repository holds was orphaned by whatever removed them. A census here
          * would attribute against a value that does not exist. */
-        *out_decision = EPOCH_RECONCILE_ADOPT;
+        *out = EPOCH_RECONCILE_ADOPT;
         return NULL;
     }
 
@@ -967,7 +737,7 @@ static error_t epoch_decide(
         bool any = false;
         err = epoch_census(repo, NULL, &any);
         if (err) return err;
-        *out_decision = any ? EPOCH_RECONCILE_DAMAGED : EPOCH_RECONCILE_ADOPT;
+        *out = any ? EPOCH_RECONCILE_DAMAGED : EPOCH_RECONCILE_ADOPT;
         return NULL;
     }
 
@@ -978,125 +748,125 @@ static error_t epoch_decide(
     bool keyed = false;
     err = epoch_census(repo, fp, &keyed);
     if (err) return err;
-    *out_decision = keyed ? EPOCH_RECONCILE_CONFLICT : EPOCH_RECONCILE_ADOPT;
-    return NULL;
-}
-
-/*
- * Remote epoch status relative to the local ref, by commit-OID compare (the
- * OID-vs-byte exactness rationale lives on the public epoch_reconcile_t). DIVERGENT
- * subsumes the local-absent case: a joiner with no epoch must converge to the
- * remote's.
- */
-typedef enum {
-    EPOCH_REMOTE_ABSENT,     /* remote does not advertise refs/dotta/epoch */
-    EPOCH_REMOTE_EQUAL,      /* advertised OID == local ref target */
-    EPOCH_REMOTE_DIVERGENT,  /* advertised OID != local target (incl. local-absent) */
-} epoch_remote_t;
-
-/*
- * Inspect the remote epoch without transferring objects: connect + ls, then compare
- * the advertised refs/dotta/epoch OID against the local one the caller read —
- * the zero id where no local ref stands. Read-only and dry-run-safe. Its failure
- * is the remote's alone, the lookup or the transport (which epoch_resolve folds
- * to UNREACHABLE); a remote that simply lacks the ref is ABSENT, never an error.
- */
-static error_t epoch_inspect_remote(
-    git_repository *repo, const char *remote_name, transfer_context_t *xfer,
-    const git_oid *local, epoch_remote_t *out_status
-) {
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) {
-        return error_git(
-            rc, "Cannot list the references of remote '%s'", remote_name
-        );
-    }
-
-    /* The advertisement, its sentence read before the free closes the transport
-     * (epoch_probe_remote reads it at the failing call) */
-    bool present = false;
-    git_oid remote_oid;
-    error_t err = epoch_probe_remote(remote, xfer, &present, &remote_oid);
-    git_remote_free(remote);
-    if (err) return err;
-
-    if (!present) {
-        *out_status = EPOCH_REMOTE_ABSENT;
-        return NULL;
-    }
-
-    /* Remote advertises the ref: its commit OID against the local one. No
-     * advertised id is the zero id, so a missing local ref compares DIVERGENT —
-     * a joiner that has no epoch yet must converge to the remote's. */
-    *out_status = git_oid_equal(local, &remote_oid)
-        ? EPOCH_REMOTE_EQUAL
-        : EPOCH_REMOTE_DIVERGENT;
-
+    *out = keyed ? EPOCH_RECONCILE_CONFLICT : EPOCH_RECONCILE_ADOPT;
     return NULL;
 }
 
 error_t epoch_resolve(
-    git_repository *repo, const char *remote_name, transfer_context_t *xfer,
-    epoch_reconcile_t *out_decision
+    git_repository *repo, const remote_t *remote, epoch_decision_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(xfer);
-    CHECK_NULL(out_decision);
+    CHECK_NULL(remote);
+    CHECK_NULL(out);
 
-    /* This store's own ref, read before the remote is asked: two questions, and
-     * a failure here is the run's and never the remote's. It names the ref
-     * (sys/gitops.h gitops_reference_find), which the caller's line does not.
-     * The one read: every finding below judges the commit it names. */
-    git_oid local;
-    error_t err = gitops_reference_oid(repo, EPOCH_REF, &local);
+    /* This store's own ref, read once, first: a failure here is the store's alone,
+     * and it names the ref (sys/gitops.h gitops_reference_find), which the caller's
+     * line does not. Every finding below judges the commit it names. Then the
+     * remote's, off the session's advertisement: no advertised id is the null
+     * id, so a remote holding none reads absent, and a local ref that stands at
+     * nothing never equals an advertised one — a joiner with no epoch must converge
+     * to the remote's. */
+    error_t err = gitops_reference_oid(repo, EPOCH_REF, &out->local);
     if (err) return err;
+    remote_advertised(remote, EPOCH_REF, &out->advertised);
 
-    /* The remote's half alone now: a lookup or transport failure folds to
-     * UNREACHABLE — the caller skips epoch reconciliation best-effort, and the
-     * fetch phase carries the authoritative "remote unreachable" diagnostic. */
-    epoch_remote_t status;
-    err = epoch_inspect_remote(repo, remote_name, xfer, &local, &status);
-    if (err) {
-        *out_decision = EPOCH_RECONCILE_UNREACHABLE;
+    if (git_oid_is_zero(&out->advertised)) {
+        /* Establish publishes THIS machine's epoch, so a valid local one must
+         * exist, judged at the commit read above. A repo whose ref is absent,
+         * or stands and yields no epoch, has nothing to publish — distinguish
+         * the two so the caller never claims an establish it cannot perform (the
+         * establish guard). */
+        kdf_epoch_t scratch;
+        out->verdict = git_oid_is_zero(&out->local)
+            || epoch_read_commit(repo, &out->local, &scratch)
+            ? EPOCH_RECONCILE_NO_LOCAL_EPOCH : EPOCH_RECONCILE_ESTABLISH;
         return NULL;
     }
 
-    switch (status) {
-        case EPOCH_REMOTE_EQUAL:
-            *out_decision = EPOCH_RECONCILE_EQUAL;
-            return NULL;
-
-        case EPOCH_REMOTE_ABSENT: {
-            /* Establish publishes THIS machine's epoch, so a valid local one
-             * must exist, judged at the commit read above. A repo whose ref is
-             * absent, or stands and yields no epoch, has nothing to publish —
-             * distinguish the two so the caller never claims an establish it
-             * cannot perform (the establish guard). */
-            kdf_epoch_t scratch;
-            *out_decision = git_oid_is_zero(&local)
-                || epoch_read_commit(repo, &local, &scratch)
-                ? EPOCH_RECONCILE_NO_LOCAL_EPOCH : EPOCH_RECONCILE_ESTABLISH;
-
-            return NULL;
-        }
-
-        case EPOCH_REMOTE_DIVERGENT:
-            /* Five findings, and the fail-closed one is the return: a fetch arm
-             * is reached only over bytes nothing here can depend on. A census
-             * that could not finish is said as the question it could not answer,
-             * here where it was asked, as epoch_init says its own */
-            err = epoch_decide(repo, &local, out_decision);
-            if (err) {
-                return error_wrap(
-                    err, "Whether any encrypted file here is sealed under the local "
-                    "epoch could not be determined"
-                );
-            }
-            return NULL;
+    if (git_oid_equal(&out->local, &out->advertised)) {
+        out->verdict = EPOCH_RECONCILE_EQUAL;
+        return NULL;
     }
 
-    /* epoch_inspect_remote yields exactly one of three statuses */
-    CHECK_ARG(false, "a remote epoch status no enumerator names");
+    /* Divergent: five findings, and the fail-closed one is the return — an adopt
+     * is reached only over bytes nothing here can depend on. A census that could
+     * not finish is said as the question it could not answer, here where it was
+     * asked, as epoch_init says its own */
+    err = epoch_decide(repo, &out->local, &out->verdict);
+    if (err) {
+        return error_wrap(
+            err, "Whether any encrypted file here is sealed under the local epoch "
+            "could not be determined"
+        );
+    }
+    return NULL;
+}
+
+error_t epoch_adopt(
+    git_repository *repo, const epoch_decision_t *decision, const char *remote_name,
+    commit_action_t action
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(decision);
+    CHECK_NULL(remote_name);
+    CHECK_ARG(
+        decision->verdict == EPOCH_RECONCILE_ADOPT,
+        "an epoch is adopted only where its verdict is ADOPT"
+    );
+
+    /* Judge the bytes while no ref names them. This is the epoch acquisition
+     * boundary, so it owns the "is this a well-formed epoch?" check — and there
+     * is nothing to undo when the answer is no, because a malformed remote epoch
+     * never stood in refs/dotta/epoch for a later resolve to read as canonical
+     * or a later load to surface as a deferred, cryptic decrypt failure. The
+     * commit is the one the advertisement named, the objects the caller's fetch
+     * brought (sys/remote.h remote_fetch) — a fetch that did not bring them is
+     * a read that will not load, refused here like any other. */
+    kdf_epoch_t fetched;
+    error_t err = epoch_read_commit(repo, &decision->advertised, &fetched);
+    /* The epoch is public — no wipe. */
+    if (err) {
+        /* One ERR_CRYPTO surface for every way the read can fail, so clone and
+         * sync route it alike — a wrap would keep the cause's code (ERR_CRYPTO
+         * or ERR_GIT) and split them. The ways are two kinds, and the code cannot
+         * tell them apart: bytes the read refused (a wrong size, a missing blob,
+         * a pair out of range, an object that is no commit), the remote's; and
+         * an object that would not load after a download that completed, this
+         * store's. So the words blame neither: the act that failed, and the root's
+         * — the blob the read refused, which object it was loading and the
+         * mechanism's sentence for it, one node as every libgit2 failure is
+         * (base/error.h error_git), or the bound the pair broke beneath the wrap
+         * naming the params blob. The act names the advertisement, where the
+         * reader names no ref (epoch_read_blob). A re-mint keeps one fact's words
+         * (base/error.h "Messages"). */
+        return error_create(
+            ERR_CRYPTO, "Cannot adopt the epoch remote '%s' advertises: %s",
+            remote_name, error_message(error_root(err))
+        );
+    }
+
+    /* Install, and only now: the one mutation this function makes, and its last
+     * step. The write is forced — the local ref is replaced wholesale by the
+     * remote's, the one ref write dotta makes from no read of what stands
+     * (sys/gitops.h gitops_write_reference) — which is safe because the verdict
+     * licensed it: sync reaches ADOPT over a divergent local epoch only where
+     * the key-free census proved no reachable ciphertext (any commit, any branch)
+     * is keyed by the epoch being replaced, and clone over none at all. Deliberate
+     * epoch rotation remains unsupported end-to-end: a re-minted epoch cannot
+     * even be published (the establish expects the remote to hold none), and a
+     * clone whose ciphertext the old epoch keys lands on CONFLICT, not adopt.
+     * Its line names the caller's command. The write's failure names the ref,
+     * and the act and the remote are this call's to say. */
+    err = gitops_write_reference(
+        repo, EPOCH_REF, &decision->advertised, NULL, commit_action_word(action),
+        "adopted from %s", remote_name
+    );
+    if (err) {
+        return error_wrap(
+            err, "Cannot adopt the epoch remote '%s' advertises",
+            remote_name
+        );
+    }
+
+    return NULL;
 }

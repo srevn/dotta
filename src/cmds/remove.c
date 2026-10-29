@@ -1452,6 +1452,7 @@ static error_t remove_profile(
          * and nothing is pushed */
         char ref[DOTTA_REFNAME_MAX];
         remote_t *remote = NULL;
+        git_oid advertised = GIT_OID_SHA1_ZERO;
         error_t push_err = gitops_branch_refname(ref, sizeof(ref), opts->profile);
         if (!push_err) {
             push_err = remote_open(
@@ -1459,7 +1460,6 @@ static error_t remove_profile(
             );
         }
         if (!push_err) {
-            git_oid advertised;
             remote_advertised(remote, ref, &advertised);
             if (!git_oid_is_zero(&advertised)) {
                 const git_oid none = GIT_OID_SHA1_ZERO;
@@ -1480,6 +1480,15 @@ static error_t remove_profile(
                 out, OUTPUT_NORMAL,
                 "Run 'dotta git push %s --delete %s' to push the deletion",
                 remote_name, opts->profile
+            );
+        } else if (git_oid_is_zero(&advertised)) {
+            /* The remote holds no branch of the name, taken there since this
+             * store last saw it — by another machine, or a hand: nothing was
+             * pushed, and the remote's absence is what is said */
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Profile '%s' is not on remote '%s': nothing to delete there",
+                opts->profile, remote_name
             );
         } else {
             output_info(out, OUTPUT_NORMAL, "Profile deletion pushed to remote");

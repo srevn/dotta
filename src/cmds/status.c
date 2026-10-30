@@ -1421,10 +1421,12 @@ typedef struct {
  * The transport's answer (status_remote), a value of the command arena: the name
  * the resolver gave, and a row for each profile of the set the transport chose
  * — the scope's, or under --all every local branch — read against the remote
- * while its session stood. The zero value is no section.
+ * while its session stood, or with no contact as last seen. The zero value is
+ * no section.
  */
 typedef struct {
     const char *name;                 /* The default remote; NULL where no section stands */
+    bool last_seen;                   /* Read with no contact: each row against its tracking ref */
     const status_remote_row_t *rows;  /* A row a profile of the set, in its order */
     size_t row_count;
 } status_remote_t;
@@ -1442,9 +1444,10 @@ typedef struct {
  * unless --no-fetch, is the half's one write, each profile's remote-tracking
  * ref (sys/remote.h remote_fetch): a progress line at -v while it runs, on a
  * terminal; its failure a warning at -v. Then each profile is read against the
- * remote, while the session stands (sys/remote.h remote_relation), or, with no
- * contact, against its tracking ref, the remote as last seen (remote_last_relation)
- * — and the session is left: the section prints values.
+ * remote while the session stands (sys/remote.h remote_relation), the session
+ * left after it; or, with no contact — --no-fetch, or one that failed — against
+ * its tracking ref, the remote as last seen (remote_last_relation), which the
+ * answer says: the section prints values.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options: --remote, --all and --no-fetch (must not be NULL)
@@ -1512,48 +1515,61 @@ static status_remote_t status_remote(
 
     if (profiles->count == 0) return (status_remote_t){ 0 };
 
+    /* A row a profile of the set, in its order. A row that will not read keeps
+     * its failure, which the section says in its place. */
+    status_remote_row_t *rows = arena_calloc(ctx->arena, profiles->count, sizeof(*rows));
+
     /* The contact, unless --no-fetch: the remote met once and the set fetched
      * from it (sys/remote.h), its listing what the rows read the remote's heads
      * off. While it runs, a progress line at -v: a terminal's alone, drawn over
      * by transfer's frames while objects move (sys/transfer.h transfer_op_end),
      * never a line of the report (base/output.h output_progress), and taken down
      * once the fetch is done, whichever way it went */
-    remote_t *remote = NULL;
     if (!opts->no_fetch) {
         output_progress(out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name);
+        remote_t *remote = NULL;
         err = remote_open(repo, remote_name, "status", out, &remote);
         if (!err) err = remote_fetch(remote, profiles, NULL, NULL);
         output_clear_line(out);
 
-        if (err) {
-            /* Non-fatal: warn and continue with status display. Either's failure
-             * names its act and the remote, or the tracking ref the fetch read,
-             * took out of a name's way or wrote (sys/remote.h remote_fetch), a
-             * block of its own. A session whose fetch failed brought no objects
-             * for its listing's heads: the rows read the tracking refs. */
-            output_gap(out, OUTPUT_VERBOSE);
-            output_warning(out, OUTPUT_VERBOSE, "%s", error_line(err));
+        /* Each profile against the session's heads, then the session left, its
+         * credential's verdict told (sys/remote.h remote_free) */
+        if (!err) {
+            for (size_t i = 0; i < profiles->count; i++) {
+                status_remote_row_t *row = &rows[i];
+
+                row->profile = profiles->entries[i];
+                row->error = remote_relation(remote, row->profile, &row->relation);
+            }
             remote_free(remote);
-            remote = NULL;
+
+            return (status_remote_t){
+                .name = remote_name, .rows = rows, .row_count = profiles->count
+            };
         }
+
+        /* Non-fatal: warn and continue with status display. Either's failure
+         * names its act and the remote, or the tracking ref the fetch read, took
+         * out of a name's way or wrote (sys/remote.h remote_fetch), a block of
+         * its own. A session whose fetch failed brought no objects for its
+         * listing's heads: the rows read the tracking refs. */
+        output_gap(out, OUTPUT_VERBOSE);
+        output_warning(out, OUTPUT_VERBOSE, "%s", error_line(err));
+        remote_free(remote);
     }
 
-    /* Each profile against the remote — the session's heads where the contact
-     * stands, else its tracking ref's — then the session left, its credential's
-     * verdict told (sys/remote.h remote_free). A row that will not read keeps
-     * its failure, which the section says in its place. */
-    status_remote_row_t *rows = arena_calloc(ctx->arena, profiles->count, sizeof(*rows));
+    /* With no contact, each profile against its tracking ref: the remote as last
+     * seen (sys/remote.h remote_last_relation), which the section's title says */
     for (size_t i = 0; i < profiles->count; i++) {
         status_remote_row_t *row = &rows[i];
 
         row->profile = profiles->entries[i];
-        row->error = remote
-            ? remote_relation(remote, row->profile, &row->relation)
-            : remote_last_relation(repo, remote_name, row->profile, &row->relation);
+        row->error = remote_last_relation(repo, remote_name, row->profile, &row->relation);
     }
-    remote_free(remote);
 
-    return (status_remote_t){ .name = remote_name, .rows = rows, .row_count = profiles->count };
+    return (status_remote_t){
+        .name = remote_name, .last_seen = true, .rows = rows, .row_count = profiles->count
+    };
 }
 
 /**
@@ -1579,8 +1595,18 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
     bool verbose = output_is_verbose(out);
 
     /* The remote sync status section, under the title list's remote listing takes
-     * too (cmds/list.c list_profiles) */
-    output_section(out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote->name);
+     * too (cmds/list.c list_profiles): marked as last seen where its rows were
+     * read with no contact, as list's always are */
+    if (remote->last_seen) {
+        output_section(
+            out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset}, as last seen)",
+            remote->name
+        );
+    } else {
+        output_section(
+            out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote->name
+        );
+    }
 
     /* Display each profile's reading */
     size_t up_to_date = 0;
@@ -1882,7 +1908,7 @@ static const args_opt_t status_opts[] = {
     ARGS_FLAG(
         "no-fetch",
         cmd_status_options_t,no_fetch,
-        "Skip remote fetch; use cached refs"
+        "Show the remote as last seen, without contacting it"
     ),
     ARGS_FLAG(
         "all",
@@ -1923,7 +1949,7 @@ const args_command_t spec_status = {
         "  %s status                         # Local + remote\n"
         "  %s status --local                 # Filesystem only\n"
         "  %s status --remote                # Remote only\n"
-        "  %s status --no-fetch              # Skip fetch (cached refs)\n"
+        "  %s status --no-fetch              # Local + remote as last seen\n"
         "  %s status -p work -p home         # Named profiles only\n"
         "  %s status --all                   # Include non-enabled profiles\n"
         "  %s status --full                  # Every active path, clean ones too\n",

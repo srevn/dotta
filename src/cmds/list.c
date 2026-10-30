@@ -292,10 +292,12 @@ static error_t list_profiles(
     }
 
     /* The header: where the rows say each state, the title status's remote section
-     * gives the same rows, naming the remote (cmds/status.c status_print_remote) */
+     * gives the same rows read with no contact, naming the remote and marked as
+     * last seen (cmds/status.c status_print_remote) — list makes none */
     if (show_remote) {
         output_section(
-            out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote_name
+            out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset}, as last seen)",
+            remote_name
         );
     } else {
         output_section(out, OUTPUT_NORMAL, "Profiles");
@@ -1132,7 +1134,7 @@ static const args_opt_t list_opts[] = {
     ARGS_FLAG(
         "remote",
         cmd_list_options_t,remote,
-        "Show remote sync status (Level 1 only)"
+        "Show remote sync status as last seen (Level 1 only)"
     ),
     ARGS_FLAG_SET(
         "v verbose",

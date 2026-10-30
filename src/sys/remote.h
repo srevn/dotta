@@ -457,7 +457,7 @@ const char *remote_state_symbol(remote_state_t state);
  *   NO_LOCAL     → DIM      (no local branch to compare)
  * each _AHEAD as its base, and every reading with no branch here as NO_LOCAL.
  *
- * Readers: cmds/status.c status_print_remote; cmds/profile.c profile_fetch.
+ * Reader: cmds/profile.c profile_fetch, whose rows colour the glyph.
  */
 output_color_t remote_state_color(remote_state_t state);
 
@@ -472,9 +472,9 @@ output_color_t remote_state_color(remote_state_t state);
  * ahead" where this store holds commits the remote lacks beside a re-creation,
  * a deletion or no branch here, AHEAD's own words; ", deleted on the remote" or
  * ", no remote branch" beside no branch here. The phrase, not its frame: each
- * reader sets the glyph and the colour beside it (remote_state_symbol,
- * remote_state_color) and the frame its screen gives a reading, so the rows of
- * status, list and profile fetch say a reading alike.
+ * reader sets the glyph beside it (remote_state_symbol), a colour where its screen
+ * gives one (remote_state_color), and the frame its screen gives a reading, so
+ * the rows of status, list and profile fetch say a reading alike.
  *
  * The words on screen: a reading named alone, without its counts — status's Sync
  * summary counting the branches in each (cmds/status.c status_print_remote) —
@@ -484,7 +484,7 @@ output_color_t remote_state_color(remote_state_t state);
  * prints the phrase beside it.
  *
  * Readers: cmds/status.c status_print_remote; cmds/list.c list_profiles, whose
- * rows take status's compact frame; cmds/profile.c profile_fetch.
+ * rows take status's frame; cmds/profile.c profile_fetch.
  *
  * @param relation The reading and its counts (must not be NULL)
  * @param buffer Output buffer for the phrase (must not be NULL)

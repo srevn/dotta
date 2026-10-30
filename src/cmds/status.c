@@ -25,6 +25,7 @@
 #include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/remote.h"
+#include "sys/stats.h"
 
 /**
  * Print the enabled profiles and the last deployment of each — or, where no profile
@@ -1578,7 +1579,7 @@ static status_remote_t status_remote(
  * stands
  *
  * Reads what it prints and writes nothing: each row as the transport read it,
- * and at -v the two heads its relation names.
+ * and at -v, beneath it, each head its relation names.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param remote The transport's answer (status_remote; must not be NULL)
@@ -1626,8 +1627,8 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
         /* A profile whose reading could not be read is a row of the section like
          * any other, on the report's stream, its cause the error's own line and
          * the outcome glyph sync gives a failed analysis; the summary counts
-         * it, and the report goes on past it. At both levels: a failure has no
-         * commit for -v to show. */
+         * it, and the report goes on past it. At both levels its one line: a
+         * failure read no head for -v to show beneath it. */
         if (row->error) {
             output_print(
                 out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {red}(✗ %s){reset}\n",
@@ -1636,15 +1637,6 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
             failed++;
             continue;
         }
-
-        /* The reading's face comes from the relation's map — its glyph, its colour
-         * and its phrase, read as list's and profile fetch's rows read it
-         * (sys/remote.h); only the frame and the counter per first clause are
-         * status's. */
-        const char *symbol = remote_state_symbol(relation->state);
-        output_color_t color = remote_state_color(relation->state);
-        char phrase[REMOTE_PHRASE_MAX];
-        remote_state_phrase(relation, phrase, sizeof(phrase));
 
         switch (relation->state) {
             case REMOTE_STATE_UP_TO_DATE:         up_to_date++; break;
@@ -1662,70 +1654,55 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
             case REMOTE_STATE_NO_LOCAL_NO_REMOTE: no_local++; break;
         }
 
-        /* Display with colors */
+        /* The reading's face comes from the relation's map — its glyph and its
+         * phrase, read as list's and profile fetch's rows read it (sys/remote.h);
+         * only the frame and the counter per first clause are status's. The frame
+         * is one line at every level, matching the enabled profiles' format,
+         * and list's remote rows take it too (cmds/list.c list_profiles). */
+        char phrase[REMOTE_PHRASE_MAX];
+        remote_state_phrase(relation, phrase, sizeof(phrase));
+        output_print(
+            out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {dim}(%s %s){reset}\n",
+            row->profile, remote_state_symbol(relation->state), phrase
+        );
+
+        /* At -v, beneath the row, each head its reading holds: the branch here,
+         * and the remote's — the open's listing, or with no contact its tracking
+         * ref. Each commit is read and printed as a list row's last commit is
+         * (sys/stats.h stats_commit_info, cmds/list.c list_profiles); one that
+         * will not read, an object a hand removed, prints no line. */
+        git_commit *commit = NULL;
         if (verbose && !git_oid_is_zero(&relation->local) &&
-            !git_oid_is_zero(&relation->remote)) {
-            /* Verbose mode: show detailed commit info, where the reading holds
-             * both heads — the branch here and the remote's, which the open listed
-             * or, with no contact, the tracking ref stands for. */
-            output_gap(out, OUTPUT_VERBOSE);
-            output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", row->profile);
+            git_commit_lookup(&commit, repo, &relation->local) == 0) {
+            const commit_info_t head = stats_commit_info(ctx->arena, commit);
+            git_commit_free(commit);
 
-            /* Get local commit info. A commit lookup here that fails prints no
-             * line — at most two per profile, the local and the remote. */
-            git_commit *local_commit = NULL;
-            int rc = git_commit_lookup(&local_commit, repo, &relation->local);
+            char oid_str[8];
+            git_oid_tostr(oid_str, sizeof(oid_str), &head.oid);
 
-            /* Status line — always shown regardless of commit loading */
-            output_print(out, OUTPUT_VERBOSE, "  Status:         ");
-            output_colored(out, OUTPUT_VERBOSE, color, "%s %s\n", symbol, phrase);
+            char time_str[64];
+            timeutil_relative(head.time, time_str, sizeof(time_str));
 
-            if (rc == 0) {
-                const git_oid *local_oid = git_commit_id(local_commit);
-                char local_oid_str[8];
-                git_oid_tostr(local_oid_str, sizeof(local_oid_str), local_oid);
+            output_print(
+                out, OUTPUT_VERBOSE, "    local:  {yellow}%s{reset} %s {dim}(%s){reset}\n",
+                oid_str, head.summary, time_str
+            );
+        }
+        if (verbose && !git_oid_is_zero(&relation->remote) &&
+            git_commit_lookup(&commit, repo, &relation->remote) == 0) {
+            const commit_info_t head = stats_commit_info(ctx->arena, commit);
+            git_commit_free(commit);
 
-                const char *local_summary = git_commit_summary(local_commit);
-                git_time_t local_time = git_commit_time(local_commit);
+            char oid_str[8];
+            git_oid_tostr(oid_str, sizeof(oid_str), &head.oid);
 
-                char time_str[64];
-                timeutil_relative(local_time, time_str, sizeof(time_str));
+            char time_str[64];
+            timeutil_relative(head.time, time_str, sizeof(time_str));
 
-                output_print(
-                    out, OUTPUT_VERBOSE, "  Local commit:   %s %s (%s)\n",
-                    local_oid_str, local_summary, time_str
-                );
-
-                git_commit_free(local_commit);
-            }
-
-            /* Remote commit info, the head the reading holds */
-            git_commit *remote_commit = NULL;
-            rc = git_commit_lookup(&remote_commit, repo, &relation->remote);
-
-            if (rc == 0) {
-                const git_oid *remote_oid = git_commit_id(remote_commit);
-                char remote_oid_str[8];
-                git_oid_tostr(remote_oid_str, sizeof(remote_oid_str), remote_oid);
-
-                const char *remote_summary = git_commit_summary(remote_commit);
-                git_time_t remote_time = git_commit_time(remote_commit);
-
-                char time_str[64];
-                timeutil_relative(remote_time, time_str, sizeof(time_str));
-
-                output_print(
-                    out, OUTPUT_VERBOSE, "  Remote commit:  %s %s (%s)\n",
-                    remote_oid_str, remote_summary, time_str
-                );
-
-                git_commit_free(remote_commit);
-            }
-        } else {
-            /* Compact mode: single line matching enabled profiles format, the
-             * frame list's remote rows take too (cmds/list.c list_profiles) */
-            output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", row->profile);
-            output_print(out, OUTPUT_NORMAL, "  {dim}(%s %s){reset}\n", symbol, phrase);
+            output_print(
+                out, OUTPUT_VERBOSE, "    remote: {yellow}%s{reset} %s {dim}(%s){reset}\n",
+                oid_str, head.summary, time_str
+            );
         }
     }
 

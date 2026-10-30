@@ -353,9 +353,8 @@ static error_t list_profiles(
 
         /* Remote: where the profile stands against its tracking ref, the remote
          * as last seen — list makes no contact (sys/remote.h remote_last_relation)
-         * — as status's compact row says it: the glyph beside its phrase, or
-         * the read's failure in its place, its error dropped once said, one per
-         * such branch */
+         * — as status's row says it: the glyph beside its phrase, or the read's
+         * failure in its place, its error dropped once said, one per such branch */
         if (show_remote) {
             remote_relation_t relation;
             err = remote_last_relation(repo, remote_name, profile, &relation);

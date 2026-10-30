@@ -215,6 +215,10 @@ auto_pull = true
 #   - "ours"   - Keep local, force-push over the remote
 #   - "theirs" - Keep remote, reset the local branch
 #
+# Where both sides changed the same thing differently, "merge" merges nothing
+# and lists each conflict: `dotta sync --conflicts ours` (or `theirs`) keeps
+# that side of every one.
+#
 # WARNING: "ours" and "theirs" are destructive and will lose commits! They act
 # on a branch that is only behind or only ahead as well: "ours" force-pushes
 # over the newer remote commits, "theirs" resets the local ones away.

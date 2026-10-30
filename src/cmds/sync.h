@@ -4,9 +4,10 @@
  * Exchanges commits with the remote (fetch, pull, push), each profile's branch
  * against its remote's, a divergence by the strategy — a merge the profile's
  * own (core/profiles.h profile_draft_merge): its claims composed name by name
- * over the merged tree, the merge refused where both sides moved one thing apart.
- * The files on disk and the record are no part of it: apply lands what a pull
- * brought, and update commits what disk holds.
+ * over the merged tree, the merge refused where both sides moved one thing apart,
+ * each conflict listed by its name and what moved there, until --conflicts keeps
+ * one side of every one. The files on disk and the record are no part of it:
+ * apply lands what a pull brought, and update commits what disk holds.
  */
 
 #ifndef DOTTA_CMD_SYNC_H
@@ -16,6 +17,8 @@
 #include <git2.h>
 #include <runtime.h>
 #include <types.h>
+
+#include "core/profiles.h"
 
 /**
  * Sync command options
@@ -29,6 +32,8 @@ typedef struct {
     int verbosity;               /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     const char *diverged;        /* --diverged's word (NULL: the config's strategy) */
     sync_strategy_t diverged_strategy; /* Its strategy, iff diverged (sync_post_parse) */
+    const char *conflicts;       /* --conflicts' word (NULL: none) */
+    profile_side_t conflicts_side; /* Its side, PROFILE_SIDE_NONE without it (sync_post_parse) */
 } cmd_sync_options_t;
 
 /**
@@ -41,8 +46,9 @@ typedef struct {
  * and the configuration asks one — beneath the preview, before any profile acts;
  * then the acts, which say nothing but the remote's words a push brings, and
  * their receipt — beneath a resolution that landed, each name its two sides took,
- * one deleting it and the other removing it — the Manifest block and the import's
- * health, the summary and its remedies, and post-sync.
+ * one deleting it and the other removing it, and beneath a merge each conflict
+ * it met, refusing it or kept for --conflicts' side — the Manifest block and
+ * the import's health, the summary and its remedies, and post-sync.
  *
  * A dry run speaks for the Git phase alone: what each verdict would do, and its
  * end. The view a pull would leave is unknown without the pull, so its health

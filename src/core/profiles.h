@@ -1009,8 +1009,8 @@ error_t profile_draft_open(git_repository *repo, const char *name, profile_draft
 error_t profile_draft_orphan(git_repository *repo, const char *name, profile_draft_t **out);
 
 /**
- * The side a merge's every conflict is settled for: the run's word, none where
- * it named none
+ * The side a merge's every conflict is settled for: the run's word (cmds/sync.c,
+ * --conflicts), none where it named none
  */
 typedef enum {
     PROFILE_SIDE_NONE,     /* None named: a conflict refuses the merge */

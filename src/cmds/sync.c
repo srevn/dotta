@@ -7,6 +7,7 @@
 #include <config.h>
 #include <git2.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -116,14 +117,15 @@ typedef struct {
  *
  * Each column is written once, by its phase: the analysis the upstream, the
  * decision the verdict and what the user's word withholds, the act the outcome,
- * what it sent and, of a resolution that landed, the names its two sides took
- * one deleting and one removing. A withheld act leaves its row as it stands,
- * its verdict none — but a rebase or a merge under --no-push, which resolves
- * all the same and withholds its push alone. The row's error is the failure the
- * run met for it, whichever phase met it — said on the row's line, counted and
- * named by sync_failure. A row whose analysis failed has no verdict, and every
- * reader asks its error before its state: a failed analysis's zeroed state reads
- * as up to date otherwise.
+ * what it sent, of a resolution that landed the names its two sides took one
+ * deleting and one removing, and of a merge the conflicts its open met — refusing
+ * it, or each settled for the run's side. A withheld act leaves its row as it
+ * stands, its verdict none — but a rebase or a merge under --no-push, which
+ * resolves all the same and withholds its push alone. The row's error is the
+ * failure the run met for it, whichever phase met it — said on the row's line,
+ * counted and named by sync_failure. A row whose analysis failed has no verdict,
+ * and every reader asks its error before its state: a failed analysis's zeroed
+ * state reads as up to date otherwise.
  */
 typedef struct {
     const char *profile;                 /* The scope's own name, borrowed */
@@ -134,6 +136,7 @@ typedef struct {
     sync_outcome_t outcome;              /* What carrying the verdict out came to */
     transfer_wire_t sent;                /* What the act sent: its push's, none where no push landed */
     sync_disagreements_t disagreements;  /* A resolution's that landed; none elsewhere */
+    profile_conflicts_t conflicts;       /* A merge's, refusing it or settled; none elsewhere */
     error_t error;                       /* The failure's cause, borrowed; NULL where the run met none */
 } sync_row_t;
 
@@ -703,38 +706,41 @@ static error_t sync_rebase(
 }
 
 /**
- * Carry a merge out: the profile's merge with the remote's head, committed, then
- * pushed unless --no-push withheld it
+ * Carry a merge out: the profile's merge with the remote's head, each conflict
+ * settled for the run's side, committed, then pushed unless --no-push withheld it
  *
  * The remote's head is its remote-tracking ref's, read here as the rebase reads
  * it (sys/resolve.h resolve_init): what the fetch brought, and so what every
  * push of the run is leased on. The merge is the profile's own — the tree Git's,
- * the claims composed name by name over it, the open refused where both sides
- * moved one thing apart (core/profiles.h profile_draft_merge) — and its commit
- * is written only from the head the open read, so a step that fails up to it
- * leaves the branch where it stood, said in its own words. Committed, the merge
- * stands: its history is read once more, for the names its two sides took one
- * deleting and one removing, and a push that fails after it leaves the branch
- * ahead of the remote, the next sync's push. Nothing is rolled back and nothing
- * verified: the merge has the two heads as its parents by construction.
+ * the claims composed name by name over it, and each conflict, a name both sides
+ * moved one thing apart at, settled at the open for `side`, or the open refused
+ * naming each where the run named none (core/profiles.h profile_draft_merge) —
+ * and its commit is written only from the head the open read, so a step that
+ * fails up to it leaves the branch where it stood, said in its own words.
+ * Committed, the merge stands: its history is read once more, for the names its
+ * two sides took one deleting and one removing, and a push that fails after it
+ * leaves the branch ahead of the remote, the next sync's push. Nothing is rolled
+ * back and nothing verified: the merge has the two heads as its parents by
+ * construction.
  */
 static void sync_merge(
     arena_t *arena,
     git_repository *repo,
     const char *remote_name,
     sync_row_t *row,
-    remote_t *remote
+    remote_t *remote,
+    profile_side_t side
 ) {
     git_oid theirs;
     error_t err = gitops_resolve_remote_branch_oid(repo, remote_name, row->profile, &theirs);
 
-    /* The profile's merge, no side named: a conflict refuses the open, which
-     * counts them, and the list it answers beside the refusal goes unread */
-    profile_conflicts_t conflicts;
+    /* The profile's merge, each conflict settled for the run's side, or the open
+     * refused naming each: the row's list either way, in the command arena the
+     * receipt reads it from */
     profile_draft_t *draft = NULL;
     if (!err) {
         err = profile_draft_merge(
-            repo, row->profile, &theirs, PROFILE_SIDE_NONE, arena, &conflicts, &draft
+            repo, row->profile, &theirs, side, arena, &row->conflicts, &draft
         );
     }
 
@@ -811,13 +817,16 @@ static void sync_reset(git_repository *repo, const char *remote_name, sync_row_t
  *
  * Git only: every pull, rebase, merge and reset moves a branch head and nothing
  * else — a resolution that lands reads its history once more, for its row's
- * disagreements, in `arena` (sync_disagreements) — and what the acts did to the
- * view is read off once, for every enabled profile, in cmd_sync's Manifest block.
- * Each verdict is one mechanism, called as the decision named it: nothing here
- * decides again. A push says the remote's words as it runs, above the receipt
- * as git's stand above its ref list — where it failed, and under -v every push's
- * as they come (sys/transfer.h transfer_push_sideband_callback).
+ * disagreements, and a merge's open lists its conflicts, both in `arena`
+ * (sync_disagreements, sync_merge) — and what the acts did to the view is read
+ * off once, for every enabled profile, in cmd_sync's Manifest block. Each verdict
+ * is one mechanism, called as the decision named it: nothing here decides again.
+ * A push says the remote's words as it runs, above the receipt as git's stand
+ * above its ref list — where it failed, and under -v every push's as they come
+ * (sys/transfer.h transfer_push_sideband_callback).
  *
+ * @param side The run's side (--conflicts), every merge's conflicts settled for
+ *             it; PROFILE_SIDE_NONE where the run named none
  * @return The run's error where a rebase's rollback failed — the rows after it
  *         left as decided, their outcome none — or NULL: every other failure is
  *         its row's
@@ -827,7 +836,8 @@ static error_t sync_execute(
     git_repository *repo,
     const char *remote_name,
     sync_rows_t *rows,
-    remote_t *remote
+    remote_t *remote,
+    profile_side_t side
 ) {
     CHECK_NULL(arena);
     CHECK_NULL(repo);
@@ -874,7 +884,7 @@ static error_t sync_execute(
             }
 
             case SYNC_VERDICT_MERGE:
-                sync_merge(arena, repo, remote_name, row, remote);
+                sync_merge(arena, repo, remote_name, row, remote, side);
                 break;
 
             case SYNC_VERDICT_RESET:
@@ -954,14 +964,22 @@ static void sync_print_withheld(output_t *out, const sync_row_t *row) {
  * Print the remedies the rows call for, beneath the run's summary in both tenses:
  * one hint a family, said once however many rows call for it
  *
- * One family: a divergence warn leaves — no failure, no act, and no word of the
- * user's that withheld one; under any other strategy a divergence has its act,
- * or its row says the word that kept it. The hint names the flag and the key,
- * and the strategies that resolve by their words (utils/config.h
+ * Two families. A divergence warn leaves — no failure, no act, and no word of
+ * the user's that withheld one; under any other strategy a divergence has its
+ * act, or its row says the word that kept it. The hint names the flag and the
+ * key, and the strategies that resolve by their words (utils/config.h
  * config_strategies), warn left out, joined in `arena`; what each does is --help's
- * and completion's.
+ * and completion's. And a merge its conflicts refused: where the run named no
+ * side (`side`) a merge's row holds conflicts only where they refused it
+ * (core/profiles.h profile_draft_merge), and the hint names --conflicts' two
+ * words, a re-run keeping whatever else the run's line said.
  */
-static void sync_print_remedies(output_t *out, arena_t *arena, const sync_rows_t *rows) {
+static void sync_print_remedies(
+    output_t *out,
+    arena_t *arena,
+    const sync_rows_t *rows,
+    profile_side_t side
+) {
     for (size_t i = 0; i < rows->count; i++) {
         const sync_row_t *row = &rows->entries[i];
 
@@ -988,7 +1006,18 @@ static void sync_print_remedies(output_t *out, arena_t *arena, const sync_rows_t
                 "diverged_strategy in the config file, to resolve a divergence: %s",
                 strategies
             );
-            return;
+            break;
+        }
+    }
+
+    for (size_t i = 0; side == PROFILE_SIDE_NONE && i < rows->count; i++) {
+        if (rows->entries[i].conflicts.count > 0) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_hint(
+                out, OUTPUT_NORMAL, "Re-run this sync with --conflicts ours or "
+                "--conflicts theirs to keep that side of every conflict"
+            );
+            break;
         }
     }
 }
@@ -1166,6 +1195,80 @@ static void sync_print_disagreements(output_t *out, const sync_row_t *row) {
 }
 
 /**
+ * Print one side's value on a conflict's axis: a mode as %04o, an ownership as
+ * chown(1) spells it — owner, owner:group or :group, as show spells one
+ * (cmds/show.c show_print_blob) — and none where the side's claim names nothing
+ * on the axis, absence being a value on each, as the merge reads it
+ * (core/metadata.h metadata_merge_axis)
+ */
+static void sync_print_value(
+    output_t *out,
+    profile_axis_t axis,
+    const profile_claim_t *claim
+) {
+    if (axis == PROFILE_AXIS_MODE && claim->mode != MODE_UNCLAIMED) {
+        output_print(out, OUTPUT_NORMAL, "%04o", (unsigned) claim->mode);
+    } else if (axis == PROFILE_AXIS_OWNERSHIP && (claim->owner || claim->group)) {
+        output_print(
+            out, OUTPUT_NORMAL, "%s%s%s", claim->owner ? claim->owner : "",
+            claim->group ? ":" : "", claim->group ? claim->group : ""
+        );
+    } else {
+        output_print(out, OUTPUT_NORMAL, "none");
+    }
+}
+
+/**
+ * Print, beneath a merge's row, each conflict its open met: the name, and what
+ * both sides moved apart there — the content, or a claim's mode or ownership
+ * with each side's value — then, where the merge landed, the run's side it kept;
+ * LIST_LIMIT lines, and a count of the rest
+ *
+ * The open's list, in its order (core/profiles.h profile_draft_merge): the same
+ * conflicts whether the open refused naming each, the run having named no side,
+ * or settled each for the side the run named (`side`). A merge whose commit failed
+ * after a settled open landed no side's value, so its lines name the conflicts
+ * alone, as a refusal's do.
+ */
+static void sync_print_conflicts(output_t *out, const sync_row_t *row, profile_side_t side) {
+    const profile_conflicts_t *conflicts = &row->conflicts;
+
+    for (size_t i = 0; i < conflicts->count && i < LIST_LIMIT; i++) {
+        const profile_conflict_t *conflict = &conflicts->entries[i];
+
+        /* The content is Git's refusal at the name; a claim's axis is said with
+         * both sides' values, a directory's name with its slash */
+        if (conflict->axis == PROFILE_AXIS_CONTENT) {
+            output_print(out, OUTPUT_NORMAL, "    %s (content)", conflict->storage_path);
+        } else {
+            output_print(
+                out, OUTPUT_NORMAL, "    %s%s (%s: ", conflict->storage_path,
+                path_kind_suffix(path_type_kind(conflict->ours->type)),
+                conflict->axis == PROFILE_AXIS_MODE ? "mode" : "ownership"
+            );
+            sync_print_value(out, conflict->axis, conflict->ours);
+            output_print(out, OUTPUT_NORMAL, " ours, ");
+            sync_print_value(out, conflict->axis, conflict->theirs);
+            output_print(out, OUTPUT_NORMAL, " theirs)");
+        }
+
+        /* A merge that landed, pushed or not, holds the run's side of each */
+        if (row->outcome != SYNC_OUTCOME_FAILED) {
+            output_print(
+                out, OUTPUT_NORMAL, " — %s kept",
+                side == PROFILE_SIDE_OURS ? "ours" : "theirs"
+            );
+        }
+        output_endline(out, OUTPUT_NORMAL);
+    }
+    if (conflicts->count > LIST_LIMIT) {
+        output_print(
+            out, OUTPUT_NORMAL, "    ... and %zu more\n", conflicts->count - LIST_LIMIT
+        );
+    }
+}
+
+/**
  * Print the receipt: what each act came to, profile by profile in the scope's
  * order, titled by the remote, once every act is done
  *
@@ -1178,12 +1281,15 @@ static void sync_print_disagreements(output_t *out, const sync_row_t *row) {
  * error beneath saying why; and a failure by its cause, beside where it left
  * the branch — after the act, where the act stands. Beneath a resolution that
  * landed — a merge whose push failed among them — the names its two sides took
- * one deleting and one removing (sync_print_disagreements).
+ * one deleting and one removing (sync_print_disagreements); and beneath a merge
+ * each conflict its open met, refusing it or kept for `side`, the run's
+ * (sync_print_conflicts).
  */
 static void sync_print_receipt(
     output_t *out,
     const char *remote_name,
-    const sync_rows_t *rows
+    const sync_rows_t *rows,
+    profile_side_t side
 ) {
     output_section(out, OUTPUT_NORMAL, "Sync with '{cyan}%s{reset}'", remote_name);
 
@@ -1243,6 +1349,7 @@ static void sync_print_receipt(
         sync_print_wire(out, row->sent);
         output_endline(out, OUTPUT_NORMAL);
         sync_print_disagreements(out, row);
+        sync_print_conflicts(out, row, side);
     }
 }
 
@@ -1849,7 +1956,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * answer, not a profile it found no work for. */
     if (opts->dry_run) {
         output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was pulled or pushed");
-        sync_print_remedies(out, ctx->arena, &rows);
+        sync_print_remedies(out, ctx->arena, &rows, opts->conflicts_side);
         err = sync_failure(ctx->arena, &rows);
         goto cleanup;
     }
@@ -1871,16 +1978,17 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
     }
 
-    /* The act: every verdict carried out, and nothing said but the remote's words
-     * a push brings (sync_execute). Git only — no state is written, so the write
-     * lock is never held across network IO. Nothing catches up afterwards either:
-     * the view is computed, and the block that follows only reports what the
-     * act did to it. */
-    err = sync_execute(ctx->arena, repo, remote_name, &rows, remote);
+    /* The act: every verdict carried out — a merge's conflicts each settled for
+     * the run's side, or refusing it where the run named none — and nothing said
+     * but the remote's words a push brings (sync_execute). Git only — no state
+     * is written, so the write lock is never held across network IO. Nothing
+     * catches up afterwards either: the view is computed, and the block that
+     * follows only reports what the act did to it. */
+    err = sync_execute(ctx->arena, repo, remote_name, &rows, remote, opts->conflicts_side);
 
     /* The receipt, once every act is done, a row for every profile — a run a
      * failed rollback stopped among them, which then ends in that error */
-    sync_print_receipt(out, remote_name, &rows);
+    sync_print_receipt(out, remote_name, &rows, opts->conflicts_side);
     if (err) goto cleanup;
 
     /* Manifest block — the view after the Git phase, diffed against the view
@@ -2100,7 +2208,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* The run's summary, beneath the receipt and what it did to the view, then
      * the remedies its rows call for */
     sync_print_summary(out, remote_name, &rows);
-    sync_print_remedies(out, ctx->arena, &rows);
+    sync_print_remedies(out, ctx->arena, &rows, opts->conflicts_side);
 
     /* Post-sync fires once the report is done — the receipt, the manifest block,
      * the summary and its hints; a failed build was warned above and is not a
@@ -2127,11 +2235,12 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * The divergence strategy the line names, judged and converted in the
- * configuration's words (utils/config.h config_parse_strategy): a word the
- * vocabulary does not know refuses the line before the store opens. The refusal
- * is the vocabulary's own, unwrapped — --diverged is the one place a strategy
- * word stands on the line, and the word is quoted in it.
+ * The divergence strategy and the conflicts' side the line names, each judged
+ * before the store opens, a word neither knows refusing the line. The strategy
+ * in the configuration's words (utils/config.h config_parse_strategy), its refusal
+ * the vocabulary's own, unwrapped — --diverged is the one place a strategy word
+ * stands on the line, and the word is quoted in it. The side, ours or theirs,
+ * is --conflicts' alone.
  */
 static error_t sync_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -2140,12 +2249,29 @@ static error_t sync_post_parse(
     (void) cmd;
     cmd_sync_options_t *o = opts_v;
 
-    return o->diverged ? config_parse_strategy(o->diverged, &o->diverged_strategy) : NULL;
+    if (o->diverged) {
+        error_t err = config_parse_strategy(o->diverged, &o->diverged_strategy);
+        if (err) return err;
+    }
+
+    /* No side named is PROFILE_SIDE_NONE, the options' zero */
+    if (!o->conflicts) return NULL;
+    if (strcmp(o->conflicts, "ours") == 0) {
+        o->conflicts_side = PROFILE_SIDE_OURS;
+    } else if (strcmp(o->conflicts, "theirs") == 0) {
+        o->conflicts_side = PROFILE_SIDE_THEIRS;
+    } else {
+        return error_create(
+            ERR_INVALID_ARG, "Unknown side '%s' for --conflicts (valid: ours, theirs)",
+            o->conflicts
+        );
+    }
+    return NULL;
 }
 
 /**
  * What can stand at the cursor: an enabled profile, by -p or bare; for --diverged,
- * a strategy.
+ * a strategy; for --conflicts, a side.
  */
 static args_want_t sync_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -2160,6 +2286,12 @@ static args_want_t sync_complete(
                 config_strategies[i].name, config_strategies[i].summary
             );
         }
+        return ARGS_WANT_NONE;
+    }
+
+    if (ARGS_VALUE_IS(at, cmd_sync_options_t, conflicts)) {
+        fputs("ours\tKeep the local side of every conflict\n", out);
+        fputs("theirs\tKeep the remote's side of every conflict\n", out);
         return ARGS_WANT_NONE;
     }
 
@@ -2199,6 +2331,11 @@ static const args_opt_t sync_opts[] = {
         cmd_sync_options_t,diverged,
         "Diverged-branch strategy (see notes)"
     ),
+    ARGS_STRING(
+        "conflicts",       "<side>",
+        cmd_sync_options_t,conflicts,
+        "Keep one side of every conflict: ours or theirs"
+    ),
     ARGS_FLAG_SET(
         "v verbose",
         cmd_sync_options_t,verbosity,    DOTTA_VERBOSITY_VERBOSE,
@@ -2231,14 +2368,22 @@ const args_command_t spec_sync = {
         "  The strategy is [sync] diverged_strategy's, or --diverged's for one\n"
         "  run. ours and theirs act on a branch that is only behind or only\n"
         "  ahead as well: ours force-pushes over the newer remote commits, and\n"
-        "  theirs resets the local ones away.\n",
+        "  theirs resets the local ones away.\n"
+        "\n"
+        "Conflicts:\n"
+        "  merge combines changes to different files, lines and permissions.\n"
+        "  Where both sides changed the same thing differently, the profile is\n"
+        "  not merged and each conflict is listed: --conflicts ours keeps the\n"
+        "  local side of every one, --conflicts theirs the remote's. The side\n"
+        "  not kept stays in the profile's history.\n",
     .examples     =
-        "  %s sync                    # All enabled profiles\n"
-        "  %s sync global             # Single profile\n"
-        "  %s sync global darwin      # Multiple profiles\n"
-        "  %s sync -n                 # Preview without pulling or pushing\n"
-        "  %s sync --no-pull          # Push only\n"
-        "  %s sync --diverged rebase  # Override divergence strategy\n",
+        "  %s sync                                      # All enabled profiles\n"
+        "  %s sync global                               # Single profile\n"
+        "  %s sync global darwin                        # Multiple profiles\n"
+        "  %s sync -n                                   # Preview without pulling or pushing\n"
+        "  %s sync --no-pull                            # Push only\n"
+        "  %s sync --diverged rebase                    # Override divergence strategy\n"
+        "  %s sync --diverged merge --conflicts theirs  # Merge, keeping the remote's side\n",
     .epilogue     =
         "See also:\n"
         "  %s update          # Commit local changes first\n"

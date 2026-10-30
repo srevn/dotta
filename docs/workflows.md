@@ -209,6 +209,9 @@ dotta sync --no-push
 
 # Handle diverged branches with a specific strategy
 dotta sync --diverged rebase   # Options: warn, rebase, merge, ours, theirs
+
+# Merge, keeping the remote's side where both changed the same thing
+dotta sync --diverged merge --conflicts theirs
 ```
 
 **Typical workflow:**
@@ -218,7 +221,9 @@ dotta update    # Commit local changes
 dotta sync      # Push/pull with remote
 ```
 
-`sync` moves commits and nothing else: it neither reads nor changes the files on this machine, so an edit not yet committed with `dotta update` stays here. A file you edited that a pull also changed then reads as changed in Git and on disk, for you to decide: `dotta apply --force <path>` keeps the pulled version, `dotta add --force <profile> <path>` keeps yours. Committed first, the two edits leave the profile diverged instead, and `dotta sync --diverged merge` (or `rebase`) merges them where they touch different lines.
+`sync` moves commits and nothing else: it neither reads nor changes the files on this machine, so an edit not yet committed with `dotta update` stays here. A file you edited that a pull also changed then reads as changed in Git and on disk, for you to decide: `dotta apply --force <path>` keeps the pulled version, `dotta add --force <profile> <path>` keeps yours. Committed first, the two edits leave the profile diverged instead, for `dotta sync --diverged merge` (or `rebase`) to combine.
+
+`dotta sync --diverged merge` combines what two machines changed in a profile wherever they changed different files, lines or permissions. Where both changed the same thing differently, the profile is not merged: the sync lists each conflict beneath it -- `home/.config/f (mode: 0640 ours, 0600 theirs)`, `home/.config/r (content)` -- and `--conflicts ours` keeps this machine's side of every one, `--conflicts theirs` the remote's: of a file both changed, that side's version. A change only one machine made, a permission or another file, stays either way, and the side not kept stays in the profile's history.
 
 After a pull, `sync` lists what it did to each profile's files — added, updated, reassigned to another profile, overridden by another profile's file, removed or deleted (see [Removing Files](#removing-files)); `dotta apply` lands what it brought.
 

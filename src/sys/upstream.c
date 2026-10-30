@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "base/arena.h"
 #include "base/error.h"
 #include "sys/gitops.h"
 
@@ -174,75 +173,4 @@ void upstream_state_phrase(
     }
 
     CHECK_ARG(false, "an upstream state no enumerator names");
-}
-
-/**
- * Create a branch at its remote's head
- */
-error_t upstream_create_branch(
-    git_repository *repo, const char *remote_name, const char *branch_name,
-    const char *action
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(action);
-
-    /* Build reference names */
-    char local_refname[DOTTA_REFNAME_MAX];
-    char remote_refname[DOTTA_REFNAME_MAX];
-    error_t err;
-
-    err = gitops_branch_refname(
-        local_refname, sizeof(local_refname), branch_name
-    );
-    if (err) return err;
-
-    err = gitops_remote_branch_refname(
-        remote_refname, sizeof(remote_refname), remote_name, branch_name
-    );
-    if (err) return err;
-
-    /* A name Git's ref namespace cannot hold beside the ones already here. The
-     * remote cannot ship a colliding pair — Git forbids it there too — so the
-     * blocker is a branch here the remote does not hold: one never pushed, standing
-     * where a fetched one would go, or one the remote no longer holds, whose
-     * tracking ref stood in the fetched name's way and barred its fetch
-     * (sys/remote.h remote_fetch). Refused by name, ahead of the ref write whose
-     * own message names only one of the two, and of the barred name's tracking
-     * ref, which no fetch wrote. The listing the blocker is read from is a frame
-     * of this call's own: what the call answers is no memory, and the refusal
-     * copies the name. */
-    arena_t *frame = arena_create(0);
-    const char *blocker = NULL;
-    err = gitops_branch_blocker(repo, branch_name, frame, &blocker);
-    if (!err && blocker) {
-        err = error_create(
-            ERR_CONFLICT,
-            "Branch '%s' already exists, and Git cannot hold '%s' beside it: "
-            "one is a name, the other a folder of names", blocker, branch_name
-        );
-    }
-    arena_free(frame);
-    if (err) return err;
-
-    /* The remote's head, read as every head is: a commit, or refused naming the
-     * remote-tracking ref, so a remote's branch at a tag or a tree is no branch
-     * here (the header) */
-    git_commit *head = NULL;
-    err = gitops_load_reference_commit(repo, remote_refname, &head);
-    if (err) return err;
-
-    /* The local branch at that commit, created only where the name is still free
-     * — one created since its caller found none refuses (sys/gitops.h
-     * gitops_write_reference) — its line git's words for a branch created from
-     * another, under the command that creates it */
-    const git_oid none = GIT_OID_SHA1_ZERO;
-    err = gitops_write_reference(
-        repo, local_refname, git_commit_id(head), &none, action,
-        "created from %s/%s", remote_name, branch_name
-    );
-    git_commit_free(head);
-
-    return err;
 }

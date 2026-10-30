@@ -365,13 +365,22 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
         /* Where the profile stands against the remote's branch the fetch brought,
          * read as sync's and status's rows read it (sys/upstream.h
          * upstream_analyze_profile). One with no local branch is made local at
-         * the remote's commit, the one act a fetch takes on a profile; a branch
-         * already here is left where it stands — the fetch moved its
-         * remote-tracking ref, and merging the two is sync's. */
+         * the remote's head as the open listed it, the one act a fetch takes on
+         * a profile; a branch already here is left where it stands — the fetch
+         * moved its remote-tracking ref, and merging the two is sync's. */
         upstream_info_t upstream;
         error_t row_err = upstream_analyze_profile(repo, remote_name, profile, &upstream);
         if (!row_err && upstream.state == UPSTREAM_NO_LOCAL) {
-            row_err = upstream_create_branch(repo, remote_name, profile, "profile fetch");
+            char ref[DOTTA_REFNAME_MAX];
+            git_oid head;
+            row_err = gitops_branch_refname(ref, sizeof(ref), profile);
+            if (!row_err) {
+                remote_advertised(remote, ref, &head);
+                row_err = gitops_create_branch(
+                    repo, profile, &head, "profile fetch", "created from %s/%s",
+                    remote_name, profile
+                );
+            }
         }
 
         /* A profile that fails is named and counted, its error dropped — at most

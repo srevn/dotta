@@ -677,6 +677,69 @@ error_t gitops_list_remote_tracking(
     return NULL;
 }
 
+error_t gitops_create_branch(
+    git_repository *repo, const char *name, const git_oid *target, const char *action,
+    const char *format, ...
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(target);
+    CHECK_NULL(action);
+    CHECK_NULL(format);
+    CHECK_ARG(!git_oid_is_zero(target), "a create names the commit its branch is to name");
+
+    char refname[DOTTA_REFNAME_MAX];
+    error_t err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (err) return err;
+
+    /* A name Git's namespace cannot hold beside the branches here, refused by
+     * both names ahead of the write, whose own message names one; asked before
+     * the target is read (the header). The listing is a frame of this call's
+     * own: what the call answers is no memory, and the refusal copies the name. */
+    arena_t *frame = arena_create(0);
+    const char *blocker = NULL;
+    err = gitops_branch_blocker(repo, name, frame, &blocker);
+    if (!err && blocker) {
+        err = error_create(
+            ERR_CONFLICT,
+            "Branch '%s' already exists, and Git cannot hold '%s' beside it: "
+            "one is a name, the other a folder of names", blocker, name
+        );
+    }
+    arena_free(frame);
+    if (err) return err;
+
+    /* The target, read as every head is: a commit, a tag refused as a tree is
+     * and never peeled (gitops_reference_commit), named by its id whole, as git's
+     * own refusal names one (lib/git/refs.c ref_transaction_update) */
+    git_object *object = NULL;
+    int rc = git_object_lookup(&object, repo, target, GIT_OBJECT_ANY);
+    if (rc < 0) return error_git(rc, "Cannot read the commit a branch is created at");
+
+    const git_object_t type = git_object_type(object);
+    git_object_free(object);
+    if (type != GIT_OBJECT_COMMIT) {
+        char hex[GIT_OID_SHA1_HEXSIZE + 1];
+        git_oid_tostr(hex, sizeof(hex), target);
+        return error_create(
+            ERR_GIT, "Object %s is a %s, not a commit", hex, git_object_type2string(type)
+        );
+    }
+
+    /* The words formatted once, and written by the one writer as they stand,
+     * only where no branch of the name stands */
+    va_list args;
+    va_start(args, format);
+    char *words = heap_str_vformat(format, args);
+    va_end(args);
+
+    const git_oid none = GIT_OID_SHA1_ZERO;
+    err = gitops_write_reference(repo, refname, target, &none, action, "%s", words);
+    free(words);
+
+    return err;
+}
+
 error_t gitops_verify_branch(
     git_repository *repo, const char *name, const git_oid *expected
 ) {

@@ -145,8 +145,9 @@ error_t remote_open(
  *
  * Readers: infra/epoch.c epoch_resolve (the epoch's verdict); cmds/sync.c sync_push
  * (a push's expectation); cmds/clone.c cmd_clone (its gate, through the epoch's
- * verdict); cmds/remove.c remove_profile (the remote's branch against the tracking
- * ref its deletion is leased on, and whether there is one to delete).
+ * verdict) and land_profiles, and cmds/profile.c profile_fetch (the head a branch
+ * is created at); cmds/remove.c remove_profile (the remote's branch against the
+ * tracking ref its deletion is leased on, and whether there is one to delete).
  *
  * @param remote The session (must not be NULL)
  * @param refname Full reference name (must not be NULL)
@@ -161,9 +162,9 @@ void remote_advertised(const remote_t *remote, const char *refname, git_oid *out
  * holds now. A name the branch rule refuses — a leading '-', HEAD, which git's
  * plumbing alone makes — is listed as the remote holds it, and refused where a
  * reader builds its ref (sys/gitops.h gitops_branch_refname); so is a branch at
- * a tag or a tree, which only a tool other than git makes, refused where a reader
- * reads its head (sys/upstream.h upstream_create_branch). Lent from the session:
- * valid until remote_free.
+ * a tag or a tree, which only a tool other than git makes, refused where a branch
+ * is created at its head (sys/gitops.h gitops_create_branch). Lent from the
+ * session: valid until remote_free.
  *
  * Readers: cmds/profile.c profile_fetch (the selection and its pre-flight) and
  * profile_list (the remote's not fetched here); cmds/clone.c cmd_clone (its gate,

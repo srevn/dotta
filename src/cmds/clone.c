@@ -40,7 +40,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/remote.h"
-#include "sys/upstream.h"
 #include "utils/bootstrap.h"
 #include "utils/repo.h"
 
@@ -164,15 +163,16 @@ static error_t select_profiles(
  * Make the selected profiles local, and say what landed
  *
  * The one fetch has run (sys/remote.h remote_fetch): each selected profile, a
- * branch the remote advertised (select_profiles), stands under
- * refs/remotes/<remote>. Each becomes a local branch at that commit; one that
- * cannot is warned about by name and skipped, so one profile costs itself and
- * not the clone. The warnings are one block, beneath whatever stood: its boundary
- * is asked here, and paid by the first of them or, where none prints, by the
- * summary's line — what landed, said alike whichever arm selected, and nothing
- * where the selection was empty, which said why where it was made.
+ * branch the remote advertised (select_profiles), has its head's objects here.
+ * Each becomes a local branch at that head, as the open listed it; one that cannot
+ * is warned about by name and skipped, so one profile costs itself and not the
+ * clone. The warnings are one block, beneath whatever stood: its boundary is
+ * asked here, and paid by the first of them or, where none prints, by the summary's
+ * line — what landed, said alike whichever arm selected, and nothing where the
+ * selection was empty, which said why where it was made.
  *
  * @param repo Repository (must not be NULL)
+ * @param remote The session, its listing the remote's heads (must not be NULL)
  * @param remote_name Remote name (typically "origin")
  * @param selection The profiles to make local, each once (must not be NULL)
  * @param arena Arena the names made local live in (must not be NULL)
@@ -181,12 +181,14 @@ static error_t select_profiles(
  */
 static string_array_t land_profiles(
     git_repository *repo,
+    const remote_t *remote,
     const char *remote_name,
     const string_array_t *selection,
     arena_t *arena,
     output_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(remote);
     CHECK_NULL(selection);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -198,13 +200,20 @@ static string_array_t land_profiles(
     for (size_t i = 0; i < selection->count; i++) {
         const char *profile = selection->entries[i];
 
-        /* The local branch, created at the remote's commit: each name comes once,
+        /* The local branch, created at the remote's head: each name comes once,
          * into a store the clone just made. A name that fails — a remote's branch
          * at a tag or a tree among them — is warned about and skipped, its error
          * dropped, one per such name. */
-        error_t err = upstream_create_branch(
-            repo, remote_name, profile, commit_action_word(COMMIT_ACTION_CLONE)
-        );
+        char ref[DOTTA_REFNAME_MAX];
+        git_oid head;
+        error_t err = gitops_branch_refname(ref, sizeof(ref), profile);
+        if (!err) {
+            remote_advertised(remote, ref, &head);
+            err = gitops_create_branch(
+                repo, profile, &head, commit_action_word(COMMIT_ACTION_CLONE),
+                "created from %s/%s", remote_name, profile
+            );
+        }
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
@@ -495,7 +504,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     if (err) goto cleanup;
 
     /* The selection made local, and what landed said once */
-    const string_array_t landed = land_profiles(repo, "origin", &selection, ctx->arena, out);
+    const string_array_t landed = land_profiles(
+        repo, remote, "origin", &selection, ctx->arena, out
+    );
 
     /* The profiles to enable: every landed one whose claims this machine can
      * place. A profile that needs a target is enabled only with one, and clone

@@ -2292,14 +2292,17 @@ static void workspace_ask_bases(workspace_t *ws) {
  * Ask each owned file orphan's profile what its history says of the name
  *
  * The files among the owned orphans, by their record's profile, and one ask a
- * profile: its branch's head read by name (sys/gitops.h gitops_branch_commit),
- * NULL where the branch is proven gone, and every name of the run answered by
- * one walk of the history behind it (core/profiles.h profile_departures). Each
- * answer is the workspace's arena's, borrowed by its item (workspace_item_t's
- * departure); a directory is asked nothing. A head that will not read answers
- * no name of its profile — each keeps no departure, for the second loop to read
- * as UNVERIFIED — and its error is dropped, one a profile: the bound of what a
- * load keeps (base/error.h "Lifetime"). The next load reads afresh.
+ * profile at the head this load stands on: an enabled profile's, the one the
+ * view read its rows at (core/manifest.h manifest_head), none where the view
+ * found its branch gone; a disabled one's, its branch's head read by name now
+ * (sys/gitops.h gitops_branch_commit), none where the branch is proven gone. No
+ * head answers every name GONE, and a head every name of the run, by one walk
+ * of the history behind it (core/profiles.h profile_departures). Each answer is
+ * the workspace's arena's, borrowed by its item (workspace_item_t's departure);
+ * a directory is asked nothing. A disabled profile's head that will not read
+ * answers no name of its profile — each keeps no departure, for the second loop
+ * to read as UNVERIFIED — and its error is dropped, one a profile: the bound of
+ * what a load keeps (base/error.h "Lifetime"). The next load reads afresh.
  *
  * @param ws Workspace (must not be NULL)
  * @param owned The owned orphans the first loop passed, either kind
@@ -2327,16 +2330,27 @@ static void workspace_ask_departures(
         size_t end = start + 1;
         while (end < file_count && strcmp(files[end]->profile, profile) == 0) end++;
 
-        git_commit *head = NULL;
-        error_t err = gitops_branch_commit(ws->repo, profile, &head);
+        /* The head this load stands on. An enabled profile's is the one the view
+         * read its rows at, so what its rows lack and what its history says of
+         * it are one read of the ref — and its none, the branch the view found
+         * gone, answers every name GONE with nothing read. A disabled profile
+         * has no head in the view, and its branch's is read now. Which of the
+         * two a profile is, the rows the view was built from say (workspace_load:
+         * the view current). */
+        const git_oid *head = NULL;
+        git_commit *commit = NULL;
+        error_t err = NULL;
+        if (state_enabled(ws->state, profile)) {
+            head = manifest_head(ws->manifest, profile);
+        } else {
+            err = gitops_branch_commit(ws->repo, profile, &commit);
+            if (commit) head = git_commit_id(commit);
+        }
         if (!err) {
-            profile_departures(
-                ws->repo, head ? git_commit_id(head) : NULL, paths + start, end - start,
-                departures + start
-            );
+            profile_departures(ws->repo, head, paths + start, end - start, departures + start);
             for (size_t k = start; k < end; k++) files[k]->departure = &departures[k];
         }
-        git_commit_free(head);
+        git_commit_free(commit);
 
         start = end;
     }
@@ -2353,10 +2367,11 @@ static void workspace_ask_departures(
  * which questions apply, in two loops around the one question a history answers:
  * the first takes each orphan through the rungs that ask nothing of Git, to the
  * ownership gate, and keeps each owned one it passes; between the two, each owned
- * file's profile is asked once, at its branch's head, what its history says of
- * every such name (workspace_ask_departures); the second decides each owned orphan,
- * a file by its departure. Then the directories the ladder left a scope exit's
- * walk a pass of their own, which reads the ladder's verdicts on what lies in them.
+ * file's profile is asked once, at the head this load stands on — the view's,
+ * for an enabled profile — what its history says of every such name
+ * (workspace_ask_departures); the second decides each owned orphan, a file by
+ * its departure. Then the directories the ladder left a scope exit's walk a pass
+ * of their own, which reads the ladder's verdicts on what lies in them.
  *
  * Per orphan, in order — the ancestry, presence, the occupant's kind, the entry,
  * position, above a row and beneath a blob, the ownership gate, then a file's
@@ -2413,23 +2428,25 @@ static void workspace_ask_departures(
  *     Released: the copy is left alone, the record retires, and no history is
  *     asked about it;
  *   - the departure of an owned file (core/profiles.h profile_departure_t), what
- *     its profile's history says of the name at the branch's head: HELD, the
- *     profile holds it still — disabled, or the claim moved with its root — and
- *     DELETED, every commit that took it named update, the user's deletion, are
- *     dotta's to prune, divergence permitting; REMOVED, NEVER_HELD and GONE — a
- *     commit that took it named another action or none, no commit of the history
- *     held it, the branch is gone — leave the deployed copy alone (RELEASED).
- *     UNVERIFIED — a history that would not read, the head's own among it — keeps
- *     the orphan skipped until it reads, since a release would retire the record
- *     and a prune would remove the copy and neither is a guess to make — until
- *     --force, which lifts every skip a file carries (core/cleanup.h
- *     cleanup_verdict), and so may remove a copy its history would have released.
- *     Skipped and not measured: no reader shows a bit beside a fault, so a compare
- *     would only give the item a second reason for the one fate it already has.
- *     The departure raises nothing, so a history that would not read is this
- *     orphan's skip and never the load's — the rule the file analysis takes for
- *     its own looks. An owned directory is not asked: it holds no bytes, and
- *     what is left in it decides (below);
+ *     its profile's history says of the name at the head this load stands on —
+ *     the one the view read an enabled profile's rows at, a disabled one's branch
+ *     now (workspace_ask_departures): HELD, the profile holds it still — disabled,
+ *     or the claim moved with its root — and DELETED, every commit that took it
+ *     named update, the user's deletion, are dotta's to prune, divergence
+ *     permitting; REMOVED, NEVER_HELD and GONE — a commit that took it named
+ *     another action or none, no commit of the history held it, the branch is
+ *     gone — leave the deployed copy alone (RELEASED). UNVERIFIED — a history
+ *     that would not read, the head's own among it — keeps the orphan skipped
+ *     until it reads, since a release would retire the record and a prune would
+ *     remove the copy and neither is a guess to make — until --force, which lifts
+ *     every skip a file carries (core/cleanup.h cleanup_verdict), and so may
+ *     remove a copy its history would have released. Skipped and not measured:
+ *     no reader shows a bit beside a fault, so a compare would only give the
+ *     item a second reason for the one fate it already has. The departure raises
+ *     nothing, so a history that would not read is this orphan's skip and never
+ *     the load's — the rule the file analysis takes for its own looks. An owned
+ *     directory is not asked: it holds no bytes, and what is left in it decides
+ *     (below);
  *   - the relocation read, of an owned directory and of an owned file its profile
  *     still holds (HELD): one whose claim its profile still holds elsewhere, of
  *     its own kind and standing there or not, carries the class of the namespace
@@ -2639,10 +2656,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
     for (size_t i = 0; i < owned_count; i++) {
         workspace_item_t *item = owned[i];
 
-        /* A file, by what its profile's history says of its name — none where
-         * the profile's head would not read, which no history answered: UNVERIFIED.
-         * Held in its type: the conditional's own is int, and only a switch over
-         * an enum is held to every value */
+        /* A file, by what its profile's history says of its name — none where a
+         * disabled profile's head would not read, which no history answered:
+         * UNVERIFIED. Held in its type: the conditional's own is int, and only
+         * a switch over an enum is held to every value */
         if (item->item_kind == PATH_KIND_FILE) {
             const profile_departure_kind_t departure = item->departure
                 ? item->departure->kind : PROFILE_DEPARTURE_UNVERIFIED;
@@ -2656,10 +2673,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
 
                 case PROFILE_DEPARTURE_DELETED:
                     /* The user's deletion, committed by update: dotta's to prune,
-                     * divergence permitting. A name its profile's head lacks is
-                     * in no row of the profile, so no relocation is read — save
-                     * where another process moved the branch after the view was
-                     * built, whose relocation goes unread (stated) */
+                     * divergence permitting. A name the head lacks is in no row
+                     * of its profile — an enabled one's rows were read at that
+                     * head, and a disabled one has none — so no relocation is
+                     * read */
                     workspace_measure(ws, item);
                     continue;
 

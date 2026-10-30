@@ -555,9 +555,10 @@ const string_array_t *manifest_profiles(const manifest_t *manifest);
  * whose branch stands and claims nothing has a head and no row.
  *
  * Readers: core/workspace.h workspace_unconfirmed (the head a kept answer for
- * bytes no base proves stands at) and core/workspace.c workspace_ask_bases (the
- * head each profile's history is asked back from). A reader not on this list is
- * a bug.
+ * bytes no base proves stands at), core/workspace.c workspace_ask_bases (the
+ * head each profile's history is asked back from) and workspace_ask_departures
+ * (the head an enabled profile's history is asked at for its orphans' names,
+ * none where the branch is gone). A reader not on this list is a bug.
  *
  * Pure value return — no allocation, no error path. The id is the view's, valid
  * for the arena's lifetime.

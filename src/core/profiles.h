@@ -866,7 +866,8 @@ typedef struct profile_departure {
  * say.
  *
  * Readers: core/workspace.c workspace_ask_departures (each owned file orphan,
- * at its profile's head); cmds/sync.c sync_departure_counts (each file a pull's
+ * at the head the view read for an enabled profile, at its branch's head now
+ * for a disabled one); cmds/sync.c sync_departure_counts (each file a pull's
  * view lost, at its profile's head as the pull left it) and sync_disagreements
  * (each name a rebase's or a merge's local side took since its merge base, at
  * the remote's head, the local one and the one the rebase or the merge left).

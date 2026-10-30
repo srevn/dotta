@@ -523,10 +523,10 @@ error_t gitops_reference_tree(
  * Readers: core/manifest.c manifest_build (each enabled profile, its claims read
  * from the head's tree and the head's id kept beside them, a branch gone
  * contributing nothing), core/workspace.c workspace_ask_departures (each owned
- * file orphan's profile, whose branch gone answers every name GONE), cmds/sync.c
- * sync_departure_counts (each profile whose files a pull's view lost) and
- * cmds/remove.c remove_profile (the head a deletion takes, read once, before it
- * says what it takes; a branch gone, no profile to delete).
+ * file orphan's disabled profile, whose branch gone answers every name GONE),
+ * cmds/sync.c sync_departure_counts (each profile whose files a pull's view lost)
+ * and cmds/remove.c remove_profile (the head a deletion takes, read once, before
+ * it says what it takes; a branch gone, no profile to delete).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)

@@ -667,12 +667,12 @@ typedef enum {
  * (core/profiles.h profile_departure_t): the reason its verdict is what it is,
  * asked once a profile between the orphan analysis's two loops (workspace.c
  * workspace_ask_departures) and borrowed, as `row` and `record` are. NULL on
- * every other item, and on an owned file orphan whose profile's head would not
- * read: no history answered it. Readers: the orphan analysis's second loop, which
- * decides the verdict by it (workspace.c workspace_analyze_orphans), the line
- * that says it (workspace_item_line's metadata), and apply's prune split, which
- * counts the deletions (cmds/apply.c apply_print_cleanup_preview). A reader not
- * on this list is a bug.
+ * every other item, and on an owned file orphan whose disabled profile's head
+ * would not read: no history answered it. Readers: the orphan analysis's second
+ * loop, which decides the verdict by it (workspace.c workspace_analyze_orphans),
+ * the line that says it (workspace_item_line's metadata), and apply's prune split,
+ * which counts the deletions (cmds/apply.c apply_print_cleanup_preview). A reader
+ * not on this list is a bug.
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -1515,10 +1515,11 @@ typedef struct workspace workspace_t;
  * - analyze_orphans — every record whose path the view lacks, either kind, off
  *   the look the join took at it: presence, ownership, divergence, whether a
  *   landing needs its place — a row of the view beneath it, or a blob above it
- *   — and a file's departure, at one head read per profile with present, owned
- *   file orphans and one walk of its history, every commit on the lines back to
- *   the commits that took their names read once, the head's tree alone where it
- *   holds every name — and what is left in a directory, at one readdir per
+ *   — and a file's departure, one ask per profile with present, owned file orphans,
+ *   at the head the view read for an enabled profile and at one head read for a
+ *   disabled one, and one walk of its history, every commit on the lines back
+ *   to the commits that took their names read once, the head's tree alone where
+ *   it holds every name — and what is left in a directory, at one readdir per
  *   directory the ladder leaves a scope exit's. Read by core/cleanup.c
  *   cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
  *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies

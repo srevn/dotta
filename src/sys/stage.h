@@ -1,25 +1,35 @@
 /**
- * stage.h - One ref's next tree, staged in memory
+ * stage.h - One ref's next commit, staged in memory
  *
- * The one way dotta turns a tree edit into a commit. Open a ref: its head is
- * the parent the commit will have, and its tree seeds a private index. Put and
- * remove entries. Commit: the index is written as a tree; a tree equal to the
- * opened one is not committed (no writer wants an empty commit, so none can make
- * one); otherwise one commit with the opened head as its parent and its writer's
- * action in its header, written apart from its ref, and the ref written only
- * from that head — under the ref's own lock, which refuses the write where another
- * writer got there first. Four spellings of this answer lived in the tree before
- * (a temp worktree, an index primitive, a recursive treebuilder, the epoch's
- * own mint), and every one looked the parent up at commit time, so a tree built
- * from one head could be committed on top of another and discard its change;
- * only one of the four declined an empty commit. Both properties are the stage's,
- * once.
+ * The one way dotta turns a tree edit or a merge into a commit. Open a ref: its
+ * head is the commit's first parent, and its tree the one every move is measured
+ * from and the index's seed (stage_open); open its absence, a root's
+ * (stage_orphan); or open it over a merge with another commit (stage_merge):
+ * the head and that commit are the two parents, the opened tree is still the
+ * head's, and the index is seeded from Git's three-way merge of the two trees
+ * over their merge base, each name the merge could not compose held at its stages
+ * until it is settled (stage_settle, stage_unite). Put and remove entries. Commit:
+ * the index is written as a tree; a tree equal to the opened one is not committed
+ * — no writer wants an empty commit, so none can make one — save a merge's, whose
+ * second parent records the integration whatever its tree, and which no conflict
+ * may stand in; otherwise one commit, the opened head its first parent and a
+ * merge's other commit its second, its writer's action in its header, written
+ * apart from its ref, and the ref written only from that head — under the ref's
+ * own lock, which refuses the write where another writer got there first. Four
+ * spellings of this answer lived in the tree before (a temp worktree, an index
+ * primitive, a recursive treebuilder, the epoch's own mint), and every one looked
+ * the parent up at commit time, so a tree built from one head could be committed
+ * on top of another and discard its change; only one of the four declined an
+ * empty commit. Both properties are the stage's, once.
  *
  * A writer says what it expects of the ref, and the open refuses the other state:
  * stage_open wants the ref (a profile the view listed, the branch a command
  * resolved) and is refused ERR_NOT_FOUND without it; stage_orphan wants its absence
  * (a profile being created, the epoch's mint, the machine's baseline) and is
- * refused ERR_EXISTS by its presence. An orphan's stage stands on the empty tree
+ * refused ERR_EXISTS by its presence; stage_merge wants the ref as stage_open
+ * does, and a commit the store holds. Whether a merge is owed is its caller's:
+ * a commit the head already holds, or one holding the head, merges all the same,
+ * its tree the one Git's merge gives. An orphan's stage stands on the empty tree
  * — Git's own, which every repository answers for without holding it — so every
  * reader of the opened tree sees a tree, and a ref that does not exist yet reads
  * as one with nothing in it. The expectation is checked once more where it matters,
@@ -30,16 +40,23 @@
  *
  * A put never removes another path. libgit2's index REPLACES on a file/directory
  * collision — `git_index_add` of `a/x` over blob `a` drops `a` — so the stage
- * refuses both collisions itself, and stage_remove is the only verb that takes
- * an entry away. Paths are canonical tree paths (no leading or trailing slash,
- * no empty component): libgit2 refuses `..`, `.` and `.git` components at the
- * put — a verdict about the name, as a collision is, so both are ERR_CONFLICT —
- * and `a//b` at the tree write, but writes `/a` as a tree with an empty-named
- * component, so the stage checks the shape itself, before libgit2 is asked.
+ * refuses both collisions itself, and no verb but three takes an entry away:
+ * stage_remove the one it names, stage_settle a name's at and beneath it, and
+ * stage_unite a conflict's, its union in their place. Nor does a put or a removal
+ * settle a name a merge left in conflict: libgit2's add replaces only the entry
+ * of its own stage, setting the staged one beside the conflict's
+ * (lib/libgit2/src/libgit2/index.c index_existing_and_best, index_insert), a
+ * removal takes the staged entry alone, and the commit's tree write refuses a
+ * conflict standing (tree.c git_tree__write_index). Paths are canonical tree
+ * paths (no leading or trailing slash, no empty component): libgit2 refuses `..`,
+ * `.` and `.git` components at the put — a verdict about the name, as a collision
+ * is, so both are ERR_CONFLICT — and `a//b` at the tree write, but writes `/a`
+ * as a tree with an empty-named component, so the stage checks the shape itself,
+ * before libgit2 is asked.
  *
  * That rule is askable before a byte is read, of the tree one writer intends
  * (stage_admission_t): the ref's own entries, and every blob the writer has
- * admitted since. stage_admit_blob and stage_admit_subtree are its two sides —
+ * admitted since. stage_admit_blob and stage_admit_subtree are its two halves —
  * a blob at N leaves no room for a subtree at N or for anything beneath it, and
  * another blob at N replaces it — and a blob is recorded as it is admitted, so
  * a writer that chooses several names learns whether they can stand together
@@ -61,26 +78,41 @@
  *
  * Nothing here touches HEAD, a working directory, or the repository's own index,
  * and neither an open nor an admission writes anything — the ref is resolved
- * and its tree read, an orphan's empty tree included — so a stage freed before
- * its first put leaves the repository exactly as it found it. A put admits its
- * path before it writes a byte, so a refused put writes nothing; one admitted
- * writes its blob at once, and a stage freed after it without a commit, or whose
- * commit was refused, leaves loose objects and no ref. A put whose blob write
- * fails leaves its entry at the null id, which the commit's tree write refuses,
- * and an entry it replaced is gone from the index: a writer abandons a stage
- * whose put failed. One commit per stage: after it the ref names the commit and
- * the stage still describes the tree it opened on, so a second commit is refused
- * by the head check — a writer with more to write opens another.
+ * and its tree read, an orphan's empty tree included — but a merge's open, which
+ * writes the blobs Git's clean content merges compose as Git composes them
+ * (lib/libgit2/src/libgit2/merge.c merge_conflict_invoke_driver). So a stage
+ * freed before its first put leaves the repository as it found it, those blobs
+ * aside, loose. A put admits its path before it writes a byte, so a refused put
+ * writes nothing; one admitted writes its blob at once — a union its own — and
+ * a stage freed after either without a commit, or whose commit was refused, leaves
+ * loose objects and no ref. A put whose blob write fails leaves its entry at
+ * the null id, which the commit's tree write refuses, and an entry it replaced
+ * is gone from the index: a writer abandons a stage whose put failed, as one
+ * whose settle failed. One commit per stage: after it the ref names the commit
+ * and the stage still describes the tree it opened on, so a second commit is
+ * refused by the head check — a writer with more to write opens another.
+ *
+ * A merge is Git's, under two options of the stage's own: no rename paired —
+ * dotta has no rename verb, so a pairing could only read a hand's rename against
+ * a removal as a conflict nothing explains — and no favor, ever: a sealed blob
+ * with no NUL in its first 8,000 bytes is text to Git
+ * (lib/libgit2/src/libgit2/merge_file.c merge_file__is_binary), and a favor would
+ * compose two ciphertexts. One answer stays Git's, stated: two heads with several
+ * best common ancestors — a criss-cross, which two remotes swapped by `dotta
+ * remote set-url` reach — merge over the first of them (merge.c git_merge_base),
+ * so a name two earlier merges settled apart takes one of the two settles in
+ * silence, both standing in the history.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, its object
- * writer and its ref writer, nothing of mounts, content or dotta's vocabulary:
- * a commit's action is the word its writer hands, carried as it is. Called by
- * the commands that write a branch's machinery (bootstrap, ignore), by a profile's
- * draft — every claim writer's: add's, remove's, revert's and update's
- * (core/profiles.h profile_draft_t) — by core/metadata's sheet writer, by
- * core/ignore — a .dottaignore put onto the stage its edit opened, and the
- * machine's baseline seeded on a stage of its own — and by infra/epoch's mint;
- * a profile's draft alone creates an admission, for add.
+ * writer, its ref writer and its merge base, nothing of mounts, content or dotta's
+ * vocabulary: a commit's action is the word its writer hands, carried as it is.
+ * Called by the commands that write a branch's machinery (bootstrap, ignore),
+ * by a profile's draft — every claim writer's: add's, remove's, revert's and
+ * update's (core/profiles.h profile_draft_t), and a profile's merge
+ * (profile_draft_merge) — by core/metadata's sheet writer, by core/ignore — a
+ * .dottaignore put onto the stage its edit opened, and the machine's baseline
+ * seeded on a stage of its own — and by infra/epoch's mint; a profile's draft
+ * alone creates an admission, for add.
  */
 
 #ifndef DOTTA_STAGE_H
@@ -92,7 +124,8 @@
 #include <types.h>
 
 /**
- * A stage: one ref, its head at open, and the tree being made for it (opaque)
+ * A stage: one ref, its head at open — and a merge's other commit — and the tree
+ * being made for it (opaque)
  */
 typedef struct stage stage_t;
 
@@ -131,7 +164,42 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out);
 error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 
 /**
+ * Open a ref that exists over a merge with another commit: the head the first
+ * parent, `theirs` the second, and the index Git's three-way merge of their trees
+ * over their merge base
+ *
+ * The ref is read and refused as stage_open reads it, and `refname` copied.
+ * `theirs` is any commit the store holds: one it lacks, or an object that is no
+ * commit, is refused in Git's words. The merge base is the first of the two heads'
+ * best common ancestors (sys/gitops.h gitops_find_merge_base), and two histories
+ * that share no commit merge over Git's empty tree, as git merges unrelated
+ * histories. Each name the merge could not compose stands at its stages until
+ * it is settled — the merge base's entry there, ours' and theirs', each where
+ * that side holds a blob (stage_conflicts) — and every other name stands as Git
+ * composed or took it. The opened tree is the head's (stage_tree): what the merge
+ * brings is measured from it, and an admission is seeded from it. The open writes
+ * the blobs Git's clean content merges compose, and nothing else (the header).
+ *
+ * Reader: core/profiles.c profile_draft_merge.
+ *
+ * @param repo Repository (must not be NULL; borrowed for the stage's lifetime)
+ * @param refname Full reference name (must not be NULL)
+ * @param theirs The commit merged into the head (must not be NULL)
+ * @param out Stage (must not be NULL; freed with stage_free)
+ * @return Error or NULL on success
+ */
+error_t stage_merge(
+    git_repository *repo,
+    const char *refname,
+    const git_oid *theirs,
+    stage_t **out
+);
+
+/**
  * The tree the stage opened at — the ref's own bytes at open
+ *
+ * Over a merge's stage, the head's, whatever the merge composed: what the merge
+ * brings is measured from it.
  *
  * Readers: the base of a profile's draft (core/profiles.c profile_draft_seed),
  * whose claims remove's arguments are matched against, of which revert asks the
@@ -149,6 +217,30 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 const git_tree *stage_tree(const stage_t *st);
 
 /**
+ * The tree of the commit a merge's stage merged into the head — theirs; NULL
+ * over no merge
+ *
+ * Reader: core/profiles.c profile_draft_merge — the profile at theirs, and a
+ * name settled for theirs (stage_settle). Borrowed; valid until stage_free.
+ *
+ * @param st Stage (must not be NULL)
+ * @return Theirs' tree, or NULL
+ */
+const git_tree *stage_theirs(const stage_t *st);
+
+/**
+ * The tree a merge's stage merged over: its two heads' merge base's, or Git's
+ * empty tree where they share no commit; NULL over no merge
+ *
+ * Reader: core/profiles.c profile_draft_merge, the profile at the merge base.
+ * Borrowed; valid until stage_free.
+ *
+ * @param st Stage (must not be NULL)
+ * @return The merge base's tree, or NULL
+ */
+const git_tree *stage_merge_base(const stage_t *st);
+
+/**
  * The tree one writer intends: the ref's own entries, and every blob admitted
  * since (opaque)
  *
@@ -161,9 +253,9 @@ const git_tree *stage_tree(const stage_t *st);
  * asks its own document about a blob chosen above it.
  *
  * Seeded from the tree the stage opened at — Git's empty tree for an orphan's,
- * read and never written (stage_orphan) — and never from the stage's index: the
- * stage's puts and removals, made before the admission or after, move no answer
- * it gives.
+ * read and never written (stage_orphan), and the head's for a merge's — and never
+ * from the stage's index: what a merge composed, and the stage's puts and removals,
+ * made before the admission or after, move no answer it gives.
  *
  * An index and never a stage: ownerless, as the stage's own is, so libgit2 skips
  * the entry's object check (index.c index_insert), and every admitted entry names
@@ -327,6 +419,79 @@ error_t stage_put_blob(
 error_t stage_remove(stage_t *st, const char *path);
 
 /**
+ * The names a merge left in conflict, in path order, each once
+ *
+ * A name both sides moved apart that Git could not compose — two edits of one
+ * blob, an edit beside a deletion, a blob beside a directory — held at its stages:
+ * the merge base's entry there, ours' and theirs', each where that side holds a
+ * blob. The iterator steps past a name's stages at once
+ * (lib/libgit2/src/libgit2/index.c git_index_conflict_next), and the index is
+ * sorted, so each name comes once and in order, byte by byte as strcmp reads
+ * it. None over no merge, and none once each is settled. Nothing is written.
+ *
+ * Reader: core/profiles.c profile_draft_merge.
+ *
+ * @param st Stage (must not be NULL)
+ * @param arena The arena the names live in (must not be NULL)
+ * @param out The names (must not be NULL; written on success alone)
+ * @return Error or NULL on success
+ */
+error_t stage_conflicts(const stage_t *st, arena_t *arena, string_array_t *out);
+
+/**
+ * A name settled from a tree: what `tree` holds at and beneath `path`, in place
+ * of whatever the index holds there
+ *
+ * The index's entries at the name and beneath it go, at every stage — a conflict's
+ * among them — and the tree's take their place: a blob at the name, a subtree's
+ * blobs beneath it, or nothing where the tree holds nothing at the name. So a
+ * blob beside a directory settles whole either way, and a name Git composed or
+ * took cleanly is settled as one in conflict is. Each entry is put as every entry
+ * is (stage_put), its mode the tree's, so a gitlink's is refused; the blobs are
+ * the tree's, held already, so a settle writes nothing. In path order a name
+ * precedes everything beneath it, so a name's settle and the settles beneath
+ * it, made in that order from one tree, leave what the tree holds there. A settle
+ * that fails leaves the name half settled: a writer abandons the stage.
+ *
+ * Reader: core/profiles.c profile_draft_merge — the sheet's own name from the
+ * head's tree, a filemode-only modify/delete from the side that holds nothing,
+ * and each content conflict from the side the run names.
+ *
+ * @param st Stage (must not be NULL)
+ * @param path Tree path (must not be NULL; canonical, see the header)
+ * @param tree The tree to settle the name from (must not be NULL; one the stage's
+ *             repository holds — the opened tree, theirs, or any other)
+ * @return Error or NULL on success
+ */
+error_t stage_settle(stage_t *st, const char *path, const git_tree *tree);
+
+/**
+ * A conflicted text united: the union of the lines both sides hold at `path`
+ * over the merge base's, in place of the conflict
+ *
+ * Git's union driver asked of one name (lib/git/merge-ll.c ll_union_merge;
+ * libgit2's GIT_MERGE_FILE_FAVOR_UNION through git_merge_file_from_index): where
+ * the two sides' changes meet, ours' lines then theirs', none dropped — so a
+ * line one side removed beside a line the other added returns. The union's blob
+ * is written, under Git's mode for the three (lib/libgit2/src/libgit2/merge.h
+ * git_merge_file__best_mode), and staged in the conflict's place. Which name a
+ * union serves is its caller's.
+ *
+ * Refused ERR_NOT_FOUND where no conflict stands at the name. Refused ERR_CONFLICT,
+ * the conflict standing and nothing written, where a side holds nothing there,
+ * or where Git reads one of the three as binary — a NUL in its first 8,000 bytes,
+ * which no favor but ours' or theirs' composes (merge_file.c merge_file__binary)
+ * — and nowhere else: the union's put meets nothing in its way, both sides holding
+ * a blob at the name. Reader: core/profiles.c profile_draft_merge, the profile's
+ * .dottaignore, which holds a refused union as the conflict it is.
+ *
+ * @param st Stage (must not be NULL)
+ * @param path Tree path (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t stage_unite(stage_t *st, const char *path);
+
+/**
  * Whether the tree the commit would record holds anything beneath `path`: an
  * entry the name and a separator begin, at any depth
  *
@@ -334,7 +499,10 @@ error_t stage_remove(stage_t *st, const char *path);
  * file goes — asked of the tree the puts and removals so far leave, by the one
  * search the put makes, so this answer and the put's refusal cannot part. An
  * entry at the name itself is not beneath it, nor one at a sibling the name merely
- * prefixes ("x.bak" and "x0" beside "x"). Nothing is written.
+ * prefixes ("x.bak" and "x0" beside "x"). A conflict's stages are entries to
+ * it: the search asks every stage (lib/libgit2/src/libgit2/index.c
+ * git_index_find_prefix), so a name a merge left in conflict stands beneath until
+ * it is settled. Nothing is written.
  *
  * Reader: core/profiles.c profile_prune_ancestors, whether anything a tree can
  * hold stands beneath a derivation.
@@ -348,35 +516,37 @@ error_t stage_remove(stage_t *st, const char *path);
 error_t stage_holds_beneath(const stage_t *st, const char *path, bool *out);
 
 /**
- * Whether the puts and removals so far move the tree from the one the stage opened
- * at
+ * Whether the commit would move the ref: over a merge always, and otherwise where
+ * the puts and removals so far move the tree from the one the stage opened at
  *
- * stage_commit's question, asked without its write: libgit2 diffs the opened
- * tree against the index through two iterators, an entry unmodified where its
- * id and its mode agree, and writes no object
- * (lib/libgit2/src/libgit2/diff_generate.c git_diff_tree_to_index, maybe_modified
- * — the arms that hash reach a workdir side alone). So a dry run may ask it and
- * leave the database as it found it, and an id put before its object is written
- * is compared by the id alone. An entry put back as the tree holds it moves
- * nothing; an orphan's stage is compared against the empty tree. About 0.1 µs
- * an entry. The comparison is stage_changes' too, which keeps the entries, so
- * the two cannot part; that it reads a type change as one entry moves no answer
- * here.
+ * stage_commit's question, asked without its write. A merge's second parent records
+ * the integration whatever the tree, so a merge's stage has always moved. Over
+ * one parent or none, libgit2 diffs the opened tree against the index through
+ * two iterators, an entry unmodified where its id and its mode agree, and writes
+ * no object (lib/libgit2/src/libgit2/diff_generate.c git_diff_tree_to_index,
+ * maybe_modified — the arms that hash reach a workdir side alone). So a dry run
+ * may ask it and leave the database as it found it, and an id put before its
+ * object is written is compared by the id alone. An entry put back as the tree
+ * holds it moves nothing; an orphan's stage is compared against the empty tree.
+ * About 0.1 µs an entry. The comparison is stage_changes' too, which keeps the
+ * entries, so over one parent the two cannot part, and over a merge they part
+ * there alone; that it reads a type change as one entry moves no answer here.
  *
  * Reader: core/profiles.c profile_changed, the sheet's comparison beside it.
  *
  * @param st Stage (must not be NULL)
- * @param out Whether the tree moved (must not be NULL; written on success alone)
+ * @param out Whether the commit would move the ref (must not be NULL; written
+ *            on success alone)
  * @return Error or NULL on success: a tree the comparison could not read, which
  *         needs a store that changed beneath the stage
  */
 error_t stage_changed(const stage_t *st, bool *out);
 
 /**
- * One entry the puts and removals moved: its name, and what stood at it on either
- * side
+ * One entry the puts and removals moved: its name, and what stood at it before
+ * and after
  *
- * A side is Git's type for what stands at the name there: GIT_OBJECT_BLOB for a
+ * Each is Git's type for what stands at the name there: GIT_OBJECT_BLOB for a
  * blob of any mode its tree spells — bytes, an executable, a link — and
  * GIT_OBJECT_COMMIT for a gitlink; GIT_OBJECT_INVALID where nothing stands. Never
  * a tree: the comparison descends into every one.
@@ -396,19 +566,21 @@ typedef struct {
 } stage_changes_t;
 
 /**
- * The entries the puts and removals so far move, each with what stood at it on
- * either side
+ * The entries the puts and removals so far move, each with what stood at it before
+ * and after
  *
- * stage_changed's comparison with its entries kept, so the list and the bool
- * cannot part. A type change — a blob become a link, a gitlink a blob — is one
- * entry, where libgit2 would split it in two
+ * stage_changed's comparison with its entries kept, so over one parent the list
+ * and the bool cannot part; over a merge, the entries the merge and the settles
+ * since bring to the head, none where the merged tree is the head's, which the
+ * bool calls moved all the same. A type change — a blob become a link, a gitlink
+ * a blob — is one entry, where libgit2 would split it in two
  * (lib/libgit2/src/libgit2/diff_generate.c maybe_modified,
- * GIT_DIFF_INCLUDE_TYPECHANGE). A side is read as libgit2 reads a tree entry's
- * type (tree.c git_tree_entry_type), off the mode the comparison hands on as
- * the tree spelled it (iterator.c tree_iterator_set_current), so a blob a hand's
- * tree spells 100664 is a blob as the profile's walk reads it. In path order,
- * byte by byte as strcmp reads it: the index is ownerless, so case-sensitive,
- * and the comparison walks it and the tree — a tree as Git writes one, its names
+ * GIT_DIFF_INCLUDE_TYPECHANGE). Each type is read as libgit2 reads a tree entry's
+ * (tree.c git_tree_entry_type), off the mode the comparison hands on as the tree
+ * spelled it (iterator.c tree_iterator_set_current), so a blob a hand's tree
+ * spells 100664 is a blob as the profile's walk reads it. In path order, byte
+ * by byte as strcmp reads it: the index is ownerless, so case-sensitive, and
+ * the comparison walks it and the tree — a tree as Git writes one, its names
  * sorted — in that order, re-sorting only an ignore-case index's deltas
  * (diff_generate.c git_diff_tree_to_index). Nothing is written, so a dry run
  * may ask it; an id put before its object is compared by the id alone.
@@ -424,18 +596,23 @@ typedef struct {
 error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out);
 
 /**
- * The tree, and — when it differs from the opened one — one commit
+ * The tree, and — when it differs from the opened one, or a merge records it —
+ * one commit
  *
- * The index is written as a tree. A tree equal to the opened one is not committed:
- * nothing moves, and the commit answered is Git's null id. Otherwise one commit
- * with the opened head as its parent (a root for an orphan's stage) and the action
- * in its header (sys/gitops.h gitops_create_commit), written apart from the ref,
- * then the ref written to it only from what the open read (gitops_write_reference):
- * a head that moved, or a ref that appeared, reads as ERR_CONFLICT naming the
- * ref; a head deleted since, and every other refusal of the write, in Git's words;
- * each says nothing was committed, and the object stays loose. The reflog line
- * is "dotta <action>: <summary>", the action the header's and the summary the
- * commit's, a root's alike (gitops_write_reference).
+ * The index is written as a tree; a conflict a merge left standing refuses the
+ * write in Git's words (lib/libgit2/src/libgit2/tree.c git_tree__write_index),
+ * and nothing is committed. A tree equal to the opened one is not committed —
+ * nothing moves, and the commit answered is Git's null id — save a merge's, whose
+ * second parent records the integration whatever its tree. Otherwise one commit
+ * with the opened head as its first parent (a root for an orphan's stage), a
+ * merge's other commit as its second, and the action in its header (sys/gitops.h
+ * gitops_create_commit), written apart from the ref, then the ref written to it
+ * only from what the open read (gitops_write_reference): a head that moved, or
+ * a ref that appeared, reads as ERR_CONFLICT naming the ref; a head deleted since,
+ * and every other refusal of the write, in Git's words; each says nothing was
+ * committed, and the object stays loose. The reflog line is "dotta <action>:
+ * <summary>", the action the header's and the summary the commit's, a root's
+ * and a merge's alike (gitops_write_reference).
  *
  * The commit is answered to the caller that asks, and only once its ref names
  * it: the id the object was written under, never the ref read again, which another

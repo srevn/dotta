@@ -1,18 +1,19 @@
 /**
- * stage.c - One ref's next tree, staged in memory: implementation
+ * stage.c - One ref's next commit, staged in memory: implementation
  *
  * See stage.h. The stage composes five primitives: the ref read once to its head,
  * its absence proven (sys/gitops.h gitops_load_reference_commit,
  * gitops_reference_exists), an ownerless index seeded from the head's tree
  * (git_index_new + git_index_read_tree — never git_repository_index, the
- * checked-out branch's staging area), the tree written straight to the ODB
- * (git_index_write_tree_to — never git_index_write, which wants a backing file),
- * gitops' one writer of a commit object, which moves no ref (gitops_create_commit),
- * and gitops' one writer of a ref, from the head the open read — from nothing
- * for an orphan's stage (gitops_write_reference). That write's compare, under
- * the ref's own lock, is the last inch of the atomicity, and it is still libgit2's:
- * the stage owns no lock, and says every refusal of the write as the writer's
- * one fact with its own clause.
+ * checked-out branch's staging area) or from Git's merge of it with another
+ * commit's (git_merge_trees, whose index is ownerless too), the tree written
+ * straight to the ODB (git_index_write_tree_to — never git_index_write, which
+ * wants a backing file), gitops' one writer of a commit object, which moves no
+ * ref (gitops_create_commit), and gitops' one writer of a ref, from the head
+ * the open read — from nothing for an orphan's stage (gitops_write_reference).
+ * That write's compare, under the ref's own lock, is the last inch of the
+ * atomicity, and it is still libgit2's: the stage owns no lock, and says every
+ * refusal of the write as the writer's one fact with its own clause.
  */
 
 #include "sys/stage.h"
@@ -23,16 +24,21 @@
 #include <sys/stat.h>
 
 #include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/string.h"
 #include "sys/gitops.h"
 
 struct stage {
     git_repository *repo;   /* borrowed */
     char *refname;          /* owned */
-    git_commit *parent;     /* the head at open; NULL for an orphan's stage */
+    git_commit *parent;     /* the head at open, the first parent; NULL for an orphan's stage */
+    git_commit *theirs;     /* a merge's second parent; NULL over no merge */
     git_tree *tree;         /* the parent's tree, or the empty tree */
-    git_index *index;       /* ownerless, seeded from tree */
+    git_tree *theirs_tree;  /* the second parent's tree; NULL over no merge */
+    git_tree *merge_base;   /* the merge base's tree, or the empty tree; NULL over no merge */
+    git_index *index;       /* ownerless: the tree read into it, or Git's merge of the three */
 };
 
 struct stage_admission {
@@ -40,57 +46,149 @@ struct stage_admission {
 };
 
 /**
- * The stage on `refname`, seeded: the tree of `parent` in a private index with
- * it as the parent-to-be, or — when `parent` is NULL, the orphan's stage — the
- * empty tree and no parent
+ * Git's empty tree: its own "nothing", read and never written
+ *
+ * Its id is the hash of a tree with no entries, and libgit2 — like git — serves
+ * that one object whether or not the database holds it (odb.c odb_read_hardcoded).
+ *
+ * Readers: stage_seed, the tree an orphan's stage opens on; stage_merge_trees,
+ * the merge base of two histories that share no commit.
+ */
+static error_t stage_empty_tree(const stage_t *st, git_tree **out) {
+    git_oid empty;
+    int rc = git_odb_hash(&empty, "", 0, GIT_OBJECT_TREE);
+    if (rc == 0) {
+        rc = git_tree_lookup(out, st->repo, &empty);
+    }
+    if (rc < 0) {
+        return error_git(rc, "Failed to read the empty tree for '%s'", st->refname);
+    }
+
+    return NULL;
+}
+
+/**
+ * An ownerless index holding the tree the stage opened at
+ *
+ * Ownerless — never git_repository_index, the checked-out branch's staging area
+ * — so libgit2's path rule runs at every add, and the object check waits for a
+ * tree write (index.c index_insert). The index holds its own copies of the entries:
+ * the stage is not borrowed past the call.
+ *
+ * Readers: stage_seed, the index of a stage over one parent or none;
+ * stage_admission_create, an admission's.
+ */
+static error_t stage_read_tree(const stage_t *st, git_index **out) {
+    int rc = git_index_new(out);
+    if (rc == 0) {
+        rc = git_index_read_tree(*out, st->tree);
+    }
+    if (rc < 0) {
+        return error_git(rc, "Failed to read the tree of '%s'", st->refname);
+    }
+
+    return NULL;
+}
+
+/**
+ * A merge's index: Git's three-way merge of the opened tree and theirs over the
+ * tree the two histories last shared, under the stage's own options
+ *
+ * A failure is said as the merge's, theirs' read among them — a commit the store
+ * lacks named by libgit2 — save the empty tree's, said as each reader of it says
+ * it (stage_empty_tree).
+ *
+ * Reader: stage_seed, a merge's seed.
+ */
+static error_t stage_merge_trees(stage_t *st, const git_oid *theirs) {
+    /* Theirs, the second parent — any commit the store holds — and its tree */
+    int rc = git_commit_lookup(&st->theirs, st->repo, theirs);
+    if (rc == 0) {
+        rc = git_commit_tree(&st->theirs_tree, st->theirs);
+    }
+    if (rc < 0) {
+        return error_git(rc, "Failed to merge into '%s'", st->refname);
+    }
+
+    /* The tree the two histories last shared: their merge base's, the first of
+     * their best common ancestors (sys/gitops.h gitops_find_merge_base) — or,
+     * where they share no commit, Git's empty tree, as git merges unrelated
+     * histories: an empty ancestor merges as none does
+     * (lib/libgit2/src/libgit2/merge.c git_merge__iterators) */
+    git_oid base;
+    error_t err = gitops_find_merge_base(
+        st->repo, git_commit_id(st->parent), git_commit_id(st->theirs), &base
+    );
+    if (error_code(err) == ERR_NOT_FOUND) {
+        err = stage_empty_tree(st, &st->merge_base);
+        if (err) return err;
+    } else {
+        if (!err) err = gitops_get_tree_from_commit(st->repo, &base, &st->merge_base);
+        if (err) return error_wrap(err, "Failed to merge into '%s'", st->refname);
+    }
+
+    /* Git's merge, under the stage's own options (the header): no rename paired
+     * — the options' one default flag is GIT_MERGE_FIND_RENAMES
+     * (include/git2/merge.h GIT_MERGE_OPTIONS_INIT), and with it clear the pairing
+     * returns at once (merge.c git_merge_diff_list__find_renames) — and no favor,
+     * the options' own GIT_MERGE_FILE_FAVOR_NORMAL. The index it answers is a
+     * new one, ownerless as the stage's every index is (merge.c
+     * index_from_diff_list), so the puts keep their contract on it. */
+    git_merge_options opts;
+    git_merge_options_init(&opts, GIT_MERGE_OPTIONS_VERSION);
+    opts.flags &= ~GIT_MERGE_FIND_RENAMES;
+    rc = git_merge_trees(
+        &st->index, st->repo, st->merge_base, st->tree, st->theirs_tree, &opts
+    );
+    if (rc < 0) {
+        return error_git(rc, "Failed to merge into '%s'", st->refname);
+    }
+
+    return NULL;
+}
+
+/**
+ * The stage on `refname`, seeded: the tree of `parent` with it as the first parent
+ * — or, where `parent` is NULL, the orphan's stage, the empty tree and no parent
+ * — and the index the commit's tree is written from: that tree read into it,
+ * or, where `theirs` names a commit, Git's merge of the two
  *
  * The stage owns everything it makes from its first allocation on, and the parent
  * from the call, so every failure frees through stage_free and nothing is handed
- * across this call half-built. Its readers are the two openers: each resolves
- * the ref, refuses the state it did not expect, and seeds here.
+ * across this call half-built. Its readers are the three openers: each resolves
+ * the ref, refuses the state it did not expect, and seeds here — two seeds of
+ * one model, a merge's the second.
  */
 static error_t stage_seed(
-    git_repository *repo, const char *refname, git_commit *parent, stage_t **out
+    git_repository *repo, const char *refname, git_commit *parent, const git_oid *theirs,
+    stage_t **out
 ) {
     stage_t *st = heap_calloc(1, sizeof(*st));
     st->repo = repo;
     st->refname = heap_strdup(refname);
     st->parent = parent;
 
-    int rc;
+    /* The tree every move is measured from: the head's, a merge's among them,
+     * or Git's empty tree, every orphan's stage's. The index seeded from the
+     * empty tree answers for its tree from its own cache until a verb touches
+     * it (tree.c git_tree__write_index), so an orphan's stage committed untouched
+     * meets the rule every stage keeps — a tree equal to the opened one — and
+     * writes nothing there either. */
+    error_t err = NULL;
     if (parent) {
-        rc = git_commit_tree(&st->tree, parent);
-        if (rc < 0) {
-            stage_free(st);
-            return error_git(rc, "Failed to read the head of '%s'", refname);
-        }
+        int rc = git_commit_tree(&st->tree, parent);
+        if (rc < 0) err = error_git(rc, "Failed to read the head of '%s'", refname);
     } else {
-        /* The empty tree: Git's own "nothing", the tree every orphan's stage
-         * opens on. Read, never written: its id is the hash of a tree with no
-         * entries, and libgit2 — like git — serves that one object whether or
-         * not the database holds it (odb.c odb_read_hardcoded). The index seeded
-         * from it answers for its tree from its own cache until a verb touches
-         * it (tree.c git_tree__write_index), so an orphan's stage committed
-         * untouched meets the rule every stage keeps — a tree equal to the opened
-         * one — and writes nothing there either. */
-        git_oid empty;
-        rc = git_odb_hash(&empty, "", 0, GIT_OBJECT_TREE);
-        if (rc == 0) {
-            rc = git_tree_lookup(&st->tree, repo, &empty);
-        }
-        if (rc < 0) {
-            stage_free(st);
-            return error_git(rc, "Failed to read the empty tree for '%s'", refname);
-        }
+        err = stage_empty_tree(st, &st->tree);
     }
 
-    rc = git_index_new(&st->index);
-    if (rc == 0) {
-        rc = git_index_read_tree(st->index, st->tree);
+    /* The index: the opened tree read into it, or Git's merge of it and theirs */
+    if (!err) {
+        err = theirs ? stage_merge_trees(st, theirs) : stage_read_tree(st, &st->index);
     }
-    if (rc < 0) {
+    if (err) {
         stage_free(st);
-        return error_git(rc, "Failed to read the tree of '%s'", refname);
+        return err;
     }
 
     *out = st;
@@ -113,7 +211,7 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out) {
     error_t err = gitops_load_reference_commit(repo, refname, &parent);
     if (err) return err;
 
-    return stage_seed(repo, refname, parent, out);
+    return stage_seed(repo, refname, parent, NULL, out);
 }
 
 error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
@@ -133,13 +231,43 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
         return error_create(ERR_EXISTS, "Reference '%s' already exists", refname);
     }
 
-    return stage_seed(repo, refname, NULL, out);
+    return stage_seed(repo, refname, NULL, NULL, out);
+}
+
+error_t stage_merge(
+    git_repository *repo, const char *refname, const git_oid *theirs, stage_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(refname);
+    CHECK_NULL(theirs);
+    CHECK_NULL(out);
+    *out = NULL;
+
+    /* The head, the first parent, read and refused as stage_open reads it; theirs
+     * is the seed's, which merges it in (stage_merge_trees) */
+    git_commit *parent = NULL;
+    error_t err = gitops_load_reference_commit(repo, refname, &parent);
+    if (err) return err;
+
+    return stage_seed(repo, refname, parent, theirs, out);
 }
 
 const git_tree *stage_tree(const stage_t *st) {
     CHECK_NULL(st);
 
     return st->tree;
+}
+
+const git_tree *stage_theirs(const stage_t *st) {
+    CHECK_NULL(st);
+
+    return st->theirs_tree;
+}
+
+const git_tree *stage_merge_base(const stage_t *st) {
+    CHECK_NULL(st);
+
+    return st->merge_base;
 }
 
 /**
@@ -149,13 +277,13 @@ const git_tree *stage_tree(const stage_t *st) {
  * libgit2's own reading of a tree entry, whole (lib/libgit2/src/libgit2/tree.c
  * git_tree_entry_type: S_ISGITLINK, then S_ISDIR), asked of a mode the stage
  * meets as a tree spelled it — an index entry's, where the index was seeded from
- * one (index.c read_tree_cb), and a delta's side, which the comparison hands on
- * from either (iterator.c tree_iterator_set_current) — so a blob of whatever
- * permission bits a hand's tree spells is the blob the profile's walk reads there
- * (core/profiles.c profile_step).
+ * one (index.c read_tree_cb), and a delta's file, before or after, which the
+ * comparison hands on from either (iterator.c tree_iterator_set_current) — so a
+ * blob of whatever permission bits a hand's tree spells is the blob the profile's
+ * walk reads there (core/profiles.c profile_step).
  *
  * Readers: the noun a refusal names an entry in a name's way by (stage_mode_noun),
- * and what stood on a delta's side (stage_side_type).
+ * and what a delta says stood at its name (stage_delta_type).
  */
 static git_object_t stage_mode_type(uint32_t mode) {
     switch (mode & S_IFMT) {
@@ -181,7 +309,7 @@ static const char *stage_mode_noun(uint32_t mode) {
 /**
  * Can anything at all be named at this path — the shape, and no entry above it?
  *
- * The identical beginning of both sides of the rule, a blob's and a subtree's:
+ * The identical beginning of both halves of the rule, a blob's and a subtree's:
  * what libgit2 would refuse later with a worse message, and then a proper prefix
  * that names an entry, which puts the path inside a file or a submodule. Neither
  * answer depends on what is being put there.
@@ -230,7 +358,8 @@ static error_t stage_admit_path(git_index *index, const char *path) {
  * The separator is the boundary: an entry at the name itself is not beneath it,
  * nor one at a sibling the name merely prefixes ("x.bak" and "x0" beside "x").
  * The index is sorted, so one prefix probe answers (lib/libgit2/src/libgit2/index.c
- * git_index_find_prefix).
+ * git_index_find_prefix), and it asks every stage: a conflict's entries are entries
+ * here.
  *
  * Readers: stage_put_entry, a directory where the file goes; stage_holds_beneath,
  * the stage's question of its own index, so the put's refusal and the prune's
@@ -329,17 +458,14 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out) {
 
     stage_admission_t *adm = heap_calloc(1, sizeof(*adm));
 
-    /* Ownerless, for the reason the stage's own index is: the path rule runs at
-     * every add, and the object check waits for a tree write that never comes.
-     * The index holds its own copies of the entries, so the stage is not borrowed
-     * past this call. */
-    int rc = git_index_new(&adm->index);
-    if (rc == 0) {
-        rc = git_index_read_tree(adm->index, st->tree);
-    }
-    if (rc < 0) {
+    /* Ownerless, as the stage's own index is (stage_read_tree): the path rule
+     * runs at every add, and the object check waits for a tree write that never
+     * comes. The opened tree, a merge's head's included, and never the stage's
+     * index. */
+    error_t err = stage_read_tree(st, &adm->index);
+    if (err) {
         stage_admission_free(adm);
-        return error_git(rc, "Failed to read the tree of '%s'", st->refname);
+        return err;
     }
 
     *out = adm;
@@ -463,6 +589,178 @@ error_t stage_remove(stage_t *st, const char *path) {
     return NULL;
 }
 
+error_t stage_conflicts(const stage_t *st, arena_t *arena, string_array_t *out) {
+    CHECK_NULL(st);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    git_index_conflict_iterator *conflicts = NULL;
+    int rc = git_index_conflict_iterator_new(&conflicts, st->index);
+    if (rc < 0) {
+        return error_git(rc, "Failed to read the conflicts of '%s'", st->refname);
+    }
+
+    /* Each name once, in the index's order: the iterator steps past a name's
+     * stages together, and any side it holds names it — the three share the name.
+     * The iteration classifies its three answers, as every one dotta makes does:
+     * an entry, the end, or a failure. */
+    string_array_t names;
+    string_array_init(&names, arena, 0);
+    const git_index_entry *ancestor = NULL;
+    const git_index_entry *ours = NULL;
+    const git_index_entry *theirs = NULL;
+    while ((rc = git_index_conflict_next(&ancestor, &ours, &theirs, conflicts)) == 0) {
+        string_array_push(&names, (ancestor ? ancestor : ours ? ours : theirs)->path);
+    }
+    git_index_conflict_iterator_free(conflicts);
+    if (rc != GIT_ITEROVER) {
+        return error_git(rc, "Failed to read the conflicts of '%s'", st->refname);
+    }
+
+    *out = names;
+    return NULL;
+}
+
+/* One walk of the tree a name is settled from: the index the tree's entries go
+ * into, and the name */
+typedef struct {
+    git_index *index;           /* The stage's */
+    const char *path;           /* The name settled */
+    size_t path_len;            /* Its length, asked once */
+} stage_walk_t;
+
+/*
+ * The settle's visitor, once per entry of the tree it reads: an entry at the
+ * name or beneath it put where it stands — a blob, and a gitlink its mode refuses
+ * — and a tree there passed into; an entry above the name, on the way down to
+ * it, passed into; every other entry passed by, a tree with everything beneath
+ * it, so the walk reads the way to the name and what stands there, and no more.
+ */
+static error_t stage_step(
+    const char *path, const git_tree_entry *entry, void *payload, gitops_next_t *next
+) {
+    const stage_walk_t *walk = payload;
+
+    if (str_path_under(path, walk->path, walk->path_len)) {
+        if (git_tree_entry_type(entry) == GIT_OBJECT_TREE) return NULL;
+
+        git_index_entry put;
+        memset(&put, 0, sizeof(put));
+        put.mode = git_tree_entry_filemode(entry);
+        put.path = path;
+        git_oid_cpy(&put.id, git_tree_entry_id(entry));
+
+        return stage_put_entry(walk->index, &put);
+    }
+
+    if (!str_path_beneath(walk->path, path, strlen(path))) {
+        *next = GITOPS_NEXT_SKIP;
+    }
+    return NULL;
+}
+
+error_t stage_settle(stage_t *st, const char *path, const git_tree *tree) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+    CHECK_NULL(tree);
+
+    /* What the index holds at the name and beneath it goes, the staged entry
+     * and a conflict's alike. libgit2 takes an entry at a name, and every entry
+     * beneath it ("<path>/"), one stage at a time (index.c git_index_remove,
+     * which answers GIT_ENOTFOUND where none stands, and
+     * git_index_remove_directory), so each of the four is asked in turn: the
+     * staged one, then the merge base's, ours' and theirs'. */
+    for (int i = GIT_INDEX_STAGE_NORMAL; i <= GIT_INDEX_STAGE_THEIRS; i++) {
+        int rc = git_index_remove(st->index, path, i);
+        if (rc == 0 || rc == GIT_ENOTFOUND) {
+            rc = git_index_remove_directory(st->index, path, i);
+        }
+        if (rc < 0) {
+            return error_git(rc, "Failed to settle '%s'", path);
+        }
+    }
+
+    /* Then what the tree holds there, each entry put as every entry is
+     * (stage_put_entry), its mode the tree's, read as libgit2 reads one (tree.c
+     * git_tree_entry_filemode) — nothing at or beneath the name stands in its
+     * way any more — and its blob the tree's, held already (stage_step) */
+    stage_walk_t walk = { .index = st->index, .path = path, .path_len = strlen(path) };
+    return gitops_tree_walk(tree, stage_step, &walk);
+}
+
+error_t stage_unite(stage_t *st, const char *path) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+
+    /* The conflict at the name: the merge base's entry there, ours' and theirs',
+     * each where that side holds a blob */
+    const git_index_entry *ancestor = NULL;
+    const git_index_entry *ours = NULL;
+    const git_index_entry *theirs = NULL;
+    int rc = git_index_conflict_get(&ancestor, &ours, &theirs, st->index, path);
+    if (rc == GIT_ENOTFOUND) {
+        return error_create(
+            ERR_NOT_FOUND, "Cannot unite '%s': no conflict stands there", path
+        );
+    }
+    if (rc < 0) {
+        return error_git(rc, "Failed to unite '%s'", path);
+    }
+
+    /* A removal has no lines to unite with the other side's: the conflict stands */
+    if (!ours || !theirs) {
+        return error_create(
+            ERR_CONFLICT, "Cannot unite '%s': a side holds nothing there", path
+        );
+    }
+
+    /* The union, made in memory over the three blobs: a version Git reads as
+     * binary — a NUL in its first 8,000 bytes — composes under no favor but ours'
+     * or theirs', and comes back not automergeable, nothing written (merge_file.c
+     * merge_file__from_inputs, merge_file__binary) */
+    git_merge_file_options opts;
+    git_merge_file_options_init(&opts, GIT_MERGE_FILE_OPTIONS_VERSION);
+    opts.favor = GIT_MERGE_FILE_FAVOR_UNION;
+    git_merge_file_result united;
+    rc = git_merge_file_from_index(&united, st->repo, ancestor, ours, theirs, &opts);
+    if (rc < 0) {
+        return error_git(rc, "Failed to unite '%s'", path);
+    }
+    if (!united.automergeable) {
+        git_merge_file_result_free(&united);
+        return error_create(
+            ERR_CONFLICT, "Cannot unite '%s': Git reads a version of it as binary", path
+        );
+    }
+
+    /* Its blob, written once, under Git's mode for the three (merge.h
+     * git_merge_file__best_mode) */
+    git_index_entry entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.mode = united.mode;
+    entry.path = path;
+    rc = git_blob_create_from_buffer(
+        &entry.id, st->repo, united.len > 0 ? united.ptr : "", united.len
+    );
+    git_merge_file_result_free(&united);
+    if (rc < 0) {
+        return error_git(rc, "Failed to write the blob for '%s'", path);
+    }
+
+    /* Staged beside the conflict, and then the conflict taken: the add replaces
+     * only the entry of its own stage (the header), so a put refused would leave
+     * the conflict standing — and none is, both sides holding a blob at the name */
+    error_t err = stage_put_entry(st->index, &entry);
+    if (err) return err;
+
+    rc = git_index_conflict_remove(st->index, path);
+    if (rc < 0) {
+        return error_git(rc, "Failed to unite '%s'", path);
+    }
+
+    return NULL;
+}
+
 error_t stage_holds_beneath(const stage_t *st, const char *path, bool *out) {
     CHECK_NULL(st);
     CHECK_NULL(path);
@@ -475,8 +773,9 @@ error_t stage_holds_beneath(const stage_t *st, const char *path, bool *out) {
 /**
  * The index against the tree the open read, a type change one delta
  *
- * Readers: stage_changed, whether any entry moved; stage_changes, each one —
- * one comparison for both questions, so the bool and the list cannot part.
+ * Readers: stage_changed, whether any entry moved over one parent or none;
+ * stage_changes, each one — one comparison for both questions, so the bool and
+ * the list cannot part where the bool asks it.
  */
 static error_t stage_diff(const stage_t *st, git_diff **out) {
     /* A type change — a blob become a link, a gitlink a blob — one delta at its
@@ -501,6 +800,13 @@ error_t stage_changed(const stage_t *st, bool *out) {
     CHECK_NULL(st);
     CHECK_NULL(out);
 
+    /* A merge's second parent records the integration whatever the tree, so its
+     * commit moves the ref (stage_commit) */
+    if (st->theirs) {
+        *out = true;
+        return NULL;
+    }
+
     /* The index against the tree the open read, stage_commit's question asked
      * without its write (stage_diff) */
     git_diff *diff = NULL;
@@ -515,21 +821,21 @@ error_t stage_changed(const stage_t *st, bool *out) {
 }
 
 /**
- * What stood on one side of a delta: Git's type for its mode (stage_mode_type),
- * or GIT_OBJECT_INVALID where nothing stands — an addition's first side, a
- * removal's second
+ * What a delta says stood at its name, before or after: Git's type for the file's
+ * mode (stage_mode_type), or GIT_OBJECT_INVALID where nothing stands — an
+ * addition's before, a removal's after
  *
- * Absence is read off libgit2's own word for it, the flag that a file exists on
- * the side (include/git2/diff.h GIT_DIFF_FLAG_EXISTS), never off the mode 0 a
- * zeroed delta leaves such a side at (lib/libgit2/src/libgit2/diff_generate.c
+ * Absence is read off libgit2's own word for it, the flag that the file exists
+ * (include/git2/diff.h GIT_DIFF_FLAG_EXISTS), never off the mode 0 a zeroed delta
+ * leaves an absent file at (lib/libgit2/src/libgit2/diff_generate.c
  * diff_delta__alloc): a hand's tree can spell 0 (tree.c parse_mode), which the
  * walk reads as a blob.
  *
- * Reader: stage_changes, each delta's two sides.
+ * Reader: stage_changes, each delta's two files.
  */
-static git_object_t stage_side_type(const git_diff_file *side) {
-    return side->flags & GIT_DIFF_FLAG_EXISTS
-        ? stage_mode_type(side->mode) : GIT_OBJECT_INVALID;
+static git_object_t stage_delta_type(const git_diff_file *file) {
+    return file->flags & GIT_DIFF_FLAG_EXISTS
+        ? stage_mode_type(file->mode) : GIT_OBJECT_INVALID;
 }
 
 error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out) {
@@ -544,17 +850,18 @@ error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out) {
     if (err) return err;
 
     /* Each delta kept, in the order the comparison made them: its name, one string
-     * for both sides since no rename is asked (diff_generate.c diff_delta__alloc),
-     * copied out of the diff that goes, and what stood on each side. The room
-     * is made at once, and an arena's answer is never NULL, for no delta either */
+     * for its two files since no rename is asked (diff_generate.c
+     * diff_delta__alloc), copied out of the diff that goes, and what stood there
+     * before and after. The room is made at once, and an arena's answer is never
+     * NULL, for no delta either */
     const size_t count = git_diff_num_deltas(diff);
     stage_change_t *entries = arena_calloc(arena, count, sizeof(*entries));
     for (size_t i = 0; i < count; i++) {
         const git_diff_delta *delta = git_diff_get_delta(diff, i);
         entries[i] = (stage_change_t){
             .path = arena_strdup(arena, delta->new_file.path),
-            .before = stage_side_type(&delta->old_file),
-            .after = stage_side_type(&delta->new_file),
+            .before = stage_delta_type(&delta->old_file),
+            .after = stage_delta_type(&delta->new_file),
         };
     }
     git_diff_free(diff);
@@ -574,14 +881,17 @@ error_t stage_commit(
         *out_commit = (git_oid) GIT_OID_SHA1_ZERO;
     }
 
+    /* The tree, which a conflict a merge left standing refuses in Git's words
+     * (tree.c git_tree__write_index) */
     git_oid tree_oid;
     int rc = git_index_write_tree_to(&tree_oid, st->index, st->repo);
     if (rc < 0) {
         return error_git(rc, "Failed to write the tree for '%s'", st->refname);
     }
 
-    /* The tree the open read: nothing to commit, nothing moves. */
-    if (git_oid_equal(&tree_oid, git_tree_id(st->tree))) {
+    /* The tree the open read: nothing to commit, nothing moves — save over a
+     * merge, whose second parent records the integration whatever the tree */
+    if (!st->theirs && git_oid_equal(&tree_oid, git_tree_id(st->tree))) {
         return NULL;
     }
 
@@ -598,13 +908,15 @@ error_t stage_commit(
         return err;
     }
 
-    /* The object: the tree, the head the open read as its one parent — none for
-     * an orphan's stage — and the writer's action in its header, written apart
-     * from the ref, which is written below */
-    const git_commit *parents[] = { st->parent };
+    /* The object: the tree, the head the open read as its first parent — none
+     * for an orphan's stage — and a merge's other commit as its second, in git's
+     * order, the first the line the merge continues (cmds/show.c show_commit
+     * diffs a merge against it); and the writer's action in its header, written
+     * apart from the ref, which is written below */
+    const git_commit *parents[] = { st->parent, st->theirs };
     git_oid commit_oid;
     err = gitops_create_commit(
-        st->repo, sig, sig, NULL, message, tree, st->parent ? 1 : 0,
+        st->repo, sig, sig, NULL, message, tree, st->theirs ? 2 : st->parent ? 1 : 0,
         parents, action, &commit_oid
     );
     git_signature_free(sig);
@@ -658,7 +970,10 @@ void stage_free(stage_t *st) {
     }
 
     git_index_free(st->index);
+    git_tree_free(st->merge_base);
+    git_tree_free(st->theirs_tree);
     git_tree_free(st->tree);
+    git_commit_free(st->theirs);
     git_commit_free(st->parent);
     free(st->refname);
     free(st);

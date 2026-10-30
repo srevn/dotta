@@ -661,9 +661,10 @@ void gitops_blob_view_close(gitops_blob_view_t *view);
  *
  * gitops_reference_commit for a reader that needs the reference: its absence,
  * proven, is refused (ERR_NOT_FOUND, naming the reference). Readers: sys/stage.c
- * stage_open (the parent-to-be), cmds/status.c status_print_remote (the
- * remote-tracking branch's head), sys/upstream.c upstream_create_branch (the
- * remote's head a branch is created at), and gitops_load_branch_commit.
+ * stage_open and stage_merge (the parent-to-be, a merge's first), cmds/status.c
+ * status_print_remote (the remote-tracking branch's head), sys/upstream.c
+ * upstream_create_branch (the remote's head a branch is created at), and
+ * gitops_load_branch_commit.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -1015,13 +1016,15 @@ error_t gitops_diff_get_stats(
 /**
  * Find merge base between two commits
  *
- * Finds the best common ancestor for a three-way merge. Two commits that share
- * no history are ERR_NOT_FOUND — libgit2's GIT_ENOTFOUND, which it answers for
- * that alone, a commit it could not load being -1 (lib/libgit2/src/libgit2/merge.c
- * merge_bases) — read by sys/resolve.c resolve_merge_trees, which names the two
- * strategies that need no common commit; and by cmds/sync.c sync_disagreements,
- * the floor of the names a landed resolution's two sides took, where no base is
- * no line.
+ * Finds the best common ancestor for a three-way merge — the first of several,
+ * where a criss-cross leaves more than one (lib/libgit2/src/libgit2/merge.c
+ * git_merge_base). Two commits that share no history are ERR_NOT_FOUND — libgit2's
+ * GIT_ENOTFOUND, which it answers for that alone, a commit it could not load
+ * being -1 (merge.c merge_bases) — read by sys/stage.c stage_merge_trees, which
+ * merges two such histories over Git's empty tree; by sys/resolve.c
+ * resolve_merge_trees, which names the two strategies that need no common commit;
+ * and by cmds/sync.c sync_disagreements, the floor of the names a landed
+ * resolution's two sides took, where no base is no line.
  *
  * @param repo Repository (must not be NULL)
  * @param one First commit OID (must not be NULL)

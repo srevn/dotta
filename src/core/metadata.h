@@ -93,17 +93,18 @@
  * FIFOs; symlink mode; umask-relative mode classes. Each would need its own
  * capture/deploy/divergence story; none is blocked by this schema.
  *
- * Two halves, read apart. The sheet — the item, the collection, the codec, the
- * merge, the load from a tree and the save to a stage — is a profile's own, read
- * by one module: the handle decodes it, a profile's draft edits a copy of it,
- * and a merge of two of its histories composes three (core/profiles.c
- * profile_load_sheet, profile_walk, profile_draft_open, profile_draft_orphan
- * and the draft's edits, profile_draft_merge through metadata_merge). The claim's
- * attributes on this host — ownership as this host's ids, and the captures that
- * read a claim off a look — are every layer's that places or prints a claim,
- * each name below listing its readers. The mode a claim does not make and a
- * directory's floor are the prelude's, which the decoded claim carries as the
- * item does (include/types.h MODE_UNCLAIMED, DIR_MODE_DEFAULT).
+ * Two halves, read apart. The sheet — the item, the collection, the codec, an
+ * axis's three-way, the load from a tree and the save to a stage — is a profile's
+ * own, read by one module: the handle decodes it, a profile's draft edits a copy
+ * of it, and a merge of two of its histories composes its claims an axis at a
+ * time, over its merged tree (core/profiles.c profile_load_sheet, profile_walk,
+ * profile_draft_open, profile_draft_orphan and the draft's edits,
+ * profile_draft_merge through metadata_merge_axis). The claim's attributes on
+ * this host — ownership as this host's ids, and the captures that read a claim
+ * off a look — are every layer's that places or prints a claim, each name below
+ * listing its readers. The mode a claim does not make and a directory's floor
+ * are the prelude's, which the decoded claim carries as the item does
+ * (include/types.h MODE_UNCLAIMED, DIR_MODE_DEFAULT).
  *
  * Memory: a sheet is a container (include/runtime.h "Memory"). It lives in the
  * arena it was made in — a profile's, which keeps the sheet its tree holds, or
@@ -172,6 +173,15 @@
  * and defined there */
 typedef struct stage stage_t;
 
+/**
+ * The document's version: the one the serializer writes and the one the parser
+ * reads, every other refused, no migration code reading the old
+ * (metadata_from_json)
+ *
+ * A bump lands with every machine's work pushed: a merge reads its merge base's
+ * sheet (core/profiles.c profile_draft_merge), and a version two machines' rewrites
+ * crossed apart refuses every merge over it.
+ */
 #define METADATA_VERSION 6
 #define METADATA_DIR ".dotta"
 #define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
@@ -262,7 +272,8 @@ typedef struct {
  * An empty sheet, in `arena`
  *
  * Readers: the loader, for a tree that holds no sheet (metadata_load_from_tree),
- * the parser (metadata_from_json) and the copy (metadata_clone).
+ * the parser (metadata_from_json) and the copy (metadata_clone); and a merge,
+ * the sheet its claims are composed into (core/profiles.c profile_draft_merge).
  *
  * @param arena The arena the sheet lives in, and every claim written into it
  *              (must not be NULL)
@@ -277,12 +288,11 @@ metadata_t *metadata_create(arena_t *arena);
  * draft edits a copy of the sheet its base decoded (core/profiles.h
  * profile_draft_open, profile_draft_orphan), so the claims the base lends stand
  * whatever the commit does, and the commit saves the copy only where its claims
- * are no longer the base's (metadata_same); and a merge composes into a copy of
- * ours', the three it reads left as they were. The same sheet a second parse of
+ * are no longer the base's (metadata_same). The same sheet a second parse of
  * the bytes would give, at a fraction of its cost.
  *
  * Readers: core/profiles.c profile_draft_open and profile_draft_orphan, the sheet
- * a writer's commit carries; and metadata_merge, the claims it composes into.
+ * a writer's commit carries.
  *
  * @param arena The arena the copy lives in (must not be NULL)
  * @param metadata The sheet to copy (must not be NULL)
@@ -312,11 +322,12 @@ metadata_t *metadata_clone(arena_t *arena, const metadata_t *metadata);
  * and the flag a hand wrote onto the other kind is read past there
  * (metadata_from_json).
  *
- * Readers: the parser, the copy and the merge (metadata_from_json, metadata_clone,
- * metadata_merge); and a profile's draft, its every edit that writes a claim
- * (core/profiles.c profile_remove, profile_admit, profile_capture_file,
- * profile_capture_directory, profile_capture_rung, profile_restore_ancestors
- * and profile_restore_file), the rung counting what it moved.
+ * Readers: the parser and the copy (metadata_from_json, metadata_clone); a
+ * profile's draft, its every edit that writes a claim (core/profiles.c
+ * profile_remove, profile_admit, profile_capture_file, profile_capture_directory,
+ * profile_capture_rung, profile_restore_ancestors and profile_restore_file),
+ * the rung counting what it moved; and a merge, each claim it carries or composes
+ * (profile_merge_claims, profile_merge_file, profile_merge_directory).
  *
  * @param metadata The sheet (must not be NULL)
  * @param item The claim (must not be NULL; its key must not be NULL)
@@ -346,6 +357,29 @@ const metadata_item_t *metadata_find_item(
 );
 
 /**
+ * Two claims that say the same thing
+ *
+ * Every field, the key included: a claim is one row of the sheet, and two rows
+ * are the same row when nothing about them differs. Absence is a value on both
+ * sides — a NULL owner is a claim of no owner, and two of them are equal — and
+ * so is no claim: NULL, a sheet holding none of a kind at a key, is the same as
+ * itself alone. Two claims of the same key can differ in what only the sheet
+ * carries — the mode's lower bits, an owner, a group — so the tree's entry cannot
+ * stand in for this comparison.
+ *
+ * Readers: metadata_same, claim by claim, the two sheets in step; metadata_changes,
+ * at each key both sheets hold a claim of its kind at; metadata_write_item, a
+ * claim against the one standing at its key; and a merge's walk — the three sheets'
+ * claims at a key, held alike or not, and a directory claim's three-way whole
+ * (core/profiles.c profile_merge_claims, profile_merge_directory).
+ *
+ * @param a A claim, or NULL where a sheet holds none
+ * @param b Another, or NULL likewise
+ * @return true where the two say the same thing
+ */
+bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b);
+
+/**
  * Two sheets that say the same thing
  *
  * The same claims of each kind, each the same in every field, absence included:
@@ -360,8 +394,8 @@ const metadata_item_t *metadata_find_item(
  * stage_commit) — its change test, and its save's gate, so a sheet no claim of
  * which moved keeps the bytes it has, a hand's spelling included (core/profiles.c
  * profile_changed, profile_commit). The keys at which two sheets differ are
- * metadata_changes', which asks each pair of claims what this asks, so the two
- * cannot part.
+ * metadata_changes', which asks each pair of claims what this asks
+ * (metadata_same_claim), so the two cannot part.
  *
  * @param a A sheet (must not be NULL)
  * @param b Another (must not be NULL)
@@ -380,10 +414,8 @@ bool metadata_same(const metadata_t *a, const metadata_t *b);
  * in key order in both sheets, so the answer is one merge of the two orders,
  * nothing sorted, each key once.
  *
- * Readers: a profile's draft — the keys at which the sheet its commit carries
- * left the one it opened (core/profiles.c profile_changes); and a merge — the
- * keys at which theirs left the merge base's, each composed with ours'
- * (metadata_merge).
+ * Reader: a profile's draft — the keys at which the sheet its commit carries
+ * left the one it opened (core/profiles.c profile_changes).
  *
  * @param arena The arena the answer and its keys live in (must not be NULL)
  * @param a A sheet (must not be NULL)
@@ -400,14 +432,16 @@ string_array_t metadata_changes(
 );
 
 /**
- * The axis of a claim three sheets could not compose: its mode, or its owner
- * and group
+ * An axis of a claim: its mode, or its owner and group
  *
- * The two a claim carries beside its class and its stamp, which are flags: a
- * three-way over a flag never comes apart, two sides that moved one having moved
- * it to the one value the merge base's is not, so a merge composes them always.
- * The words are the workspace's for the same two (core/workspace.h
- * divergence_type_t: MODE the mode, OWNERSHIP the owner and group).
+ * The two a claim carries beside its class and its stamp. Those are flags, and
+ * a three-way over a flag never comes apart — two sides that moved one moved it
+ * to the one value the merge base's is not — so a merge composes them always;
+ * an axis it composes by its three-way, which comes apart where both sides moved
+ * it to two values (metadata_merge_axis). The words are the workspace's for the
+ * same two (core/workspace.h divergence_type_t: MODE the mode, OWNERSHIP the
+ * owner and group), each named beside the profile's own where a merge composes
+ * it (core/profiles.h profile_axis_t).
  */
 typedef enum {
     METADATA_AXIS_MODE,        /* The claimed permission bits */
@@ -415,86 +449,38 @@ typedef enum {
 } metadata_axis_t;
 
 /**
- * A claim both sides of a merge moved apart on one axis
+ * One axis of a claim, composed from three: the claim whose value it takes, or
+ * NULL where both sides moved it apart
  *
- * Each side's claim as the merge read it — one key and one kind, the claim's —
- * copied into the merge's arena, so the words that say the conflict and the settle
- * that takes one side's value on its axis outlive the sheets it read. The merged
- * sheet holds the claim at ours' value on the axis (metadata_merge).
+ * Theirs' where ours moved nothing on the axis, whether theirs did or not; ours'
+ * where theirs moved nothing, or both moved it alike; and none where both moved
+ * it apart, the two orders of their acts leaving two values. The mode, or the
+ * owner and group as a pair (metadata_axis_t), absence a value on each, as
+ * metadata_same_claim reads every field.
+ *
+ * Each of the three is the claim whose value is that side's word on the axis,
+ * and nothing but the axis is read of it: a caller that reads a side as silent
+ * hands the merge base's claim in its place, and a merge base that claims nothing
+ * hands the claim of none — an item claiming no mode, no owner and no group.
+ * Nothing is written or kept: the answer is one of the claims handed.
+ *
+ * Readers: core/profiles.c profile_merge_file and profile_merge_directory, each
+ * axis of each claim a merge composes.
+ *
+ * @param axis The axis
+ * @param merge_base The merge base's word: its claim, or the claim of none (must
+ *                   not be NULL)
+ * @param ours Ours' word: its claim, or the merge base's where it is silent (must
+ *             not be NULL)
+ * @param theirs Theirs', likewise (must not be NULL)
+ * @return ours or theirs, the claim whose value the axis takes; NULL where both
+ *         moved it apart
  */
-typedef struct {
-    metadata_axis_t axis;             /* What both moved apart */
-    const metadata_item_t *ours;      /* Ours' claim */
-    const metadata_item_t *theirs;    /* Theirs', at the same key and of the same kind */
-} metadata_conflict_t;
-
-/**
- * The conflicts a merge met, in the document's order — by key, a file's claim
- * before a directory's at one key (metadata_to_json) — and at one claim the mode's
- * before the ownership's
- */
-typedef struct {
-    const metadata_conflict_t *entries;
-    size_t count;
-} metadata_conflicts_t;
-
-/**
- * The claims three sheets compose to: a profile's merge, claim by claim
- *
- * Each claim — a kind and a key — of the merge base's, ours' and theirs', absence
- * a value among them:
- *   - one side moved it from the merge base's, or both moved it alike: the claim
- *     it moved to, whole — none, where it removed it;
- *   - one side removed it and the other moved it: the removal, as either order
- *     of the two acts leaves it — on a dense sheet a regular file's item leaves
- *     only with its blob, so the removal is the name's;
- *   - two derivations apart, each side's a directory claim it does not track:
- *     ours', the merging machine's, as the last writer's stands in a linear history
- *     — a derivation binds only dotta's own creation of its path;
- *   - otherwise, axis by axis. The class and the stamp are flags, never apart,
- *     each the value its mover gave it. Where the merge makes the claim tracked,
- *     a side whose claim is derived holds no opinion on its mode or its owner —
- *     a tracked claim's attributes are the profile's to enforce, a derivation's
- *     bind dotta's own creation alone — and the merge base's stand in for that
- *     side. The mode, and the owner and group as a pair: an axis one side moved
- *     takes that side's value, one both moved alike that value, and one both
- *     moved apart is a conflict — the claim written at ours' value there, the
- *     axis and each side's claim kept for the words that say it and the settle
- *     that rewrites it for theirs.
- *
- * Ours' claims stand wherever theirs left the merge base's as they were, so the
- * merge is a copy of ours' (metadata_clone) and one composition at each key theirs
- * moved (metadata_changes), met in the document's order: nothing sorted, and
- * nothing asked of a key only ours moved.
- *
- * A pure function of the three sheets. What a side's absence of a directory claim
- * means — its prune's effect, or its own decision — is its caller's to read first,
- * through that side's tree (core/profiles.c profile_draft_merge); and a link's
- * item gone — the link the invoker's, which absence says — is a removal as a
- * file's is, so the other side's chown of it goes, both values standing in the
- * merge's parents. The merged sheet and the conflicts are `arena`'s, nothing in
- * either borrowed from the three.
- *
- * Reader: core/profiles.c profile_draft_merge.
- *
- * @param arena The arena the merged sheet and the conflicts live in (must not
- *              be NULL)
- * @param merge_base The sheet at the two heads' merge base (must not be NULL;
- *                   an empty one where they share no commit)
- * @param ours Ours': the sheet at the head the merge's draft opened at, as its
- *             caller reads it (must not be NULL)
- * @param theirs Theirs': the sheet at the commit merged into it, likewise (must
- *               not be NULL)
- * @param out_conflicts The claims both sides moved apart, an entry an axis (must
- *                      not be NULL)
- * @return The merged sheet; never NULL
- */
-metadata_t *metadata_merge(
-    arena_t *arena,
-    const metadata_t *merge_base,
-    const metadata_t *ours,
-    const metadata_t *theirs,
-    metadata_conflicts_t *out_conflicts
+const metadata_item_t *metadata_merge_axis(
+    metadata_axis_t axis,
+    const metadata_item_t *merge_base,
+    const metadata_item_t *ours,
+    const metadata_item_t *theirs
 );
 
 /**
@@ -526,6 +512,12 @@ bool metadata_remove_item(
  * answers the empty slice, as a NULL view answers its rows (core/manifest.h
  * manifest_rows).
  *
+ * Readers: a profile's handle, each directory claim its sheet holds — the walk's,
+ * and those a blob contradicts (core/profiles.c profile_walk,
+ * profile_contradicted); a profile's draft, each directory claim of the copy,
+ * for its prune (profile_prune_ancestors); and a merge, its three sheets read
+ * in step (profile_merge_claims).
+ *
  * @param metadata The sheet (NULL answers the empty slice)
  * @param kind Which kind's items
  * @return The slice, borrowed: good until a write or a removal of that kind
@@ -546,7 +538,8 @@ metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind);
  * Readers: a profile's draft — the admission's sheet half, of the name a blob
  * would stand at (core/profiles.c profile_refuse_beneath); and the tracked set's
  * sheet half, the prune's of a derivation's key in the copy and the way's of a
- * rung in the base's sheet (profile_tracked_beneath).
+ * rung in a profile's sheet, a draft's base or a merge's side
+ * (profile_tracked_beneath).
  *
  * @param metadata The sheet (NULL answers the empty slice)
  * @param kind Which kind's items

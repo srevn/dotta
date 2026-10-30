@@ -418,6 +418,52 @@ error_t gitops_branch_exists(
     return gitops_reference_exists(repo, refname, exists);
 }
 
+error_t gitops_branches_exist(
+    git_repository *repo, const char *const *names, size_t count, bool *exists
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(exists);
+    if (count == 0) return NULL;
+    CHECK_NULL(names);
+
+    /* Each name looked up first: a lookup that finds, or fails, is the answer
+     * (gitops_reference_find says why), and a miss is no absence yet */
+    size_t missed = 0;
+    for (size_t i = 0; i < count; i++) {
+        char refname[DOTTA_REFNAME_MAX];
+        error_t err = gitops_branch_refname(refname, sizeof(refname), names[i]);
+        if (err) return err;
+
+        git_reference *ref = NULL;
+        int rc = git_reference_lookup(&ref, repo, refname);
+        git_reference_free(ref);
+        if (rc < 0 && rc != GIT_ENOTFOUND) {
+            return error_git(rc, "Cannot read reference '%s'", refname);
+        }
+
+        exists[i] = rc == 0;
+        if (!exists[i]) missed++;
+    }
+    if (missed == 0) return NULL;
+
+    /* Every miss proven by one listing, which parses packed-refs whole on a
+     * database that has read nothing yet: a name it lacks is absent, and one it
+     * holds is asked as the singular asks it — its lookup reading the database
+     * the listing filled, or its own proof refusing it. The listing is a frame
+     * of this call's own: what the call answers is no memory. */
+    arena_t *frame = arena_create(0);
+    string_array_t branches;
+    error_t err = gitops_list_branches(repo, frame, &branches);
+    for (size_t i = 0; !err && i < count; i++) {
+        if (!exists[i] && string_array_contains(&branches, names[i])) {
+            err = gitops_branch_exists(repo, names[i], &exists[i]);
+        }
+    }
+    arena_free(frame);
+
+    return err;
+}
+
 bool gitops_nested(const char *a, const char *b) {
     CHECK_NULL(a);
     CHECK_NULL(b);

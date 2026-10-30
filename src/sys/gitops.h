@@ -245,7 +245,8 @@ error_t gitops_reference_exists(
  * Check if branch exists
  *
  * gitops_reference_exists of refs/heads/<name>, the name through the branch rule
- * (gitops_branch_refname) on the way.
+ * (gitops_branch_refname) on the way. A reader asking of many names asks them
+ * together (gitops_branches_exist), every miss proven at once.
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
@@ -253,6 +254,38 @@ error_t gitops_reference_exists(
  * @return Error or NULL on success
  */
 error_t gitops_branch_exists(git_repository *repo, const char *name, bool *exists);
+
+/**
+ * Check which branches exist
+ *
+ * gitops_branch_exists of each name, the misses proven together: each name looked
+ * up first, through the branch rule (gitops_branch_refname) — a lookup that finds,
+ * or fails, is the answer, as it is the singular's (gitops_reference_find) —
+ * and every name that missed proven by one listing of the branches, on a reference
+ * database that has read nothing yet (gitops_list_branches): absent where the
+ * listing lacks it, and where it holds it asked as the singular asks, a name
+ * the listing holds and no lookup reaches being the failure. So however many of
+ * the names miss, the store's packed refs are parsed once, and where none misses,
+ * never — the singular parses them once a miss. The listing is complete or an
+ * error, so a branch it cannot read refuses the answer for every name, where
+ * the singular reads its own name alone; and the corner the singular leaves open
+ * for a decomposed name stands here alike. Where any missed, the handle is left
+ * on the listing's fresh reference database.
+ *
+ * Readers: core/manifest.c manifest_build (every enabled profile), core/scope.c
+ * scope_resolve_enabled (the same rows, without the view) and core/workspace.c
+ * workspace_ask_departures (each owned file orphan's disabled profile).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param names Branch names (must not be NULL where count > 0)
+ * @param count How many
+ * @param exists Whether each stands, parallel to `names` (must not be NULL); no
+ *               answer beside an error
+ * @return Error or NULL on success
+ */
+error_t gitops_branches_exist(
+    git_repository *repo, const char *const *names, size_t count, bool *exists
+);
 
 /**
  * Find the existing branch that blocks a name
@@ -520,13 +553,14 @@ error_t gitops_reference_tree(
  * gitops_reference_commit of refs/heads/<name>, the name through the branch rule
  * (gitops_branch_refname) on the way: gitops_branch_tree's twin, for a reader
  * that needs the head itself — the history behind it, or its id beside its tree.
- * Readers: core/manifest.c manifest_build (each enabled profile, its claims read
- * from the head's tree and the head's id kept beside them, a branch gone
- * contributing nothing), core/workspace.c workspace_ask_departures (each owned
- * file orphan's disabled profile, whose branch gone answers every name GONE),
- * cmds/sync.c sync_departure_counts (each profile whose files a pull's view lost)
- * and cmds/remove.c remove_profile (the head a deletion takes, read once, before
- * it says what it takes; a branch gone, no profile to delete).
+ * Readers: core/manifest.c manifest_build (each enabled profile whose branch it
+ * found standing, its claims read from the head's tree and the head's id kept
+ * beside them, a branch gone since contributing nothing), core/workspace.c
+ * workspace_ask_departures (each owned file orphan's disabled profile whose branch
+ * it found standing, one gone since answering every name GONE), cmds/sync.c
+ * sync_departure_counts (each profile whose files a pull's view lost) and
+ * cmds/remove.c remove_profile (the head a deletion takes, read once, before it
+ * says what it takes; a branch gone, no profile to delete).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)

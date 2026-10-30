@@ -1498,10 +1498,7 @@ error_t manifest_mount_table(
  * Build the manifest over the enabled set
  */
 error_t manifest_build(
-    git_repository *repo,
-    const state_t *state,
-    arena_t *arena,
-    manifest_t **out
+    git_repository *repo, const state_t *state, arena_t *arena, manifest_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1525,18 +1522,31 @@ error_t manifest_build(
     manifest_t *manifest = manifest_allocate(arena, 128, enabled_profiles.count);
     manifest->mounts = mounts;
 
+    /* Every enabled branch asked at once whether it stands (sys/gitops.h
+     * gitops_branches_exist): however many are gone, the store's packed refs
+     * are read once, and where every one stands, never */
+    const char **names = arena_calloc(arena, enabled_profiles.count, sizeof(*names));
+    bool *stands = arena_calloc(arena, enabled_profiles.count, sizeof(*stands));
+    for (size_t i = 0; i < enabled_profiles.count; i++) {
+        names[i] = enabled_profiles.entries[i].name;
+    }
+    err = gitops_branches_exist(repo, names, enabled_profiles.count, stands);
+    if (err) return err;
+
     /* One contribution per profile, in order; precedence runs over them once
      * every one of them is settled. */
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         const char *name = enabled_profiles.entries[i].name;
 
         /* The profile's head, scoped to the iteration, or none where its branch
-         * is gone — and "missing" is not "broken": missing is an observation —
-         * the profile contributes nothing, is listed among the missing
-         * (manifest_missing) and not among the view's profiles, and the workspace
-         * reads its records as orphans — broken is an error that must propagate. */
+         * is gone — proven above, or by the read's own proof where another process
+         * deleted it since — and "missing" is not "broken": missing is an
+         * observation — the profile contributes nothing, is listed among the
+         * missing (manifest_missing) and not among the view's profiles, and the
+         * workspace reads its records as orphans — broken is an error that must
+         * propagate. */
         git_commit *head = NULL;
-        err = gitops_branch_commit(repo, name, &head);
+        err = stands[i] ? gitops_branch_commit(repo, name, &head) : NULL;
         if (err) return err;
         if (!head) {
             manifest_note_missing(manifest, arena_strdup(arena, name), arena);

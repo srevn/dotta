@@ -122,19 +122,24 @@ error_t scope_resolve_enabled(
      * (core/state.h state_profiles) */
     state_profiles_t enabled_profiles = state_profiles(state);
 
+    /* Every enabled branch asked at once whether it is here (sys/gitops.h
+     * gitops_branches_exist): however many are gone, the store's packed refs
+     * are read once, and where every one is here, never */
+    const char **names = arena_calloc(arena, enabled_profiles.count, sizeof(*names));
+    bool *stands = arena_calloc(arena, enabled_profiles.count, sizeof(*stands));
+    for (size_t i = 0; i < enabled_profiles.count; i++) {
+        names[i] = enabled_profiles.entries[i].name;
+    }
+    error_t err = gitops_branches_exist(repo, names, enabled_profiles.count, stands);
+    if (err) return err;
+
     /* The answer, the arena's: each profile whose branch is here. One that is
      * gone is dropped unsaid — the health commands say it, off the view
      * (core/manifest.h manifest_missing). */
     string_array_t valid_profiles;
     string_array_init(&valid_profiles, arena, 0);
-
     for (size_t i = 0; i < enabled_profiles.count; i++) {
-        const char *profile = enabled_profiles.entries[i].name;
-
-        bool exists = false;
-        error_t err = gitops_branch_exists(repo, profile, &exists);
-        if (err) return err;
-        if (exists) string_array_push(&valid_profiles, profile);
+        if (stands[i]) string_array_push(&valid_profiles, names[i]);
     }
 
     *out = valid_profiles;

@@ -183,8 +183,8 @@ error_t scope_build(
  * manifest_profiles): the scope it builds borrows it (scope_build), and show's
  * and list's file arms ask it there.
  *
- * Asks each enabled branch whether it is here (sys/gitops.h gitops_branch_exists)
- * and loads no tree.
+ * Asks every enabled branch at once whether it is here (sys/gitops.h
+ * gitops_branches_exist), as the view's build does, and loads no tree.
  *
  * @param repo Repository (must not be NULL)
  * @param state State handle (must not be NULL; borrowed, not freed). Nothing is

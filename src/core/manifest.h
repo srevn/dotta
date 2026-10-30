@@ -359,16 +359,20 @@ typedef struct manifest manifest_t;
  * row and is recorded on the view (manifest_unbound); the health consumers surface
  * it, and the build stays total over importable content.
  *
- * Each profile is read at its branch's head, once: the commit whose tree its
- * claims come from, its id kept beside them (manifest_head), so the rows and
- * the head are one read of the ref. A profile whose branch does not exist
- * contributes no rows and is listed among the missing (manifest_missing), which
- * the health commands say, and the workspace reads that profile's records as
- * orphans. The unbound claim is the dead branch's sibling at claim scale: this
- * machine cannot place it, and the build says so as data, not failure. Only those
- * two questions are tolerant: a branch that exists but cannot be loaded (corrupt
- * object, I/O) still fails the build, as do a failed lookup and metadata that
- * will not parse — those stay retryable errors, never silent omissions.
+ * Every enabled branch is asked first whether it stands, all at once (sys/gitops.h
+ * gitops_branches_exist): however many are gone, the store's packed refs are
+ * read once, and where every one stands, never. Each profile is then read at
+ * its branch's head, once: the commit whose tree its claims come from, its id
+ * kept beside them (manifest_head), so the rows and the head are one read of
+ * the ref. A profile whose branch does not exist — proven so at once, or by its
+ * own read where another process deleted it since — contributes no rows and is
+ * listed among the missing (manifest_missing), which the health commands say,
+ * and the workspace reads that profile's records as orphans. The unbound claim
+ * is the dead branch's sibling at claim scale: this machine cannot place it,
+ * and the build says so as data, not failure. Only those two questions are
+ * tolerant: a branch that exists but cannot be loaded (corrupt object, I/O) still
+ * fails the build, as do a failed lookup and metadata that will not parse — those
+ * stay retryable errors, never silent omissions.
  *
  * Per profile, in order: the claims its walk shows (core/profiles.h profile_walk)
  * — the tree's blobs first, then the DIRECTORY items of its metadata.json — are

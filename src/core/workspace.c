@@ -2295,14 +2295,16 @@ static void workspace_ask_bases(workspace_t *ws) {
  * profile at the head this load stands on: an enabled profile's, the one the
  * view read its rows at (core/manifest.h manifest_head), none where the view
  * found its branch gone; a disabled one's, its branch's head read by name now
- * (sys/gitops.h gitops_branch_commit), none where the branch is proven gone. No
- * head answers every name GONE, and a head every name of the run, by one walk
- * of the history behind it (core/profiles.h profile_departures). Each answer is
- * the workspace's arena's, borrowed by its item (workspace_item_t's departure);
- * a directory is asked nothing. A disabled profile's head that will not read
- * answers no name of its profile — each keeps no departure, for the second loop
- * to read as UNVERIFIED — and its error is dropped, one a profile: the bound of
- * what a load keeps (base/error.h "Lifetime"). The next load reads afresh.
+ * (sys/gitops.h gitops_branch_commit), none where the branch is proven gone —
+ * every disabled profile's at once (gitops_branches_exist). No head answers every
+ * name GONE, and a head every name of the run, by one walk of the history behind
+ * it (core/profiles.h profile_departures). Each answer is the workspace's arena's,
+ * borrowed by its item (workspace_item_t's departure); a directory is asked
+ * nothing. A disabled profile's head that will not read answers no name of its
+ * profile — each keeps no departure, for the second loop to read as UNVERIFIED
+ * — and its error is dropped, one a profile, as a presence that will not answer
+ * answers none of theirs, one a load: the bound of what a load keeps (base/error.h
+ * "Lifetime"). The next load reads afresh.
  *
  * @param ws Workspace (must not be NULL)
  * @param owned The owned orphans the first loop passed, either kind
@@ -2325,7 +2327,23 @@ static void workspace_ask_departures(
     profile_departure_t *departures = arena_calloc(ws->arena, file_count, sizeof(*departures));
     for (size_t i = 0; i < file_count; i++) paths[i] = files[i]->storage_path;
 
+    /* The disabled profiles, one a run, every one's branch asked at once whether
+     * it stands (sys/gitops.h gitops_branches_exist): however many are gone,
+     * the store's packed refs are read once */
+    const char **disabled = arena_calloc(frame, file_count, sizeof(*disabled));
+    size_t disabled_count = 0;
     for (size_t start = 0; start < file_count;) {
+        const char *profile = files[start]->profile;
+        size_t end = start + 1;
+        while (end < file_count && strcmp(files[end]->profile, profile) == 0) end++;
+
+        if (!state_enabled(ws->state, profile)) disabled[disabled_count++] = profile;
+        start = end;
+    }
+    bool *stands = arena_calloc(frame, disabled_count, sizeof(*stands));
+    const error_t asked = gitops_branches_exist(ws->repo, disabled, disabled_count, stands);
+
+    for (size_t start = 0, d = 0; start < file_count;) {
         const char *profile = files[start]->profile;
         size_t end = start + 1;
         while (end < file_count && strcmp(files[end]->profile, profile) == 0) end++;
@@ -2334,17 +2352,20 @@ static void workspace_ask_departures(
          * read its rows at, so what its rows lack and what its history says of
          * it are one read of the ref — and its none, the branch the view found
          * gone, answers every name GONE with nothing read. A disabled profile
-         * has no head in the view, and its branch's is read now. Which of the
-         * two a profile is, the rows the view was built from say (workspace_load:
-         * the view current). */
+         * has no head in the view, and its branch's is read now where it stands,
+         * in the order the disabled were asked. Which of the two a profile is,
+         * the rows the view was built from say (workspace_load: the view
+         * current). */
         const git_oid *head = NULL;
         git_commit *commit = NULL;
         error_t err = NULL;
         if (state_enabled(ws->state, profile)) {
             head = manifest_head(ws->manifest, profile);
         } else {
-            err = gitops_branch_commit(ws->repo, profile, &commit);
+            err = asked;
+            if (!err && stands[d]) err = gitops_branch_commit(ws->repo, profile, &commit);
             if (commit) head = git_commit_id(commit);
+            d++;
         }
         if (!err) {
             profile_departures(ws->repo, head, paths + start, end - start, departures + start);

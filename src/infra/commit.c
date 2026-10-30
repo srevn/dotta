@@ -297,18 +297,21 @@ const char *commit_message(
 ) {
     CHECK_NULL(arena);
     CHECK_NULL(words);
-    CHECK_NULL(words->title);
-    CHECK_NULL(words->body);
     CHECK_NULL(profile);
     CHECK_NULL(changes);
 
-    /* A message the user wrote is the whole message, and an empty one is none:
-     * Git itself refuses to commit an empty message (lib/git/builtin/commit.c
-     * cmd_commit, "Aborting commit due to empty commit message"), so the template
-     * speaks where `-m ""` — a script's unset variable — said nothing */
+    /* A whole message is the message, whatever its action — the user's, or a
+     * merge's — and an empty one is none: Git itself refuses to commit an empty
+     * message (lib/git/builtin/commit.c cmd_commit, "Aborting commit due to empty
+     * commit message"), so the template speaks where `-m ""` — a script's unset
+     * variable — said nothing */
     if (words->custom_msg && words->custom_msg[0]) {
         return arena_strdup(arena, words->custom_msg);
     }
+
+    /* The templates, asked where they render and nowhere else */
+    CHECK_NULL(words->title);
+    CHECK_NULL(words->body);
 
     /* The values this message is made of, resolved once for both templates: the
      * clock read once, so every time the message names is one instant's. The

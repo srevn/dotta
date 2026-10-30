@@ -5,8 +5,6 @@
 #include "sys/resolve.h"
 
 #include <git2.h>
-#include <stdio.h>
-#include <string.h>
 
 #include "base/error.h"
 #include "sys/gitops.h"
@@ -80,103 +78,6 @@ static error_t resolve_rebase_inmemory(resolve_context_t *ctx) {
 }
 
 /**
- * Resolve with merge strategy (tree-based merge)
- */
-static error_t resolve_merge_trees(resolve_context_t *ctx) {
-    CHECK_NULL(ctx);
-
-    /* Find merge base */
-    git_oid merge_base_oid;
-    error_t err = gitops_find_merge_base(
-        ctx->repo, &ctx->local_oid, &ctx->remote_oid, &merge_base_oid
-    );
-    if (err) {
-        if (error_code(err) == ERR_NOT_FOUND) {
-            /* Only a strategy that takes one side whole needs no common commit;
-             * the strategies are this module's words, whichever spelling — the
-             * flag, the configuration — named the one that met this */
-            return error_create(
-                ERR_NOT_FOUND, "Branch '%s' and its remote share no history; the ours "
-                "and theirs strategies take one side whole", ctx->branch_name
-            );
-        }
-        return error_wrap(
-            err, "Failed to find merge base for branch '%s'",
-            ctx->branch_name
-        );
-    }
-
-    /* Perform tree merge (never touches HEAD) */
-    git_index *merged_index = NULL;
-    err = gitops_merge_trees_safe(
-        ctx->repo, &merge_base_oid, &ctx->local_oid, &ctx->remote_oid, &merged_index
-    );
-    if (err) {
-        return error_wrap(err, "Merge failed for branch '%s'", ctx->branch_name);
-    }
-
-    /* Check for conflicts */
-    if (git_index_has_conflicts(merged_index)) {
-        git_index_free(merged_index);
-        return error_create(
-            ERR_CONFLICT, "Merging branch '%s' with its remote met conflicts",
-            ctx->branch_name
-        );
-    }
-
-    /* Get commit objects for merge commit creation */
-    git_commit *local_commit = NULL;
-    git_commit *remote_commit = NULL;
-    git_oid merge_commit_oid;
-
-    int rc = git_commit_lookup(&local_commit, ctx->repo, &ctx->local_oid);
-    if (rc < 0) {
-        git_index_free(merged_index);
-        return error_git(rc, "Cannot read the head of branch '%s'", ctx->branch_name);
-    }
-
-    rc = git_commit_lookup(&remote_commit, ctx->repo, &ctx->remote_oid);
-    if (rc < 0) {
-        git_commit_free(local_commit);
-        git_index_free(merged_index);
-        return error_git(rc, "Cannot read the remote head of branch '%s'", ctx->branch_name);
-    }
-
-    /* Create merge commit */
-    char message[DOTTA_MESSAGE_MAX];
-    snprintf(
-        message, sizeof(message),
-        "Merge remote-tracking branch '%s/%s'",
-        ctx->remote_name, ctx->branch_name
-    );
-
-    err = gitops_create_merge_commit(
-        ctx->repo, merged_index, local_commit, remote_commit, message, ctx->action,
-        &merge_commit_oid
-    );
-    git_commit_free(remote_commit);
-    git_commit_free(local_commit);
-    git_index_free(merged_index);
-
-    if (err) {
-        return error_wrap(
-            err, "Failed to create merge commit for branch '%s'",
-            ctx->branch_name
-        );
-    }
-
-    /* Update branch reference to point to merge commit */
-    err = gitops_write_reference(
-        ctx->repo, ctx->refname, &merge_commit_oid, &ctx->local_oid, ctx->action,
-        "merge %s/%s", ctx->remote_name, ctx->branch_name
-    );
-    if (err) return err;
-
-    git_oid_cpy(&ctx->resolved_oid, &merge_commit_oid);
-    return NULL;
-}
-
-/**
  * Resolve with "ours" strategy (keep local, handled by caller)
  *
  * This strategy doesn't modify the local branch - it stays at local_oid. The
@@ -222,9 +123,6 @@ error_t resolve_execute(resolve_context_t *ctx) {
     switch (ctx->strategy) {
         case RESOLVE_STRATEGY_REBASE:
             return resolve_rebase_inmemory(ctx);
-
-        case RESOLVE_STRATEGY_MERGE:
-            return resolve_merge_trees(ctx);
 
         case RESOLVE_STRATEGY_OURS:
             return resolve_ours(ctx);

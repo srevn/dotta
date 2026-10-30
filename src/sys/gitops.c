@@ -1228,72 +1228,6 @@ error_t gitops_find_merge_base(
 }
 
 /**
- * Merge trees without modifying HEAD or working directory
- */
-error_t gitops_merge_trees_safe(
-    git_repository *repo, const git_oid *ancestor_oid, const git_oid *our_oid,
-    const git_oid *their_oid, git_index **out_index
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(ancestor_oid);
-    CHECK_NULL(our_oid);
-    CHECK_NULL(their_oid);
-    CHECK_NULL(out_index);
-
-    git_tree *ancestor_tree = NULL;
-    git_tree *our_tree = NULL;
-    git_tree *their_tree = NULL;
-    git_index *index = NULL;
-    error_t err = NULL;
-    int rc;
-
-    /* Get tree from ancestor commit */
-    err = gitops_get_tree_from_commit(repo, ancestor_oid, &ancestor_tree);
-    if (err) {
-        return error_wrap(err, "Failed to get ancestor tree");
-    }
-
-    /* Get tree from our commit */
-    err = gitops_get_tree_from_commit(repo, our_oid, &our_tree);
-    if (err) {
-        git_tree_free(ancestor_tree);
-        return error_wrap(err, "Failed to get our tree");
-    }
-
-    /* Get tree from their commit */
-    err = gitops_get_tree_from_commit(repo, their_oid, &their_tree);
-    if (err) {
-        git_tree_free(our_tree);
-        git_tree_free(ancestor_tree);
-        return error_wrap(err, "Failed to get their tree");
-    }
-
-    /* Perform three-way merge on trees, pairing no renames — the options' one
-     * default flag is GIT_MERGE_FIND_RENAMES (include/git2/merge.h
-     * GIT_MERGE_OPTIONS_INIT), and with it clear the pairing returns at once
-     * (lib/libgit2/src/libgit2/merge.c git_merge_diff_list__find_renames) — and
-     * naming Git's text driver, so merge.default is never read (merge.c
-     * merge_normalize_opts) */
-    git_merge_options merge_opts;
-    git_merge_options_init(&merge_opts, GIT_MERGE_OPTIONS_VERSION);
-    merge_opts.flags &= ~GIT_MERGE_FIND_RENAMES;
-    merge_opts.default_driver = "text";
-    rc = git_merge_trees(
-        &index, repo, ancestor_tree, our_tree, their_tree, &merge_opts
-    );
-
-    /* Clean up trees */
-    git_tree_free(their_tree);
-    git_tree_free(our_tree);
-    git_tree_free(ancestor_tree);
-
-    if (rc < 0) return error_git(rc, "Cannot merge the trees");
-
-    *out_index = index;
-    return NULL;
-}
-
-/**
  * Write a commit object, moving no reference
  */
 error_t gitops_create_commit(
@@ -1353,48 +1287,6 @@ error_t gitops_commit_action(
     return NULL;
 }
 
-/**
- * Write a merge commit from a merged index, moving no reference
- */
-error_t gitops_create_merge_commit(
-    git_repository *repo, git_index *index, git_commit *our_commit,
-    git_commit *their_commit, const char *message, const char *action, git_oid *out_oid
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(index);
-    CHECK_NULL(our_commit);
-    CHECK_NULL(their_commit);
-    CHECK_NULL(message);
-    CHECK_NULL(action);
-    CHECK_NULL(out_oid);
-
-    /* The merged tree, into the repository by name: an index git_merge_trees
-     * made is backed by none. One that holds a conflict is refused here, in Git's
-     * words (tree.c git_tree__write_index). */
-    git_oid tree_oid;
-    int rc = git_index_write_tree_to(&tree_oid, index, repo);
-    if (rc < 0) return error_git(rc, "Cannot write the merged tree");
-
-    git_tree *tree = NULL;
-    rc = git_tree_lookup(&tree, repo, &tree_oid);
-    if (rc < 0) return error_git(rc, "Cannot read the merged tree");
-
-    git_signature *sig = NULL;
-    error_t err = gitops_get_signature(&sig, repo);
-    if (err) {
-        git_tree_free(tree);
-        return err;
-    }
-
-    /* Our side, then theirs: the two parents, through the one object writer */
-    const git_commit *parents[] = { our_commit, their_commit };
-    err = gitops_create_commit(repo, sig, sig, NULL, message, tree, 2, parents, action, out_oid);
-    git_signature_free(sig);
-    git_tree_free(tree);
-
-    return err;
-}
-
 /* The replay at hand, as the loop and its writer share it: its pick's action,
  * which the loop reads before libgit2 calls the writer, and the writer's failure,
  * which the loop reads after. */
@@ -1449,7 +1341,8 @@ error_t gitops_rebase_inmemory_safe(
      * at once (rebase.c git_rebase_finish, git_rebase_abort) — each replay written
      * by the one object writer (gitops_create_replay), and each pick merged under
      * these merge options (rebase.c rebase_next_inmemory), which pair no renames
-     * and name Git's text driver, as gitops_merge_trees_safe's do */
+     * and name Git's text driver, as the stage's merge's do (sys/stage.c
+     * stage_merge_trees) */
     rebase_replay_t replay = { 0 };
     git_rebase_options opts;
     git_rebase_options_init(&opts, GIT_REBASE_OPTIONS_VERSION);

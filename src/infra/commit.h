@@ -69,16 +69,16 @@ typedef enum {
  * profile_fetch). A value no enumerator names is only a cast's, and dies
  * (base/error.h CHECK_ARG).
  *
- * Readers: core/profiles.c profile_commit, and profile_departures, update's word
- * against each removal's; cmds/ignore.c ignore_edit and ignore_modify;
- * cmds/bootstrap.c bootstrap_edit; infra/epoch.c epoch_init, and epoch_adopt,
- * the install's line; core/ignore.c ignore_seed_baseline; cmds/sync.c sync_resolve
- * and sync_reset, for every line a resolution writes and the commit it makes
- * (sys/resolve.h resolve_init), and sync_fast_forward, its line; cmds/clone.c
- * land_profiles, the line of each branch it creates (sys/upstream.h
- * upstream_create_branch); cmds/sync.c cmd_sync, cmds/clone.c cmd_clone and
- * cmds/remove.c remove_profile, the word every line their session writes names
- * (sys/remote.h remote_open).
+ * Readers: core/profiles.c profile_commit — every claim writer's commit, and a
+ * profile's merge — and profile_departures, update's word against each removal's;
+ * cmds/ignore.c ignore_edit and ignore_modify; cmds/bootstrap.c bootstrap_edit;
+ * infra/epoch.c epoch_init, and epoch_adopt, the install's line; core/ignore.c
+ * ignore_seed_baseline; cmds/sync.c sync_rebase and sync_reset, for every line
+ * a rebase or a reset writes (sys/resolve.h resolve_init), and sync_fast_forward,
+ * its line; cmds/clone.c land_profiles, the line of each branch it creates
+ * (sys/upstream.h upstream_create_branch); cmds/sync.c cmd_sync, cmds/clone.c
+ * cmd_clone and cmds/remove.c remove_profile, the word every line their session
+ * writes names (sys/remote.h remote_open).
  *
  * @param action The action
  * @return Its word, static
@@ -89,15 +89,16 @@ const char *commit_action_word(commit_action_t action);
  * What a writer says of its commit
  *
  * Its action; the two templates its message renders, the configuration's [commit]
- * title and body; the message the user wrote, where -m gave one and it is not
- * empty, which is then the whole message; and a revert's target. Filled once,
- * at the writer's commit, every string borrowed for the call.
+ * title and body; a whole message, where it has one that is not empty — the one
+ * the user wrote, where -m gave one, or the words of an action the templates
+ * never render, a merge's — which is then the message; and a revert's target.
+ * Filled once, at the writer's commit, every string borrowed for the call.
  */
 typedef struct commit_words {
     commit_action_t action;     /* The command that made the commit */
-    const char *title;          /* The title template (must not be NULL) */
-    const char *body;           /* The body template (must not be NULL) */
-    const char *custom_msg;     /* -m: the whole message; NULL or empty, the templates' */
+    const char *title;          /* The title template; NULL beside a whole message */
+    const char *body;           /* The body template; NULL beside a whole message */
+    const char *custom_msg;     /* The whole message; NULL or empty, the templates' */
     const char *target_commit;  /* The commit a revert restores from; NULL otherwise */
 } commit_words_t;
 
@@ -122,9 +123,10 @@ typedef struct commit_changes {
 /**
  * The message a commit carries: its writer's words, over what it changes
  *
- * A custom message the user wrote is the whole message. Otherwise — none given,
- * or an empty one, which Git itself never commits — the writer's two templates,
- * with variable substitution.
+ * A whole message is the message, whatever its action — the user's, or the words
+ * of an action the templates never render — and the templates are asked only
+ * where they render. Otherwise — none given, or an empty one, which Git itself
+ * never commits — the writer's two templates, with variable substitution.
  *
  * Available template variables:
  *   {host}          - System hostname
@@ -162,9 +164,10 @@ typedef struct commit_changes {
  * are their writers', inserted as written.
  *
  * @param arena Arena the message lives in (must not be NULL)
- * @param words What the writer says of the commit, its two templates among them
- *              (must not be NULL; its action one of the four the template renders
- *              — any other is a caller's bug, and dies)
+ * @param words What the writer says of the commit (must not be NULL): a whole
+ *              message, or the two templates (neither NULL) and an action one
+ *              of the four the templates render — any other is a caller's bug,
+ *              and dies
  * @param profile The profile's name (must not be NULL)
  * @param changes What the commit changes of the profile's explicit claims (must
  *                not be NULL)

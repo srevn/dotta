@@ -14,12 +14,11 @@
  * object has one writer, the action that made it in its header
  * (gitops_create_commit). An option whose configured value would change what
  * dotta's own operation answers is dotta's, whatever the configuration says: a
- * merge's rename pairing and its driver here (gitops_merge_trees_safe, and each
- * pick of gitops_rebase_inmemory_safe) and in sys/stage, the fetch's tags and
- * its prune in sys/remote. Beside the rules stand the passes the layers above
- * share — a tree walked, a blob read in place, two trees diffed, a merge base —
- * and calls passed through, each failure in Git's words. Nothing here meets a
- * remote (sys/remote.h).
+ * merge's rename pairing and its driver in sys/stage, and each rebase pick's
+ * here (gitops_rebase_inmemory_safe), the fetch's tags and its prune in sys/remote.
+ * Beside the rules stand the passes the layers above share — a tree walked, a
+ * blob read in place, two trees diffed, a merge base — and calls passed through,
+ * each failure in Git's words. Nothing here meets a remote (sys/remote.h).
  *
  * Converting libgit2's errors includes its iterators, the ones easy to miss:
  * `git_reference_next_name` and `git_rebase_next` each return 0, GIT_ITEROVER
@@ -65,8 +64,6 @@
 #define DOTTA_REFNAME_MAX 1024                        /* a name, and its NUL */
 #define DOTTA_REFSPEC_MAX (2 * DOTTA_REFNAME_MAX + 1) /* [+]<source>:<name>, and NUL */
 
-#define DOTTA_MESSAGE_MAX 512                         /* For commit messages */
-
 /**
  * Initialize libgit2 for this process, and configure it
  *
@@ -100,11 +97,11 @@ void gitops_shutdown(void);
  * with no name and "localhost" for a host gethostname cannot name.
  *
  * Readers: every writer of a commit object — the stage's commit (sys/stage.c
- * stage_commit), the merge commit (gitops_create_merge_commit) and the rebase
- * (gitops_rebase_inmemory_safe) — and the handle's open and create, which hand
- * it to libgit2 as the ident of the reflog lines it signs itself
- * (gitops_open_repository, gitops_init_repository). Caller frees the returned
- * signature via `git_signature_free`.
+ * stage_commit), a merge's among them, and the rebase (gitops_rebase_inmemory_safe)
+ * — and the handle's open and create, which hand it to libgit2 as the ident of
+ * the reflog lines it signs itself (gitops_open_repository,
+ * gitops_init_repository). Caller frees the returned signature via
+ * `git_signature_free`.
  *
  * @param out  Output signature (caller frees with git_signature_free)
  * @param repo Repository (must not be NULL)
@@ -745,10 +742,10 @@ error_t gitops_load_branch_commit(
  * the baseline's (refdb.c git_refdb_should_write_reflog). Its clock is the write's.
  *
  * Readers: sys/stage.c stage_commit; sys/resolve.c resolve_rebase_inmemory,
- * resolve_merge_trees, resolve_theirs and resolve_rollback; cmds/sync.c
- * sync_fast_forward; sys/upstream.c upstream_create_branch; sys/remote.c
- * remote_fetch and remote_follow, a remote-tracking ref after a fetch and a push;
- * infra/epoch.c epoch_adopt.
+ * resolve_theirs and resolve_rollback; cmds/sync.c sync_fast_forward;
+ * sys/upstream.c upstream_create_branch; sys/remote.c remote_fetch and
+ * remote_follow, a remote-tracking ref after a fetch and a push; infra/epoch.c
+ * epoch_adopt.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL)
@@ -1022,10 +1019,9 @@ error_t gitops_diff_get_stats(
  * git_merge_base). Two commits that share no history are ERR_NOT_FOUND — libgit2's
  * GIT_ENOTFOUND, which it answers for that alone, a commit it could not load
  * being -1 (merge.c merge_bases) — read by sys/stage.c stage_merge_trees, which
- * merges two such histories over Git's empty tree; by sys/resolve.c
- * resolve_merge_trees, which names the two strategies that need no common commit;
- * and by cmds/sync.c sync_disagreements, the floor of the names a landed
- * resolution's two sides took, where no base is no line.
+ * merges two such histories over Git's empty tree, and by cmds/sync.c
+ * sync_disagreements, the floor of the names a landed resolution's two sides
+ * took, where no base is no line.
  *
  * @param repo Repository (must not be NULL)
  * @param one First commit OID (must not be NULL)
@@ -1038,37 +1034,6 @@ error_t gitops_find_merge_base(
     const git_oid *one,
     const git_oid *two,
     git_oid *out_oid
-);
-
-/**
- * Merge trees without modifying HEAD or working directory
- *
- * Performs a three-way merge using common ancestor. This is a pure tree-level
- * operation that never touches HEAD.
- *
- * Pairs no renames: dotta has no rename verb — a move is a removal and a capture
- * — so a pairing could only read a hand's rename against a removal as a conflict
- * nothing explains. A hand's rename is a removal and an add, and an edit against
- * it a removal against an edit, refused as every such pair is.
- *
- * Names Git's text driver for a name both sides changed, never merge.default's,
- * as the stage's merge does (sys/stage.h): a union there would compose two sealed
- * blobs Git reads as text into bytes no key opens.
- *
- * @param repo Repository (must not be NULL)
- * @param ancestor_oid Common ancestor commit (must not be NULL)
- * @param our_oid Our commit (local) (must not be NULL)
- * @param their_oid Their commit (remote) (must not be NULL)
- * @param out_index Resulting merge index (must not be NULL, caller must free
- *                  with git_index_free)
- * @return Error or NULL on success
- */
-error_t gitops_merge_trees_safe(
-    git_repository *repo,
-    const git_oid *ancestor_oid,
-    const git_oid *our_oid,
-    const git_oid *their_oid,
-    git_index **out_index
 );
 
 /**
@@ -1085,9 +1050,8 @@ error_t gitops_merge_trees_safe(
  * byte for byte.
  *
  * The reference is its writer's to write, from the state it read
- * (gitops_write_reference). Readers: sys/stage.c stage_commit and
- * gitops_create_merge_commit, each with its writer's action; and each replay of
- * gitops_rebase_inmemory_safe, with its pick's.
+ * (gitops_write_reference). Readers: sys/stage.c stage_commit, with its writer's
+ * action; and each replay of gitops_rebase_inmemory_safe, with its pick's.
  *
  * @param repo Repository (must not be NULL)
  * @param author The author (must not be NULL)
@@ -1140,54 +1104,21 @@ error_t gitops_commit_action(
 );
 
 /**
- * Write a merge commit from a merged index, moving no reference
- *
- * The index's tree, written into the repository by name — an index git_merge_trees
- * made is backed by no repository — then one commit with our side and theirs as
- * its parents, in that order, and its writer's action in its header, signed as
- * every commit dotta writes is (gitops_get_signature), through the one object
- * writer (gitops_create_commit). An index that holds a conflict is refused at
- * the tree's write, in Git's words (lib/libgit2/src/libgit2/tree.c
- * git_tree__write_index). The reference is its writer's to write
- * (gitops_write_reference).
- *
- * Reader: sys/resolve.c resolve_merge_trees.
- *
- * @param repo Repository (must not be NULL)
- * @param index Merged index (must not be NULL, must not have conflicts)
- * @param our_commit Our commit (local) (must not be NULL)
- * @param their_commit Their commit (remote) (must not be NULL)
- * @param message Commit message (must not be NULL)
- * @param action The word its writer names the merge's action by (must not be
- *               NULL: every commit dotta writes names one)
- * @param out_oid Created commit OID (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_create_merge_commit(
-    git_repository *repo,
-    git_index *index,
-    git_commit *our_commit,
-    git_commit *their_commit,
-    const char *message,
-    const char *action,
-    git_oid *out_oid
-);
-
-/**
  * Rebase a branch's commits onto another commit, in memory, moving no reference
  *
  * Each commit `branch_oid` holds that `onto_oid` lacks — a pick — is replayed
  * onto the last replay written, the onto before any, in libgit2's in-memory mode:
  * HEAD, the index and a working tree untouched, and no rebase state left in the
- * repository. Each pick is merged as gitops_merge_trees_safe merges: no rename
- * paired, and Git's text driver named. A replay keeps its pick's author, message
- * and encoding, and the action its header names (gitops_commit_action), written
- * by the one object writer (gitops_create_commit) under the committer every commit
- * dotta writes carries (gitops_get_signature); every other header a pick carries
- * — a second action line among them — is dropped, as git_commit_create drops
- * them all. A pick whose change the onto already holds — its replay would change
- * nothing — is skipped, its action with it. The answer is the last replay written,
- * or the onto where none was: no pick to replay, or every one skipped.
+ * repository. Each pick is merged under two of the options the stage's merge
+ * takes (sys/stage.h): no rename paired, and Git's text driver named. A replay
+ * keeps its pick's author, message and encoding, and the action its header names
+ * (gitops_commit_action), written by the one object writer (gitops_create_commit)
+ * under the committer every commit dotta writes carries (gitops_get_signature);
+ * every other header a pick carries — a second action line among them — is dropped,
+ * as git_commit_create drops them all. A pick whose change the onto already holds
+ * — its replay would change nothing — is skipped, its action with it. The answer
+ * is the last replay written, or the onto where none was: no pick to replay, or
+ * every one skipped.
  *
  * A pick that conflicts is refused ERR_CONFLICT; the writer's own failure is
  * answered in its words, every other failure in Git's. Refused, nothing but loose

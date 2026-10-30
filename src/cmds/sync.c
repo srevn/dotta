@@ -40,10 +40,11 @@
  * (sync_decide), and read by the preview, the question, the act and the receipt:
  * none decides again, core/cleanup.h's stance. Each names one mechanism — a push
  * and a force push the session's, one update leased on the head this sync read
- * (sync_push), a pull the fast-forward (sync_fast_forward), a rebase, a merge
- * and a reset sys/resolve's. A force push and a reset discard the other side's
- * commits, and a run's are of one kind, its strategy's: ours force pushes, theirs
- * resets. A person confirms them where the configuration asks (cmd_sync).
+ * (sync_push), a pull the fast-forward (sync_fast_forward), a rebase and a reset
+ * sys/resolve's, a merge the profile's own (sync_merge). A force push and a reset
+ * discard the other side's commits, and a run's are of one kind, its strategy's:
+ * ours force pushes, theirs resets. A person confirms them where the configuration
+ * asks (cmd_sync).
  *
  * None is a row with nothing to carry out: the sides agree, there is no local
  * branch, warn leaves a divergence to the user, or the user's word withheld the
@@ -77,15 +78,20 @@ typedef enum {
  *
  * Up to date is an act that found its work done, the branch at the remote's head
  * and nothing to send: a pull another process made before it (sync_execute), or
- * a rebase whose every pick the remote already held (sync_resolve).
+ * a rebase whose every pick the remote already held (sync_rebase). Three acts
+ * move the branch before a step that can fail after it: a rebase, then its
+ * verification and its push, rolled back where either fails; a reset, then its
+ * verification, and a merge, then its push, the branch staying where the act
+ * put it.
  */
 typedef enum {
     SYNC_OUTCOME_NONE,          /* Not carried out: no act, or the run stopped before the row */
     SYNC_OUTCOME_DONE,          /* The act carried out whole */
     SYNC_OUTCOME_UP_TO_DATE,    /* The act found its work done, the branch at the remote's head */
     SYNC_OUTCOME_FAILED,        /* The act failed, its cause the row's error */
-    SYNC_OUTCOME_ROLLED_BACK,   /* A resolution undone: its verification or its push failed */
-    SYNC_OUTCOME_UNVERIFIED     /* A reset that moved the branch, then failed its verification */
+    SYNC_OUTCOME_ROLLED_BACK,   /* A rebase undone: its verification or its push failed */
+    SYNC_OUTCOME_UNVERIFIED,    /* A reset that moved the branch, then failed its verification */
+    SYNC_OUTCOME_UNPUSHED       /* A merge committed here, then its push failed: the branch ahead */
 } sync_outcome_t;
 
 /**
@@ -461,10 +467,10 @@ static error_t sync_push(remote_t *remote, sync_row_t *row, const git_oid *targe
 }
 
 /**
- * Roll a resolution back to the head the branch stood at before it, after its
- * `step` — "verification" or "push" — failed: the row rolled back, or, where
- * the rollback fails, the run's error, naming the step — the branch left where
- * the resolution put it, the row failed by that step
+ * Roll a rebase back to the head the branch stood at before it, after its `step`
+ * — "verification" or "push" — failed: the row rolled back, or, where the rollback
+ * fails, the run's error, naming the step — the branch left where the rebase
+ * put it, the row failed by that step
  */
 static error_t sync_rollback(
     resolve_context_t *resolve,
@@ -503,8 +509,9 @@ static error_t sync_rollback(
  * the names it says the remote took, DELETED or REMOVED, are asked of the local
  * side's history and of the head the resolution left, and each the local side
  * took under the other word is a disagreement. The three heads are the resolution's
- * own reads (sys/resolve.h resolve_context_t): a push moves the remote-tracking
- * ref past the remote's.
+ * own, its caller's to hand: a rebase's two reads and the head it left
+ * (sys/resolve.h resolve_context_t), a merge's two parents and the merge — never
+ * the remote-tracking ref read again, which a push moves past the remote's head.
  *
  * A history that will not say is no line (stated): no merge base, a tree or a
  * commit that will not load, a side whose walk went unread. Its error is dropped,
@@ -513,11 +520,15 @@ static error_t sync_rollback(
  *
  * @param arena The command arena, the answer's (must not be NULL)
  * @param repo Repository (must not be NULL)
- * @param resolve The resolution that landed (must not be NULL)
+ * @param local_oid The branch's head the resolution was made from (must not be
+ *                  NULL)
+ * @param remote_oid The remote's head it integrated (must not be NULL)
+ * @param resolved_oid The head it left (must not be NULL)
  * @return The disagreements, none where the history says none
  */
 static sync_disagreements_t sync_disagreements(
-    arena_t *arena, git_repository *repo, const resolve_context_t *resolve
+    arena_t *arena, git_repository *repo, const git_oid *local_oid,
+    const git_oid *remote_oid, const git_oid *resolved_oid
 ) {
     sync_disagreements_t found = { 0 };
     arena_t *frame = arena_create(0);
@@ -531,9 +542,9 @@ static sync_disagreements_t sync_disagreements(
     /* The local side's deletions since the merge base, by one tree diff: the
      * names point into it, which lives until the end */
     git_oid base;
-    error_t err = gitops_find_merge_base(repo, &resolve->local_oid, &resolve->remote_oid, &base);
+    error_t err = gitops_find_merge_base(repo, local_oid, remote_oid, &base);
     if (!err) err = gitops_get_tree_from_commit(repo, &base, &base_tree);
-    if (!err) err = gitops_get_tree_from_commit(repo, &resolve->local_oid, &local_tree);
+    if (!err) err = gitops_get_tree_from_commit(repo, local_oid, &local_tree);
     if (!err) err = gitops_diff_trees(repo, base_tree, local_tree, NULL, &diff);
     if (err) goto done;
 
@@ -568,7 +579,7 @@ static sync_disagreements_t sync_disagreements(
 
     /* The remote's history first, and the names it says the remote took kept,
      * in place, each beside its departure */
-    if (git_commit_lookup(&remote_head, repo, &resolve->remote_oid) < 0) goto done;
+    if (git_commit_lookup(&remote_head, repo, remote_oid) < 0) goto done;
 
     profile_departure_t *remote = arena_calloc(frame, name_count, sizeof(*remote));
     profile_departures(remote_head, names, name_count, remote);
@@ -585,8 +596,8 @@ static sync_disagreements_t sync_disagreements(
     if (taken == 0) goto done;
 
     /* The local side's history and the resolved head's, of those alone */
-    if (git_commit_lookup(&local_head, repo, &resolve->local_oid) < 0 ||
-        git_commit_lookup(&resolved_head, repo, &resolve->resolved_oid) < 0) {
+    if (git_commit_lookup(&local_head, repo, local_oid) < 0 ||
+        git_commit_lookup(&resolved_head, repo, resolved_oid) < 0) {
         goto done;
     }
 
@@ -624,38 +635,35 @@ done:
 }
 
 /**
- * Carry a rebase or a merge out: the resolution, its verification, then its push
- * where one is owed, unless --no-push withheld it
+ * Carry a rebase out: the resolution, its verification, then its push where one
+ * is owed, unless --no-push withheld it
  *
  * A step that fails is the row's, its cause as it stands: each names its act
- * and its branch (sys/resolve.h, sys/remote.h). The resolution runs in memory
- * and moves the branch alone, never HEAD, so one that fails leaves the branch
- * where it stood — a commit another writer landed meanwhile refuses it; a
- * verification or a push that fails after it rolls the branch back, from the
- * head the resolution left, and a branch another writer moved since refuses the
- * rollback, which stops the run naming the head. One that lands at the remote's
- * own head owes no push, and its row is up to date. Either way, one that lands
- * reads its history once more, for the names its two sides took one deleting
- * and one removing.
+ * and its branch (sys/resolve.h, sys/remote.h). The rebase runs in memory and
+ * moves the branch alone, never HEAD, so one that fails leaves the branch where
+ * it stood — a commit another writer landed meanwhile refuses it; a verification
+ * or a push that fails after it rolls the branch back, from the head the rebase
+ * left, and a branch another writer moved since refuses the rollback, which stops
+ * the run naming the head. One that lands at the remote's own head owes no push,
+ * and its row is up to date. Either way, one that lands reads its history once
+ * more, for the names its two sides took one deleting and one removing.
  *
  * @return The run's error where that rollback fails; NULL otherwise, every other
  *         failure the row's
  */
-static error_t sync_resolve(
+static error_t sync_rebase(
     arena_t *arena,
     git_repository *repo,
     const char *remote_name,
     sync_row_t *row,
     remote_t *remote
 ) {
-    /* The context keeps the two heads the resolution integrates — the branch's,
-     * every write's expectation and the rollback's target, and the remote's —
-     * the head it leaves, and the action each write's line and a merge's commit
-     * name */
+    /* The context keeps the two heads the rebase integrates — the branch's, every
+     * write's expectation and the rollback's target, and the remote's — the head
+     * it leaves, and the action each write's line names */
     resolve_context_t resolve;
     error_t err = resolve_init(
-        &resolve, repo, remote_name, row->profile,
-        row->verdict == SYNC_VERDICT_REBASE ? RESOLVE_STRATEGY_REBASE : RESOLVE_STRATEGY_MERGE,
+        &resolve, repo, remote_name, row->profile, RESOLVE_STRATEGY_REBASE,
         commit_action_word(COMMIT_ACTION_SYNC)
     );
     if (!err) err = resolve_execute(&resolve);
@@ -671,11 +679,10 @@ static error_t sync_resolve(
         return sync_rollback(&resolve, row, "verification");
     }
 
-    /* A resolution that left the branch at the remote's own head is a rebase
-     * whose every pick the remote held, each skipped (sys/gitops.h
-     * gitops_rebase_inmemory_safe) — a merge writes a commit of its own. A push
-     * would send nothing, or be refused where the remote moved past the fetch,
-     * so none is made */
+    /* A rebase that left the branch at the remote's own head is one whose every
+     * pick the remote held, each skipped (sys/gitops.h
+     * gitops_rebase_inmemory_safe). A push would send nothing, or be refused
+     * where the remote moved past the fetch, so none is made */
     if (git_oid_equal(&resolve.resolved_oid, &resolve.remote_oid)) {
         row->outcome = SYNC_OUTCOME_UP_TO_DATE;
     } else {
@@ -689,8 +696,86 @@ static error_t sync_resolve(
         row->outcome = SYNC_OUTCOME_DONE;
     }
 
-    row->disagreements = sync_disagreements(arena, repo, &resolve);
+    row->disagreements = sync_disagreements(
+        arena, repo, &resolve.local_oid, &resolve.remote_oid, &resolve.resolved_oid
+    );
     return NULL;
+}
+
+/**
+ * Carry a merge out: the profile's merge with the remote's head, committed, then
+ * pushed unless --no-push withheld it
+ *
+ * The remote's head is its remote-tracking ref's, read here as the rebase reads
+ * it (sys/resolve.h resolve_init): what the fetch brought, and so what every
+ * push of the run is leased on. The merge is the profile's own — the tree Git's,
+ * the claims composed name by name over it, the open refused where both sides
+ * moved one thing apart (core/profiles.h profile_draft_merge) — and its commit
+ * is written only from the head the open read, so a step that fails up to it
+ * leaves the branch where it stood, said in its own words. Committed, the merge
+ * stands: its history is read once more, for the names its two sides took one
+ * deleting and one removing, and a push that fails after it leaves the branch
+ * ahead of the remote, the next sync's push. Nothing is rolled back and nothing
+ * verified: the merge has the two heads as its parents by construction.
+ */
+static void sync_merge(
+    arena_t *arena,
+    git_repository *repo,
+    const char *remote_name,
+    sync_row_t *row,
+    remote_t *remote
+) {
+    git_oid theirs;
+    error_t err = gitops_resolve_remote_branch_oid(repo, remote_name, row->profile, &theirs);
+
+    /* The profile's merge, no side named: a conflict refuses the open, which
+     * counts them, and the list it answers beside the refusal goes unread */
+    profile_conflicts_t conflicts;
+    profile_draft_t *draft = NULL;
+    if (!err) {
+        err = profile_draft_merge(
+            repo, row->profile, &theirs, PROFILE_SIDE_NONE, arena, &conflicts, &draft
+        );
+    }
+
+    /* Its commit, Git's line for a merge its whole message */
+    git_oid merge;
+    if (!err) {
+        const char *message = arena_str_format(
+            arena, "Merge remote-tracking branch '%s/%s'", remote_name, row->profile
+        );
+        const commit_words_t words = {
+            .action     = COMMIT_ACTION_SYNC,
+            .custom_msg = message,
+        };
+        err = profile_commit(draft, &words, &merge, NULL);
+    }
+    profile_draft_free(draft);
+    if (err) {
+        row->error = err;
+        row->outcome = SYNC_OUTCOME_FAILED;
+        return;
+    }
+
+    /* The names its two sides took, read off the merge itself — the head the
+     * open read is its first parent — whether its push lands or not */
+    git_commit *commit = NULL;
+    if (git_commit_lookup(&commit, repo, &merge) == 0) {
+        row->disagreements = sync_disagreements(
+            arena, repo, git_commit_parent_id(commit, 0), &theirs, &merge
+        );
+    }
+    git_commit_free(commit);
+
+    if (row->withheld != SYNC_VERDICT_PUSH) {
+        err = sync_push(remote, row, &merge);
+        if (err) {
+            row->error = err;
+            row->outcome = SYNC_OUTCOME_UNPUSHED;
+            return;
+        }
+    }
+    row->outcome = SYNC_OUTCOME_DONE;
 }
 
 /**
@@ -733,9 +818,9 @@ static void sync_reset(git_repository *repo, const char *remote_name, sync_row_t
  * as git's stand above its ref list — where it failed, and under -v every push's
  * as they come (sys/transfer.h transfer_push_sideband_callback).
  *
- * @return The run's error where a resolution's rollback failed — the rows after
- *         it left as decided, their outcome none — or NULL: every other failure
- *         is its row's
+ * @return The run's error where a rebase's rollback failed — the rows after it
+ *         left as decided, their outcome none — or NULL: every other failure is
+ *         its row's
  */
 static error_t sync_execute(
     arena_t *arena,
@@ -780,14 +865,17 @@ static error_t sync_execute(
                 break;
             }
 
-            case SYNC_VERDICT_REBASE:
-            case SYNC_VERDICT_MERGE: {
+            case SYNC_VERDICT_REBASE: {
                 /* A rollback that fails stops the run, and the row sent nothing:
                  * its push failed, or none ran */
-                error_t err = sync_resolve(arena, repo, remote_name, row, remote);
+                error_t err = sync_rebase(arena, repo, remote_name, row, remote);
                 if (err) return err;
                 break;
             }
+
+            case SYNC_VERDICT_MERGE:
+                sync_merge(arena, repo, remote_name, row, remote);
+                break;
 
             case SYNC_VERDICT_RESET:
                 sync_reset(repo, remote_name, row);
@@ -1088,7 +1176,8 @@ static void sync_print_disagreements(output_t *out, const sync_row_t *row) {
  * done by what it found; a row no act moved where it stands, as the preview says
  * it (sync_print_state) — a row the run stopped before among them, the run's
  * error beneath saying why; and a failure by its cause, beside where it left
- * the branch. Beneath a resolution that landed, the names its two sides took
+ * the branch — after the act, where the act stands. Beneath a resolution that
+ * landed — a merge whose push failed among them — the names its two sides took
  * one deleting and one removing (sync_print_disagreements).
  */
 static void sync_print_receipt(
@@ -1137,6 +1226,15 @@ static void sync_print_receipt(
                  * comes first: what failed is the verification after it */
                 output_print(
                     out, OUTPUT_NORMAL, "reset to the remote, unverified: %s",
+                    error_line(row->error)
+                );
+                break;
+
+            case SYNC_OUTCOME_UNPUSHED:
+                /* The merge stands where it was committed, so the act comes first:
+                 * what failed is the push after it */
+                output_print(
+                    out, OUTPUT_NORMAL, "merged the remote, unpushed: %s",
                     error_line(row->error)
                 );
                 break;
@@ -1962,11 +2060,12 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
 
         /* The third: a claim the profile's own claims leave no room is in the
-         * profile and in no row — a sync's merge composes one from two machines'
-         * ordinary edits and refuses none, and brings a pair of names two of
-         * this machine's labels place on one chain — so the import is where it
-         * is first named. The remedy turns on the pair's shape, which status -v
-         * prints, as apply's section says. */
+         * profile and in no row — a sync's rebase composes one from two machines'
+         * ordinary edits and refuses none, where its merge composes none
+         * (core/profiles.h profile_draft_merge), and any act brings a pair of
+         * names two of this machine's labels place on one chain — so the import
+         * is where it is first named. The remedy turns on the pair's shape, which
+         * status -v prints, as apply's section says. */
         manifest_contradicted_t contradicted = manifest_contradicted(after);
         if (contradicted.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Contradicted paths");

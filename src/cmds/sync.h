@@ -2,9 +2,11 @@
  * sync.h - Remote synchronization command
  *
  * Exchanges commits with the remote (fetch, pull, push), each profile's branch
- * against its remote's, a divergence by the strategy. The files on disk and the
- * record are no part of it: apply lands what a pull brought, and update commits
- * what disk holds.
+ * against its remote's, a divergence by the strategy — a merge the profile's
+ * own (core/profiles.h profile_draft_merge): its claims composed name by name
+ * over the merged tree, the merge refused where both sides moved one thing apart.
+ * The files on disk and the record are no part of it: apply lands what a pull
+ * brought, and update commits what disk holds.
  */
 
 #ifndef DOTTA_CMD_SYNC_H

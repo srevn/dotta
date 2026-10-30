@@ -1,9 +1,9 @@
 /**
  * resolve.h - Branch divergence resolution strategies
  *
- * This module encapsulates all branch resolution logic for sync operations. It
- * provides a clean abstraction over merge/rebase operations that never modifies
- * HEAD, maintaining dotta's architectural principle.
+ * A branch's divergence from its remote resolved by a strategy that never modifies
+ * HEAD: a rebase onto the remote-tracking head, in memory, or a reset to it. A
+ * merge is the stage's (sys/stage.h stage_merge).
  *
  * A resolution writes the branch only from the head it was computed from — the
  * one resolve_init read — and a rollback only from the head the resolution left,
@@ -14,11 +14,11 @@
  *
  * What a resolution integrates is resolve_init's two reads, the branch's head
  * and the remote-tracking head, not the heads the caller's analysis decided from:
- * a commit landed on either between the two is in what a rebase or a merge
- * resolves, and a reset to the remote discards the branch's and lands on the
- * remote's. The remote-tracking head is read nowhere after: a push that lands
- * moves the ref past the head a resolution integrated (sys/remote.h remote_push),
- * so a reader of what was integrated reads the context, never the ref.
+ * a commit landed on either between the two is in what a rebase resolves, and a
+ * reset to the remote discards the branch's and lands on the remote's. The
+ * remote-tracking head is read nowhere after: a push that lands moves the ref
+ * past the head a resolution integrated (sys/remote.h remote_push), so a reader
+ * of what was integrated reads the context, never the ref.
  */
 
 #ifndef DOTTA_RESOLVE_H
@@ -34,7 +34,6 @@
  */
 typedef enum {
     RESOLVE_STRATEGY_REBASE,   /* Rebase local onto remote */
-    RESOLVE_STRATEGY_MERGE,    /* Merge remote into local */
     RESOLVE_STRATEGY_OURS,     /* Force push local (destructive) */
     RESOLVE_STRATEGY_THEIRS    /* Reset to remote (destructive) */
 } resolve_strategy_t;
@@ -44,18 +43,18 @@ typedef enum {
  *
  * Three heads: the two resolve_init read — the branch's, every resolution's
  * expectation and the rollback's target, and the remote-tracking head, what a
- * rebase, a merge and a reset to the remote integrate — and the one the resolution
- * left, the rollback's expectation, Git's null id until a resolution lands. The
- * action is the word of the command a resolution runs under: every line a write
- * to the branch logs names it, the rollback's among them, and so does the merge's
- * commit — a rebase's replays carry their picks' own.
+ * rebase and a reset to the remote integrate — and the one the resolution left,
+ * the rollback's expectation, Git's null id until a resolution lands. The action
+ * is the word of the command a resolution runs under: every line a write to the
+ * branch logs names it, the rollback's among them — a rebase's replays carry
+ * their picks' own.
  */
 typedef struct {
     git_repository *repo;             /* Repository handle (must not be NULL) */
     const char *remote_name;          /* Remote name (e.g., "origin") */
     const char *branch_name;          /* Branch name to resolve */
     resolve_strategy_t strategy;      /* Resolution strategy */
-    const char *action;               /* The command's word: each write's line, a merge's header */
+    const char *action;               /* The command's word, each write's line */
     char refname[DOTTA_REFNAME_MAX];  /* The branch's reference, every write's */
     git_oid local_oid;                /* The branch's head resolve_init read */
     git_oid remote_oid;               /* The remote-tracking head resolve_init read */
@@ -68,9 +67,9 @@ typedef struct {
  * The branch's reference, through the branch rule (sys/gitops.h
  * gitops_branch_refname), and the head it names, read through a symbolic one:
  * the head every resolution is computed from and written over; then the
- * remote-tracking head (gitops_resolve_remote_branch_oid), what a rebase, a merge
- * and a reset to the remote integrate. Either absent is refused (ERR_NOT_FOUND).
- * No resolution has landed yet.
+ * remote-tracking head (gitops_resolve_remote_branch_oid), what a rebase and a
+ * reset to the remote integrate. Either absent is refused (ERR_NOT_FOUND). No
+ * resolution has landed yet.
  *
  * @param ctx Context to initialize (must not be NULL)
  * @param repo Repository (must not be NULL)
@@ -78,8 +77,8 @@ typedef struct {
  * @param branch_name Branch name (must not be NULL)
  * @param strategy Resolution strategy
  * @param action The word of the command the resolution runs under, which each
- *               line it logs and a merge's commit name (must not be NULL; borrowed
- *               for the context's life)
+ *               line it logs names (must not be NULL; borrowed for the context's
+ *               life)
  * @return Error or NULL on success
  */
 error_t resolve_init(
@@ -94,7 +93,7 @@ error_t resolve_init(
 /**
  * Resolve branch divergence using specified strategy
  *
- * Performs merge or rebase WITHOUT modifying HEAD. Uses in-memory operations
+ * Performs a rebase or a reset WITHOUT modifying HEAD. Uses in-memory operations
  * and writes the branch once, upon successful completion, only from the branch's
  * head resolve_init read: one another writer moved or deleted since is refused
  * (ERR_CONFLICT for a move, Git's words for a deletion), the branch as it left

@@ -867,8 +867,8 @@ typedef struct profile_departure {
  * Readers: core/workspace.c workspace_ask_departures (each owned file orphan,
  * at its profile's head); cmds/sync.c sync_departure_counts (each file a pull's
  * view lost, at its profile's head as the pull left it) and sync_disagreements
- * (each name a resolution's local side took since its merge base, at the remote's
- * head, the local one and the one the resolution left).
+ * (each name a rebase's or a merge's local side took since its merge base, at
+ * the remote's head, the local one and the one the rebase or the merge left).
  *
  * @param head The head, or NULL where the branch is gone (borrowed)
  * @param storage_paths The names, validated (must not be NULL where count > 0)
@@ -1602,8 +1602,9 @@ error_t profile_changes(
  * Readers: cmds/add.c cmd_add and cmds/update.c update_profile, which count the
  * prune and read whether the commit landed, so a capture that put back what the
  * profile holds commits nothing — add says so, and update neither reports nor
- * records it; cmds/remove.c remove_paths, which counts the prune; and cmds/revert.c
- * cmd_revert, which asks neither.
+ * records it; cmds/remove.c remove_paths, which counts the prune; cmds/revert.c
+ * cmd_revert, which asks neither; and cmds/sync.c sync_merge, a merge's commit,
+ * which it pushes.
  *
  * @param draft The draft (must not be NULL)
  * @param words What the writer says of the commit: its action, the templates,

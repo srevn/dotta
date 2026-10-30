@@ -130,13 +130,15 @@ static error_t stage_merge_trees(stage_t *st, const git_oid *theirs) {
     /* Git's merge, under the stage's own options (the header): no rename paired
      * — the options' one default flag is GIT_MERGE_FIND_RENAMES
      * (include/git2/merge.h GIT_MERGE_OPTIONS_INIT), and with it clear the pairing
-     * returns at once (merge.c git_merge_diff_list__find_renames) — and no favor,
-     * the options' own GIT_MERGE_FILE_FAVOR_NORMAL. The index it answers is a
-     * new one, ownerless as the stage's every index is (merge.c
+     * returns at once (merge.c git_merge_diff_list__find_renames) — Git's text
+     * driver named, so merge.default is never read (merge.c merge_normalize_opts),
+     * and no favor, the options' own GIT_MERGE_FILE_FAVOR_NORMAL. The index it
+     * answers is a new one, ownerless as the stage's every index is (merge.c
      * index_from_diff_list), so the puts keep their contract on it. */
     git_merge_options opts;
     git_merge_options_init(&opts, GIT_MERGE_OPTIONS_VERSION);
     opts.flags &= ~GIT_MERGE_FIND_RENAMES;
+    opts.default_driver = "text";
     rc = git_merge_trees(
         &st->index, st->repo, st->merge_base, st->tree, st->theirs_tree, &opts
     );

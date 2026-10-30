@@ -13,9 +13,10 @@
  * that moved it (gitops_write_reference, gitops_delete_reference), and a commit
  * object has one writer, the action that made it in its header
  * (gitops_create_commit). An option whose configured value would change what
- * dotta's own operation answers is dotta's, whatever the configuration says:
- * the merge's rename pairing here (gitops_merge_trees_safe), the fetch's tags
- * and its prune in sys/remote. Beside the rules stand the passes the layers above
+ * dotta's own operation answers is dotta's, whatever the configuration says: a
+ * merge's rename pairing and its driver here (gitops_merge_trees_safe, and each
+ * pick of gitops_rebase_inmemory_safe) and in sys/stage, the fetch's tags and
+ * its prune in sys/remote. Beside the rules stand the passes the layers above
  * share — a tree walked, a blob read in place, two trees diffed, a merge base —
  * and calls passed through, each failure in Git's words. Nothing here meets a
  * remote (sys/remote.h).
@@ -1050,6 +1051,10 @@ error_t gitops_find_merge_base(
  * nothing explains. A hand's rename is a removal and an add, and an edit against
  * it a removal against an edit, refused as every such pair is.
  *
+ * Names Git's text driver for a name both sides changed, never merge.default's,
+ * as the stage's merge does (sys/stage.h): a union there would compose two sealed
+ * blobs Git reads as text into bytes no key opens.
+ *
  * @param repo Repository (must not be NULL)
  * @param ancestor_oid Common ancestor commit (must not be NULL)
  * @param our_oid Our commit (local) (must not be NULL)
@@ -1174,15 +1179,15 @@ error_t gitops_create_merge_commit(
  * Each commit `branch_oid` holds that `onto_oid` lacks — a pick — is replayed
  * onto the last replay written, the onto before any, in libgit2's in-memory mode:
  * HEAD, the index and a working tree untouched, and no rebase state left in the
- * repository. Each pick is merged as gitops_merge_trees_safe merges, no rename
- * paired. A replay keeps its pick's author, message and encoding, and the action
- * its header names (gitops_commit_action), written by the one object writer
- * (gitops_create_commit) under the committer every commit dotta writes carries
- * (gitops_get_signature); every other header a pick carries — a second action
- * line among them — is dropped, as git_commit_create drops them all. A pick whose
- * change the onto already holds — its replay would change nothing — is skipped,
- * its action with it. The answer is the last replay written, or the onto where
- * none was: no pick to replay, or every one skipped.
+ * repository. Each pick is merged as gitops_merge_trees_safe merges: no rename
+ * paired, and Git's text driver named. A replay keeps its pick's author, message
+ * and encoding, and the action its header names (gitops_commit_action), written
+ * by the one object writer (gitops_create_commit) under the committer every commit
+ * dotta writes carries (gitops_get_signature); every other header a pick carries
+ * — a second action line among them — is dropped, as git_commit_create drops
+ * them all. A pick whose change the onto already holds — its replay would change
+ * nothing — is skipped, its action with it. The answer is the last replay written,
+ * or the onto where none was: no pick to replay, or every one skipped.
  *
  * A pick that conflicts is refused ERR_CONFLICT; the writer's own failure is
  * answered in its words, every other failure in Git's. Refused, nothing but loose

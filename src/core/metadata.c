@@ -202,8 +202,9 @@ metadata_t *metadata_clone(arena_t *arena, const metadata_t *metadata) {
  * comparison.
  *
  * Readers: metadata_same, claim by claim, the two sheets in step; metadata_changes,
- * at each key both sheets hold a claim of its kind at; and metadata_write_item,
- * a claim against the one standing at its key.
+ * at each key both sheets hold a claim of its kind at; metadata_write_item, a
+ * claim against the one standing at its key; and metadata_merge_claim, the three
+ * sides' claims at a key theirs moved.
  *
  * @param a First claim (must not be NULL)
  * @param b Second claim (must not be NULL)
@@ -214,6 +215,30 @@ static bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t 
            a->encrypted == b->encrypted && a->tracked == b->tracked &&
            str_equal(a->key, b->key) && str_equal(a->owner, b->owner) &&
            str_equal(a->group, b->group);
+}
+
+/**
+ * A claim's own copy in `arena`, its names with it
+ *
+ * Written here and never again, so it stands as it was handed for the arena's
+ * life, whatever is written after it, and the item and its names are the caller's
+ * again once it returns.
+ *
+ * Readers: metadata_write_item, the claim a sheet keeps at its key; and
+ * metadata_merge_axis, each side's claim a conflict keeps.
+ *
+ * @param arena The arena the copy lives in
+ * @param item The claim (must not be NULL)
+ * @return The copy
+ */
+static const metadata_item_t *metadata_keep(arena_t *arena, const metadata_item_t *item) {
+    metadata_item_t *claim = arena_alloc(arena, sizeof(*claim));
+    *claim = *item;
+    claim->key = arena_strdup(arena, item->key);
+    claim->owner = arena_strdup(arena, item->owner);
+    claim->group = arena_strdup(arena, item->group);
+
+    return claim;
 }
 
 /**
@@ -277,12 +302,7 @@ bool metadata_write_item(metadata_t *metadata, const metadata_item_t *item) {
      * with it, written here and never again — so a claim the sheet lent stands
      * as it was lent, and one this write replaces stays whole for whoever holds
      * it */
-    metadata_item_t *claim = arena_alloc(metadata->arena, sizeof(*claim));
-    *claim = *item;
-    claim->key = arena_strdup(metadata->arena, item->key);
-    claim->owner = arena_strdup(metadata->arena, item->owner);
-    claim->group = arena_strdup(metadata->arena, item->group);
-    claims->entries[place] = claim;
+    claims->entries[place] = metadata_keep(metadata->arena, item);
 
     return true;
 }
@@ -409,6 +429,254 @@ string_array_t metadata_changes(
     }
 
     return keys;
+}
+
+/**
+ * A merge as it composes: the sheet it writes, and the conflicts it meets, grown
+ * in that sheet's arena as it meets them
+ *
+ * Made by metadata_merge, which hands both on; written by metadata_merge_claim
+ * and metadata_merge_axis.
+ */
+typedef struct {
+    metadata_t *sheet;                 /* Ours' claims, each theirs moved composed into them */
+    metadata_conflict_t *conflicts;    /* The claims both sides moved apart, an entry an axis */
+    size_t conflict_count;
+    size_t conflict_capacity;
+} metadata_merge_t;
+
+/**
+ * Two claims that say the same thing on one axis
+ *
+ * The mode, or the owner and group as a pair: absence a value on each, as
+ * metadata_same_claim reads every field. Total over metadata_axis_t, so a new
+ * axis is a build error here.
+ *
+ * Reader: metadata_merge_axis, the three comparisons of its three-way.
+ *
+ * @param axis The axis
+ * @param a A claim (must not be NULL)
+ * @param b Another (must not be NULL)
+ * @return true where the two say the same thing on the axis
+ */
+static bool metadata_same_axis(
+    metadata_axis_t axis, const metadata_item_t *a, const metadata_item_t *b
+) {
+    switch (axis) {
+        case METADATA_AXIS_MODE:
+            return a->mode == b->mode;
+        case METADATA_AXIS_OWNERSHIP:
+            return str_equal(a->owner, b->owner) && str_equal(a->group, b->group);
+    }
+
+    /* Unreachable once every enum value is handled */
+    return false;
+}
+
+/**
+ * One axis of a claim both sides moved apart: the claim whose value it takes
+ *
+ * The three-way every value of a merged claim follows, the flags beside it too,
+ * which never come apart (metadata_merge_claim): theirs' where ours moved nothing,
+ * whether theirs did or not, and ours' otherwise — where theirs moved nothing,
+ * where both moved it alike, and where both moved it apart. The last is a conflict
+ * the merge meets: ours' value is written there, and each side's claim kept in
+ * the merge's arena for the words that say it.
+ *
+ * A side the merge base's claim stands in for moved nothing on the axis
+ * (metadata_merge_claim), so a conflict keeps two sides' own claims.
+ *
+ * Reader: metadata_merge_claim, at the mode and then at the ownership, so the
+ * conflicts of one claim are met in that order.
+ *
+ * @param merge The merge, whose conflicts a conflict joins
+ * @param axis The axis
+ * @param merge_base The merge base's claim, or the claim of none
+ * @param ours Ours', or the merge base's standing in for it
+ * @param theirs Theirs', likewise
+ * @return ours or theirs: the claim whose value the axis takes
+ */
+static const metadata_item_t *metadata_merge_axis(
+    metadata_merge_t *merge,
+    metadata_axis_t axis,
+    const metadata_item_t *merge_base,
+    const metadata_item_t *ours,
+    const metadata_item_t *theirs
+) {
+    /* Ours moved nothing: theirs', moved or not */
+    if (metadata_same_axis(axis, merge_base, ours)) return theirs;
+
+    /* Both moved it, apart: a conflict, each side's claim kept in the merge's
+     * arena, since the sheets it read may go before the words that say it */
+    if (!metadata_same_axis(axis, merge_base, theirs) &&
+        !metadata_same_axis(axis, ours, theirs)) {
+        arena_t *arena = merge->sheet->arena;
+        merge->conflicts = arena_grow(
+            arena, merge->conflicts, &merge->conflict_capacity,
+            merge->conflict_count + 1, sizeof(*merge->conflicts)
+        );
+        merge->conflicts[merge->conflict_count++] = (metadata_conflict_t){
+            .axis = axis,
+            .ours = metadata_keep(arena, ours),
+            .theirs = metadata_keep(arena, theirs),
+        };
+    }
+
+    /* Otherwise ours': moved alone, alike, or apart */
+    return ours;
+}
+
+/**
+ * One claim theirs moved from the merge base's, composed with ours' in the merge's
+ * sheet
+ *
+ * The sheet holds ours' claim at the key already (metadata_merge): where ours'
+ * is the answer it is left as it stands, and otherwise written over or removed.
+ * The claim's three-way first, absence a value — a side holding no claim of the
+ * kind at the key holds that — then, where both moved it apart and both still
+ * hold it, its axes.
+ *
+ * Reader: metadata_merge, at each key theirs moved, in the document's order.
+ *
+ * @param merge The merge
+ * @param kind The claim's kind
+ * @param key Its key
+ * @param merge_base The merge base's claim of the kind at the key, or NULL
+ * @param ours Ours', or NULL
+ * @param theirs Theirs', or NULL: other than the merge base's, the move composed
+ */
+static void metadata_merge_claim(
+    metadata_merge_t *merge,
+    path_kind_t kind,
+    const char *key,
+    const metadata_item_t *merge_base,
+    const metadata_item_t *ours,
+    const metadata_item_t *theirs
+) {
+    /* Ours moved nothing: theirs', whole — the claim it moved to, or its removal */
+    if (merge_base && ours ? metadata_same_claim(merge_base, ours) : merge_base == ours) {
+        if (theirs) {
+            metadata_write_item(merge->sheet, theirs);
+        } else {
+            metadata_remove_item(merge->sheet, kind, key);
+        }
+        return;
+    }
+
+    /* Both moved it alike: ours', the sheet's already */
+    if (ours && theirs ? metadata_same_claim(ours, theirs) : ours == theirs) return;
+
+    /* Both moved it, apart. Where one removed it, the removal, as either order
+     * of the two acts leaves it: on a dense sheet a regular file's item leaves
+     * only with its blob, so the removal is the name's, and a claim moved beside
+     * it goes with the name — ours' copy, where the sheet holds one */
+    if (!ours || !theirs) {
+        metadata_remove_item(merge->sheet, kind, key);
+        return;
+    }
+
+    /* Two derivations: ours', the merging machine's, as the last writer's stands
+     * in a linear history — a derivation binds only dotta's own creation of its
+     * path */
+    if (kind == PATH_KIND_DIRECTORY && !ours->tracked && !theirs->tracked) return;
+
+    /* Otherwise axis by axis. A merge base with no claim here holds the claim
+     * of none, absence a value on every axis */
+    static const metadata_item_t none = { .mode = MODE_UNCLAIMED };
+    if (!merge_base) merge_base = &none;
+
+    /* The class and the stamp are flags, never apart — two sides that moved one
+     * moved it to the one value the merge base's is not — so each is the axes'
+     * rule without its conflict (metadata_merge_axis): theirs' where ours moved
+     * nothing, else ours' */
+    const bool tracked = merge_base->tracked == ours->tracked
+        ? theirs->tracked : ours->tracked;
+    const bool encrypted = merge_base->encrypted == ours->encrypted
+        ? theirs->encrypted : ours->encrypted;
+
+    /* Where the merge makes the claim tracked, a side whose claim is derived
+     * holds no opinion on its attributes: a tracked claim's are the profile's
+     * to enforce, a derivation's bind dotta's own creation alone, and a climb
+     * leaves a tracked claim as it stands, so in either order of the two acts
+     * the derived side's attributes never reach the claim. The merge base's stand
+     * in for that side */
+    if (tracked && !ours->tracked) ours = merge_base;
+    if (tracked && !theirs->tracked) theirs = merge_base;
+
+    /* The mode, and the owner and group as a pair, each its own three-way: the
+     * mode's first, so a claim's conflicts are met in that order */
+    const metadata_item_t *mode = metadata_merge_axis(
+        merge, METADATA_AXIS_MODE, merge_base, ours, theirs
+    );
+    const metadata_item_t *ownership = metadata_merge_axis(
+        merge, METADATA_AXIS_OWNERSHIP, merge_base, ours, theirs
+    );
+
+    const metadata_item_t merged = {
+        .kind      = kind,
+        .key       = key,
+        .mode      = mode->mode,
+        .owner     = ownership->owner,
+        .group     = ownership->group,
+        .encrypted = encrypted,
+        .tracked   = tracked,
+    };
+    metadata_write_item(merge->sheet, &merged);
+}
+
+/**
+ * The claims three sheets compose to
+ *
+ * Ours' claims in a sheet of the merge's own, then each claim theirs moved from
+ * the merge base's composed into it, the two kinds' keys read as one order.
+ */
+metadata_t *metadata_merge(
+    arena_t *arena,
+    const metadata_t *merge_base,
+    const metadata_t *ours,
+    const metadata_t *theirs,
+    metadata_conflicts_t *out_conflicts
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(merge_base);
+    CHECK_NULL(ours);
+    CHECK_NULL(theirs);
+    CHECK_NULL(out_conflicts);
+
+    /* Ours' claims, copied: each claim theirs left as the merge base has it is
+     * ours' to the three-way, whatever ours did */
+    metadata_merge_t merge = { .sheet = metadata_clone(arena, ours) };
+
+    /* Then each claim theirs moved: the keys at which theirs' claims of a kind
+     * left the merge base's, each kind's in key order (metadata_changes) */
+    const string_array_t files = metadata_changes(
+        arena, merge_base, theirs, PATH_KIND_FILE
+    );
+    const string_array_t directories = metadata_changes(
+        arena, merge_base, theirs, PATH_KIND_DIRECTORY
+    );
+
+    for (size_t f = 0, d = 0; f < files.count || d < directories.count;) {
+        /* The byte-least key either kind moved next, a file's claim first at
+         * one key, as the document holds them (metadata_to_json): one kind past
+         * its last holds none, which follows every key */
+        const int order = f == files.count ? 1 : d == directories.count ? -1 :
+            strcmp(files.entries[f], directories.entries[d]);
+        const path_kind_t kind = order <= 0 ? PATH_KIND_FILE : PATH_KIND_DIRECTORY;
+        const char *key = kind == PATH_KIND_FILE ? files.entries[f++] : directories.entries[d++];
+
+        metadata_merge_claim(
+            &merge, kind, key, metadata_find_item(merge_base, kind, key),
+            metadata_find_item(ours, kind, key), metadata_find_item(theirs, kind, key)
+        );
+    }
+
+    *out_conflicts = (metadata_conflicts_t){
+        .entries = merge.conflicts,
+        .count = merge.conflict_count,
+    };
+
+    return merge.sheet;
 }
 
 /**

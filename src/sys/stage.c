@@ -285,7 +285,8 @@ const git_tree *stage_merge_base(const stage_t *st) {
  * walk reads there (core/profiles.c profile_step).
  *
  * Readers: the noun a refusal names an entry in a name's way by (stage_mode_noun),
- * and what a delta says stood at its name (stage_delta_type).
+ * what a delta says stood at its name (stage_delta_type), and what the tree holds
+ * at one (stage_holds).
  */
 static git_object_t stage_mode_type(uint32_t mode) {
     switch (mode & S_IFMT) {
@@ -761,6 +762,27 @@ error_t stage_unite(stage_t *st, const char *path) {
     }
 
     return NULL;
+}
+
+stage_held_t stage_holds(const stage_t *st, const char *path) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+
+    /* The staged entry, at stage 0 — a conflict's entries stand at the other
+     * three, and no tree holds them — by one lookup in the index's own map, which
+     * finds an entry or none (index.c git_index_get_bypath) */
+    const git_index_entry *entry = git_index_get_bypath(st->index, path, 0);
+    if (!entry) {
+        return (stage_held_t){ .type = GIT_OBJECT_INVALID };
+    }
+
+    /* Its type as libgit2 reads the mode word (stage_mode_type), and the entry's
+     * two facts copied out by value: the index's entry moves with its next edit */
+    return (stage_held_t){
+        .type = stage_mode_type(entry->mode),
+        .oid = entry->id,
+        .filemode = (git_filemode_t) entry->mode,
+    };
 }
 
 error_t stage_holds_beneath(const stage_t *st, const char *path, bool *out) {

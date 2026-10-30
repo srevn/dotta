@@ -100,16 +100,21 @@
  * merge_normalize_opts), and its union is the union favor (merge_driver.c
  * git_merge_driver__union); and no favor, ever: a sealed blob with no NUL in
  * its first 8,000 bytes is text to Git (merge_file.c merge_file__is_binary),
- * and a favor would compose two ciphertexts into bytes no key opens. Two answers
- * stay Git's, stated: a merge attribute in git's attributes files — the system's,
- * the user's, the store's info/attributes (attr.c attr_setup) — outranks the
- * driver, and no option keeps it from the merge (merge_driver.c
- * merge_driver_name_for_path), so a name it matches merges by its driver, a union
- * composing two sealed blobs Git reads as text, both standing in the merge's
- * parents; and two heads with several best common ancestors — a criss-cross,
- * which two remotes swapped by `dotta remote set-url` reach — merge over the
- * first of them (merge.c git_merge_base), so a name two earlier merges settled
- * apart takes one of the two settles in silence, both standing in the history.
+ * and a favor would compose two ciphertexts into bytes no key opens. The text
+ * driver itself composes no two ciphertexts: a sealed edit moves every byte past
+ * the seal's header (crypto/cipher.h), so it keeps no line of its merge base's
+ * but by chance, both sides' changes span the file, and two changes over one
+ * span are a conflict wherever they differ (lib/git/xdiff/xmerge.c xdl_do_merge,
+ * the xdiff libgit2 carries). Two answers stay Git's, stated: a merge attribute
+ * in git's attributes files — the system's, the user's, the store's info/attributes
+ * (attr.c attr_setup) — outranks the driver, and no option keeps it from the
+ * merge (merge_driver.c merge_driver_name_for_path), so a name it matches merges
+ * by its driver, a union composing two sealed blobs Git reads as text, both
+ * standing in the merge's parents; and two heads with several best common ancestors
+ * — a criss-cross, which two remotes swapped by `dotta remote set-url` reach —
+ * merge over the first of them (merge.c git_merge_base), so a name two earlier
+ * merges settled apart takes one of the two settles in silence, both standing
+ * in the history.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, its object
  * writer, its ref writer and its merge base, nothing of mounts, content or dotta's
@@ -462,8 +467,9 @@ error_t stage_conflicts(const stage_t *st, arena_t *arena, string_array_t *out);
  * that fails leaves the name half settled: a writer abandons the stage.
  *
  * Reader: core/profiles.c profile_draft_merge — the sheet's own name from the
- * head's tree, a filemode-only modify/delete from the side that holds nothing,
- * and each content conflict from the side the run names.
+ * opened tree, the base's; a removal beside a change of the executable bit alone,
+ * from the side holding no regular file there; and each content conflict from
+ * the side the run names.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)
@@ -500,17 +506,56 @@ error_t stage_settle(stage_t *st, const char *path, const git_tree *tree);
 error_t stage_unite(stage_t *st, const char *path);
 
 /**
+ * What the tree the commit would record holds at one name, by value — as
+ * core/profiles.h profile_held_t is a profile's, so no index entry outlives the
+ * call that read it
+ */
+typedef struct {
+    git_object_t type;          /* Git's type for its mode; GIT_OBJECT_INVALID where none stands */
+    git_oid oid;                /* A blob's id, or a gitlink's commit; zero where none stands */
+    git_filemode_t filemode;    /* The mode word the tree would record; 0 where none stands */
+} stage_held_t;
+
+/**
+ * What the tree the commit would record holds at `path`: a blob — bytes, an
+ * executable, a link — or a gitlink, by its type, its id and its mode word; none
+ * where nothing stands at the name, where a subtree does, or where only a
+ * conflict's stages do
+ *
+ * The twin of stage_holds_beneath, asked at the name itself of the same tree —
+ * the one the puts and removals so far leave, a merge's settles and unions among
+ * them — by one lookup in the index's own map (lib/libgit2/src/libgit2/index.c
+ * git_index_get_bypath), which finds an entry or none and fails no other way.
+ * The lookup is at stage 0, the staged entry's: a conflict's stages are no tree's,
+ * so a name a merge left in conflict holds none until it is settled, while its
+ * twin, the put's search, counts them beneath a name. Its type is read as libgit2
+ * reads a tree entry's (tree.c git_tree_entry_type), off the mode word the index
+ * holds — so a blob a hand's tree spells 100664 is a blob, as stage_changes reads
+ * one — and none is said by the type, never by a mode word, which a hand's tree
+ * can spell 0 (tree.c parse_mode). Nothing is written.
+ *
+ * Readers: core/profiles.c profile_merge_file, the blob a file's claim stands
+ * with, and profile_merge_contradicted, a blob at a rung of a directory claim's
+ * name.
+ *
+ * @param st Stage (must not be NULL)
+ * @param path Tree path (must not be NULL)
+ * @return What stands at the name, by value: one lookup, which cannot fail
+ */
+stage_held_t stage_holds(const stage_t *st, const char *path);
+
+/**
  * Whether the tree the commit would record holds anything beneath `path`: an
  * entry the name and a separator begin, at any depth
  *
  * The question every put asks before it adds an entry — a directory where the
  * file goes — asked of the tree the puts and removals so far leave, by the one
  * search the put makes, so this answer and the put's refusal cannot part. An
- * entry at the name itself is not beneath it, nor one at a sibling the name merely
- * prefixes ("x.bak" and "x0" beside "x"). A conflict's stages are entries to
- * it: the search asks every stage (lib/libgit2/src/libgit2/index.c
- * git_index_find_prefix), so a name a merge left in conflict stands beneath until
- * it is settled. Nothing is written.
+ * entry at the name itself is not beneath it — its twin, stage_holds, answers
+ * what stands there — nor one at a sibling the name merely prefixes ("x.bak"
+ * and "x0" beside "x"). A conflict's stages are entries to it: the search asks
+ * every stage (lib/libgit2/src/libgit2/index.c git_index_find_prefix), so a name
+ * a merge left in conflict stands beneath until it is settled. Nothing is written.
  *
  * Reader: core/profiles.c profile_prune_ancestors, whether anything a tree can
  * hold stands beneath a derivation.

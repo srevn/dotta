@@ -2330,7 +2330,10 @@ static void workspace_ask_departures(
         git_commit *head = NULL;
         error_t err = gitops_branch_commit(ws->repo, profile, &head);
         if (!err) {
-            profile_departures(head, paths + start, end - start, departures + start);
+            profile_departures(
+                ws->repo, head ? git_commit_id(head) : NULL, paths + start, end - start,
+                departures + start
+            );
             for (size_t k = start; k < end; k++) files[k]->departure = &departures[k];
         }
         git_commit_free(head);

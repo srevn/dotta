@@ -1011,9 +1011,10 @@ error_t profile_sealed(profile_t *profile, const char *storage_path, bool *out) 
 }
 
 void profile_departures(
-    const git_commit *head, const char *const *storage_paths, size_t count,
-    profile_departure_t *out
+    git_repository *repo, const git_oid *head, const char *const *storage_paths,
+    size_t count, profile_departure_t *out
 ) {
+    CHECK_NULL(repo);
     CHECK_NULL(out);
     if (count == 0) return;
     CHECK_NULL(storage_paths);
@@ -1030,7 +1031,7 @@ void profile_departures(
      * out by value */
     arena_t *frame = arena_create(0);
     history_removals_t *found = arena_calloc(frame, count, sizeof(*found));
-    history_removals(head, storage_paths, count, frame, found);
+    history_removals(repo, head, storage_paths, count, frame, found);
 
     /* The one table: update's removals delete the files they take, and every
      * other action's — none's too — keep them; a removal that keeps decides beside

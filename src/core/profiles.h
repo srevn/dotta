@@ -856,13 +856,14 @@ typedef struct profile_departure {
 /**
  * The departure of each name, from the history at `head`
  *
- * The head is the caller's: a branch's, read by name — NULL where the branch is
- * proven gone, which answers every name GONE, a deleted branch's bytes being
- * reachable from nothing — or any commit a history is asked at. One walk answers
- * every name (sys/history.h history_removals). Reads Git alone and raises nothing:
- * a read that fails leaves the names whose lines it reached UNVERIFIED, save
- * where a removal keeps; a head that would not read is no history, the caller's
- * to say.
+ * The head is the caller's, by its id: a branch's, read by name — NULL where
+ * the branch is proven gone, which answers every name GONE, a deleted branch's
+ * bytes being reachable from nothing — or any commit a history is asked at. One
+ * walk answers every name (sys/history.h history_removals). Reads Git alone and
+ * raises nothing: a read that fails leaves the names whose lines it reached
+ * UNVERIFIED, save where a removal keeps — every name, where the head's own commit
+ * will not read; a branch whose head would not read is no head, the caller's to
+ * say.
  *
  * Readers: core/workspace.c workspace_ask_departures (each owned file orphan,
  * at its profile's head); cmds/sync.c sync_departure_counts (each file a pull's
@@ -870,13 +871,15 @@ typedef struct profile_departure {
  * (each name a rebase's or a merge's local side took since its merge base, at
  * the remote's head, the local one and the one the rebase or the merge left).
  *
- * @param head The head, or NULL where the branch is gone (borrowed)
+ * @param repo The repository the history is read from (must not be NULL)
+ * @param head The head's id, or NULL where the branch is gone (borrowed)
  * @param storage_paths The names, validated (must not be NULL where count > 0)
  * @param count How many
  * @param out The departures, parallel to `storage_paths` (must not be NULL)
  */
 void profile_departures(
-    const git_commit *head,
+    git_repository *repo,
+    const git_oid *head,
     const char *const *storage_paths,
     size_t count,
     profile_departure_t *out

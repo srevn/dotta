@@ -538,9 +538,6 @@ static sync_disagreements_t sync_disagreements(
     git_tree *base_tree = NULL;
     git_tree *local_tree = NULL;
     git_diff *diff = NULL;
-    git_commit *local_head = NULL;
-    git_commit *remote_head = NULL;
-    git_commit *resolved_head = NULL;
 
     /* The local side's deletions since the merge base, by one tree diff: the
      * names point into it, which lives until the end */
@@ -582,10 +579,8 @@ static sync_disagreements_t sync_disagreements(
 
     /* The remote's history first, and the names it says the remote took kept,
      * in place, each beside its departure */
-    if (git_commit_lookup(&remote_head, repo, remote_oid) < 0) goto done;
-
     profile_departure_t *remote = arena_calloc(frame, name_count, sizeof(*remote));
-    profile_departures(remote_head, names, name_count, remote);
+    profile_departures(repo, remote_oid, names, name_count, remote);
 
     size_t taken = 0;
     for (size_t i = 0; i < name_count; i++) {
@@ -599,15 +594,10 @@ static sync_disagreements_t sync_disagreements(
     if (taken == 0) goto done;
 
     /* The local side's history and the resolved head's, of those alone */
-    if (git_commit_lookup(&local_head, repo, local_oid) < 0 ||
-        git_commit_lookup(&resolved_head, repo, resolved_oid) < 0) {
-        goto done;
-    }
-
     profile_departure_t *local = arena_calloc(frame, taken, sizeof(*local));
     profile_departure_t *resolved = arena_calloc(frame, taken, sizeof(*resolved));
-    profile_departures(local_head, names, taken, local);
-    profile_departures(resolved_head, names, taken, resolved);
+    profile_departures(repo, local_oid, names, taken, local);
+    profile_departures(repo, resolved_oid, names, taken, resolved);
 
     /* A name the local side took under the other word of the two: the remote's
      * is one of them, so the local's is the other where it is either and differs */
@@ -626,9 +616,6 @@ static sync_disagreements_t sync_disagreements(
     found = (sync_disagreements_t){ .entries = entries, .count = entry_count };
 
 done:
-    git_commit_free(resolved_head);
-    git_commit_free(local_head);
-    git_commit_free(remote_head);
     git_diff_free(diff);
     git_tree_free(local_tree);
     git_tree_free(base_tree);
@@ -1784,7 +1771,9 @@ static sync_departure_counts_t sync_departure_counts(
     if (err) {
         counts.unverified = path_count;
     } else {
-        profile_departures(head, paths, path_count, departures);
+        profile_departures(
+            repo, head ? git_commit_id(head) : NULL, paths, path_count, departures
+        );
 
         for (size_t i = 0; i < path_count; i++) {
             switch (departures[i].kind) {

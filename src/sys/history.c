@@ -382,12 +382,14 @@ static void history_read(history_walk_t *walk, history_commit_t *reached) {
 }
 
 void history_removals(
-    const git_commit *head,
+    git_repository *repo,
+    const git_oid *head,
     const char *const *paths,
     size_t count,
     arena_t *arena,
     history_removals_t *out
 ) {
+    CHECK_NULL(repo);
     CHECK_NULL(head);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -397,7 +399,7 @@ void history_removals(
     /* All the walk keeps is the frame's, sized by the paths asked: the answers'
      * removals and words alone are the caller's */
     history_walk_t walk = {
-        .repo  = git_commit_owner(head),
+        .repo  = repo,
         .frame = arena_create(0),
         .arena = arena,
         .count = count,
@@ -428,10 +430,11 @@ void history_removals(
 
     /* The head first, on its own: a path it holds has not left, and nothing behind
      * it is walked for it; one whose way its tree would not read is unread there.
-     * A tree that will not load is every path's unread, and nothing is walked
-     * at all. */
+     * A head or a tree that will not load is every path's unread, and nothing
+     * is walked at all. */
+    git_commit *commit = NULL;
     git_tree *tree = NULL;
-    if (git_commit_tree(&tree, head) < 0) {
+    if (git_commit_lookup(&commit, repo, head) < 0 || git_commit_tree(&tree, commit) < 0) {
         for (size_t p = 0; p < count; p++) history_set_add(walk.unread, p);
     } else {
         for (size_t p = 0; p < count; p++) {
@@ -444,8 +447,9 @@ void history_removals(
         for (size_t k = 0; k < walk.words; k++) {
             walk.lacking[k] = walk.reading[k] & ~(walk.held[k] | walk.unread[k]);
         }
-        history_arrive(&walk, head, walk.lacking);
+        history_arrive(&walk, commit, walk.lacking);
     }
+    git_commit_free(commit);
 
     /* Newest first, each commit read for the paths waiting there. libgit2's revwalk
      * is no queue for this (lib/libgit2/src/libgit2/revwalk.c): sorted, or with

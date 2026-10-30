@@ -78,12 +78,12 @@ typedef struct {
  *
  * Per path, parallel to `paths`: held, or the removals its lines ended at and
  * whether a line went unread. No failure is raised: a read that fails is the
- * paths' `unread`, the head's own tree the first such read.
+ * paths' `unread`, the head's own commit and its tree the first such reads.
  *
  * Reader: core/profiles.c profile_departures.
  *
- * @param head The newest commit; the walk reads its repository (git_commit_owner)
- *             (must not be NULL)
+ * @param repo The repository the walk reads (must not be NULL)
+ * @param head The newest commit's id (must not be NULL)
  * @param paths Storage paths, validated, in any order, one more than once (must
  *              not be NULL where count > 0)
  * @param count How many
@@ -91,7 +91,8 @@ typedef struct {
  * @param out The answers, parallel to `paths` (must not be NULL)
  */
 void history_removals(
-    const git_commit *head,
+    git_repository *repo,
+    const git_oid *head,
     const char *const *paths,
     size_t count,
     arena_t *arena,

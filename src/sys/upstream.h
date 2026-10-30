@@ -1,10 +1,14 @@
 /**
- * upstream.h - A branch against its remote
+ * upstream.h - A branch against its tracking ref, as sync reads it
  *
  * Read off the remote-tracking refs the session's last fetch wrote (sys/remote.h
  * remote_fetch), and nothing here contacts the remote: a branch's state against
- * its remote (upstream_analyze_profile) and the face every screen gives that
- * state — its glyph, its colour and its phrase.
+ * its tracking ref (upstream_analyze_profile), the two-way reading sync decides
+ * by, and the face sync's rows give that state — its glyph, its colour and its
+ * phrase. Every other screen reads a branch against its remote three ways, the
+ * remote's own listing beside the tracking ref (sys/remote.h remote_relation_t).
+ * Readers: cmds/sync.c sync_analyze, each row its run decides by, and sys/resolve.c
+ * resolve_verify, after a resolution.
  */
 
 #ifndef DOTTA_UPSTREAM_H
@@ -73,11 +77,11 @@ error_t upstream_analyze_profile(
  * A state's glyph: "=", "↑", "↓", "↕", "•" or "?"
  *
  * One of the three faces of a state, beside its colour (upstream_state_color)
- * and its phrase (upstream_state_phrase). Centralizing the map keeps every display
- * path in agreement on what each state looks like.
+ * and its phrase (upstream_state_phrase), each the one sys/remote.h gives the
+ * same reading (remote_state_symbol, remote_state_color, remote_state_phrase),
+ * so sync's rows look as status's do.
  *
- * Readers: cmds/status.c status_print_remote; cmds/sync.c sync_print_lead;
- * cmds/profile.c profile_fetch; cmds/list.c list_profiles.
+ * Reader: cmds/sync.c sync_print_lead.
  */
 const char *upstream_state_symbol(upstream_state_t state);
 
@@ -92,6 +96,8 @@ const char *upstream_state_symbol(upstream_state_t state);
  *   DIVERGED     → RED      (manual resolution required)
  *   NO_REMOTE    → CYAN     (informational, not an issue)
  *   NO_LOCAL     → DIM      (no local branch to compare)
+ *
+ * Reader: cmds/sync.c sync_print_lead.
  */
 output_color_t upstream_state_color(upstream_state_t state);
 
@@ -102,19 +108,12 @@ output_color_t upstream_state_color(upstream_state_t state);
  *
  * "up-to-date", "1 commit ahead", "2 commits behind", "diverged (1 ahead, 2
  * behind)", "no remote branch", "no local branch": the phrase, not its frame —
- * each reader sets the glyph and the colour beside it (upstream_state_symbol,
- * upstream_state_color) and the frame its screen gives a state, so the rows of
- * status, list, sync and profile fetch say a state alike.
+ * the reader sets the glyph and the colour beside it (upstream_state_symbol,
+ * upstream_state_color) and the frame its screen gives a state. No key decodes
+ * the glyph, on a screen or in a help: every row that prints one prints the phrase
+ * beside it.
  *
- * The words on screen: a state named alone, without its counts — status's Sync
- * summary counting the branches in each state (cmds/status.c status_print_remote)
- * — takes the phrase's word for it: up-to-date, ahead, behind, diverged, no remote
- * branch, no local branch. No key decodes the glyph, on a screen or in a help:
- * every row that prints one prints the phrase beside it.
- *
- * Readers: cmds/status.c status_print_remote, cmds/list.c list_profiles, whose
- * rows take status's compact frame, cmds/sync.c sync_print_state, cmds/profile.c
- * profile_fetch.
+ * Reader: cmds/sync.c sync_print_state.
  *
  * @param info The state and its counts (must not be NULL)
  * @param buffer Output buffer for the phrase (must not be NULL)

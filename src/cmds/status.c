@@ -25,7 +25,6 @@
 #include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/remote.h"
-#include "sys/upstream.h"
 
 /**
  * Print the enabled profiles and the last deployment of each — or, where no profile
@@ -1407,20 +1406,32 @@ static void status_print_workspace(
 }
 
 /**
- * What the remote section reads: the remote, and the profiles it reports on
- *
- * The transport's answer (status_remote), a value of the command arena: the name
- * the resolver gave, and the set the transport chose — the scope's, borrowed,
- * or under --all the listing it made. The zero value is no section.
+ * A profile of the remote section: its branch against the remote, or why it could
+ * not be read
  */
 typedef struct {
-    const char *name;                /* The default remote; NULL where no section stands */
-    const string_array_t *profiles;  /* The scope's, or every local branch under --all */
+    const char *profile;          /* The set's own name, borrowed */
+    remote_relation_t relation;   /* Its branch against the remote; unread where an error stands */
+    error_t error;                /* The read's failure, borrowed; NULL where it read */
+} status_remote_row_t;
+
+/**
+ * What the remote section prints: the remote, and a row a profile it reports on
+ *
+ * The transport's answer (status_remote), a value of the command arena: the name
+ * the resolver gave, and a row for each profile of the set the transport chose
+ * — the scope's, or under --all every local branch — read against the remote
+ * while its session stood. The zero value is no section.
+ */
+typedef struct {
+    const char *name;                 /* The default remote; NULL where no section stands */
+    const status_remote_row_t *rows;  /* A row a profile of the set, in its order */
+    size_t row_count;
 } status_remote_t;
 
 /**
  * The remote half's transport: the remote resolved, the set chosen, the set fetched
- * — each step saying its own lines where it runs
+ * and read against it — each step saying its own lines where it runs
  *
  * By default the set is the scope's profiles, for consistency with workspace
  * status; --all reports on every branch in the repository. Its failures are lines
@@ -1430,15 +1441,17 @@ typedef struct {
  * place and no section, and an empty set is no section, unsaid. The contact,
  * unless --no-fetch, is the half's one write, each profile's remote-tracking
  * ref (sys/remote.h remote_fetch): a progress line at -v while it runs, on a
- * terminal; its failure a warning at -v; and the section then read from the refs
- * at hand.
+ * terminal; its failure a warning at -v. Then each profile is read against the
+ * remote, while the session stands (sys/remote.h remote_relation), or, with no
+ * contact, against its tracking ref, the remote as last seen (remote_last_relation)
+ * — and the session is left: the section prints values.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options: --remote, --all and --no-fetch (must not be NULL)
  * @param scope The operation scope, whose profiles are the default set (must
  *              not be NULL)
- * @return The remote and the set the section reads; the zero value where no section
- *         stands
+ * @return The remote and the rows the section prints; the zero value where no
+ *         section stands
  */
 static status_remote_t status_remote(
     const dotta_ctx_t *ctx,
@@ -1500,14 +1513,14 @@ static status_remote_t status_remote(
     if (profiles->count == 0) return (status_remote_t){ 0 };
 
     /* The contact, unless --no-fetch: the remote met once and the set fetched
-     * from it (sys/remote.h), its listing read by nothing else. While it runs,
-     * a progress line at -v: a terminal's alone, drawn over by transfer's frames
-     * while objects move (sys/transfer.h transfer_op_end), never a line of the
-     * report (base/output.h output_progress), and taken down once the fetch is
-     * done, whichever way it went */
+     * from it (sys/remote.h), its listing what the rows read the remote's heads
+     * off. While it runs, a progress line at -v: a terminal's alone, drawn over
+     * by transfer's frames while objects move (sys/transfer.h transfer_op_end),
+     * never a line of the report (base/output.h output_progress), and taken down
+     * once the fetch is done, whichever way it went */
+    remote_t *remote = NULL;
     if (!opts->no_fetch) {
         output_progress(out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name);
-        remote_t *remote = NULL;
         err = remote_open(repo, remote_name, "status", out, &remote);
         if (!err) err = remote_fetch(remote, profiles, NULL, NULL);
         output_clear_line(out);
@@ -1516,25 +1529,40 @@ static status_remote_t status_remote(
             /* Non-fatal: warn and continue with status display. Either's failure
              * names its act and the remote, or the tracking ref the fetch read,
              * took out of a name's way or wrote (sys/remote.h remote_fetch), a
-             * block of its own. */
+             * block of its own. A session whose fetch failed brought no objects
+             * for its listing's heads: the rows read the tracking refs. */
             output_gap(out, OUTPUT_VERBOSE);
             output_warning(out, OUTPUT_VERBOSE, "%s", error_line(err));
+            remote_free(remote);
+            remote = NULL;
         }
-
-        remote_free(remote);
     }
 
-    return (status_remote_t){ .name = remote_name, .profiles = profiles };
+    /* Each profile against the remote — the session's heads where the contact
+     * stands, else its tracking ref's — then the session left, its credential's
+     * verdict told (sys/remote.h remote_free). A row that will not read keeps
+     * its failure, which the section says in its place. */
+    status_remote_row_t *rows = arena_calloc(ctx->arena, profiles->count, sizeof(*rows));
+    for (size_t i = 0; i < profiles->count; i++) {
+        status_remote_row_t *row = &rows[i];
+
+        row->profile = profiles->entries[i];
+        row->error = remote
+            ? remote_relation(remote, row->profile, &row->relation)
+            : remote_last_relation(repo, remote_name, row->profile, &row->relation);
+    }
+    remote_free(remote);
+
+    return (status_remote_t){ .name = remote_name, .rows = rows, .row_count = profiles->count };
 }
 
 /**
  * Print the remote sync status: a row per profile of the set the transport chose,
- * each its state against the remote, then the summary — nothing where no section
+ * each its reading against the remote, then the summary — nothing where no section
  * stands
  *
- * Reads what it prints and writes nothing: each profile's state off the refs
- * the transport left (sys/upstream.h upstream_analyze_profile), and at -v the
- * two heads its rows name.
+ * Reads what it prints and writes nothing: each row as the transport read it,
+ * and at -v the two heads its relation names.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param remote The transport's answer (status_remote; must not be NULL)
@@ -1554,72 +1582,79 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
      * too (cmds/list.c list_profiles) */
     output_section(out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote->name);
 
-    /* Analyze and display each profile's sync state */
+    /* Display each profile's reading */
     size_t up_to_date = 0;
     size_t ahead = 0;
     size_t behind = 0;
     size_t diverged = 0;
+    size_t recreated = 0;
     size_t no_remote = 0;
+    size_t deleted = 0;
     size_t no_local = 0;
     size_t failed = 0;
 
-    for (size_t i = 0; i < remote->profiles->count; i++) {
-        const char *profile = remote->profiles->entries[i];
+    for (size_t i = 0; i < remote->row_count; i++) {
+        const status_remote_row_t *row = &remote->rows[i];
+        const remote_relation_t *relation = &row->relation;
 
-        /* Analyze upstream state. A profile whose state could not be read is a
-         * row of the section like any other, on the report's stream, its cause
-         * the error's own line and the outcome glyph sync gives a failed analysis;
-         * the summary counts it, and the report goes on past it. At both levels:
-         * a failure has no commit for -v to show. The error is dropped, one per
-         * such profile. */
-        upstream_info_t info;
-        error_t err = upstream_analyze_profile(repo, remote->name, profile, &info);
-        if (err) {
+        /* A profile whose reading could not be read is a row of the section like
+         * any other, on the report's stream, its cause the error's own line and
+         * the outcome glyph sync gives a failed analysis; the summary counts
+         * it, and the report goes on past it. At both levels: a failure has no
+         * commit for -v to show. */
+        if (row->error) {
             output_print(
                 out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {red}(✗ %s){reset}\n",
-                profile, error_line(err)
+                row->profile, error_line(row->error)
             );
             failed++;
             continue;
         }
 
-        /* The state's face comes from the shared map — its glyph, its colour
-         * and its phrase, read as sync's rows read it (cmds/sync.c sync_print_lead,
-         * sync_print_state); only the frame and the per-state counter are
+        /* The reading's face comes from the relation's map — its glyph, its colour
+         * and its phrase, read as list's and profile fetch's rows read it
+         * (sys/remote.h); only the frame and the counter per first clause are
          * status's. */
-        const char *symbol = upstream_state_symbol(info.state);
-        output_color_t color = upstream_state_color(info.state);
-        char phrase[UPSTREAM_PHRASE_MAX];
-        upstream_state_phrase(&info, phrase, sizeof(phrase));
+        const char *symbol = remote_state_symbol(relation->state);
+        output_color_t color = remote_state_color(relation->state);
+        char phrase[REMOTE_PHRASE_MAX];
+        remote_state_phrase(relation, phrase, sizeof(phrase));
 
-        switch (info.state) {
-            case UPSTREAM_UP_TO_DATE:   up_to_date++; break;
-            case UPSTREAM_LOCAL_AHEAD:  ahead++; break;
-            case UPSTREAM_REMOTE_AHEAD: behind++; break;
-            case UPSTREAM_DIVERGED:     diverged++; break;
-            case UPSTREAM_NO_REMOTE:    no_remote++; break;
-            case UPSTREAM_NO_LOCAL:     no_local++; break;
+        switch (relation->state) {
+            case REMOTE_STATE_UP_TO_DATE:         up_to_date++; break;
+            case REMOTE_STATE_AHEAD:              ahead++; break;
+            case REMOTE_STATE_BEHIND:             behind++; break;
+            case REMOTE_STATE_DIVERGED:           diverged++; break;
+            case REMOTE_STATE_RECREATED:
+            case REMOTE_STATE_RECREATED_AHEAD:    recreated++; break;
+            case REMOTE_STATE_NO_REMOTE:          no_remote++; break;
+            case REMOTE_STATE_DELETED:
+            case REMOTE_STATE_DELETED_AHEAD:      deleted++; break;
+            case REMOTE_STATE_NO_LOCAL:
+            case REMOTE_STATE_NO_LOCAL_AHEAD:
+            case REMOTE_STATE_NO_LOCAL_DELETED:
+            case REMOTE_STATE_NO_LOCAL_NO_REMOTE: no_local++; break;
         }
 
         /* Display with colors */
-        if (verbose && info.state != UPSTREAM_NO_REMOTE && info.state != UPSTREAM_NO_LOCAL) {
-            /* Verbose mode: show detailed commit info. The enclosing branch has
-             * already filtered out NO_REMOTE/NO_LOCAL, so both local and remote
-             * refs are guaranteed to exist on every state reaching this block. */
+        if (verbose && !git_oid_is_zero(&relation->local) &&
+            !git_oid_is_zero(&relation->remote)) {
+            /* Verbose mode: show detailed commit info, where the reading holds
+             * both heads — the branch here and the remote's, which the open listed
+             * or, with no contact, the tracking ref stands for. */
             output_gap(out, OUTPUT_VERBOSE);
-            output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile);
+            output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", row->profile);
 
             /* Get local commit info. A commit lookup here that fails prints no
-             * line, its error dropped — at most two per profile, the local and
-             * the remote. */
+             * line — at most two per profile, the local and the remote. */
             git_commit *local_commit = NULL;
-            err = gitops_load_branch_commit(repo, profile, &local_commit);
+            int rc = git_commit_lookup(&local_commit, repo, &relation->local);
 
             /* Status line — always shown regardless of commit loading */
             output_print(out, OUTPUT_VERBOSE, "  Status:         ");
             output_colored(out, OUTPUT_VERBOSE, color, "%s %s\n", symbol, phrase);
 
-            if (!err) {
+            if (rc == 0) {
                 const git_oid *local_oid = git_commit_id(local_commit);
                 char local_oid_str[8];
                 git_oid_tostr(local_oid_str, sizeof(local_oid_str), local_oid);
@@ -1638,16 +1673,11 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
                 git_commit_free(local_commit);
             }
 
-            /* Remote commit info — guaranteed reachable per the enclosing filter
-             * above. */
-            char remote_ref[DOTTA_REFNAME_MAX];
-            err = gitops_remote_branch_refname(
-                remote_ref, sizeof(remote_ref), remote->name, profile
-            );
+            /* Remote commit info, the head the reading holds */
             git_commit *remote_commit = NULL;
-            if (!err) err = gitops_load_reference_commit(repo, remote_ref, &remote_commit);
+            rc = git_commit_lookup(&remote_commit, repo, &relation->remote);
 
-            if (!err) {
+            if (rc == 0) {
                 const git_oid *remote_oid = git_commit_id(remote_commit);
                 char remote_oid_str[8];
                 git_oid_tostr(remote_oid_str, sizeof(remote_oid_str), remote_oid);
@@ -1668,12 +1698,13 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
         } else {
             /* Compact mode: single line matching enabled profiles format, the
              * frame list's remote rows take too (cmds/list.c list_profiles) */
-            output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
+            output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", row->profile);
             output_print(out, OUTPUT_NORMAL, "  {dim}(%s %s){reset}\n", symbol, phrase);
         }
     }
 
-    /* Display summary section */
+    /* Display summary section: each reading counted under its phrase's first
+     * clause (sys/remote.h remote_state_phrase) */
     output_section(out, OUTPUT_NORMAL, "Sync summary");
 
     if (up_to_date > 0) {
@@ -1688,8 +1719,16 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
     if (diverged > 0) {
         output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n", diverged);
     }
+    if (recreated > 0) {
+        output_print(
+            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} recreated on the remote\n", recreated
+        );
+    }
     if (no_remote > 0) {
         output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote branch\n", no_remote);
+    }
+    if (deleted > 0) {
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} deleted on the remote\n", deleted);
     }
     if (no_local > 0) {
         output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no local branch\n", no_local);

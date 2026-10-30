@@ -903,9 +903,9 @@ static error_t sync_execute(
  * The glyph is read off the row alone, alike in both tenses: ✗ where the row
  * holds an error — exactly the rows the run's failure counts (sync_failure) — ✓
  * where an act was carried out whole, and otherwise the state the row stands
- * in, sys/upstream.h's face for it, read as status's rows read it (cmds/status.c
- * status_print_remote). The glyph alone carries the row's colour; the profile
- * is cyan, as every screen spells one.
+ * in, sys/upstream.h's face for it — the glyph status's rows give the same reading
+ * (sys/remote.h remote_state_symbol). The glyph alone carries the row's colour;
+ * the profile is cyan, as every screen spells one.
  */
 static void sync_print_lead(output_t *out, const sync_row_t *row) {
     if (row->error) {

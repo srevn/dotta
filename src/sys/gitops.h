@@ -388,8 +388,9 @@ error_t gitops_list_remote_tracking(
  * branch at a tag, which only a tool other than git writes, is no branch here.
  *
  * Readers: cmds/clone.c land_profiles (each profile the clone selected, into a
- * store it just made) and cmds/profile.c profile_fetch (a profile with no branch
- * here), each at the remote's head.
+ * store it just made, at the remote's head) and cmds/profile.c profile_fetch (a
+ * profile with no branch here, at the head its relation names: sys/remote.h
+ * remote_relation_t from).
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
@@ -700,8 +701,7 @@ void gitops_blob_view_close(gitops_blob_view_t *view);
  *
  * gitops_reference_commit for a reader that needs the reference: its absence,
  * proven, is refused (ERR_NOT_FOUND, naming the reference). Readers: sys/stage.c
- * stage_open and stage_merge (the parent-to-be, a merge's first), cmds/status.c
- * status_print_remote (the remote-tracking branch's head), and
+ * stage_open and stage_merge (the parent-to-be, a merge's first), and
  * gitops_load_branch_commit.
  *
  * @param repo Repository (must not be NULL)
@@ -724,9 +724,8 @@ error_t gitops_load_reference_commit(
  * Readers: the revision's three askers, sys/revision.c revision_load and
  * core/scope.c scope_resolve_commit and scope_resolve_range, which read a branch's
  * head once and ask it; cmds/list.c list_profiles, list_files and
- * list_file_history, which read every fact a screen prints off it; cmds/status.c
- * status_print_remote, which prints it; cmds/completion.c commits_walk, which
- * walks back from it.
+ * list_file_history, which read every fact a screen prints off it;
+ * cmds/completion.c commits_walk, which walks back from it.
  *
  * @param repo Repository (must not be NULL)
  * @param branch Branch name (must not be NULL)
@@ -867,8 +866,9 @@ error_t gitops_delete_reference(
  * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
  * sync_fast_forward (nothing fetched to fast-forward to), infra/epoch.c
  * epoch_resolve (no local epoch), sys/remote.c remote_fetch (a tracking ref in
- * a fetched name's way gone since its listing, nothing to take out) and
- * remote_follow (a pushed branch's tracking ref never written, a create),
+ * a fetched name's way gone since its listing, nothing to take out), remote_follow
+ * (a pushed branch's tracking ref never written, a create) and remote_read_heads
+ * (no branch here, no tracking ref: a branch against its remote),
  * gitops_reference_commit, which reads the commit at the id, and
  * gitops_resolve_reference_oid, which refuses it.
  *
@@ -982,9 +982,9 @@ error_t gitops_branch_refname(
  * reference. The branch half is the caller's: a profile's name, held to the branch
  * rule where its own ref is built (gitops_branch_refname).
  *
- * Readers: cmds/sync.c sync_fast_forward, cmds/status.c status_print_remote,
- * sys/upstream.c upstream_analyze_profile, sys/remote.c remote_fetch and
- * remote_follow, and this file's gitops_resolve_remote_branch_oid.
+ * Readers: cmds/sync.c sync_fast_forward, sys/upstream.c upstream_analyze_profile,
+ * sys/remote.c remote_fetch, remote_follow and remote_read_heads, and this file's
+ * gitops_resolve_remote_branch_oid.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX
@@ -1058,9 +1058,11 @@ error_t gitops_diff_get_stats(
  * git_merge_base). Two commits that share no history are ERR_NOT_FOUND — libgit2's
  * GIT_ENOTFOUND, which it answers for that alone, a commit it could not load
  * being -1 (merge.c merge_bases) — read by sys/stage.c stage_merge_trees, which
- * merges two such histories over Git's empty tree, and by cmds/sync.c
+ * merges two such histories over Git's empty tree; by cmds/sync.c
  * sync_disagreements, the floor of the names a landed resolution's two sides
- * took, where no base is no line.
+ * took, where no base is no line; and by sys/remote.c remote_relate and
+ * remote_ahead, where a branch against its remote reads two histories sharing
+ * none: the remote's branch recreated, or a tracking ref no counterpart.
  *
  * @param repo Repository (must not be NULL)
  * @param one First commit OID (must not be NULL)

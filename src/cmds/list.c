@@ -32,7 +32,6 @@
 #include "sys/gitops.h"
 #include "sys/remote.h"
 #include "sys/stats.h"
-#include "sys/upstream.h"
 
 /* Display configuration constants */
 #define LIST_SHORT_OID_BUF_SIZE 8
@@ -350,22 +349,24 @@ static error_t list_profiles(
             );
         }
 
-        /* Remote: where the profile stands, as status's compact row says it —
-         * the glyph beside its phrase (sys/upstream.h), or the analysis's failure
-         * in its place, its error dropped once said, one per such branch */
+        /* Remote: where the profile stands against its tracking ref, the remote
+         * as last seen — list makes no contact (sys/remote.h remote_last_relation)
+         * — as status's compact row says it: the glyph beside its phrase, or
+         * the read's failure in its place, its error dropped once said, one per
+         * such branch */
         if (show_remote) {
-            upstream_info_t info;
-            err = upstream_analyze_profile(repo, remote_name, profile, &info);
+            remote_relation_t relation;
+            err = remote_last_relation(repo, remote_name, profile, &relation);
             if (err) {
                 output_print(
                     out, OUTPUT_NORMAL, "  {red}(✗ %s){reset}", error_line(err)
                 );
             } else {
-                char phrase[UPSTREAM_PHRASE_MAX];
-                upstream_state_phrase(&info, phrase, sizeof(phrase));
+                char phrase[REMOTE_PHRASE_MAX];
+                remote_state_phrase(&relation, phrase, sizeof(phrase));
                 output_print(
                     out, OUTPUT_NORMAL, "  {dim}(%s %s){reset}",
-                    upstream_state_symbol(info.state), phrase
+                    remote_state_symbol(relation.state), phrase
                 );
             }
         }

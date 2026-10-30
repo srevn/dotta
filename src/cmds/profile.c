@@ -29,7 +29,6 @@
 #include "sys/identity.h"
 #include "sys/remote.h"
 #include "sys/transfer.h"
-#include "sys/upstream.h"
 
 /**
  * Profile list subcommand
@@ -363,24 +362,18 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
         const char *profile = selection.entries[i];
 
         /* Where the profile stands against the remote's branch the fetch brought,
-         * read as sync's and status's rows read it (sys/upstream.h
-         * upstream_analyze_profile). One with no local branch is made local at
-         * the remote's head as the open listed it, the one act a fetch takes on
-         * a profile; a branch already here is left where it stands — the fetch
+         * read three ways as status's rows read it (sys/remote.h remote_relation).
+         * One with no local branch is made local where the relation says it comes
+         * back from (remote_relation_t from), the one act a fetch takes on a
+         * profile; a branch already here is left where it stands — the fetch
          * moved its remote-tracking ref, and merging the two is sync's. */
-        upstream_info_t upstream;
-        error_t row_err = upstream_analyze_profile(repo, remote_name, profile, &upstream);
-        if (!row_err && upstream.state == UPSTREAM_NO_LOCAL) {
-            char ref[DOTTA_REFNAME_MAX];
-            git_oid head;
-            row_err = gitops_branch_refname(ref, sizeof(ref), profile);
-            if (!row_err) {
-                remote_advertised(remote, ref, &head);
-                row_err = gitops_create_branch(
-                    repo, profile, &head, "profile fetch", "created from %s/%s",
-                    remote_name, profile
-                );
-            }
+        remote_relation_t relation;
+        error_t row_err = remote_relation(remote, profile, &relation);
+        if (!row_err && !git_oid_is_zero(&relation.from)) {
+            row_err = gitops_create_branch(
+                repo, profile, &relation.from, "profile fetch", "created from %s/%s",
+                remote_name, profile
+            );
         }
 
         /* A profile that fails is named and counted, its error dropped — at most
@@ -395,22 +388,30 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
             continue;
         }
 
-        /* Made local: the act carried out */
-        if (upstream.state == UPSTREAM_NO_LOCAL) {
+        /* Made local: the act carried out, and where the head it came back from
+         * holds commits the remote lacks, how many, in the reading's words */
+        if (!git_oid_is_zero(&relation.from)) {
             output_print(
-                out, OUTPUT_NORMAL, "  {green}✓{reset} {cyan}%s{reset}: created local branch\n",
+                out, OUTPUT_NORMAL, "  {green}✓{reset} {cyan}%s{reset}: created local branch",
                 profile
             );
+            if (relation.ahead > 0) {
+                output_print(
+                    out, OUTPUT_NORMAL, ", %zu commit%s ahead",
+                    relation.ahead, relation.ahead == 1 ? "" : "s"
+                );
+            }
+            output_endline(out, OUTPUT_NORMAL);
             continue;
         }
 
-        /* Otherwise where the branch here stands: its state's glyph in its colour,
-         * and its phrase (sys/upstream.h) */
-        char phrase[UPSTREAM_PHRASE_MAX];
-        upstream_state_phrase(&upstream, phrase, sizeof(phrase));
+        /* Otherwise where the branch here stands: its reading's glyph in its
+         * colour, and its phrase (sys/remote.h) */
+        char phrase[REMOTE_PHRASE_MAX];
+        remote_state_phrase(&relation, phrase, sizeof(phrase));
         output_colored(
-            out, OUTPUT_NORMAL, upstream_state_color(upstream.state), "  %s",
-            upstream_state_symbol(upstream.state)
+            out, OUTPUT_NORMAL, remote_state_color(relation.state), "  %s",
+            remote_state_symbol(relation.state)
         );
         output_print(out, OUTPUT_NORMAL, " {cyan}%s{reset}: %s\n", profile, phrase);
     }

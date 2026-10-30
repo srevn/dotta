@@ -52,6 +52,15 @@
  * open and freed at the free, which commits the credential helper's one verdict.
  * Which remote: "origin", or the one configured (remote_default).
  *
+ * A branch against its remote (remote_relation_t): three heads — the branch here
+ * (L) and its tracking ref (T), read now, and the remote's (R) as the open listed
+ * it — each an id or Git's null id, and their reading (remote_state_t), asked
+ * of the history beneath them only where the reading needs it; and the face every
+ * screen gives a reading, its glyph, its colour and its phrase. With no contact
+ * (remote_last_relation) T stands for R, the remote as last seen: a branch against
+ * its tracking ref. Nothing here reads the state: which branches a reading is
+ * asked of is its caller's.
+ *
  * Layer: sys/. Knows libgit2, sys/gitops and sys/transfer, nothing of dotta's
  * vocabulary: every ref it writes carries the command word its caller hands its
  * open in its reflog line, as it is.
@@ -143,11 +152,12 @@ error_t remote_open(
  * (transports/smart.c git_smart__connect) — and absence is its answer, as a
  * reference that does not stand is gitops_reference_oid's.
  *
- * Readers: infra/epoch.c epoch_resolve (the epoch's verdict); cmds/sync.c sync_push
- * (a push's expectation); cmds/clone.c cmd_clone (its gate, through the epoch's
- * verdict) and land_profiles, and cmds/profile.c profile_fetch (the head a branch
- * is created at); cmds/remove.c remove_profile (the remote's branch against the
- * tracking ref its deletion is leased on, and whether there is one to delete).
+ * Readers: infra/epoch.c epoch_resolve (the epoch's verdict); remote_relation
+ * (a branch against it); cmds/sync.c sync_push (a push's expectation); cmds/clone.c
+ * cmd_clone (its gate, through the epoch's verdict) and land_profiles (the head
+ * each branch is created at); cmds/remove.c remove_profile (the remote's branch
+ * against the tracking ref its deletion is leased on, and whether there is one
+ * to delete).
  *
  * @param remote The session (must not be NULL)
  * @param refname Full reference name (must not be NULL)
@@ -163,8 +173,9 @@ void remote_advertised(const remote_t *remote, const char *refname, git_oid *out
  * plumbing alone makes — is listed as the remote holds it, and refused where a
  * reader builds its ref (sys/gitops.h gitops_branch_refname); so is a branch at
  * a tag or a tree, which only a tool other than git makes, refused where a branch
- * is created at its head (sys/gitops.h gitops_create_branch). Lent from the
- * session: valid until remote_free.
+ * is created at its head (sys/gitops.h gitops_create_branch) and where a branch
+ * here is read against it (remote_relation). Lent from the session: valid until
+ * remote_free.
  *
  * Readers: cmds/profile.c profile_fetch (the selection and its pre-flight) and
  * profile_list (the remote's not fetched here); cmds/clone.c cmd_clone (its gate,
@@ -312,5 +323,177 @@ error_t remote_push(
  * NULL-safe.
  */
 void remote_free(remote_t *remote);
+
+/**
+ * A branch's reading against its remote
+ *
+ * One constant a row of the readings that differ in what a screen says of a branch,
+ * read off its three heads (remote_relation_t) by what one holds against another:
+ * within it (every commit of the one the other's), beyond it and sharing a commit,
+ * or apart from it, sharing none (sys/gitops.h gitops_find_merge_base). Each
+ * _AHEAD holds commits the remote lacks, which a screen counts (remote_relation_t
+ * ahead).
+ */
+typedef enum {
+    REMOTE_STATE_UP_TO_DATE,         /* The branch is the remote's head */
+    REMOTE_STATE_AHEAD,              /* The branch holds the remote's head, and commits beyond it */
+    REMOTE_STATE_BEHIND,             /* The branch is within the remote's head */
+    REMOTE_STATE_DIVERGED,           /* Each holds commits the other lacks, sharing one or none */
+    REMOTE_STATE_RECREATED,          /* Recreated there: the remote's head shares nothing with the tracking ref; the branch within it */
+    REMOTE_STATE_RECREATED_AHEAD,    /* Recreated there; the branch beyond the tracking ref, sharing it */
+    REMOTE_STATE_NO_REMOTE,          /* The remote holds none, and no tracking ref shares the branch's history */
+    REMOTE_STATE_DELETED,            /* Deleted there: the remote holds none, the tracking ref stands; the branch within it */
+    REMOTE_STATE_DELETED_AHEAD,      /* Deleted there; the branch beyond its tracking ref, sharing it */
+    REMOTE_STATE_NO_LOCAL,           /* No branch here; the tracking ref within the remote's head, apart from it, or none */
+    REMOTE_STATE_NO_LOCAL_AHEAD,     /* No branch here; the tracking ref beyond the remote's head, sharing it */
+    REMOTE_STATE_NO_LOCAL_DELETED,   /* No branch here, none on the remote; the tracking ref stands */
+    REMOTE_STATE_NO_LOCAL_NO_REMOTE  /* No branch here, none on the remote, and no tracking ref */
+} remote_state_t;
+
+/**
+ * A branch against its remote: three heads, each an id or Git's null id where
+ * none stands, and their reading
+ *
+ * `from` is where a branch none stands here is created: the remote's head, or
+ * the tracking ref's where it holds commits the remote's lacks and shares its
+ * history (NO_LOCAL_AHEAD) — the one head a missing branch comes back from, for
+ * every reader that creates one; Git's null id wherever a branch stands, and
+ * where the remote holds none. `ahead` is the commits this store holds that the
+ * remote lacks: the branch's beyond the remote's head (AHEAD, DIVERGED) or beyond
+ * its tracking ref (RECREATED_AHEAD, DELETED_AHEAD), the tracking ref's beyond
+ * the remote's head (NO_LOCAL_AHEAD); `behind` the remote's head's beyond the
+ * branch (BEHIND, DIVERGED). Both are zero elsewhere.
+ */
+typedef struct {
+    remote_state_t state;   /* The reading */
+    git_oid local;          /* L: the branch here, read now */
+    git_oid tracking;       /* T: its tracking ref, read now — the remote as this store last saw it */
+    git_oid remote;         /* R: the remote's head as the open listed it; T with no contact */
+    git_oid from;           /* Where a branch none stands here is created; the null id elsewhere */
+    size_t ahead;           /* The commits this store holds that the remote lacks */
+    size_t behind;          /* The commits the remote's head holds that the branch lacks */
+} remote_relation_t;
+
+/**
+ * A branch against the remote the session met
+ *
+ * The branch here and its tracking ref read now, each its absence proven
+ * (sys/gitops.h gitops_reference_oid), and the remote's head as the open listed
+ * it (remote_advertised); then their reading, each question of the history asked
+ * only where the reading needs its answer, two histories sharing no commit walked
+ * whole. Asked of a name the session's fetch asked for, or one the remote does
+ * not advertise: the remote's head is read as a commit, and a name the fetch
+ * passed over refuses its walk naming the object.
+ *
+ * A failure is the step's that met it, in its words — a reference that will not
+ * read naming it, a walk over an object a hand removed or a remote's branch at
+ * a tag in libgit2's — and names no branch: each reader's row names its profile,
+ * beneath a title naming the remote.
+ *
+ * Readers: cmds/status.c status_remote, each profile its section reports on where
+ * the contact stands; cmds/profile.c profile_fetch, each profile it fetched.
+ *
+ * @param remote The session (must not be NULL)
+ * @param branch Branch name (must not be NULL)
+ * @param out The branch against the remote (must not be NULL; read only where
+ *            NULL is answered)
+ * @return Error or NULL on success
+ */
+error_t remote_relation(const remote_t *remote, const char *branch, remote_relation_t *out);
+
+/**
+ * A branch against its remote as last seen: its tracking ref for the remote's head
+ *
+ * remote_relation's reading with no contact: the branch and its tracking ref
+ * read as it reads them, the tracking ref standing for the remote's head — so a
+ * branch reads against the line its last fetch wrote, never the remote's present:
+ * a profile deleted on the remote reads as its tracking ref left it, until a
+ * contact reads it. The readings with no branch here are no reader's: a name
+ * with none reads NO_LOCAL where its tracking ref stands, which nothing acts on.
+ *
+ * Readers: cmds/status.c status_remote, where no contact stands (--no-fetch, or
+ * an open or a fetch that failed); cmds/list.c list_profiles, every branch --remote
+ * lists.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param name The remote's name (must not be NULL)
+ * @param branch Branch name (must not be NULL)
+ * @param out The branch against its tracking ref (must not be NULL; read only
+ *            where NULL is answered)
+ * @return Error or NULL on success
+ */
+error_t remote_last_relation(
+    git_repository *repo,
+    const char *name,
+    const char *branch,
+    remote_relation_t *out
+);
+
+/**
+ * A reading's glyph: "=", "↑", "↓", "↕", "↻", "•", "−" or "?"
+ *
+ * One of the three faces of a reading, beside its colour (remote_state_color)
+ * and its phrase (remote_state_phrase): its phrase's first clause's, so a reading
+ * that counts commits beside an absence or a re-creation looks as that clause
+ * does, and every screen shows a reading alike.
+ *
+ * Readers: cmds/status.c status_print_remote; cmds/list.c list_profiles;
+ * cmds/profile.c profile_fetch.
+ */
+const char *remote_state_symbol(remote_state_t state);
+
+/**
+ * A reading's colour
+ *
+ * Sibling to remote_state_symbol, read where it is — a pure function of the
+ * reading, its first clause's, no policy:
+ *   UP_TO_DATE   → GREEN
+ *   AHEAD        → YELLOW   (local commits to push)
+ *   BEHIND       → YELLOW   (the remote's commits to pull)
+ *   DIVERGED     → RED      (manual resolution required)
+ *   RECREATED    → YELLOW   (the remote's branch recreated)
+ *   NO_REMOTE    → CYAN     (informational, not an issue)
+ *   DELETED      → YELLOW   (the remote's branch deleted)
+ *   NO_LOCAL     → DIM      (no local branch to compare)
+ * each _AHEAD as its base, and every reading with no branch here as NO_LOCAL.
+ *
+ * Readers: cmds/status.c status_print_remote; cmds/profile.c profile_fetch.
+ */
+output_color_t remote_state_color(remote_state_t state);
+
+#define REMOTE_PHRASE_MAX 72 /* "diverged (%zu ahead, %zu behind)" at a size_t's widest, and NUL */
+
+/**
+ * A reading's words, with the commits it counts
+ *
+ * "up-to-date", "1 commit ahead", "2 commits behind", "diverged (1 ahead, 2
+ * behind)", "recreated on the remote", "no remote branch", "deleted on the remote",
+ * "no local branch" — then a second clause where the reading has one: ", 2 commits
+ * ahead" where this store holds commits the remote lacks beside a re-creation,
+ * a deletion or no branch here, AHEAD's own words; ", deleted on the remote" or
+ * ", no remote branch" beside no branch here. The phrase, not its frame: each
+ * reader sets the glyph and the colour beside it (remote_state_symbol,
+ * remote_state_color) and the frame its screen gives a reading, so the rows of
+ * status, list and profile fetch say a reading alike.
+ *
+ * The words on screen: a reading named alone, without its counts — status's Sync
+ * summary counting the branches in each (cmds/status.c status_print_remote) —
+ * takes its phrase's first clause: up-to-date, ahead, behind, diverged, recreated
+ * on the remote, no remote branch, deleted on the remote, no local branch. No
+ * key decodes the glyph, on a screen or in a help: every row that prints one
+ * prints the phrase beside it.
+ *
+ * Readers: cmds/status.c status_print_remote; cmds/list.c list_profiles, whose
+ * rows take status's compact frame; cmds/profile.c profile_fetch.
+ *
+ * @param relation The reading and its counts (must not be NULL)
+ * @param buffer Output buffer for the phrase (must not be NULL)
+ * @param buffer_size Size of output buffer: REMOTE_PHRASE_MAX
+ */
+void remote_state_phrase(
+    const remote_relation_t *relation,
+    char *buffer,
+    size_t buffer_size
+);
 
 #endif /* DOTTA_REMOTE_H */

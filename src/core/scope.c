@@ -61,41 +61,23 @@ error_t scope_build(
     s->enabled = manifest_profiles(view);
     s->profiles = s->enabled;
 
-    /* 2. The CLI filter: every name must be enabled here. That is the one question
-     *    — the view read the branches on the way in, so a name in the enabled
-     *    set is a branch, and a name not in it is refused whether it is a disabled
-     *    profile or a typo: a filter that narrowed to nothing would touch nothing
-     *    and say nothing. The refusal tells the two apart by asking the refusing
-     *    verb, one lookup paid only here: when it does not refuse, the branch
-     *    is here and the fact is that it is not enabled. A name given twice, by
-     *    -p or as a positional, is one profile, kept where it was first given:
-     *    every reader of the filter acts on each profile once. */
-    if (in->profile_count > 0) {
-        string_array_init(&s->filter, arena, in->profile_count);
+    /* 2. The CLI filter, every name checked against that set (scope_filter):
+     *    the view read the branches on the way in, so a name in it is a branch.
+     *    Where it was given, the filter is the scope's face — scope_profiles'
+     *    answer. */
+    error_t err = scope_filter(
+        repo, s->enabled, in->profiles, in->profile_count, arena, &s->filter
+    );
+    if (err) return err;
+    if (s->filter.count > 0) s->profiles = &s->filter;
 
-        for (size_t i = 0; i < in->profile_count; i++) {
-            const char *name = in->profiles[i];
-            if (string_array_contains(&s->filter, name)) continue;
-            if (!string_array_contains(s->enabled, name)) {
-                error_t err = profile_require(repo, name);
-                if (err) return err;
-                return error_create(ERR_INVALID_ARG, "Profile '%s' is not enabled", name);
-            }
-            string_array_push(&s->filter, name);
-        }
-
-        /* 3. The filter is the scope's face — scope_profiles' answer — where it
-         *    was given. */
-        s->profiles = &s->filter;
-    }
-
-    /* 4. The path filter: one matcher over both keys a managed path has, each
+    /* 3. The path filter: one matcher over both keys a managed path has, each
      *    input read in the key its own shape names (infra/pathspec) — and none,
      *    every path in, where no positional was given. */
-    error_t err = pathspec_create(in->paths, in->path_count, arena, &s->paths);
+    err = pathspec_create(in->paths, in->path_count, arena, &s->paths);
     if (err) return err;
 
-    /* 5. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
+    /* 4. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
      *    refuses the scope, under the flag's name. */
     err = ignore_excludes_compile(
         in->exclude_patterns, in->exclude_count, arena, &s->excludes_ruleset
@@ -143,6 +125,40 @@ error_t scope_resolve_enabled(
     }
 
     *out = valid_profiles;
+    return NULL;
+}
+
+error_t scope_filter(
+    git_repository *repo, const string_array_t *enabled, char *const *names,
+    size_t count, arena_t *arena, string_array_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(enabled);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    /* Every name must be in the set. That is the one question: a name not in it
+     * is refused whether it is a profile not enabled or a typo — a filter that
+     * narrowed to nothing would touch nothing and say nothing. The refusal tells
+     * the two apart by asking the refusing verb, one lookup paid only here: when
+     * it does not refuse, the branch is here and the fact is that it is not
+     * enabled. A name given twice, by -p or as a positional, is one profile,
+     * kept where it was first given: every reader of the filter acts on each
+     * profile once. */
+    string_array_t filter;
+    string_array_init(&filter, arena, count);
+    for (size_t i = 0; i < count; i++) {
+        const char *name = names[i];
+        if (string_array_contains(&filter, name)) continue;
+        if (!string_array_contains(enabled, name)) {
+            error_t err = profile_require(repo, name);
+            if (err) return err;
+            return error_create(ERR_INVALID_ARG, "Profile '%s' is not enabled", name);
+        }
+        string_array_push(&filter, name);
+    }
+
+    *out = filter;
     return NULL;
 }
 

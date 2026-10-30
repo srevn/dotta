@@ -12,12 +12,13 @@
  *     branches stand.
  *
  * The questions asked of the set take what they read, whichever way the set was
- * read: the refusal an empty set earns (scope_require_enabled) and which of the
- * set holds a commit (scope_resolve_commit, scope_resolve_range) take the set
- * as a value, and the claim a file argument names (scope_resolve_claim) takes
- * the set's view, precedence resolved. The commands that build no scope would
- * give one nothing but the set to carry: each one's -p names any local profile,
- * enabled or not, and never reads the set.
+ * read: the filter -p's names make over it (scope_filter), the refusal an empty
+ * set earns (scope_require_enabled) and which of the set holds a commit
+ * (scope_resolve_commit, scope_resolve_range) take the set as a value, and the
+ * claim a file argument names (scope_resolve_claim) takes the set's view,
+ * precedence resolved. The commands that build no scope would give one nothing
+ * but the set to carry: each one's -p names any local profile, enabled or not,
+ * and never reads the set.
  *
  * A scope answers, for a command that holds the view, "what subset of the view
  * — every enabled profile at its head, precedence resolved — does this invocation
@@ -132,11 +133,9 @@ typedef struct scope_inputs {
  *   1. Borrow the enabled set off the view — the enabled rows whose branch the
  *      build found (core/manifest.h manifest_profiles) — which may be none (see
  *      "Empty-enabled policy" above).
- *   2. If in->profile_count > 0, check every CLI filter name against the enabled
- *      set: one not in it is refused, whether it is a disabled profile ("is not
- *      enabled") or no profile here at all (profile_require's refusal). A filter
- *      never narrows in silence. A name given twice is one profile, kept where
- *      it was first given.
+ *   2. Check every CLI filter name against the enabled set (scope_filter): one
+ *      not in it is refused, a name given twice is one profile, and the filter,
+ *      where given, is the scope's face (scope_profiles).
  *   3. Compile the positional arguments into the path filter (infra/pathspec):
  *      one matcher over the two keys a managed path has, each input read in the
  *      key its own shape names — none, every path in, where none was given.
@@ -198,6 +197,37 @@ error_t scope_build(
 error_t scope_resolve_enabled(
     git_repository *repo,
     const state_t *state,
+    arena_t *arena,
+    string_array_t *out
+);
+
+/**
+ * The filter -p's names make over the set a command reads: each name the set
+ * holds, once
+ *
+ * Every name checked against `enabled`: one the set lacks is refused, whether
+ * it names a profile not enabled ("is not enabled") or none here at all
+ * (core/profiles.h profile_require's refusal) — a filter never narrows in silence.
+ * A name given twice is one profile, kept where it was first given. No name is
+ * no filter: an empty one, which narrows nothing.
+ *
+ * Reader: scope_build, over the view's set.
+ *
+ * @param repo Repository: a name the set lacks is asked of it, to tell a profile
+ *             not enabled from none here (must not be NULL)
+ * @param enabled The set the command reads (must not be NULL)
+ * @param names -p's names, raw (must not be NULL where count > 0)
+ * @param count How many
+ * @param arena Arena the filter lives in (must not be NULL)
+ * @param out The filter, in the order its names were first given (must not be
+ *            NULL; left as it was on a refusal)
+ * @return Error or NULL on success
+ */
+error_t scope_filter(
+    git_repository *repo,
+    const string_array_t *enabled,
+    char *const *names,
+    size_t count,
     arena_t *arena,
     string_array_t *out
 );

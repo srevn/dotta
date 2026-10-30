@@ -97,13 +97,13 @@
  * merge, the load from a tree and the save to a stage — is a profile's own, read
  * by one module: the handle decodes it, a profile's draft edits a copy of it,
  * and a merge of two of its histories composes three (core/profiles.c
- * profile_load_sheet, profile_walk, profile_draft_seed and the draft's edits,
- * profile_draft_merge through metadata_merge). The claim's attributes on this
- * host — ownership as this host's ids, and the captures that read a claim off a
- * look — are every layer's that places or prints a claim, each name below listing
- * its readers. The mode a claim does not make and a directory's floor are the
- * prelude's, which the decoded claim carries as the item does (include/types.h
- * MODE_UNCLAIMED, DIR_MODE_DEFAULT).
+ * profile_load_sheet, profile_walk, profile_draft_open, profile_draft_orphan
+ * and the draft's edits, profile_draft_merge through metadata_merge). The claim's
+ * attributes on this host — ownership as this host's ids, and the captures that
+ * read a claim off a look — are every layer's that places or prints a claim,
+ * each name below listing its readers. The mode a claim does not make and a
+ * directory's floor are the prelude's, which the decoded claim carries as the
+ * item does (include/types.h MODE_UNCLAIMED, DIR_MODE_DEFAULT).
  *
  * Memory: a sheet is a container (include/runtime.h "Memory"). It lives in the
  * arena it was made in — a profile's, which keeps the sheet its tree holds, or
@@ -281,8 +281,8 @@ metadata_t *metadata_create(arena_t *arena);
  * ours', the three it reads left as they were. The same sheet a second parse of
  * the bytes would give, at a fraction of its cost.
  *
- * Readers: core/profiles.c profile_draft_seed, both openers' one body; and
- * metadata_merge, the claims it composes into.
+ * Readers: core/profiles.c profile_draft_open and profile_draft_orphan, the sheet
+ * a writer's commit carries; and metadata_merge, the claims it composes into.
  *
  * @param arena The arena the copy lives in (must not be NULL)
  * @param metadata The sheet to copy (must not be NULL)

@@ -870,19 +870,19 @@ void profile_departures(
 /**
  * A profile's draft: its next commit, both of its documents in memory (opaque)
  *
- * One profile's next tree, on a stage (sys/stage.h: one ref's next tree, staged
- * in memory), and the sheet that rides it — a stage is Git's, a draft dotta's.
- * Opened at the profile's head (profile_draft_open), or over Git's empty tree
- * for a profile the commit creates (profile_draft_orphan), it holds its stage;
- * the profile at the tree the stage opened at — the base, read and never edited,
- * lent for every question a writer asks before it edits; and the sheet the commit
- * will carry — the base's, copied at the open (core/metadata.h metadata_clone)
- * and edited from then on, so every claim the base lends stands whatever the
- * commit does. A writer asks the base and edits the draft; it never holds the
- * sheet — it hands the draft what it captured from the disk or restores from a
- * commit, and the draft authors the claim — and the draft answers what the base
- * cannot: whether a name a writer chooses before reading it has room beside the
- * names chosen with it (profile_admit), whether its edits move anything
+ * One profile's next commit, on a stage (sys/stage.h: one ref's next commit,
+ * staged in memory), and the sheet that rides it — a stage is Git's, a draft
+ * dotta's. Opened at the profile's head (profile_draft_open), or over Git's empty
+ * tree for a profile the commit creates (profile_draft_orphan), it holds its
+ * stage; the profile at the tree the stage opened at — the base, read and never
+ * edited, lent for every question a writer asks before it edits; and the sheet
+ * the commit will carry — the base's, copied at the open (core/metadata.h
+ * metadata_clone) and edited from then on, so every claim the base lends stands
+ * whatever the commit does. A writer asks the base and edits the draft; it never
+ * holds the sheet — it hands the draft what it captured from the disk or restores
+ * from a commit, and the draft authors the claim — and the draft answers what
+ * the base cannot: whether a name a writer chooses before reading it has room
+ * beside the names chosen with it (profile_admit), whether its edits move anything
  * (profile_changed), and which explicit claims they add, update and remove
  * (profile_changes). Every edit keeps the document's rules, stated here once:
  *   - a write touches its own kind: a removal takes its claim — a file's the

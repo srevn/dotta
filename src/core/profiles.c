@@ -1059,69 +1059,72 @@ void profile_departures(
 
 struct profile_draft {
     arena_t *arena;                 /* Its own: the struct, the copy, the names it spells, its message */
-    stage_t *stage;                 /* The next tree, on the profile's branch */
+    stage_t *stage;                 /* The next commit, on the profile's branch */
     profile_t *base;                /* The profile at the tree it opened: never edited */
     metadata_t *sheet;              /* The base's sheet, copied into the arena: what the commit carries */
     stage_admission_t *admission;   /* The tree as a writer chooses its names; NULL until it asks */
 };
 
 /**
- * A profile's draft over the stage `opener` opens: the base at the tree the stage
- * opened, its sheet read now and strictly, and that sheet copied
+ * A profile's draft over the stage its opener opened: the base at the stage's
+ * tree, its sheet read now and strictly
  *
- * `opener` is sys/stage's for what the writer expects of the profile's branch —
- * stage_open where it stands, stage_orphan where the commit creates it — handed
- * the branch's reference by Git's branch rule, and refusing the other state in
- * its own words. Everything after it is one body: the two openers differ in what
- * they expect of the branch and in nothing they make.
+ * Each opener builds the branch's reference by Git's branch rule and opens its
+ * stage at what the writer expects of the branch — stage_open where it stands,
+ * stage_orphan where the commit creates it — refused in the stage's own words
+ * otherwise; then seeds here, and writes the sheet its commit carries: the base's,
+ * copied. The stage is the draft's from the call, released with it on a failure.
  *
  * Readers: profile_draft_open and profile_draft_orphan.
  *
- * @param repo Repository
  * @param name The profile's name
- * @param opener sys/stage's opener of the branch's stage
- * @param out The draft; NULL on a failure
- * @return Error or NULL on success
+ * @param stage The stage its opener opened (the draft's from the call)
+ * @param out The draft (written on success alone)
+ * @return Error or NULL on success: the sheet's, in the loader's words
  */
-static error_t profile_draft_seed(
-    git_repository *repo,
-    const char *name,
-    error_t (*opener)(git_repository *repo, const char *refname, stage_t **out),
-    profile_draft_t **out
-) {
+static error_t profile_draft_seed(const char *name, stage_t *stage, profile_draft_t **out) {
+    /* The draft in an arena of its own, made here and freed with it, as the profile
+     * handle stands in its own, and the stage its own from here on. Then the
+     * base at the tree the stage opened — the head's, or Git's empty tree, which
+     * holds no sheet and so an empty one — its sheet read now and strictly: a
+     * writer refuses a sheet that will not load before its preview. The struct
+     * holds each from its first allocation, so the sheet's failure releases all
+     * of them through profile_draft_free, and outlives the base that kept it
+     * (base/error.h "Lifetime") */
+    arena_t *arena = arena_create(0);
+    profile_draft_t *draft = arena_calloc(arena, 1, sizeof(*draft));
+    draft->arena = arena;
+    draft->stage = stage;
+    draft->base = profile_open(name, stage_tree(stage));
+
+    error_t err = profile_load_sheet(draft->base);
+    if (err) {
+        profile_draft_free(draft);
+        return err;
+    }
+
+    *out = draft;
+    return NULL;
+}
+
+error_t profile_draft_open(git_repository *repo, const char *name, profile_draft_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(out);
 
     *out = NULL;
 
-    /* The branch the profile is built on, by Git's branch rule, before anything
-     * is opened (sys/gitops.h gitops_branch_refname) */
+    /* The branch the profile is built on, by Git's branch rule (sys/gitops.h
+     * gitops_branch_refname); its stage at the head, refused in the stage's words
+     * where the branch does not stand (sys/stage.h stage_open); and the draft
+     * over it */
     char refname[DOTTA_REFNAME_MAX];
+    stage_t *stage = NULL;
+    profile_draft_t *draft = NULL;
     error_t err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (!err) err = stage_open(repo, refname, &stage);
+    if (!err) err = profile_draft_seed(name, stage, &draft);
     if (err) return err;
-
-    /* The draft in an arena of its own, made here and freed with it, as the profile
-     * handle stands in its own. Then the stage the opener opens, refused in
-     * sys/stage's words where the branch is not as the writer expects it, and
-     * the base at the tree the stage opened — the head's, or Git's empty tree,
-     * which holds no sheet and so an empty one — its sheet read now and strictly:
-     * a writer refuses a sheet that will not load before its preview. The struct
-     * holds each from its first allocation, so every failure releases through
-     * profile_draft_free, and the sheet's failure outlives the base that kept
-     * it (base/error.h "Lifetime") */
-    arena_t *arena = arena_create(0);
-    profile_draft_t *draft = arena_calloc(arena, 1, sizeof(*draft));
-    draft->arena = arena;
-    err = opener(repo, refname, &draft->stage);
-    if (!err) {
-        draft->base = profile_open(name, stage_tree(draft->stage));
-        err = profile_load_sheet(draft->base);
-    }
-    if (err) {
-        profile_draft_free(draft);
-        return err;
-    }
 
     /* The sheet the commit carries: the base's, copied into the draft's arena,
      * so every claim the base lends stands whatever the edits do, and the commit
@@ -1132,16 +1135,31 @@ static error_t profile_draft_seed(
     return NULL;
 }
 
-error_t profile_draft_open(
-    git_repository *repo, const char *name, profile_draft_t **out
-) {
-    return profile_draft_seed(repo, name, stage_open, out);
-}
+error_t profile_draft_orphan(git_repository *repo, const char *name, profile_draft_t **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(out);
 
-error_t profile_draft_orphan(
-    git_repository *repo, const char *name, profile_draft_t **out
-) {
-    return profile_draft_seed(repo, name, stage_orphan, out);
+    *out = NULL;
+
+    /* The branch the commit creates, by Git's branch rule (sys/gitops.h
+     * gitops_branch_refname); its stage over Git's empty tree, refused in the
+     * stage's words where the branch stands (sys/stage.h stage_orphan); and the
+     * draft over it */
+    char refname[DOTTA_REFNAME_MAX];
+    stage_t *stage = NULL;
+    profile_draft_t *draft = NULL;
+    error_t err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (!err) err = stage_orphan(repo, refname, &stage);
+    if (!err) err = profile_draft_seed(name, stage, &draft);
+    if (err) return err;
+
+    /* The sheet the commit carries: the base's, an empty one, copied as
+     * profile_draft_open copies it */
+    draft->sheet = metadata_clone(draft->arena, draft->base->sheet);
+
+    *out = draft;
+    return NULL;
 }
 
 profile_t *profile_draft_base(const profile_draft_t *draft) {

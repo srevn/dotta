@@ -96,8 +96,10 @@ typedef struct stage stage_t;
  * and the baseline's ref (BASELINE_REF).
  *
  * Readers: ignore_blob_read, where the file is looked up; ignore_blob_write and
- * ignore_seed_baseline, where it is put; and cmds/add.c cmd_add, which puts the
- * template there for a profile it creates.
+ * ignore_seed_baseline, where it is put; cmds/add.c cmd_add, which puts the
+ * template there for a profile it creates; and core/profiles.c profile_merge_name,
+ * which unites a profile's two sides' rules where its merge left the file in
+ * conflict.
  */
 #define IGNORE_FILE_NAME ".dottaignore"
 
@@ -244,7 +246,10 @@ error_t ignore_excludes_compile(
  *
  * Input validation: a `.dottaignore` blob is at most 1 MB, and text
  * (ignore_blob_text) — the one bound on its lines and rules, which the grammar
- * reads at any length and count (base/gitignore.h).
+ * reads at any length and count (base/gitignore.h). A union of two ignore files
+ * near the cap can pass it (core/profiles.c profile_draft_merge, sys/stage.h
+ * stage_unite), every query of the profile's rules then refused until `dotta
+ * ignore` mends the file.
  *
  * @param repo      Repository (must not be NULL)
  * @param config    Configuration (may be NULL)

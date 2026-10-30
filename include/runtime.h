@@ -504,9 +504,10 @@ typedef struct dotta_run {
  *         list (base/output.h output_list_t), a profile at a tree (core/profiles.h
  *         profile_open): itself, its name, its sheet and the claims it lends; a
  *         profile's draft (core/profiles.h profile_draft_open,
- *         profile_draft_orphan): itself, the copy of the sheet it edits, the
- *         names its climb and its prune spell, and its commit's message with
- *         the changes it names; the store's remote, met once (sys/remote.h
+ *         profile_draft_orphan, profile_draft_merge): itself, the sheet its commit
+ *         carries — the copy it edits, or the claims a merge composed — the names
+ *         its climb, its prune and a merge's rungs spell, and its commit's message
+ *         with the changes it names; the store's remote, met once (sys/remote.h
  *         remote_open): itself, the advertisement it copies and the names it lends.
  *
  *   - The heap, for what dies before any scope does: a payload sized by its data

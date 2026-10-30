@@ -22,23 +22,29 @@
  * folded (profile_counts, profile_needs_target). A name's departure is its
  * history's one walk from a head (sys/history.h), read through the one table of
  * what each removal's action means (profile_departures). The draft is three things
- * in an arena of its own: a sys/stage, opened at the profile's head or over Git's
- * empty tree for a profile the commit creates; the base, the profile at the tree
- * the stage opened, its sheet read at the open; and that sheet copied. An admission
- * asks a name chosen before its bytes of the copy and of the tree as chosen so
- * far, claiming a directory in the copy as it admits it; a removal edits the
- * stage and the copy; a capture authors its claim off the look, asks the base
- * what stands in its way, puts its bytes and writes the claim into the copy,
- * and the climbs claim the way to a leaf off the disk — the first capture where
- * the profile does not pass through a rung yet, the named re-derivation again
- * where a run's paths select one; a restore asks the base the same, puts its
- * entry by id and writes its claim, and its way where the profile does not pass
- * through it, into the copy; dotta's own file is put beside the claims; the change
- * test holds each document against the one the draft opened, and the changes
- * merge what each says moved into the explicit claims the commit adds, updates
- * and removes; and the commit, where an edit moved either, prunes the copy, saves
- * it where its claims are no longer the base's, renders its message from the
- * writer's words over those changes and commits.
+ * in an arena of its own: a sys/stage, opened at the profile's head, over Git's
+ * empty tree for a profile the commit creates, or over a merge of the head with
+ * another commit; the base, the profile at the tree the stage opened, its sheet
+ * read at the open; and the sheet the commit carries — that sheet copied, or
+ * the claims a merge composed. An admission asks a name chosen before its bytes
+ * of the copy and of the tree as chosen so far, claiming a directory in the copy
+ * as it admits it; a removal edits the stage and the copy; a capture authors
+ * its claim off the look, asks the base what stands in its way, puts its bytes
+ * and writes the claim into the copy, and the climbs claim the way to a leaf
+ * off the disk — the first capture where the profile does not pass through a
+ * rung yet, the named re-derivation again where a run's paths select one; a restore
+ * asks the base the same, puts its entry by id and writes its claim, and its
+ * way where the profile does not pass through it, into the copy; dotta's own
+ * file is put beside the claims. A merge composes its tree first — each name
+ * Git could not compose settled by a rule, or for the run's side — then its claims,
+ * one pass a kind over the three sides' sheets in step, each claim a side moved
+ * composed from the three sides' words, each read over its own tree, and standing
+ * where the merged tree leaves it room. The change test holds each document against
+ * the one the draft opened, and the changes merge what each says moved into the
+ * explicit claims the commit adds, updates and removes; and the commit, where
+ * an edit moved either, prunes the sheet it carries, saves it where its claims
+ * are no longer the base's, renders its message from the writer's words over
+ * those changes and commits.
  */
 
 #include "core/profiles.h"
@@ -55,6 +61,7 @@
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/string.h"
+#include "core/ignore.h"
 #include "core/metadata.h"
 #include "infra/commit.h"
 #include "infra/content.h"
@@ -320,9 +327,10 @@ error_t profile_load_sheet(profile_t *profile) {
  * Readers: profile_step, at every blob the walk meets, and profile_find, at the
  * one it is asked — so the file claim a point question answers is the walk's;
  * profile_sealed, at the blob a seal is asked of — so the stamp it reads is the
- * one the screens read off the walk's claim; and profile_capture_file, at the
- * blob it put — so the claim a capture answers is the one the next walk shows
- * there.
+ * one the screens read off the walk's claim; profile_capture_file, at the blob
+ * it put — so the claim a capture answers is the one the next walk shows there;
+ * and profile_merge_file, at each side's blob beside an axis both sides moved
+ * apart — so a conflict says each side's claim as that side's walk shows it.
  *
  * @param path The claim's name, which the claim keeps (must not be NULL)
  * @param id The blob's id (must not be NULL)
@@ -385,8 +393,9 @@ static profile_claim_t profile_decode_blob(
  *
  * Readers: profile_walk, at each directory claim that stands; profile_contradicted,
  * at each one a blob contradicts; profile_find, at the one it is asked — so the
- * directory claim a point question answers is the walk's; and
- * profile_capture_directory, at the item it wrote.
+ * directory claim a point question answers is the walk's;
+ * profile_capture_directory, at the item it wrote; and profile_merge_directory,
+ * at each side's item beside an axis both sides moved apart.
  *
  * @param item A DIRECTORY item (must not be NULL)
  * @return The claim, by value: a function of its item, which cannot fail
@@ -419,6 +428,8 @@ static profile_claim_t profile_decode_directory(const metadata_item_t *item) {
  * Readers: profile_walk and profile_contradicted, at each DIRECTORY item;
  * profile_directory_item, for the point questions; and a profile's draft, whose
  * admission and put rule ask the base (profile_refuse_beneath, profile_convert).
+ * A merge asks the rule of its stage, whose tree is not written yet
+ * (profile_merge_contradicted): one rule, two trees.
  *
  * @param profile Handle
  * @param storage_path A validated storage path
@@ -1058,10 +1069,10 @@ void profile_departures(
 }
 
 struct profile_draft {
-    arena_t *arena;                 /* Its own: the struct, the copy, the names it spells, its message */
+    arena_t *arena;                 /* Its own: the struct, the sheet, the names it spells, its message */
     stage_t *stage;                 /* The next commit, on the profile's branch */
     profile_t *base;                /* The profile at the tree it opened: never edited */
-    metadata_t *sheet;              /* The base's sheet, copied into the arena: what the commit carries */
+    metadata_t *sheet;              /* What the commit carries: the base's copied, or a merge's claims */
     stage_admission_t *admission;   /* The tree as a writer chooses its names; NULL until it asks */
 };
 
@@ -1071,11 +1082,13 @@ struct profile_draft {
  *
  * Each opener builds the branch's reference by Git's branch rule and opens its
  * stage at what the writer expects of the branch — stage_open where it stands,
- * stage_orphan where the commit creates it — refused in the stage's own words
- * otherwise; then seeds here, and writes the sheet its commit carries: the base's,
- * copied. The stage is the draft's from the call, released with it on a failure.
+ * stage_orphan where the commit creates it, stage_merge where it stands and another
+ * commit is merged into it — refused in the stage's own words otherwise; then
+ * seeds here, and writes the sheet its commit carries: the base's, copied, or
+ * the claims a merge composes. The stage is the draft's from the call, released
+ * with it on a failure.
  *
- * Readers: profile_draft_open and profile_draft_orphan.
+ * Readers: profile_draft_open, profile_draft_orphan and profile_draft_merge.
  *
  * @param name The profile's name
  * @param stage The stage its opener opened (the draft's from the call)
@@ -1495,10 +1508,11 @@ error_t profile_capture_directory(
  * one above it is the ancestry every path has — so the claims asked are one slice
  * of the sheet's key order (core/metadata.h metadata_items_beneath).
  *
- * Readers: profile_passes, of the base's sheet at a rung of a way; and
- * profile_prune_ancestors, of the copy at a derivation's key.
+ * Readers: profile_passes, of a profile's sheet at a rung of a way — a draft's
+ * base, or a merge's side; and profile_prune_ancestors, of the sheet a draft's
+ * commit carries at a derivation's key.
  *
- * @param sheet The sheet asked: a draft's base's, or its copy
+ * @param sheet The sheet asked: a profile's, or the one a draft's commit carries
  * @param key The key
  * @return true iff a tracked directory claim stands strictly beneath it
  */
@@ -1520,38 +1534,44 @@ static bool profile_tracked_beneath(const metadata_t *sheet, const char *key) {
  *
  * The question each writer of the way asks of the base before it writes a rung
  * — the climbs from the disk, a restore from its commit — so the writers cannot
- * part over whether a rung is new to the profile. Two halves, each a footprint
- * of what the profile claims at or beneath the rung: what the base holds there,
- * by the namespace's own question (profile_holds) — a subtree, which holds what
- * stands beneath it, or a directory claim, the profile's word on the rung — and,
- * where the tree is silent, a directory the profile tracks beneath it, the one
- * claim no tree can hold (an empty directory, or one whose every file is ignored).
- * A rung the profile passes through and claims nothing at is the user's way,
- * kept as a claim is.
+ * part over whether a rung is new to the profile; and the one a merge asks of
+ * each side at a merge-base directory claim it lacks, whether the side removed
+ * the claim or its prune took it. Two halves, each a footprint of what the profile
+ * claims at or beneath the rung: what it holds there, by the namespace's own
+ * question (profile_holds) — a subtree, which holds what stands beneath it, or
+ * a directory claim, the profile's word on the rung — and, where the tree is
+ * silent, a directory the profile tracks beneath it, the one claim no tree can
+ * hold (an empty directory, or one whose every file is ignored). A rung the profile
+ * passes through and claims nothing at is the user's way, kept as a claim is.
  *
- * Asked at a rung of a leaf the base holds or the commit puts: no blob stands
- * above the rung, so every tracked claim beneath it stands, and none is asked
- * whether a blob contradicts it.
+ * A writer asks at a rung of a leaf the base holds or the commit puts: no blob
+ * stands above the rung, so every tracked claim beneath it stands, and none is
+ * asked whether a blob contradicts it. A merge's side may hold a blob above the
+ * rung: a tracked claim the blob contradicts beneath it then answers that the
+ * side passes through — a removal — and wherever the merged tree keeps that blob,
+ * no directory claim beneath it stands (profile_merge_contradicted).
  *
  * Readers: profile_capture_ancestors and profile_derive_ancestors, at each rung
- * a directory stands at; and profile_restore_ancestors, at each rung of the way
- * it brings back.
+ * a directory stands at; profile_restore_ancestors, at each rung of the way it
+ * brings back; and profile_merge_directory, at a merge-base directory claim a
+ * side lacks.
  *
- * @param base The draft's base, its sheet read at the draft's open
+ * @param profile The profile asked, its sheet read: a draft's base, or a merge's
+ *                side
  * @param rung The rung's name
  * @param out Whether the profile passes through it (written on success alone)
  * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
  *         '%s'"
  */
-static error_t profile_passes(profile_t *base, const char *rung, bool *out) {
-    /* What the base holds at the rung: the tree's entry, or the sheet's claim
+static error_t profile_passes(profile_t *profile, const char *rung, bool *out) {
+    /* What the profile holds at the rung: the tree's entry, or the sheet's claim
      * where the tree is silent */
     profile_held_t held;
-    error_t err = profile_holds(base, rung, &held);
+    error_t err = profile_holds(profile, rung, &held);
     if (err) return err;
 
     /* Else beneath it: a directory the profile tracks there, which no tree holds */
-    *out = held.kind != PROFILE_HELD_NOTHING || profile_tracked_beneath(base->sheet, rung);
+    *out = held.kind != PROFILE_HELD_NOTHING || profile_tracked_beneath(profile->sheet, rung);
 
     return NULL;
 }
@@ -1940,6 +1960,733 @@ error_t profile_put_machinery(
 
     /* A regular blob, at once in the object database (sys/stage.h stage_put) */
     return stage_put(draft->stage, name, bytes, size, GIT_FILEMODE_BLOB, NULL);
+}
+
+/**
+ * A merge as it composes (profile_draft_merge): its draft, the profiles at the
+ * merge base and at theirs beside the draft's base, which is ours; the run's
+ * side; the claims composed so far; and the conflicts met, a list for the content
+ * and one for each kind of claim, each list in name order
+ *
+ * Readers: profile_draft_merge, which makes it, and the statics it calls, from
+ * profile_merge_note to profile_merge_conflicts.
+ */
+typedef struct {
+    profile_draft_t *draft;            /* Its draft: the stage, the base — ours — and its arena */
+    profile_t *merge_base;             /* The profile at the merge base */
+    profile_t *theirs;                 /* The profile at theirs */
+    profile_side_t side;               /* The run's side, PROFILE_SIDE_NONE where it named none */
+    metadata_t *sheet;                 /* The claims composed so far, in the draft's arena */
+    arena_t *arena;                    /* The caller's: every conflict, and the words that say it */
+    ptr_array_t content_conflicts;     /* Names Git could not compose, nor any rule */
+    ptr_array_t file_conflicts;        /* An axis of a file's claim both sides moved apart */
+    ptr_array_t directory_conflicts;   /* An axis of a directory's claim, likewise */
+} profile_merge_t;
+
+/**
+ * A conflict the merge met, noted in its list: the name, what both sides moved
+ * apart there, and for a claim's axis each side's claim — all of it copied into
+ * the caller's arena, since the profiles a claim was read from go with the open
+ * and the words that say a conflict outlive it
+ *
+ * Readers: profile_merge_name, a content conflict; profile_merge_file and
+ * profile_merge_directory, an axis of a claim both sides moved apart.
+ *
+ * @param merge The merge
+ * @param list The list the conflict is noted in
+ * @param storage_path The name
+ * @param axis What both sides moved apart there
+ * @param ours Ours' claim, decoded; NULL for the content
+ * @param theirs Theirs', likewise
+ */
+static void profile_merge_note(
+    profile_merge_t *merge, ptr_array_t *list, const char *storage_path, profile_axis_t axis,
+    const profile_claim_t *ours, const profile_claim_t *theirs
+) {
+    profile_conflict_t *conflict = arena_alloc(merge->arena, sizeof(*conflict));
+    *conflict = (profile_conflict_t){
+        .storage_path = arena_strdup(merge->arena, storage_path),
+        .axis = axis,
+    };
+
+    /* Each side's claim as the merge read it, under the conflict's name, its
+     * owner and group copied off the sheet they were read from */
+    if (ours && theirs) {
+        profile_claim_t *claims = arena_calloc(merge->arena, 2, sizeof(*claims));
+        claims[0] = *ours;
+        claims[1] = *theirs;
+        for (size_t s = 0; s < 2; s++) {
+            claims[s].storage_path = conflict->storage_path;
+            claims[s].owner = arena_strdup(merge->arena, claims[s].owner);
+            claims[s].group = arena_strdup(merge->arena, claims[s].group);
+        }
+        conflict->ours = &claims[0];
+        conflict->theirs = &claims[1];
+    }
+
+    ptr_array_push(list, conflict);
+}
+
+/**
+ * The word an axis both sides moved apart keeps: the run's side's, none where
+ * it named none
+ *
+ * Readers: profile_merge_file and profile_merge_directory, each axis apart.
+ *
+ * @param side The run's side
+ * @param ours Ours' word on the axis
+ * @param theirs Theirs'
+ * @return The kept word, or NULL under PROFILE_SIDE_NONE
+ */
+static const metadata_item_t *profile_merge_kept(
+    profile_side_t side, const metadata_item_t *ours, const metadata_item_t *theirs
+) {
+    switch (side) {
+        case PROFILE_SIDE_NONE:   return NULL;
+        case PROFILE_SIDE_OURS:   return ours;
+        case PROFILE_SIDE_THEIRS: return theirs;
+    }
+
+    CHECK_ARG(false, "a side no enumerator names");
+}
+
+/**
+ * Whether a name is a removal beside a change of the executable bit alone, `flip`
+ * the side that changed the bit and `removal` the other
+ *
+ * The merge base a regular file there; `flip` the same blob under the other regular
+ * filemode; `removal` no regular file — nothing, a directory or a link, the file
+ * replaced by another kind — and no gitlink either, which a settle refuses, so
+ * it stays the content conflict it is. A type change at one blob is no bit's: a
+ * link holding the file's bytes changed the file, and never flips it.
+ *
+ * Reader: profile_merge_name, each side as the flip in turn.
+ *
+ * @param merge_base What the merge base's tree holds at the name
+ * @param flip What one side's holds
+ * @param removal What the other side's holds
+ * @return true where the name is the removal, `removal`'s tree its settle
+ */
+static bool profile_merge_removed(
+    const profile_held_t *merge_base, const profile_held_t *flip, const profile_held_t *removal
+) {
+    /* The merge base a regular file, and `flip` its blob under the other regular
+     * filemode: the bit, changed alone */
+    if (merge_base->kind != PROFILE_HELD_FILE || merge_base->filemode == GIT_FILEMODE_LINK ||
+        flip->kind != PROFILE_HELD_FILE || flip->filemode == GIT_FILEMODE_LINK ||
+        flip->filemode == merge_base->filemode || !git_oid_equal(&flip->oid, &merge_base->oid)) {
+        return false;
+    }
+
+    /* And no regular file on the other side, nor a gitlink */
+    return removal->kind == PROFILE_HELD_NOTHING || removal->kind == PROFILE_HELD_DIRECTORY ||
+           (removal->kind == PROFILE_HELD_FILE && removal->filemode == GIT_FILEMODE_LINK);
+}
+
+/**
+ * One name Git's merge left in conflict: composed by a rule, or noted as the
+ * content conflict it is
+ *
+ * What each side's tree holds at the name decides (profile_entry), machinery's
+ * names among them, which a tree answers alike. In order:
+ *   - a removal beside a change of the executable bit alone is the removal, at
+ *     any name (profile_merge_removed): the name settled from the side holding
+ *     no regular file there;
+ *   - the profile's ignore file holds its two sides' rules (sys/stage.h
+ *     stage_unite); a union refused — a side holding nothing there, a version
+ *     Git reads as binary — is the content conflict it is;
+ *   - any other is a content conflict, settled for the run's side once every
+ *     rule is in (profile_merge_tree).
+ *
+ * Reader: profile_merge_tree, each name in name order.
+ *
+ * @param merge The merge
+ * @param name A name Git's merge left in conflict
+ * @return Error or NULL on success: a tree's, under "Cannot read '%s' in profile
+ *         '%s'"; a settle's or a union's own
+ */
+static error_t profile_merge_name(profile_merge_t *merge, const char *name) {
+    stage_t *stage = merge->draft->stage;
+
+    /* What each side's tree holds at the name */
+    profile_held_t entry_merge_base, entry_ours, entry_theirs;
+    error_t err = profile_entry(merge->merge_base, name, &entry_merge_base);
+    if (!err) err = profile_entry(merge->draft->base, name, &entry_ours);
+    if (!err) err = profile_entry(merge->theirs, name, &entry_theirs);
+    if (err) return err;
+
+    /* A removal beside a change of the executable bit alone: the removal, settled
+     * from the side holding no regular file there */
+    if (profile_merge_removed(&entry_merge_base, &entry_ours, &entry_theirs)) {
+        return stage_settle(stage, name, stage_theirs(stage));
+    }
+    if (profile_merge_removed(&entry_merge_base, &entry_theirs, &entry_ours)) {
+        return stage_settle(stage, name, stage_tree(stage));
+    }
+
+    /* The profile's ignore file: both sides' rules, a set by its lines. A union
+     * the stage refuses leaves the conflict standing, and is the content's */
+    if (strcmp(name, IGNORE_FILE_NAME) == 0) {
+        err = stage_unite(stage, name);
+        if (error_code(err) != ERR_CONFLICT) return err;
+    }
+
+    /* Any other: the content, both sides' moves of it apart */
+    profile_merge_note(merge, &merge->content_conflicts, name, PROFILE_AXIS_CONTENT, NULL, NULL);
+
+    return NULL;
+}
+
+/**
+ * A merge's tree: the sheet's own name, each name Git's merge could not compose,
+ * and the run's side at each content conflict
+ *
+ * The sheet's own name holds the base's sheet, as every draft's index does: Git's
+ * merge of it — a clean take of theirs' bytes, or its text merge — is no document
+ * dotta reads, and the commit's save stands as written, the composed claims put
+ * there where they are no longer the base's and its bytes kept otherwise. Then
+ * each name Git could not compose, in name order, by a rule or as a content
+ * conflict (profile_merge_name); and once every rule is in, the side's bytes at
+ * each content conflict — its entries at and beneath the name, from its tree —
+ * so a settle above a name a rule composed takes the side's whole name, and every
+ * claim composed after reads the tree the commit will record.
+ *
+ * Reader: profile_draft_merge, the tree before the claims.
+ *
+ * @param merge The merge
+ * @return Error or NULL on success: a settle's, the conflicts' read, or a name's
+ */
+static error_t profile_merge_tree(profile_merge_t *merge) {
+    stage_t *stage = merge->draft->stage;
+
+    /* The sheet's own name, the base's */
+    error_t err = stage_settle(stage, METADATA_FILE_PATH, stage_tree(stage));
+
+    /* Each name Git could not compose: a rule's, or a content conflict */
+    string_array_t names = { 0 };
+    if (!err) err = stage_conflicts(stage, merge->arena, &names);
+    for (size_t i = 0; !err && i < names.count; i++) {
+        err = profile_merge_name(merge, names.entries[i]);
+    }
+
+    /* The side's bytes at each content conflict, from its tree — none where the
+     * run named none: the conflicts refuse the open */
+    if (err || merge->side == PROFILE_SIDE_NONE) return err;
+    const git_tree *tree = merge->side == PROFILE_SIDE_OURS
+        ? stage_tree(stage) : stage_theirs(stage);
+    for (size_t i = 0; !err && i < merge->content_conflicts.count; i++) {
+        const profile_conflict_t *conflict = merge->content_conflicts.entries[i];
+        err = stage_settle(stage, conflict->storage_path, tree);
+    }
+
+    return err;
+}
+
+/**
+ * A side's word on a file's claim, grain by grain: its claim's — the claim of
+ * none where it holds the blob and no item, absence a value — on each grain its
+ * node at the name carries, and `silence`'s on each it does not
+ *
+ * Any blob carries the ownership, the owner and group as a pair; a regular file
+ * the mode besides, and the stamp where its bytes are `bytes`, the blob the claim
+ * stands with — a stamp speaks for its own bytes alone. Nothing, a directory or
+ * a gitlink says nothing of any grain, and a link nothing of the mode or the stamp.
+ *
+ * Reader: profile_merge_file — the merge base's word over the claim of none,
+ * its stamp over its own bytes, and each side's over the merge base's, its stamp
+ * over the merged blob's.
+ *
+ * @param entry What the side's tree holds at the name
+ * @param claim The side's FILE item there, or NULL
+ * @param bytes The blob whose bytes the side's stamp must be to speak
+ * @param silence The word on each grain the node does not carry
+ * @return The word: a claim of the name, by value
+ */
+static metadata_item_t profile_merge_word(
+    const profile_held_t *entry, const metadata_item_t *claim, const git_oid *bytes,
+    const metadata_item_t *silence
+) {
+    metadata_item_t word = *silence;
+    if (entry->kind != PROFILE_HELD_FILE) return word;
+
+    word.owner = claim ? claim->owner : NULL;
+    word.group = claim ? claim->group : NULL;
+    if (entry->filemode == GIT_FILEMODE_LINK) return word;
+
+    word.mode = claim ? claim->mode : MODE_UNCLAIMED;
+    if (git_oid_equal(&entry->oid, bytes)) word.encrypted = claim && claim->encrypted;
+
+    return word;
+}
+
+/**
+ * A file's claim a side moved: composed from the three sides' words, each read
+ * over its own node, and standing where the merged tree holds a blob at its name
+ *
+ * Each side's word (profile_merge_word): the merge base's over the claim of none,
+ * each side's over the merge base's, which a side silent on a grain says. Each
+ * axis by its three-way (core/metadata.h metadata_merge_axis); one both sides
+ * moved apart is a conflict — both hold a blob there, a silent side moving nothing
+ * — noted beside each side's claim decoded over its own blob, and keeps the run's
+ * side's word, none where it named none. The axes read the three sides alone,
+ * so the conflicts at a name are the same whatever the merged tree holds there:
+ * those at a content conflict's name are listed under no side as under either.
+ *
+ * Then the merged tree, read for what stands: no blob at the name — nothing, a
+ * subtree, a conflict's stages, a gitlink — or an axis left without a value,
+ * and nothing is written, the claim going with its name or the open refused. A
+ * blob stands with the claim, its axes that blob's type's — a link's ownership
+ * alone — and the stamp by the flags' rule over the three sides' words, theirs'
+ * where ours' is the merge base's, else ours': the stamp of the side whose bytes
+ * stand, and the merge base's where Git composed bytes neither side holds.
+ *
+ * Reader: profile_merge_claims, each file's claim the three sheets do not hold
+ * alike.
+ *
+ * @param merge The merge
+ * @param key The claim's name
+ * @param merge_base The merge base's FILE item at the name, or NULL
+ * @param ours Ours', or NULL
+ * @param theirs Theirs', or NULL
+ * @return Error or NULL on success: a tree's, under "Cannot read '%s' in profile
+ *         '%s'"
+ */
+static error_t profile_merge_file(
+    profile_merge_t *merge, const char *key, const metadata_item_t *merge_base,
+    const metadata_item_t *ours, const metadata_item_t *theirs
+) {
+    /* What each side's tree holds at the name, and the merged tree */
+    profile_held_t entry_merge_base, entry_ours, entry_theirs;
+    error_t err = profile_entry(merge->merge_base, key, &entry_merge_base);
+    if (!err) err = profile_entry(merge->draft->base, key, &entry_ours);
+    if (!err) err = profile_entry(merge->theirs, key, &entry_theirs);
+    if (err) return err;
+    const stage_held_t held = stage_holds(merge->draft->stage, key);
+
+    /* Each side's word: the merge base's over the claim of none, a side's over
+     * the merge base's */
+    const metadata_item_t none = { .kind = PATH_KIND_FILE, .key = key, .mode = MODE_UNCLAIMED };
+    const metadata_item_t word_merge_base = profile_merge_word(
+        &entry_merge_base, merge_base, &entry_merge_base.oid, &none
+    );
+    const metadata_item_t word_ours = profile_merge_word(
+        &entry_ours, ours, &held.oid, &word_merge_base
+    );
+    const metadata_item_t word_theirs = profile_merge_word(
+        &entry_theirs, theirs, &held.oid, &word_merge_base
+    );
+
+    /* Each axis by its three-way; one both sides moved apart a conflict, noted
+     * beside each side's claim, and the run's side's word kept */
+    const metadata_item_t *mode = metadata_merge_axis(
+        METADATA_AXIS_MODE, &word_merge_base, &word_ours, &word_theirs
+    );
+    const metadata_item_t *ownership = metadata_merge_axis(
+        METADATA_AXIS_OWNERSHIP, &word_merge_base, &word_ours, &word_theirs
+    );
+    if (!mode || !ownership) {
+        const profile_claim_t claim_ours = profile_decode_blob(
+            key, &entry_ours.oid, entry_ours.filemode, ours
+        );
+        const profile_claim_t claim_theirs = profile_decode_blob(
+            key, &entry_theirs.oid, entry_theirs.filemode, theirs
+        );
+        if (!mode) {
+            profile_merge_note(
+                merge, &merge->file_conflicts, key, PROFILE_AXIS_MODE, &claim_ours,
+                &claim_theirs
+            );
+            mode = profile_merge_kept(merge->side, &word_ours, &word_theirs);
+        }
+        if (!ownership) {
+            profile_merge_note(
+                merge, &merge->file_conflicts, key, PROFILE_AXIS_OWNERSHIP, &claim_ours,
+                &claim_theirs
+            );
+            ownership = profile_merge_kept(merge->side, &word_ours, &word_theirs);
+        }
+    }
+
+    /* The claim stands with a blob at its name, every axis valued */
+    if (held.type != GIT_OBJECT_BLOB || !mode || !ownership) return NULL;
+
+    /* Its axes the blob's type's, a link claiming no mode and no stamp; the stamp
+     * the flags' rule over the three sides' words */
+    const bool stamp = word_ours.encrypted == word_merge_base.encrypted
+        ? word_theirs.encrypted : word_ours.encrypted;
+    const metadata_item_t claim = {
+        .kind      = PATH_KIND_FILE,
+        .key       = key,
+        .mode      = held.filemode == GIT_FILEMODE_LINK ? MODE_UNCLAIMED : mode->mode,
+        .owner     = ownership->owner,
+        .group     = ownership->group,
+        .encrypted = held.filemode != GIT_FILEMODE_LINK && stamp,
+    };
+    metadata_write_item(merge->sheet, &claim);
+
+    return NULL;
+}
+
+/**
+ * Whether the tree the merge's commit will record leaves a directory claim at
+ * `key` no room: a blob at its name, or at a rung above it
+ *
+ * The decode's rule (profile_blob_above), asked of the merge's stage, whose tree
+ * is not written yet: each rung top-down, the label's word among them, then the
+ * name, each by what the stage holds there (sys/stage.h stage_holds). A blob
+ * answers. A gitlink places nothing on disk and contradicts nothing, and nothing
+ * stands beneath one; nothing at a rung, or a subtree, holds no blob there either.
+ * The rungs are spelled in the draft's arena, as a climb spells its own.
+ *
+ * Reader: profile_merge_directory, each claim it composes.
+ *
+ * @param merge The merge
+ * @param key The claim's name
+ * @return true where a blob stands at the name or above it
+ */
+static bool profile_merge_contradicted(const profile_merge_t *merge, const char *key) {
+    char *rung = arena_strdup(merge->draft->arena, key);
+
+    for (char *slash = strchr(rung, '/');; slash = strchr(slash + 1, '/')) {
+        if (slash) *slash = '\0';
+        if (stage_holds(merge->draft->stage, rung).type == GIT_OBJECT_BLOB) return true;
+        if (!slash) return false;
+        *slash = '/';
+    }
+}
+
+/**
+ * A directory's claim a side moved: composed from the three sides' claims, a
+ * side's absence read through its own tree, and standing where the merged tree
+ * leaves its name a directory
+ *
+ * The merge base's claim, derived — its attributes, none where it makes no claim,
+ * and no class — is the word of a side that says nothing of a claim's attributes:
+ * one whose prune took the merge base's claim, and a derived side beside a tracked
+ * claim; and the attributes' merge base. A side lacking the merge base's claim
+ * is read through its own tree (profile_passes): passing through the name — a
+ * blob put there, the climb's retire at another kind — it removed it; passing
+ * through none, its prune took it once nothing tracked stood beneath it, no word
+ * on the attributes, the derived claim its word.
+ *
+ * Then the claim: where a side holds none, an addition stands — the merge base
+ * held none — and otherwise the removal, beside the other side's move of it or
+ * not, the claim's move needing its name. Two derivations, neither the merge
+ * base's claim derived, are ours', the merging machine's: a derivation binds
+ * dotta's own creation of its path alone, and each side's is one look's whole.
+ * Otherwise the claim is composed: the class by the flags' rule — theirs' where
+ * ours moved nothing on it, else ours' — a derived side saying nothing of a tracked
+ * claim's attributes, and each attribute by its three-way (core/metadata.h
+ * metadata_merge_axis), one both sides moved apart a conflict, noted beside each
+ * side's claim, keeping the run's side's word, none where it named none.
+ *
+ * The claim stands where the merged tree holds no blob at its name or above it
+ * (profile_merge_contradicted), the decode's rule; a derivation, besides, where
+ * something stands beneath it, which the commit's prune asks as every commit's
+ * does. Where it stands nowhere, or an attribute is left without a value, nothing
+ * is written.
+ *
+ * Reader: profile_merge_claims, each directory's claim the three sheets do not
+ * hold alike.
+ *
+ * @param merge The merge
+ * @param key The claim's name
+ * @param merge_base The merge base's DIRECTORY item at the name, or NULL
+ * @param ours Ours', or NULL
+ * @param theirs Theirs', or NULL
+ * @return Error or NULL on success: a side's tree's, under "Cannot read '%s' in
+ *         profile '%s'"
+ */
+static error_t profile_merge_directory(
+    profile_merge_t *merge, const char *key, const metadata_item_t *merge_base,
+    const metadata_item_t *ours, const metadata_item_t *theirs
+) {
+    /* The merge base's claim, derived */
+    const metadata_item_t derived = {
+        .kind  = PATH_KIND_DIRECTORY,
+        .key   = key,
+        .mode  = merge_base ? merge_base->mode : MODE_UNCLAIMED,
+        .owner = merge_base ? merge_base->owner : NULL,
+        .group = merge_base ? merge_base->group : NULL,
+    };
+
+    /* A side lacking the merge base's claim: removed where it passes through
+     * the name, its prune's where it passes through none */
+    if (merge_base && !ours) {
+        bool passes = false;
+        error_t err = profile_passes(merge->draft->base, key, &passes);
+        if (err) return err;
+        if (!passes) ours = &derived;
+    }
+    if (merge_base && !theirs) {
+        bool passes = false;
+        error_t err = profile_passes(merge->theirs, key, &passes);
+        if (err) return err;
+        if (!passes) theirs = &derived;
+    }
+
+    metadata_item_t composed;
+    const metadata_item_t *claim = NULL;
+    if (!ours || !theirs) {
+        /* A side holding none: the other's addition where the merge base held
+         * none, and the removal otherwise, beside a move of it or not */
+        claim = merge_base ? NULL : ours ? ours : theirs;
+    } else if (!ours->tracked && !theirs->tracked &&
+        !metadata_same_claim(&derived, ours) && !metadata_same_claim(&derived, theirs)) {
+        /* Two derivations, each moved off the merge base's: ours', each side's
+         * one look's whole */
+        claim = ours;
+    } else {
+        /* Composed: the class by the flags' rule, and a derived side's word on
+         * a tracked claim's attributes the merge base's */
+        const bool tracked = ours->tracked == (merge_base && merge_base->tracked)
+            ? theirs->tracked : ours->tracked;
+        const metadata_item_t *word_ours = tracked && !ours->tracked ? &derived : ours;
+        const metadata_item_t *word_theirs = tracked && !theirs->tracked ? &derived : theirs;
+
+        /* Each attribute by its three-way; one both sides moved apart a conflict,
+         * noted beside each side's claim, and the run's side's word kept */
+        const metadata_item_t *mode = metadata_merge_axis(
+            METADATA_AXIS_MODE, &derived, word_ours, word_theirs
+        );
+        const metadata_item_t *ownership = metadata_merge_axis(
+            METADATA_AXIS_OWNERSHIP, &derived, word_ours, word_theirs
+        );
+        if (!mode || !ownership) {
+            const profile_claim_t claim_ours = profile_decode_directory(ours);
+            const profile_claim_t claim_theirs = profile_decode_directory(theirs);
+            if (!mode) {
+                profile_merge_note(
+                    merge, &merge->directory_conflicts, key, PROFILE_AXIS_MODE,
+                    &claim_ours, &claim_theirs
+                );
+                mode = profile_merge_kept(merge->side, word_ours, word_theirs);
+            }
+            if (!ownership) {
+                profile_merge_note(
+                    merge, &merge->directory_conflicts, key, PROFILE_AXIS_OWNERSHIP,
+                    &claim_ours, &claim_theirs
+                );
+                ownership = profile_merge_kept(merge->side, word_ours, word_theirs);
+            }
+        }
+
+        if (mode && ownership) {
+            composed = (metadata_item_t){
+                .kind = PATH_KIND_DIRECTORY,
+                .key = key,
+                .mode = mode->mode,
+                .owner = ownership->owner,
+                .group = ownership->group,
+                .tracked = tracked,
+            };
+            claim = &composed;
+        }
+    }
+
+    /* The claim stands where the merged tree leaves its name a directory */
+    if (!claim || profile_merge_contradicted(merge, key)) return NULL;
+    metadata_write_item(merge->sheet, claim);
+
+    return NULL;
+}
+
+/**
+ * One kind's claims of a merge: the three sheets' read in step, each claim composed
+ * at its key and written past the last
+ *
+ * Each sheet's claims of the kind in key order (core/metadata.h metadata_items),
+ * and at each key the three sheets' claims there, or none. A claim the three
+ * hold alike, as each sheet holds it — never a side's word read off its tree —
+ * is no side's move since the merge base: carried as it stands, residue and a
+ * contradiction among it, as every write carries what it does not aim at. One a
+ * side moved is the kind's to compose (profile_merge_file,
+ * profile_merge_directory).
+ *
+ * Reader: profile_draft_merge, the files' claims then the directories'.
+ *
+ * @param merge The merge
+ * @param kind Which kind's claims
+ * @return Error or NULL on success: a claim's composition's, as it came
+ */
+static error_t profile_merge_claims(profile_merge_t *merge, path_kind_t kind) {
+    const metadata_items_t in_merge_base = metadata_items(merge->merge_base->sheet, kind);
+    const metadata_items_t in_ours = metadata_items(merge->draft->base->sheet, kind);
+    const metadata_items_t in_theirs = metadata_items(merge->theirs->sheet, kind);
+
+    for (size_t b = 0, o = 0, t = 0;;) {
+        /* The byte-least key the three sheets hold next, read where it falls: a
+         * claim stands where it was written, so stepping past one leaves its
+         * key standing */
+        const char *key = b < in_merge_base.count ? in_merge_base.entries[b]->key : NULL;
+        if (o < in_ours.count && (!key || strcmp(in_ours.entries[o]->key, key) < 0)) {
+            key = in_ours.entries[o]->key;
+        }
+        if (t < in_theirs.count && (!key || strcmp(in_theirs.entries[t]->key, key) < 0)) {
+            key = in_theirs.entries[t]->key;
+        }
+        if (!key) return NULL;
+
+        /* Each sheet's claim at the key, or none, each stepped past it */
+        const metadata_item_t *merge_base = NULL;
+        if (b < in_merge_base.count && strcmp(in_merge_base.entries[b]->key, key) == 0) {
+            merge_base = in_merge_base.entries[b++];
+        }
+        const metadata_item_t *ours = NULL;
+        if (o < in_ours.count && strcmp(in_ours.entries[o]->key, key) == 0) {
+            ours = in_ours.entries[o++];
+        }
+        const metadata_item_t *theirs = NULL;
+        if (t < in_theirs.count && strcmp(in_theirs.entries[t]->key, key) == 0) {
+            theirs = in_theirs.entries[t++];
+        }
+
+        /* The three alike: carried as it stands */
+        if (metadata_same_claim(merge_base, ours) && metadata_same_claim(merge_base, theirs)) {
+            metadata_write_item(merge->sheet, merge_base);
+            continue;
+        }
+
+        /* A side moved it: composed by its kind */
+        error_t err = kind == PATH_KIND_FILE
+            ? profile_merge_file(merge, key, merge_base, ours, theirs)
+            : profile_merge_directory(merge, key, merge_base, ours, theirs);
+        if (err) return err;
+    }
+}
+
+/**
+ * The conflicts a merge met, in name order, one list in the caller's arena
+ *
+ * Its three lists, each in name order — the content's, a file's claims', a
+ * directory's — merged as profile_changes merges its three lists, nothing sorted:
+ * at one name the earlier list's first, and in a list its order, a claim's mode
+ * before its ownership.
+ *
+ * Reader: profile_draft_merge, the conflicts it answers.
+ *
+ * @param merge The merge, every conflict noted
+ * @return The conflicts, by value
+ */
+static profile_conflicts_t profile_merge_conflicts(const profile_merge_t *merge) {
+    const ptr_array_t *const lists[] = {
+        &merge->content_conflicts, &merge->file_conflicts, &merge->directory_conflicts,
+    };
+    size_t next[] = { 0, 0, 0 };
+    const size_t count = lists[0]->count + lists[1]->count + lists[2]->count;
+    profile_conflict_t *entries = arena_calloc(merge->arena, count, sizeof(*entries));
+
+    for (size_t n = 0; n < count; n++) {
+        /* The byte-least name a list holds next, the earlier list's where two
+         * hold one name */
+        size_t from = 0;
+        const profile_conflict_t *least = NULL;
+        for (size_t k = 0; k < sizeof(lists) / sizeof(lists[0]); k++) {
+            if (next[k] == lists[k]->count) continue;
+            const profile_conflict_t *conflict = lists[k]->entries[next[k]];
+            if (!least || strcmp(conflict->storage_path, least->storage_path) < 0) {
+                least = conflict;
+                from = k;
+            }
+        }
+
+        entries[n] = *least;
+        next[from]++;
+    }
+
+    return (profile_conflicts_t){ .entries = entries, .count = count };
+}
+
+error_t profile_draft_merge(
+    git_repository *repo, const char *name, const git_oid *theirs, profile_side_t side,
+    arena_t *arena, profile_conflicts_t *out_conflicts, profile_draft_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(theirs);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_conflicts);
+    CHECK_NULL(out);
+
+    *out_conflicts = (profile_conflicts_t){ 0 };
+    *out = NULL;
+
+    /* The branch the profile is built on, by Git's branch rule (sys/gitops.h
+     * gitops_branch_refname); its stage over the merge with `theirs`, refused
+     * in the stage's words where the branch does not stand (sys/stage.h
+     * stage_merge); and the draft over it, its base ours */
+    char refname[DOTTA_REFNAME_MAX];
+    stage_t *stage = NULL;
+    profile_draft_t *draft = NULL;
+    error_t err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (!err) err = stage_merge(repo, refname, theirs, &stage);
+    if (!err) err = profile_draft_seed(name, stage, &draft);
+    if (err) return err;
+
+    /* The merge as it composes, into a sheet of the draft's own: the profiles
+     * at the merge base and at theirs beside the base, and a list of conflicts
+     * for the content and for each kind of claim */
+    profile_merge_t merge = {
+        .draft = draft,
+        .side  = side,
+        .sheet = metadata_create(draft->arena),
+        .arena = arena,
+    };
+    merge.merge_base = profile_open(name, stage_merge_base(stage));
+    merge.theirs = profile_open(name, stage_theirs(stage));
+    ptr_array_init(&merge.content_conflicts, arena, 0);
+    ptr_array_init(&merge.file_conflicts, arena, 0);
+    ptr_array_init(&merge.directory_conflicts, arena, 0);
+
+    /* Every sheet read strictly: ours' by the seed, in the loader's words; theirs'
+     * and the merge base's said by theirs' commit, seven characters as every
+     * screen spells a commit, over the loader's words, as revert says its target's
+     * (cmds/revert.c cmd_revert) */
+    char commit[8];
+    git_oid_tostr(commit, sizeof(commit), theirs);
+    err = profile_load_sheet(merge.theirs);
+    if (err) {
+        err = error_wrap(
+            err, "Failed to load metadata from commit %s, merged in", commit
+        );
+    }
+    if (!err) {
+        err = profile_load_sheet(merge.merge_base);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to load metadata from the merge base with commit %s", commit
+            );
+        }
+    }
+
+    /* The tree first, then the claims over it, one pass a kind */
+    if (!err) err = profile_merge_tree(&merge);
+    if (!err) err = profile_merge_claims(&merge, PATH_KIND_FILE);
+    if (!err) err = profile_merge_claims(&merge, PATH_KIND_DIRECTORY);
+
+    /* The two profiles go, before the stage whose trees they borrow */
+    profile_free(merge.theirs);
+    profile_free(merge.merge_base);
+    if (err) {
+        profile_draft_free(draft);
+        return err;
+    }
+
+    /* The conflicts, settled or refusing; with no side to settle them, the refusal,
+     * and no draft */
+    *out_conflicts = profile_merge_conflicts(&merge);
+    if (out_conflicts->count > 0 && side == PROFILE_SIDE_NONE) {
+        profile_draft_free(draft);
+        return error_create(
+            ERR_CONFLICT, "Merging profile '%s' met %zu conflict%s", name,
+            out_conflicts->count, out_conflicts->count == 1 ? "" : "s"
+        );
+    }
+
+    /* The draft, its sheet the claims composed */
+    draft->sheet = merge.sheet;
+    *out = draft;
+    return NULL;
 }
 
 error_t profile_changed(const profile_draft_t *draft, bool *out) {

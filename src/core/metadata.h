@@ -369,9 +369,10 @@ const metadata_item_t *metadata_find_item(
  *
  * Readers: metadata_same, claim by claim, the two sheets in step; metadata_changes,
  * at each key both sheets hold a claim of its kind at; metadata_write_item, a
- * claim against the one standing at its key; and a merge's walk — the three sheets'
- * claims at a key, held alike or not, and a directory claim's three-way whole
- * (core/profiles.c profile_merge_claims, profile_merge_directory).
+ * claim against the one standing at its key; and a merge — the three sheets'
+ * claims at a key, held alike or not (core/profiles.c profile_merge_claims),
+ * and whether each side's derivation moved off the merge base's claim, derived
+ * (profile_merge_directory).
  *
  * @param a A claim, or NULL where a sheet holds none
  * @param b Another, or NULL likewise

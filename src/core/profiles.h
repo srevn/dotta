@@ -24,10 +24,12 @@
  * draft (profile_draft_t) — its next commit, built on a stage (sys/stage.h) —
  * asks the draft's base, the profile at the tree the draft opened at, and edits
  * the draft: never the two documents, which the draft keeps together by the rules
- * its type states. The draft looks at the disk in one place, the way to a leaf
- * — first captured above a file a writer captured from it, and re-derived where
- * a named run's paths reach it — and asks the host twice more: the names of a
- * look's owner and group, where a capture names them (core/metadata.h
+ * its type states — and a merge of two of its histories is a draft too, its claims
+ * composed over the merged tree and every conflict settled at its open
+ * (profile_draft_merge). The draft looks at the disk in one place, the way to a
+ * leaf — first captured above a file a writer captured from it, and re-derived
+ * where a named run's paths reach it — and asks the host twice more: the names
+ * of a look's owner and group, where a capture names them (core/metadata.h
  * metadata_capture_file, metadata_capture_directory), and the commit's signature
  * where Git's configuration names none (sys/gitops.h gitops_get_signature).
  *
@@ -68,9 +70,11 @@
  * '%s'" for a question asked at one name — a point question's, or the
  * classification's on the way to a directory claim's name — which names the name
  * it was asked. No reader says the profile again. A removal a profile's draft
- * cannot make is refused in its own document's words (profile_remove), and a
- * name, a capture or a restore it cannot admit under "Cannot stage '%s'"
- * (profile_admit, profile_capture_file, profile_restore_file).
+ * cannot make is refused in its own document's words (profile_remove), a name,
+ * a capture or a restore it cannot admit under "Cannot stage '%s'" (profile_admit,
+ * profile_capture_file, profile_restore_file), and a merge whose conflicts no
+ * side settles under "Merging profile '%s' met %zu conflict%s"
+ * (profile_draft_merge).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -265,9 +269,10 @@ typedef struct profile profile_t;
  * selected), cmds/list.c list_profiles and list_files (the tree of the head each
  * listing read, so what each prints is that commit's), cmds/remove.c remove_profile
  * (the tree of the head its deletion is from: every claim for its hooks, the
- * counts for its preview); profile_load, at the head it read; and a profile's
- * draft, at the tree its stage opened at — a head, or Git's empty tree
- * (profile_draft_open, profile_draft_orphan).
+ * counts for its preview); profile_load, at the head it read; a profile's draft,
+ * at the tree its stage opened at — a head, or Git's empty tree — every opener
+ * through one seed (profile_draft_seed); and a merge, at theirs and at its merge
+ * base (profile_draft_merge).
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
@@ -357,16 +362,17 @@ typedef enum {
  *
  * Readers: profile_walk, profile_contradicted and the point questions
  * (profile_holds, profile_find, profile_sealed), which read the sheet through
- * it; a profile's draft, which reads it at the open, strictly, and copies it
- * for the commit (profile_draft_open, profile_draft_orphan); cmds/revert.c
- * cmd_revert, which reads its target commit's before any question of it, its
- * failure said as the commit's; cmds/show.c show_file, whose header says what
- * its tolerant read lost; cmds/list.c list_files, whose verbose rows say what
- * its tolerant walk lost; cmds/export.c cmd_export, which says what a tolerant
- * arm's collection lost, once, beside the two arms whose copy came out empty,
- * where the failure is the answer (export_collect_profile, export_collect_storage);
- * and cmds/remove.c remove_profile, which says before its preview what its hooks'
- * tolerant list lost.
+ * it; a profile's draft, which reads it at the open, strictly (profile_draft_seed),
+ * and copies it for a writer's commit (profile_draft_open, profile_draft_orphan);
+ * a merge, which reads theirs' and the merge base's at its open, strictly, each
+ * said by theirs' commit (profile_draft_merge); cmds/revert.c cmd_revert, which
+ * reads its target commit's before any question of it, its failure said as the
+ * commit's; cmds/show.c show_file, whose header says what its tolerant read lost;
+ * cmds/list.c list_files, whose verbose rows say what its tolerant walk lost;
+ * cmds/export.c cmd_export, which says what a tolerant arm's collection lost,
+ * once, beside the two arms whose copy came out empty, where the failure is the
+ * answer (export_collect_profile, export_collect_storage); and cmds/remove.c
+ * remove_profile, which says before its preview what its hooks' tolerant list lost.
  *
  * @param profile Handle (must not be NULL)
  * @return The sheet's failure, in the loader's words, or NULL
@@ -659,12 +665,17 @@ typedef struct {
  * cmds/revert.c cmd_revert, at the name the restore writes in the head (step
  * 11), the entry's identity what the preview diffs, and revert_select_profile,
  * at each holder's own name for the argument — whether a file can be restored
- * there (revert_restorable, the one question both ask); and a profile's changes,
+ * there (revert_restorable, the one question both ask); a profile's changes,
  * whether a blob stands at a name the sheet moved and the tree did not, where
- * the base's is the commit's (profile_changes).
+ * the base's is the commit's (profile_changes); and a merge, what each of its
+ * three sides holds at a name Git's merge left in conflict (profile_merge_name)
+ * and at a file's claim a side moved, whose words each side's node decides
+ * (profile_merge_file).
  *
  * @param profile Handle (must not be NULL); its sheet is never read
- * @param storage_path A validated storage path (must not be NULL)
+ * @param storage_path A validated storage path, or a name Git's merge left in
+ *                     conflict, machinery's among them, which the tree answers
+ *                     alike (must not be NULL)
  * @param out The answer (must not be NULL; written on success alone)
  * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
  *         '%s'"
@@ -707,15 +718,19 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
  * rung of a way it writes — the two climbs' and a restore's — where whatever
  * the base holds keeps the rung, as a directory it tracks beneath does
- * (profile_capture_ancestors, profile_derive_ancestors, profile_restore_file).
- * A reader not on this list is a bug. Three neighbours ask profile_entry instead,
- * the tree alone: revert's read of the head at the name it writes (cmds/revert.c
- * cmd_revert, step 11), and of each holder's head in its search
- * (revert_select_profile, at the holder's own name for the argument), where a
- * directory claim is never refused — it gives way to the write where it stands,
- * and rides it where the head's blob contradicts it; the seal a capture keeps
- * (profile_sealed), which a blob alone holds; and a profile's changes, whether
- * a blob stands at a name the tree did not move (profile_changes).
+ * (profile_capture_ancestors, profile_derive_ancestors, profile_restore_file);
+ * and a merge, at a merge-base directory claim a side lacks, where whatever that
+ * side holds is its removal (profile_merge_directory) — the four through
+ * profile_passes. A reader not on this list is a bug. Four neighbours ask
+ * profile_entry instead, the tree alone: revert's read of the head at the name
+ * it writes (cmds/revert.c cmd_revert, step 11), and of each holder's head in
+ * its search (revert_select_profile, at the holder's own name for the argument),
+ * where a directory claim is never refused — it gives way to the write where it
+ * stands, and rides it where the head's blob contradicts it; the seal a capture
+ * keeps (profile_sealed), which a blob alone holds; a profile's changes, whether
+ * a blob stands at a name the tree did not move (profile_changes); and a merge,
+ * whose rules and words read each side's node, never its sheet (profile_merge_name,
+ * profile_merge_file).
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -872,19 +887,22 @@ void profile_departures(
  *
  * One profile's next commit, on a stage (sys/stage.h: one ref's next commit,
  * staged in memory), and the sheet that rides it — a stage is Git's, a draft
- * dotta's. Opened at the profile's head (profile_draft_open), or over Git's empty
- * tree for a profile the commit creates (profile_draft_orphan), it holds its
- * stage; the profile at the tree the stage opened at — the base, read and never
- * edited, lent for every question a writer asks before it edits; and the sheet
- * the commit will carry — the base's, copied at the open (core/metadata.h
+ * dotta's. Opened at the profile's head (profile_draft_open), over Git's empty
+ * tree for a profile the commit creates (profile_draft_orphan), or over a merge
+ * of its head with another commit of its history (profile_draft_merge), it holds
+ * its stage; the profile at the tree the stage opened at — the base, read and
+ * never edited, lent for every question a writer asks before it edits; and the
+ * sheet the commit will carry — the base's, copied at the open (core/metadata.h
  * metadata_clone) and edited from then on, so every claim the base lends stands
- * whatever the commit does. A writer asks the base and edits the draft; it never
- * holds the sheet — it hands the draft what it captured from the disk or restores
- * from a commit, and the draft authors the claim — and the draft answers what
- * the base cannot: whether a name a writer chooses before reading it has room
- * beside the names chosen with it (profile_admit), whether its edits move anything
- * (profile_changed), and which explicit claims they add, update and remove
- * (profile_changes). Every edit keeps the document's rules, stated here once:
+ * whatever the commit does; or, over a merge, the claims composed over its merged
+ * tree, which no writer edits. A writer asks the base and edits the draft; it
+ * never holds the sheet — it hands the draft what it captured from the disk or
+ * restores from a commit, and the draft authors the claim — and the draft answers
+ * what the base cannot: whether a name a writer chooses before reading it has
+ * room beside the names chosen with it (profile_admit), whether its edits move
+ * anything (profile_changed), and which explicit claims they add, update and
+ * remove (profile_changes). Every edit keeps the document's rules, stated here
+ * once:
  *   - a write touches its own kind: a removal takes its claim — a file's the
  *     blob and the FILE item at its name, a directory's tracking — never the
  *     other kind's at the same name, so a directory claim a removed blob
@@ -903,7 +921,9 @@ void profile_departures(
  *     the blob that contradicts it carries it; nor is a derived claim, which
  *     what stands beneath it refuses on its own, and the prune takes where nothing
  *     does. A directory admitted is a claim the commit carries from its admission,
- *     so a blob chosen above it later meets it as it meets one the base holds;
+ *     so a blob chosen above it later meets it as it meets one the base holds.
+ *     A merge chooses no name and asks neither: its claims stand where its merged
+ *     tree leaves them room, by the decode's rule (profile_draft_merge);
  *   - the ancestors: a derived claim stands only where something tracked stands
  *     beneath it, and the way is authored where the profile first passes through
  *     a rung — the base holding nothing at it nor a directory it tracks beneath
@@ -922,21 +942,26 @@ void profile_departures(
  *     a writer that asks — but a claim the base tracked, whose removal the writer
  *     names itself; the record of every rung it took is the next load's to decide,
  *     as of every claim a commit lets go (core/workspace.c
- *     workspace_analyze_orphans);
+ *     workspace_analyze_orphans). A merge composes the two sides' ways, each
+ *     side's absence of a merge-base directory claim read through its own tree,
+ *     and the prune runs at its commit as at every commit;
  *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
  *     one; the sheet is saved only where its claims are no longer the base's
  *     (core/metadata.h metadata_same), a hand's spelling kept otherwise; and a
- *     tree equal to the one opened is no commit (sys/stage.h stage_commit).
+ *     tree equal to the one opened is no commit (sys/stage.h stage_commit). A
+ *     merge's draft has always moved, its stage's second parent, and the save
+ *     stands as written over a merge too, its sheet's name holding the base's
+ *     sheet from the open.
  *
  * Memory: a handle's own — an arena made at the open, holding the struct, the
- * copy of the base's sheet with every claim an edit writes into it, the names
- * the climbs, the way and the prune spell, and the commit's message with the
- * changes it names — released by profile_draft_free with the admission, the base
- * and the stage; the base borrows the stage's tree, and goes before it. What a
- * capture answers is the caller's (profile_claim_t), so the claim outlives the
- * draft that wrote it.
+ * sheet the commit carries — the copy of the base's with every claim an edit
+ * writes into it, or the claims a merge composed — the names the climbs, the
+ * way and the prune spell, and the commit's message with the changes it names —
+ * released by profile_draft_free with the admission, the base and the stage;
+ * the base borrows the stage's tree, and goes before it. What a capture answers
+ * is the caller's (profile_claim_t), so the claim outlives the draft that wrote it.
  */
 typedef struct profile_draft profile_draft_t;
 
@@ -982,6 +1007,136 @@ error_t profile_draft_open(git_repository *repo, const char *name, profile_draft
  * @return Error or NULL on success
  */
 error_t profile_draft_orphan(git_repository *repo, const char *name, profile_draft_t **out);
+
+/**
+ * The side a merge's every conflict is settled for: the run's word, none where
+ * it named none
+ */
+typedef enum {
+    PROFILE_SIDE_NONE,     /* None named: a conflict refuses the merge */
+    PROFILE_SIDE_OURS,     /* The branch the merge is made on, its first parent: this machine's */
+    PROFILE_SIDE_THEIRS,   /* The commit merged into it, its second */
+} profile_side_t;
+
+/**
+ * What both sides of a merge moved apart at a name: its content, Git's refusal,
+ * or a claim's mode or its ownership
+ *
+ * The words are the workspace's for the same three (core/workspace.h
+ * divergence_type_t: CONTENT the bytes, MODE the mode, OWNERSHIP the owner and
+ * group), and the claim's two the sheet's (core/metadata.h metadata_axis_t),
+ * each named beside the other where a merge composes it.
+ */
+typedef enum {
+    PROFILE_AXIS_CONTENT,     /* Git could not compose what stands at the name */
+    PROFILE_AXIS_MODE,        /* Both moved a claim's mode apart */
+    PROFILE_AXIS_OWNERSHIP,   /* Both moved its owner and group apart, the pair */
+} profile_axis_t;
+
+/**
+ * One conflict a merge met: a name, and what both sides moved apart there — for
+ * a claim's axis each side's claim, decoded as the walk decodes it over that
+ * side's own tree; for the content, none
+ */
+typedef struct {
+    const char *storage_path;        /* The name: the tree's, or the claim's key */
+    profile_axis_t axis;             /* What both moved apart there */
+    const profile_claim_t *ours;     /* Ours' claim: a claim axis's alone, NULL for the content */
+    const profile_claim_t *theirs;   /* Theirs', likewise */
+} profile_conflict_t;
+
+/**
+ * The conflicts a merge met, in name order: at one name the content's, then a
+ * file's claim's, then a directory's, the mode's before the ownership's
+ */
+typedef struct {
+    const profile_conflict_t *entries;
+    size_t count;
+} profile_conflicts_t;
+
+/**
+ * Open the draft of a profile's merge with another commit of its history, every
+ * conflict settled at the open for `side`, or the open refused
+ *
+ * Two halves, each where its authority lives.
+ *
+ * The tree first: the stage over the merge (sys/stage.h stage_merge: the profile's
+ * branch the first parent — refused ERR_NOT_FOUND, naming its reference, where
+ * it does not stand — `theirs` the second, the index Git's three-way merge of
+ * their trees over their merge base); the base ours, at the head's tree, as every
+ * draft's is at the tree its stage opened; the sheet's own name holding the base's
+ * sheet, as every draft's index does — Git's merge of it is no document dotta
+ * reads; and each name Git could not compose, in name order:
+ *   - a removal beside a change of the executable bit alone is the removal, at
+ *     any name: one side holding no regular file there — nothing, a directory
+ *     or a link — and the other the merge base's blob under its other regular
+ *     filemode;
+ *   - the profile's ignore file holds its two sides' rules, united where Git
+ *     refused them (sys/stage.h stage_unite);
+ *   - any other is a content conflict, settled for `side` once every rule is
+ *     in: the side's bytes, its entries at and beneath the name.
+ *
+ * Then the claims, into a sheet of the draft's own. A claim the three sheets
+ * hold alike is carried as it stands. One a side moved is composed from each
+ * side's word, read over that side's own tree — a side lacking the name, or holding
+ * a node that cannot carry an axis, says nothing of it — and stands only where
+ * the tree the commit will record gives its name the node it claims: a file's
+ * claim a blob at its name, its axes that blob's type's — a regular file's mode
+ * and ownership, a link's ownership — and the stamp its bytes'; a directory's
+ * claim no blob at its name or above it (the decode, the module header). A side's
+ * absence of a merge-base directory claim is read through its own tree: passing
+ * through the name, the side removed it; passing through none, its prune took it.
+ *
+ * The basis, stated once: a claim's move needs its name, so a removal beside it
+ * is the removal; a byte's change makes its name, so a removal beside it is Git's
+ * conflict, kept for the work it carries; a tie between two derivations is ours',
+ * by its stakes, a derivation binding dotta's own creation of its path alone;
+ * and the ignore file's two sides are united, by its cost — a rule one side removed
+ * beside a rule the other added comes back.
+ *
+ * A conflict is a name and what both sides moved apart there: its content, or a
+ * claim's mode or ownership. Each is read off the three sides before any settle,
+ * so a refusal names every conflict a side's run settles. Each takes `side` on
+ * its grain — the content its bytes, an axis its value, Git's merged bytes kept
+ * — or, where one stands and `side` is PROFILE_SIDE_NONE, the open is refused
+ * ERR_CONFLICT, "Merging profile '%s' met %zu conflict%s", and no draft is made.
+ *
+ * Every sheet is read strictly: ours' as every writer's base, in the loader's
+ * words; theirs' and the merge base's said by theirs' commit over them — "Failed
+ * to load metadata from commit %s, merged in", "Failed to load metadata from
+ * the merge base with commit %s" — as revert says its target's (cmds/revert.c
+ * cmd_revert). A refused open leaves the blobs its merge and its union wrote,
+ * loose, and nothing else. The draft holds no conflict, and its commit always
+ * moves the branch — its stage's second parent records the integration — its
+ * writer's words its message (profile_commit).
+ *
+ * Reader: cmds/sync.c sync_merge.
+ *
+ * @param repo Repository (must not be NULL; borrowed for the draft's life)
+ * @param name The profile's name, which its branch is named by (must not be NULL;
+ *             copied)
+ * @param theirs The commit merged into the profile's head: any commit the store
+ *               holds (must not be NULL)
+ * @param side The side every conflict is settled for, or PROFILE_SIDE_NONE
+ * @param arena The arena the conflicts live in, the words that say each with
+ *              them (must not be NULL)
+ * @param out_conflicts Every conflict met, settled or refusing, in name order
+ *                      (must not be NULL; written on success and on the refusal,
+ *                      none where any other failure came first)
+ * @param out The draft (must not be NULL; released by profile_draft_free); NULL
+ *            on a failure
+ * @return Error or NULL on success: ERR_CONFLICT where a conflict stands and no
+ *         side settles it; the stage's, the sheets' or a tree's
+ */
+error_t profile_draft_merge(
+    git_repository *repo,
+    const char *name,
+    const git_oid *theirs,
+    profile_side_t side,
+    arena_t *arena,
+    profile_conflicts_t *out_conflicts,
+    profile_draft_t **out
+);
 
 /**
  * The profile as the draft opened it: the base, lent until profile_draft_free
@@ -1369,7 +1524,8 @@ error_t profile_put_machinery(
  * a writer asks it to learn whether there is anything to do before it shows what
  * it would do; nothing is written, a dry run's question too. Every move counts
  * here, the way's to the claims included; which explicit claims moved is
- * profile_changes'.
+ * profile_changes'. A merge's draft has always moved: its stage's second parent
+ * records the integration (sys/stage.h stage_changed).
  *
  * Readers: cmds/revert.c cmd_revert, whose "already at target" it answers after
  * the restore; and profile_commit, its gate.
@@ -1439,7 +1595,9 @@ error_t profile_changes(
  * the prune, since it moved a content entry or a claim and a sheet whose claims
  * moved spells other bytes, and the null id where the prune took back the only
  * edits the gate saw: a climb's rungs nothing tracked stands beneath, authored
- * and pruned in one draft, whose message no commit carries.
+ * and pruned in one draft, whose message no commit carries. A merge's draft always
+ * commits: its gate passes (profile_changed), and its message is its writer's
+ * whole words (infra/commit.h commit_words_t.custom_msg), Git's line for a merge.
  *
  * Readers: cmds/add.c cmd_add and cmds/update.c update_profile, which count the
  * prune and read whether the commit landed, so a capture that put back what the

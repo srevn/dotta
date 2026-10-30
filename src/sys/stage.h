@@ -217,12 +217,15 @@ error_t stage_merge(
  * Readers: the base of a profile's draft (core/profiles.c profile_draft_seed),
  * whose claims remove's arguments are matched against, of which revert asks the
  * branch as it stood — the claim at a path, the entry at a name, a second name
- * — update a capture's prior, and add its view and its prior; and the file an
- * edit session opens on (cmds/ignore.c ignore_edit, ignore_modify, cmds/bootstrap.c
- * bootstrap_edit), read from the tree the session commits on. Never NULL: an
- * orphan's stage stands on the empty tree, and a profile's draft — the one reader
- * that opens one, for add — reads it as a profile with nothing in it yet, no
- * entry and no sheet. Borrowed; valid until stage_free.
+ * — update a capture's prior, and add its view and its prior; the file an edit
+ * session opens on (cmds/ignore.c ignore_edit, ignore_modify, cmds/bootstrap.c
+ * bootstrap_edit), read from the tree the session commits on; and the tree a
+ * merge settles a name from for ours — its sheet's own name and a content conflict
+ * the run settles for ours (core/profiles.c profile_merge_tree), and a removal
+ * beside a change of the executable bit alone (profile_merge_name). Never NULL:
+ * an orphan's stage stands on the empty tree, and a profile's draft — the one
+ * reader that opens one, for add — reads it as a profile with nothing in it yet,
+ * no entry and no sheet. Borrowed; valid until stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree
@@ -233,8 +236,11 @@ const git_tree *stage_tree(const stage_t *st);
  * The tree of the commit a merge's stage merged into the head — theirs; NULL
  * over no merge
  *
- * Reader: core/profiles.c profile_draft_merge — the profile at theirs, and a
- * name settled for theirs (stage_settle). Borrowed; valid until stage_free.
+ * Readers: core/profiles.c profile_draft_merge, the profile at theirs; and the
+ * tree a merge settles a name from for theirs (stage_settle) — a content conflict
+ * the run settles for theirs (profile_merge_tree), and a removal beside a change
+ * of the executable bit alone (profile_merge_name). Borrowed; valid until
+ * stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return Theirs' tree, or NULL
@@ -442,7 +448,8 @@ error_t stage_remove(stage_t *st, const char *path);
  * sorted, so each name comes once and in order, byte by byte as strcmp reads
  * it. None over no merge, and none once each is settled. Nothing is written.
  *
- * Reader: core/profiles.c profile_draft_merge.
+ * Reader: core/profiles.c profile_merge_tree, each name composed by a rule or
+ * noted as a content conflict.
  *
  * @param st Stage (must not be NULL)
  * @param arena The arena the names live in (must not be NULL)
@@ -466,10 +473,10 @@ error_t stage_conflicts(const stage_t *st, arena_t *arena, string_array_t *out);
  * it, made in that order from one tree, leave what the tree holds there. A settle
  * that fails leaves the name half settled: a writer abandons the stage.
  *
- * Reader: core/profiles.c profile_draft_merge — the sheet's own name from the
- * opened tree, the base's; a removal beside a change of the executable bit alone,
- * from the side holding no regular file there; and each content conflict from
- * the side the run names.
+ * Readers: core/profiles.c profile_merge_tree — the sheet's own name from the
+ * opened tree, the base's, and each content conflict from the side the run names
+ * — and profile_merge_name, a removal beside a change of the executable bit alone,
+ * from the side holding no regular file there.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)
@@ -496,7 +503,7 @@ error_t stage_settle(stage_t *st, const char *path, const git_tree *tree);
  * or where Git reads one of the three as binary — a NUL in its first 8,000 bytes,
  * which no favor but ours' or theirs' composes (merge_file.c merge_file__binary)
  * — and nowhere else: the union's put meets nothing in its way, both sides holding
- * a blob at the name. Reader: core/profiles.c profile_draft_merge, the profile's
+ * a blob at the name. Reader: core/profiles.c profile_merge_name, the profile's
  * .dottaignore, which holds a refused union as the conflict it is.
  *
  * @param st Stage (must not be NULL)

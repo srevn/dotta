@@ -180,9 +180,9 @@ static inline const char *path_kind_suffix(path_kind_t kind) {
  * as a look names one (sys/filesystem.h fs_stat_noun), so a sentence that sets
  * a claim beside what stands there says one word for one kind.
  *
- * Readers: cmds/add.c cmd_add (the kind refusal and the blob-above refusal) and
- * add_collect (the walk's skip); cmds/export.c export_collect_filesystem (the
- * blob that leaves the copy no room).
+ * Readers: cmds/add.c cmd_add (the kind refusal and the blob-above refusal),
+ * add_collect (the walk's skip) and add_refuse_moves (a claim whose place the
+ * command's directory claims would move).
  */
 static inline const char *path_type_noun(path_type_t type) {
     return type == PATH_TYPE_DIRECTORY ? "directory" :

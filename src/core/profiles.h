@@ -621,7 +621,9 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target);
  * profile's (cmds/remove.c remove_resolve). The other answers are each verb's
  * own: show, revert and list, which act on one file, refuse a DIRECTORY or a
  * SUBMODULE by its noun, and list reads NOTHING as a deleted file whose history
- * it searches (cmds/list.c list_file_history).
+ * it searches (cmds/list.c list_file_history). A merge's content conflict names
+ * each side's answer where the two differ in what they are — a file, a symlink,
+ * a directory, a submodule, and none for NOTHING (cmds/sync.c sync_entry_noun).
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */
@@ -668,9 +670,9 @@ typedef struct {
  * there (revert_restorable, the one question both ask); a profile's changes,
  * whether a blob stands at a name the sheet moved and the tree did not, where
  * the base's is the commit's (profile_changes); and a merge, what each of its
- * three sides holds at a name Git's merge left in conflict (profile_merge_name)
- * and at a file's claim a side moved, whose words each side's node decides
- * (profile_merge_file).
+ * three sides holds at a name Git's merge left in conflict, each side's kept on
+ * the content conflict noted there (profile_merge_name), and at a file's claim
+ * a side moved, whose words each side's node decides (profile_merge_file).
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path, or a name Git's merge left in
@@ -1038,15 +1040,27 @@ typedef enum {
 } profile_axis_t;
 
 /**
- * One conflict a merge met: a name, and what both sides moved apart there — for
- * a claim's axis each side's claim, decoded as the walk decodes it over that
- * side's own tree; for the content, none
+ * One conflict a merge met: a name, what both sides moved apart there, and each
+ * side's value on it — for the content, what the side's tree holds at the name;
+ * for a claim's axis, the side's claim, decoded as the walk decodes it over that
+ * side's own tree
+ *
+ * A sum type, spelled as infra/path.h path_input_t spells one: the axis says
+ * which pair is set, and a reader asks it before reading either.
  */
 typedef struct {
-    const char *storage_path;        /* The name: the tree's, or the claim's key */
-    profile_axis_t axis;             /* What both moved apart there */
-    const profile_claim_t *ours;     /* Ours' claim: a claim axis's alone, NULL for the content */
-    const profile_claim_t *theirs;   /* Theirs', likewise */
+    const char *storage_path;                    /* The name: the tree's, or the claim's key */
+    profile_axis_t axis;                         /* What both moved apart there: which pair is set */
+    union {
+        struct {                                 /* PROFILE_AXIS_CONTENT */
+            profile_held_t entry_ours;           /* What ours' tree holds at the name */
+            profile_held_t entry_theirs;         /* Theirs', likewise */
+        };
+        struct {                                 /* PROFILE_AXIS_MODE, PROFILE_AXIS_OWNERSHIP */
+            const profile_claim_t *claim_ours;   /* Ours' claim at the name */
+            const profile_claim_t *claim_theirs; /* Theirs', likewise */
+        };
+    };
 } profile_conflict_t;
 
 /**

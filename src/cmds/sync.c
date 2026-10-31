@@ -791,10 +791,35 @@ static void sync_print_value(
 }
 
 /**
+ * The noun one side's entry at a content conflict reads as: what its tree holds
+ * at the name, in the words every screen gives a node — a file, a symlink or a
+ * directory, as path_type_noun names a claim's type, and a submodule, as show
+ * names a gitlink (cmds/show.c show_file) — and none where it holds nothing,
+ * absence being a value on the content as on a claim's axis (sync_print_value)
+ */
+static const char *sync_entry_noun(const profile_held_t *entry) {
+    switch (entry->kind) {
+        case PROFILE_HELD_NOTHING:
+            return "none";
+        case PROFILE_HELD_FILE:
+            /* A link by its filemode; an executable is a file, its bit the claim's
+             * mode */
+            return entry->filemode == GIT_FILEMODE_LINK ? "symlink" : "file";
+        case PROFILE_HELD_DIRECTORY:
+            return "directory";
+        case PROFILE_HELD_SUBMODULE:
+            return "submodule";
+    }
+
+    CHECK_ARG(false, "a held kind no enumerator names");
+}
+
+/**
  * Print, beneath a merge's row, each conflict its open met: the name, and what
- * both sides moved apart there — the content, or a claim's mode or ownership
- * with each side's value — then, where the open settled it, the run's side it
- * keeps; LIST_LIMIT lines, and a count of the rest
+ * both sides moved apart there — the content, each side's entry named where the
+ * two differ in what they are, or a claim's mode or ownership with each side's
+ * value — then, where the open settled it, the run's side it keeps; LIST_LIMIT
+ * lines, and a count of the rest
  *
  * The open's list, in its order (core/profiles.h profile_draft_merge): the same
  * conflicts whether the open refused naming each, the run having named no side,
@@ -810,19 +835,34 @@ static void sync_print_conflicts(
     for (size_t i = 0; i < conflicts->count && i < LIST_LIMIT; i++) {
         const profile_conflict_t *conflict = &conflicts->entries[i];
 
-        /* The content is Git's refusal at the name; a claim's axis is said with
-         * both sides' values, a directory's name with its slash */
+        /* The content is Git's refusal at the name, each side's entry named where
+         * the two differ in what they are — a deletion beside an edit, a file
+         * beside a directory or a link — and the name alone where both hold one
+         * kind, their bytes apart; a claim's axis is said with both sides' values,
+         * a directory's name with its slash */
         if (conflict->axis == PROFILE_AXIS_CONTENT) {
-            output_print(out, OUTPUT_NORMAL, "    %s (content)", conflict->storage_path);
+            const char *ours = sync_entry_noun(&conflict->entry_ours);
+            const char *theirs = sync_entry_noun(&conflict->entry_theirs);
+            if (strcmp(ours, theirs) == 0) {
+                output_print(
+                    out, OUTPUT_NORMAL, "    %s (content)",
+                    conflict->storage_path
+                );
+            } else {
+                output_print(
+                    out, OUTPUT_NORMAL, "    %s (content: %s ours, %s theirs)",
+                    conflict->storage_path, ours, theirs
+                );
+            }
         } else {
             output_print(
                 out, OUTPUT_NORMAL, "    %s%s (%s: ", conflict->storage_path,
-                path_kind_suffix(path_type_kind(conflict->ours->type)),
+                path_kind_suffix(path_type_kind(conflict->claim_ours->type)),
                 conflict->axis == PROFILE_AXIS_MODE ? "mode" : "ownership"
             );
-            sync_print_value(out, conflict->axis, conflict->ours);
+            sync_print_value(out, conflict->axis, conflict->claim_ours);
             output_print(out, OUTPUT_NORMAL, " ours, ");
-            sync_print_value(out, conflict->axis, conflict->theirs);
+            sync_print_value(out, conflict->axis, conflict->claim_theirs);
             output_print(out, OUTPUT_NORMAL, " theirs)");
         }
 
@@ -839,7 +879,8 @@ static void sync_print_conflicts(
     }
     if (conflicts->count > LIST_LIMIT) {
         output_print(
-            out, OUTPUT_NORMAL, "    ... and %zu more\n", conflicts->count - LIST_LIMIT
+            out, OUTPUT_NORMAL, "    ... and %zu more\n",
+            conflicts->count - LIST_LIMIT
         );
     }
 }
@@ -1065,9 +1106,8 @@ static void sync_print_manifest(
 
     bool manifest_changed = false;  /* The block's header, said at its first line */
     for (size_t i = 0; i < enabled->count; i++) {
-        const manifest_diff_stats_t *s = &stats[i];
         const sync_departure_counts_t departed = sync_departure_counts(
-            ctx->run.repo, after, s
+            ctx->run.repo, after, &stats[i]
         );
 
         /* One line per profile, its non-zero counts in the diff's order: what
@@ -1088,10 +1128,10 @@ static void sync_print_manifest(
             size_t count;
             const char *word;
         } parts[] = {
-            { s->added,            "added"      },
-            { s->updated,          "updated"    },
-            { s->reassigned,       "reassigned" },
-            { s->overridden,       "overridden" },
+            { stats[i].added,      "added"      },
+            { stats[i].updated,    "updated"    },
+            { stats[i].reassigned, "reassigned" },
+            { stats[i].overridden, "overridden" },
             { departed.removed,    "removed"    },
             { departed.deleted,    "deleted"    },
             { departed.unverified, "unverified" },
@@ -1108,7 +1148,7 @@ static void sync_print_manifest(
             manifest_changed = true;
         }
 
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}:", s->profile);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}:", stats[i].profile);
         const char *sep = " ";
         for (size_t k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) {
             if (parts[k].count == 0) continue;

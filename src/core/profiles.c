@@ -1985,24 +1985,23 @@ typedef struct {
 } profile_merge_t;
 
 /**
- * A conflict the merge met, noted in its list: the name, what both sides moved
- * apart there, and for a claim's axis each side's claim — all of it copied into
- * the caller's arena, since the profiles a claim was read from go with the open
- * and the words that say a conflict outlive it
+ * A claim's axis both sides moved apart, noted in its list: the name, the axis
+ * and each side's claim — all of it copied into the caller's arena, since the
+ * profiles a claim was read from go with the open and the words that say a conflict
+ * outlive it
  *
- * Readers: profile_merge_name, a content conflict; profile_merge_file and
- * profile_merge_directory, an axis of a claim both sides moved apart.
+ * Readers: profile_merge_file and profile_merge_directory, each axis apart.
  *
  * @param merge The merge
  * @param list The list the conflict is noted in
  * @param storage_path The name
- * @param axis What both sides moved apart there
- * @param ours Ours' claim, decoded; NULL for the content
- * @param theirs Theirs', likewise
+ * @param axis The claim's axis both sides moved apart there
+ * @param claim_ours Ours' claim, decoded
+ * @param claim_theirs Theirs', likewise
  */
 static void profile_merge_note(
     profile_merge_t *merge, ptr_array_t *list, const char *storage_path, profile_axis_t axis,
-    const profile_claim_t *ours, const profile_claim_t *theirs
+    const profile_claim_t *claim_ours, const profile_claim_t *claim_theirs
 ) {
     profile_conflict_t *conflict = arena_alloc(merge->arena, sizeof(*conflict));
     *conflict = (profile_conflict_t){
@@ -2012,18 +2011,16 @@ static void profile_merge_note(
 
     /* Each side's claim as the merge read it, under the conflict's name, its
      * owner and group copied off the sheet they were read from */
-    if (ours && theirs) {
-        profile_claim_t *claims = arena_calloc(merge->arena, 2, sizeof(*claims));
-        claims[0] = *ours;
-        claims[1] = *theirs;
-        for (size_t s = 0; s < 2; s++) {
-            claims[s].storage_path = conflict->storage_path;
-            claims[s].owner = arena_strdup(merge->arena, claims[s].owner);
-            claims[s].group = arena_strdup(merge->arena, claims[s].group);
-        }
-        conflict->ours = &claims[0];
-        conflict->theirs = &claims[1];
+    profile_claim_t *claims = arena_calloc(merge->arena, 2, sizeof(*claims));
+    claims[0] = *claim_ours;
+    claims[1] = *claim_theirs;
+    for (size_t s = 0; s < 2; s++) {
+        claims[s].storage_path = conflict->storage_path;
+        claims[s].owner = arena_strdup(merge->arena, claims[s].owner);
+        claims[s].group = arena_strdup(merge->arena, claims[s].group);
     }
+    conflict->claim_ours = &claims[0];
+    conflict->claim_theirs = &claims[1];
 
     ptr_array_push(list, conflict);
 }
@@ -2096,8 +2093,9 @@ static bool profile_merge_removed(
  *   - the profile's ignore file holds its two sides' rules (sys/stage.h
  *     stage_unite); a union refused — a side holding nothing there, a version
  *     Git reads as binary — is the content conflict it is;
- *   - any other is a content conflict, settled for the run's side once every
- *     rule is in (profile_merge_tree).
+ *   - any other is a content conflict, noted beside what each side's tree holds
+ *     at the name, and settled for the run's side once every rule is in
+ *     (profile_merge_tree).
  *
  * Reader: profile_merge_tree, each name in name order.
  *
@@ -2132,8 +2130,17 @@ static error_t profile_merge_name(profile_merge_t *merge, const char *name) {
         if (error_code(err) != ERR_CONFLICT) return err;
     }
 
-    /* Any other: the content, both sides' moves of it apart */
-    profile_merge_note(merge, &merge->content_conflicts, name, PROFILE_AXIS_CONTENT, NULL, NULL);
+    /* Any other: the content, both sides' moves of it apart, noted beside what
+     * each side's tree holds at the name — values, so the name is all the caller's
+     * arena copies */
+    profile_conflict_t *conflict = arena_alloc(merge->arena, sizeof(*conflict));
+    *conflict = (profile_conflict_t){
+        .storage_path = arena_strdup(merge->arena, name),
+        .axis = PROFILE_AXIS_CONTENT,
+        .entry_ours = entry_ours,
+        .entry_theirs = entry_theirs,
+    };
+    ptr_array_push(&merge->content_conflicts, conflict);
 
     return NULL;
 }

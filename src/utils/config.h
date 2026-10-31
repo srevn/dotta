@@ -5,9 +5,7 @@
  * TOML, with sections and key = value pairs.
  *
  * A setting whose value is one of a few words is read as the value the word names,
- * in the words of whoever owns them: base/output's for verbosity and color, and
- * this module's for the divergence strategies (config_strategies), which `sync
- * --diverged` also speaks — no module beneath the command owns them.
+ * in the words of whoever owns them: base/output's for verbosity and color.
  */
 
 #ifndef DOTTA_CONFIG_H
@@ -105,39 +103,5 @@ const char *config_repo_dir_from_env(void);
  * @param env The child's environment, initialized (must not be NULL)
  */
 void config_child_env(const config_t *config, const char *repo_dir, string_array_t *env);
-
-/**
- * The divergence strategies, by the word [sync] diverged_strategy and `sync
- * --diverged` take — the one spelling the config's read, the flag's parse
- * (config_parse_strategy), the remedy sync closes its table with under warn
- * (cmds/sync.c sync_print_remedies), and completion share. Indexed by the strategy
- * each names, so a strategy's word is a lookup, never a search: adding one is
- * an enumerator of sync_strategy_t (include/config.h), a row here and an arm in
- * cmds/sync. `sync --help` restates the phrases, and a test holds it to them.
- */
-typedef struct config_strategy {
-    const char *name;
-    const char *summary;          /* what it does, in a phrase */
-} config_strategy_t;
-
-#define CONFIG_STRATEGY_COUNT (SYNC_STRATEGY_THEIRS + 1)
-
-extern const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT];
-
-/**
- * The strategy a word names
- *
- * The vocabulary's one parse, for both of its sources: the config's [sync]
- * diverged_strategy, read at load, and `sync --diverged`, judged by the parse
- * (cmds/sync.c sync_post_parse). An unknown word is refused (ERR_INVALID_ARG)
- * with the words it could be. The config's read names the file and the key around
- * the refusal, where its reader is not looking; the flag's needs no wrap, the
- * word it quotes being the one its reader just typed.
- *
- * @param word The word (must not be NULL)
- * @param out  The strategy (must not be NULL)
- * @return Error or NULL on success
- */
-error_t config_parse_strategy(const char *word, sync_strategy_t *out);
 
 #endif /* DOTTA_CONFIG_H */

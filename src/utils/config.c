@@ -151,17 +151,6 @@ static error_t read_color(
     return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
-static error_t read_strategy(
-    toml_datum_t value, const char *section, const char *key, sync_strategy_t *out
-) {
-    const char *word = NULL;
-    error_t err = read_text(value, section, key, &word);
-    if (err) return err;
-
-    err = config_parse_strategy(word, out);
-    return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
-}
-
 /**
  * A pattern list from its TOML value, compiled into `arena` in the order written:
  * each entry one rule of the grammar (base/gitignore.h), the line it would be
@@ -258,10 +247,6 @@ config_t *config_create_default(arena_t *arena) {
         "\n"
         "{paths}";
 
-    /* [sync] defaults */
-    config->auto_pull = true;                   /* Default: auto-pull when remote ahead */
-    config->diverged_strategy = SYNC_STRATEGY_WARN; /* Default: warn on divergence */
-
     /* [encryption] defaults. The Argon2id pair is not a config value: it is the
      * repository's epoch, minted by `dotta init --strength` (crypto/kdf.h). */
     config->encryption_enabled = false;            /* Default: disabled (opt-in) */
@@ -311,11 +296,6 @@ static error_t read_key(
             return read_string(value, section, key, arena, &config->commit_title);
         if (strcmp(key, "body") == 0)
             return read_string(value, section, key, arena, &config->commit_body);
-    } else if (strcmp(section, "sync") == 0) {
-        if (strcmp(key, "auto_pull") == 0)
-            return read_bool(value, section, key, &config->auto_pull);
-        if (strcmp(key, "diverged_strategy") == 0)
-            return read_strategy(value, section, key, &config->diverged_strategy);
     } else if (strcmp(section, "encryption") == 0) {
         if (strcmp(key, "enabled") == 0)
             return read_bool(value, section, key, &config->encryption_enabled);
@@ -339,8 +319,8 @@ static error_t read_key(
  */
 static error_t read_sections(toml_datum_t top, config_t *config, arena_t *arena) {
     static const char *const sections[] = {
-        "core",   "hooks",  "security", "ignore",
-        "output", "commit", "sync",     "encryption", NULL
+        "core",   "hooks",  "security",   "ignore",
+        "output", "commit", "encryption", NULL
     };
 
     for (int32_t i = 0; i < top.u.tab.size; i++) {
@@ -494,29 +474,4 @@ void config_child_env(const config_t *config, const char *repo_dir, string_array
         if (str_starts_with(*e, "DOTTA_")) continue;
         string_array_push(env, *e);
     }
-}
-
-const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT] = {
-    [SYNC_STRATEGY_WARN] =   { "warn",   "Report the divergence, resolve by hand" },
-    [SYNC_STRATEGY_REBASE] = { "rebase", "Rebase local commits onto the remote"   },
-    [SYNC_STRATEGY_MERGE] =  { "merge",  "Merge the remote into the local branch" },
-    [SYNC_STRATEGY_OURS] =   { "ours",   "Keep local, force-push over the remote" },
-    [SYNC_STRATEGY_THEIRS] = { "theirs", "Keep remote, reset the local branch"    },
-};
-
-error_t config_parse_strategy(const char *word, sync_strategy_t *out) {
-    CHECK_NULL(word);
-    CHECK_NULL(out);
-
-    for (size_t i = 0; i < CONFIG_STRATEGY_COUNT; i++) {
-        if (strcmp(word, config_strategies[i].name) == 0) {
-            *out = (sync_strategy_t) i;
-            return NULL;
-        }
-    }
-    return error_create(
-        ERR_INVALID_ARG,
-        "Unknown divergence strategy '%s' (valid: warn, rebase, merge, ours, theirs)",
-        word
-    );
 }

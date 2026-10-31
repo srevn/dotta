@@ -92,8 +92,7 @@ timeout = 30
 
 # Confirm Destructive Operations
 # Prompt for confirmation before operations that overwrite, delete or discard
-# Examples: dotta apply (overwrites files), dotta remove (deletes a profile),
-# dotta sync (a force push or a reset discards commits; asked once a run)
+# Examples: dotta apply (overwrites files), dotta remove (deletes a profile)
 # Default: true
 confirm_destructive = true
 
@@ -192,40 +191,6 @@ verbosity = "normal"
 #   - "never"  - Never use colors (useful for logs)
 # Default: auto
 color = "auto"
-
-# ============================================================================
-# [sync] - Synchronization Settings
-# ============================================================================
-
-[sync]
-
-# Auto-Pull Changes
-# Automatically pull remote changes when the remote branch is ahead
-# When true, `dotta sync` will automatically pull changes if the local branch is behind
-# When false, only fetches changes and warns about being behind (manual pull required)
-# Default: true
-auto_pull = true
-
-# Divergence Strategy
-# How to handle branches that have diverged (both local and remote have unique commits)
-# Options:
-#   - "warn"   - Report the divergence, resolve by hand (default, safest)
-#   - "rebase" - Rebase local commits onto the remote
-#   - "merge"  - Merge the remote into the local branch
-#   - "ours"   - Keep local, force-push over the remote
-#   - "theirs" - Keep remote, reset the local branch
-#
-# Where both sides changed the same thing differently, "merge" merges nothing
-# and lists each conflict: `dotta sync --conflicts ours` (or `theirs`) keeps
-# that side of every one.
-#
-# WARNING: "ours" and "theirs" are destructive and will lose commits! They act
-# on a branch that is only behind or only ahead as well: "ours" force-pushes
-# over the newer remote commits, "theirs" resets the local ones away.
-# `dotta sync --diverged <strategy>` overrides this for one run.
-# Default: warn
-diverged_strategy = "warn"
-
 
 # ============================================================================
 # [commit] - Commit Message Templates

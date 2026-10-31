@@ -21,25 +21,6 @@
 typedef struct gitignore_ruleset gitignore_ruleset_t;
 
 /**
- * What sync does with a diverged branch: the [sync] diverged_strategy setting,
- * which `sync --diverged` overrides — both in the words of config_strategies
- * (utils/config.h), which is indexed by it.
- *
- * Sync's, and defined here: the configuration refuses an unknown word at load,
- * utils/ does not see cmds/, and core reads this header and no utils/ one.
- *
- * A choice, not a mechanism: sys/resolve's resolve_strategy_t carries out the
- * four that resolve a divergence, and cmds/sync maps one onto the other.
- */
-typedef enum {
-    SYNC_STRATEGY_WARN,           /* Warn user, manual resolution (default) */
-    SYNC_STRATEGY_REBASE,         /* Rebase local onto remote */
-    SYNC_STRATEGY_MERGE,          /* Create merge commit */
-    SYNC_STRATEGY_OURS,           /* Keep local, force push (destructive) */
-    SYNC_STRATEGY_THEIRS          /* Keep remote, reset local (destructive) */
-} sync_strategy_t;
-
-/**
  * Configuration structure
  */
 struct config {
@@ -69,10 +50,6 @@ struct config {
     /* [commit] */
     const char *commit_title;     /* Title template for commits */
     const char *commit_body;      /* Body template for commits */
-
-    /* [sync] */
-    bool auto_pull;               /* Auto-pull when remote is ahead (default: true) */
-    sync_strategy_t diverged_strategy; /* What sync does with a diverged branch */
 
     /* [encryption] */
     bool encryption_enabled;                         /* Enable encryption feature (default: false) */

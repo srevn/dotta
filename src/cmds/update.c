@@ -47,7 +47,9 @@
  * No look is taken here: each capture takes its own and refuses the other's
  * occupant (infra/content.h), so a path whose kind changed since the load is
  * refused rather than read as what it has become, which is the refusal a second
- * look here would only have moved one frame earlier.
+ * look here would only have moved one frame earlier — the walk looks once the
+ * refusal is in, to tell a change since the preview from any other
+ * (update_profile).
  *
  * This routes, decides and captures; the entry and the claim the capture becomes
  * are the draft's to make (core/profiles.h profile_capture_file), and the record
@@ -243,7 +245,7 @@ typedef struct {
     workspace_items_t accepted;              /* The run's work */
 
     /* The accepted items by fate, in the preview's order */
-    workspace_items_t modified_files;        /* DEPLOYED files with a path bit: content or metadata, a conflict --force took among them */
+    workspace_items_t modified_files;        /* DEPLOYED files with a path bit: content or metadata, conflict */
     workspace_items_t unconfirmed;           /* DEPLOYED files --force took whose bytes no base proves */
     workspace_items_t new_files;             /* UNTRACKED files from tracked directories */
     workspace_items_t deleted;               /* DELETED paths, both kinds */
@@ -580,7 +582,9 @@ static error_t update_profile(
          * is another kind, so no target's attributes reach the claim, which is
          * captured off this look. What changes after it, the commit cannot see
          * (stated): one edit's window, where the load's look alone would leave
-         * the run's. */
+         * the run's. A file's refusal meets the same question once it is in (the
+         * file arm below), so a change since the preview is a skip whatever the
+         * edit. */
         struct stat st;
         if ((item->state == WORKSPACE_STATE_DELETED || item->item_kind == PATH_KIND_DIRECTORY) &&
             fs_lstat_occupant(item->filesystem_path, &st) != item->occupant) {
@@ -616,11 +620,12 @@ static error_t update_profile(
                  * whichever refused, the look staying readable for the record,
                  * and each refusal names the path itself — the capture's the
                  * file, the commit's the name it lands at. Either stops the run
-                 * at this profile (update_execute), an owner or a group this
-                 * host cannot name among them (core/profiles.h
-                 * profile_capture_file), which the directory arm below skips:
-                 * the preview listed the file among what the run commits, no
-                 * item carrying what its owner's lookup answers (stated) */
+                 * at this profile (update_execute) but over a path changed since
+                 * the preview, an owner or a group this host cannot name among
+                 * them (core/profiles.h profile_capture_file), which the directory
+                 * arm below skips: the preview listed the file among what the
+                 * run commits, no item carrying what its owner's lookup answers
+                 * (stated) */
                 content_capture_t capture = { 0 };
                 profile_claim_t claim;
                 error_t err = update_capture(ctx, profile_draft_base(draft), item, &capture);
@@ -630,7 +635,25 @@ static error_t update_profile(
                     );
                 }
                 content_capture_free(&capture);
-                if (err) return err;
+                if (err) {
+                    /* The race guard's question, asked once the refusal is in,
+                     * never before the read (update_capture): a path that no
+                     * longer stands as the load found it — another kind, gone,
+                     * or a look that now fails, a parent made unreadable among
+                     * them — is a change since the preview, skipped and said in
+                     * the guard's words, the error dropped once said as the
+                     * directory arm drops its own. Over the node the load found,
+                     * the refusal is the run's (above) */
+                    if (fs_lstat_occupant(item->filesystem_path, &st) == item->occupant) {
+                        return err;
+                    }
+
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Skipping '%s': changed on disk since the preview",
+                        item->filesystem_path
+                    );
+                    continue;
+                }
 
                 /* What the capture committed, as the record keeps it: the node
                  * the load found and the capture held to, the blob the commit
@@ -835,9 +858,7 @@ static error_t update_profile(
  * @return Error or NULL on success
  */
 static error_t update_write_record(
-    const dotta_ctx_t *ctx,
-    const update_commit_t *commits,
-    size_t commit_count
+    const dotta_ctx_t *ctx, const update_commit_t *commits, size_t commit_count
 ) {
     CHECK_NULL(ctx);
 
@@ -1088,9 +1109,7 @@ static error_t update_execute(
  *                  an accepted item's)
  */
 static void update_print_preview(
-    output_t *out,
-    const manifest_t *manifest,
-    const update_partition_t *partition
+    output_t *out, const manifest_t *manifest, const update_partition_t *partition
 ) {
     CHECK_NULL(out);
     CHECK_NULL(manifest);
@@ -1278,9 +1297,7 @@ static void update_print_preview(
  * @param commit_count Number of landed commits
  */
 static void update_print_receipt(
-    output_t *out,
-    const update_commit_t *commits,
-    size_t commit_count
+    output_t *out, const update_commit_t *commits, size_t commit_count
 ) {
     CHECK_NULL(out);
 
@@ -1382,9 +1399,7 @@ static void update_print_receipt(
  *             question left them out
  */
 static void update_print_skipped(
-    const dotta_ctx_t *ctx,
-    const update_partition_t *partition,
-    workspace_items_t work
+    const dotta_ctx_t *ctx, const update_partition_t *partition, workspace_items_t work
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(partition);
@@ -1723,8 +1738,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * narrowing above it, a run left with nothing to do firing none; a dry run's
      * too, told so (DOTTA_DRY_RUN=1). The preview's verdicts predate it, but
      * the drafts open after it (update_execute) and the capture stores execute-time
-     * bytes: a commit it makes to a profile is the update's parent, and a candidate
-     * it edits is committed as it wrote it. */
+     * bytes: a commit it makes to a profile is the update's parent, a candidate
+     * it edits is committed as it wrote it, and one it removes or retypes is
+     * skipped and said (update_profile). */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_UPDATE,
         .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
@@ -1769,7 +1785,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * are said as the walk meets them and counted nowhere here */
     update_print_skipped(ctx, &partition, work);
     if (commit_count == 0) {
-        /* Every profile committed nothing (the walk's race guard refused what
+        /* Every profile committed nothing (the walk's race guard skipped what
          * the plan admitted, the captures put back what the profile holds, or
          * the first profile stopped the run): say so instead of counting zero */
         output_summary(out, OUTPUT_NORMAL, "Nothing was committed");

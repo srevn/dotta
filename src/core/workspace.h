@@ -190,23 +190,23 @@ typedef enum {
  * diff's status line (cmds/diff.c diff_status_line), which names a claim's axes
  * in the act after it, this one bit for both axes attributing none — and "changed
  * in Git and on disk" where the route reads both sides moved (CONFLICT,
- * workspace_item_route): update's census, apply's skip label, diff's status line
- * and status's Conflicts header (cmds/status.c status_print_workspace). The words
- * are the three-way frame's: Git's side differs from what dotta last saw or left
- * at the path — the record, save the mode of a directory a run could not narrow
- * back (core/deploy.h deploy_working_mode, stated), or a first look where none
- * stands: its claim, or a blob the row's own branch held, which it found disk
- * at. Read as "a commit moved it" they are true of a move of Git's alone, and
- * not of a claim dotta never saw disk stand on, which the record cannot tell
- * apart from one Git moved once the first flush has written what the look found,
- * nor of a blob disk held when dotta first looked, which Git had moved past before
- * it, nor of an owner no host here can name (stated). The frame's other side, a
- * move of the user's said in a clause of its own, is "locally", never "here":
- * what a capture commits — "modified locally", "type changed locally", "<axes>
- * changed locally" (workspace_route_t) — a deletion's "deleted locally" on diff's
- * status line, and status's Uncommitted and Undeployed keys, "changed locally"
- * and "gone locally" (cmds/status.c status_print_workspace); "changed in Git
- * and on disk" names both moves in one phrase, and keeps it.
+ * workspace_item_route): update's census, apply's skip label and diff's status
+ * line, status's Conflicts header naming the way out instead (cmds/status.c
+ * status_print_workspace). The words are the three-way frame's: Git's side differs
+ * from what dotta last saw or left at the path — the record, save the mode of a
+ * directory a run could not narrow back (core/deploy.h deploy_working_mode,
+ * stated), or a first look where none stands: its claim, or a blob the row's
+ * own branch held, which it found disk at. Read as "a commit moved it" they are
+ * true of a move of Git's alone, and not of a claim dotta never saw disk stand
+ * on, which the record cannot tell apart from one Git moved once the first flush
+ * has written what the look found, nor of a blob disk held when dotta first looked,
+ * which Git had moved past before it, nor of an owner no host here can name
+ * (stated). The frame's other side, a move of the user's said in a clause of
+ * its own, is "locally", never "here": what a capture commits — "modified locally",
+ * "type changed locally", "<axes> changed locally" (workspace_route_t) — a
+ * deletion's "deleted locally" on diff's status line, and status's Undeployed
+ * legend, "gone locally" (cmds/status.c status_print_workspace); "changed in
+ * Git and on disk" names both moves in one phrase, and keeps it.
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -325,13 +325,13 @@ typedef enum {
  * opens "not looked at", the predicate its neighbours spell "locked", "cannot
  * be read" and "could not be verified". The three that name the squatter say
  * "beneath a squatted directory" (cmds/update.c cmd_update's four census lines,
- * cmds/diff.c diff_status_line, cmds/status.c status_print_workspace's key for
- * a displaced orphan), and where the squatter is dotta's own copy the first two
- * add its state in the squatter's own words — "changed in Git", "changed in Git
- * and on disk"; the Displaced paths header, where the word is grounded, spells
- * the squatter out instead; and apply's label for a row beneath a squatter it
- * skipped names the squatter by its path, "not looked at, beneath <dir>", the
- * squatter's own line listed above it (cmds/apply.c apply_print_deploy_skips).
+ * cmds/diff.c diff_status_line, cmds/status.c status_print_workspace's legend
+ * line for a displaced orphan), and where the squatter is dotta's own copy the
+ * first two add its state in the squatter's own words — "changed in Git", "changed
+ * in Git and on disk"; the Displaced paths header, where the word is grounded,
+ * spells the squatter out instead; and apply's label for a row beneath a squatter
+ * it skipped names the squatter by its path, "not looked at, beneath <dir>",
+ * the squatter's own line listed above it (cmds/apply.c apply_print_deploy_skips).
  * A landing's reason is no such sentence: it names the way, never the look, and
  * apply's ANCESTOR says the squatter "is not a directory" — the one line that
  * names it where the run gives the squatter no fate.
@@ -397,8 +397,8 @@ typedef enum {
  * skip a SHARED relocation unless --force and prune a BOUND one — the reason is
  * cleanup's and lives there (core/cleanup.h) — and the three screens that ask
  * only whether there is a relocation at all: the [relocated] tag
- * (workspace_item_line), apply's prune split, status's [relocated] key. The
- * presence question is this field against NONE at every one of them.
+ * (workspace_item_line), apply's prune split, status's [relocated] legend line.
+ * The presence question is this field against NONE at every one of them.
  */
 typedef enum {
     WORKSPACE_RELOCATION_NONE = 0,  /* Not a relocation */
@@ -477,23 +477,23 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  *
  * The words on screen: a tag says the class on every arm (workspace_item_line),
  * and a sentence says it "locked", "cannot be read" or "could not be verified"
- * — diff's status line (cmds/diff.c diff_status_line), update's census
- * (cmds/update.c cmd_update) and, of the last two, status's Issues key
- * (cmds/status.c status_print_workspace) — where apply's label says "locked",
- * "unreadable" or "cannot verify" (cmds/apply.c apply_fault_label). Status's
- * Unverifiable key says the cause instead: "encrypted, and no key opened it",
- * as the Issues key does of a sealed orphan, or "permissions refused the read",
- * which update's census says after its word. The remedy is the class's:
+ * — diff's status line (cmds/diff.c diff_status_line) and update's census
+ * (cmds/update.c cmd_update) — where apply's label says "locked", "unreadable"
+ * or "cannot verify" (cmds/apply.c apply_fault_label). Status's legends, beneath
+ * Unverifiable paths and Orphaned paths (cmds/status.c status_print_workspace),
+ * name the remedy alone, and "permissions refused the read" is update's census's,
+ * after its word. The remedy is the class's:
  *   LOCKED       the key, 'dotta key set', the switch first where encryption is
- *                off — status's keys, update's census, apply's key closers
+ *                off — status's legends, update's census, apply's key closers
  *   UNREADABLE   root, offered and never promised, to a run that holds none
- *                (sys/identity.h): "sudo may lift it" on status's Unverifiable
- *                key and in its help (cmds/status.c spec_status), and "Run under
- *                sudo to <its act> them" closing update's census and apply's
- *                two skip blocks
- *   UNVERIFIED   none: "no remedy dotta can name" on status's Unverifiable key,
- *                and update's census sends the user to the listing that names
- *                each path
+ *                (sys/identity.h): "run under sudo to <its act>" on status's
+ *                legends, "sudo may lift it" in its help (cmds/status.c
+ *                spec_status), and "Run under sudo to <its act> them" closing
+ *                update's census and apply's two skip blocks
+ *   UNVERIFIED   none: status's Unverifiable paths header says what apply and
+ *                update do with it, they skip it, as its Orphaned paths legend
+ *                does of an orphan; update's census sends the user to the listing
+ *                that names each path
  *
  * Readers — the engines, which ask it against NONE: workspace_item_route (the
  * UNVERIFIABLE arm), workspace_untouched, the orphan analysis's directory pass
@@ -501,11 +501,12 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * and cleanup_verdict, core/deploy.c deploy_needs_work and deploy_preflight;
  * and the screens: workspace_item_line (the tag — [locked] / [unreadable] /
  * [unverified], the same word on every arm — and the line's magenta beside it),
- * cmds/status.c status_print_summary (the status line) and status_print_workspace
- * (Unverifiable's key and Issues'), cmds/update.c update_partition and cmd_update's
- * census, cmds/apply.c apply_fault_label, apply_consent_label and the sudo and
- * key closers of apply_print_deploy_skips and apply_print_cleanup_skips, and
- * cmds/diff.c's status line (diff_status_line). A reader not on this list is a bug.
+ * cmds/status.c status_print_summary (the workspace's line) and
+ * status_print_workspace (Unverifiable's legend and Orphaned paths'), cmds/update.c
+ * update_partition and cmd_update's census, cmds/apply.c apply_fault_label,
+ * apply_consent_label and the sudo and key closers of apply_print_deploy_skips
+ * and apply_print_cleanup_skips, and cmds/diff.c's status line (diff_status_line).
+ * A reader not on this list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
@@ -1123,9 +1124,9 @@ static inline bool workspace_capturable(const workspace_item_t *item) {
  * frame's first question, whichever kind stands, and half the gate on its second),
  * classify_absent (an absence over what the view moved past deletes nothing it
  * holds) and workspace_item_line (the [stale] that rides [undeployed]), with
- * cmds/status.c status_print_workspace's key for that line; workspace_pending
- * below (the record still disagrees with the view). A reader not on this list
- * is a bug.
+ * cmds/status.c status_print_workspace's legend line for that row;
+ * workspace_pending below (the record still disagrees with the view). A reader
+ * not on this list is a bug.
  */
 static inline bool workspace_stale(const manifest_row_t *row, const state_record_t *record) {
     return workspace_base(record) ? workspace_compare_confirmed(row, record) != CMP_EQUAL
@@ -1284,9 +1285,8 @@ typedef struct {
  * arms (workspace_displaced_t), the failed look's for UNVERIFIABLE
  * (workspace_fault_t). A sentence says the route, a tag the bit: [type] stands
  * beside every arm a kind reaches.
- *   KIND           "a different kind stands on disk" — status's Conflicts header,
- *                  update's census, diff's status line — and "a different kind"
- *                  on apply's skip label
+ *   KIND           "a different kind stands on disk" — update's census, diff's
+ *                  status line — and "a different kind" on apply's skip label
  *   KIND_DERIVED   "a different kind stands at a directory dotta only passes
  *                  through" — status's Squatted ancestors header, update's census,
  *                  diff's status line
@@ -1522,8 +1522,8 @@ typedef struct workspace workspace_t;
  *   directory the ladder leaves a scope exit's. Read by core/cleanup.c
  *   cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
  *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies
- *   it clears) and cmds/status.c status_partition (Issues, Released paths and
- *   Overridden copies).
+ *   it clears) and cmds/status.c status_partition (Orphaned paths, Released paths
+ *   and Overridden copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
@@ -1784,7 +1784,7 @@ error_t workspace_load(
  * and is lent among the active items all the same (workspace_active, and its
  * kind's: workspace_directories, workspace_files). So a load holding none is
  * clean. cmds/status.c status_partition files them, filtered or not, and
- * status_print_summary reads its status line off what it filed, saying there
+ * status_print_summary reads the workspace's line off what it filed, saying there
  * which of them the line counts.
  *
  * @param ws Workspace (NULL returns an empty slice)
@@ -2166,10 +2166,9 @@ workspace_items_t workspace_displaced_orphans(
  *
  * A value workspace_item_line makes whole, nothing in it borrowed. The tags are
  * spelled as the line shows them, each bracketed, a space between: the string a
- * list prints (base/output.h output_list_add) and status's legend keys
- * (cmds/status.c status_legend_add). Apply's receipt writes a fixed directory's
- * two claim tags in the same spelling by hand (cmds/apply.c
- * apply_print_deploy_receipt).
+ * list prints and its legend explains (base/output.h output_list_add,
+ * output_list_legend). Apply's receipt writes a fixed directory's two claim tags
+ * in the same spelling by hand (cmds/apply.c apply_print_deploy_receipt).
  */
 typedef struct {
     char tags[WORKSPACE_ITEM_MAX_TAGS * 16];  /* "[modified] [stale]": the words, in Tag Priority */
@@ -2188,7 +2187,7 @@ typedef struct {
  * path's place (cmds/update.c update_print_preview).
  *
  * Readers: cmds/status.c status_print_manifest and status_print_workspace, every
- * section's rows and the keys of the keyed ones; cmds/update.c update_print_preview
+ * section's rows and the legends beneath them; cmds/update.c update_print_preview
  * and cmd_update's places not scanned; cmds/apply.c apply_print_cleanup_preview,
  * a released file's row, its path and what let it go. A reader not on this list
  * is a bug.
@@ -2292,8 +2291,8 @@ typedef struct {
  *     — the history's three answers that keep a file's copies — else "from
  *     {profile}, never deployed", the ownership gate's; "from {profile}" on the
  *     entry's release and a directory's, by what it holds, which the item cannot
- *     tell apart and the key names (cmds/status.c status_print_workspace) — and
- *     apply's preview says a released file's in the same words (cmds/apply.c
+ *     tell apart and the legend names (cmds/status.c status_print_workspace) —
+ *     and apply's preview says a released file's in the same words (cmds/apply.c
  *     apply_print_cleanup_preview)
  *
  * The metadata's room is 256 bytes: a profile name past about 120 characters is

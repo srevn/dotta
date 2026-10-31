@@ -1404,13 +1404,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
     if (refused[WORKSPACE_ROUTE_CONFLICT] > 0) {
-        /* The status Conflicts header's own words, a kind both sides moved among
-         * them: a directory row's too, and add keeps disk's only where the kind
-         * matches, refusing a change across file and directory; apply --force
-         * replaces a directory only with all it holds, which no load reads
-         * (core/deploy.c check_clearance), and is named with its path, for the
-         * reasons that header gives; add is spelled whole, as that header spells
-         * it */
+        /* A kind both sides moved among them: a directory row's too, and add
+         * keeps disk's only where the kind matches, refusing a change across
+         * file and directory; apply --force replaces a directory only with all
+         * it holds, which no load reads (core/deploy.c check_clearance), and is
+         * named with its path, for the reasons status's Conflicts section gives;
+         * add is spelled whole, the profile before the path (cmds/add.c
+         * add_post_parse) */
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
@@ -1456,10 +1456,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
     if (refused[WORKSPACE_ROUTE_UNCONFIRMED] > 0) {
         /* Bytes no base proves: the capture would commit what nobody has shown
-         * is the user's over the profile's. The status Unconfirmed header's own
-         * words, each way out unqualified: every such row is a file row with a
-         * file or a link standing, which add captures and apply --force replaces,
-         * each spelled as that header spells it */
+         * is the user's over the profile's. Each way out unqualified: every such
+         * row is a file row with a file or a link standing, which add captures
+         * and apply --force replaces, each spelled whole */
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: not confirmed by dotta — 'dotta diff' compares, "

@@ -1365,14 +1365,22 @@ typedef struct {
     const char *metadata;  /* Metadata string, the list's arena's (nullable) */
 } item_t;
 
+typedef struct {
+    const char *tags;  /* A row's, as it shows them, the list's arena's */
+    const char *text;  /* What the rows carrying them take, the list's arena's */
+} legend_t;
+
 struct output_list {
-    arena_t *arena;     /* The list's own: the struct, its strings and its items */
-    output_t *ctx;      /* Borrowed reference (caller owns) */
-    const char *title;  /* Section title */
-    const char *hint;   /* Hint text (nullable) */
-    item_t *items;      /* The items, grown in the arena */
-    size_t count;       /* Current item count */
-    size_t capacity;    /* Allocated capacity */
+    arena_t *arena;          /* The list's own: the struct, its strings and its items */
+    output_t *ctx;           /* Borrowed reference (caller owns) */
+    const char *title;       /* Section title */
+    const char *hint;        /* Hint text (nullable) */
+    item_t *items;           /* The items, grown in the arena */
+    size_t count;            /* Current item count */
+    size_t capacity;         /* Allocated capacity */
+    legend_t *legends;       /* One per tag string, as the rows first show it */
+    size_t legend_count;
+    size_t legend_capacity;
 };
 
 output_list_t *output_list_create(
@@ -1408,6 +1416,31 @@ void output_list_add(
         .color = color,
         .content = arena_strdup(arena, content ? content : ""),
         .metadata = arena_strdup(arena, metadata),
+    };
+}
+
+void output_list_legend(
+    output_list_t *list, const char *tags, const char *text
+) {
+    CHECK_NULL(list);
+    CHECK_NULL(tags);
+    if (!text) return;
+
+    /* Once per tag string: the line the first row carrying it was given speaks
+     * for every row that carries it */
+    for (size_t i = 0; i < list->legend_count; i++) {
+        if (strcmp(list->legends[i].tags, tags) == 0) return;
+    }
+
+    arena_t *arena = list->arena;
+    list->legends = arena_grow(
+        arena, list->legends, &list->legend_capacity, list->legend_count + 1,
+        sizeof(*list->legends)
+    );
+
+    list->legends[list->legend_count++] = (legend_t){
+        .tags = arena_strdup(arena, tags),
+        .text = arena_strdup(arena, text),
     };
 }
 
@@ -1458,6 +1491,21 @@ void output_list_render(output_list_t *list) {
         output_bytes(&line, "\n", 1);
         output_put(&line);
     }
+
+    /* The legend, written once: the blank beneath the rows — the list's shape,
+     * as the one beneath its header is — then a line per tag string, dimmed,
+     * its tags padded to the rows' width, so each stands in their column */
+    if (list->legend_count == 0) return;
+
+    output_start(&line, ctx, ctx->stream);
+    output_bytes(&line, "\n", 1);
+    for (size_t i = 0; i < list->legend_count; i++) {
+        output_appendf(
+            &line, "{dim}  %-*s - %s{reset}\n",
+            (int) width, list->legends[i].tags, list->legends[i].text
+        );
+    }
+    output_put(&line);
 }
 
 size_t output_list_count(const output_list_t *list) {

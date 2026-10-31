@@ -555,12 +555,12 @@ output_color_t remote_state_color(remote_state_t state);
  * gives one (remote_state_color), and the frame its screen gives a reading, so
  * the rows of status, list and profile fetch say a reading alike.
  *
- * The words on screen: a reading named alone, without its counts — status's Sync
- * summary counting the branches in each (cmds/status.c status_print_remote) —
- * takes its phrase's first clause: up-to-date, ahead, behind, diverged, recreated
- * on the remote, no remote branch, deleted on the remote, no local branch. No
- * key decodes the glyph, on a screen or in a help: every row that prints one
- * prints the phrase beside it.
+ * The words on screen: a reading named alone, without its counts — status's summary
+ * counting the branches in each (cmds/status.c status_print_summary) — takes
+ * its phrase's first clause: up-to-date, ahead, behind, diverged, recreated on
+ * the remote, no remote branch, deleted on the remote, no local branch. No legend
+ * decodes the glyph, on a screen or in a help: every row that prints one prints
+ * the phrase beside it.
  *
  * Readers: cmds/status.c status_print_remote; cmds/list.c list_profiles, whose
  * rows take status's frame; cmds/profile.c profile_fetch; cmds/sync.c

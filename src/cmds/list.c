@@ -118,9 +118,10 @@ static error_t list_size_claim(const profile_claim_t *claim, void *payload) {
  *
  * Default: the names, the enabled ones starred. Verbose: what each holds, what
  * that weighs, and its last commit. Remote: each one's remote sync status, in
- * the row and under the title status's remote section prints (cmds/status.c
- * status_print_remote) — the glyph beside its phrase, so no legend keys it. And
- * beneath them in every mode, each enabled row Git lists no branch for, starred
+ * the row's words and under the title status's remote section prints (cmds/status.c
+ * status_print_remote) — the glyph beside its phrase, so no legend keys it —
+ * the names padded to one column, where status's rows follow a name by one space.
+ * And beneath them in every mode, each enabled row Git lists no branch for, starred
  * and marked (no branch) where a branch's facts would stand, as profile list
  * marks its row (cmds/profile.c profile_list): the fact the view says as
  * core/manifest.h manifest_missing, read off the rows and the listing, since

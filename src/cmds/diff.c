@@ -152,11 +152,11 @@ static const char *diff_status_line(
             /* Both sides moved: the user's bytes or kind beside a move Git made,
              * to the bytes, the kind or a claim — in the frame's words
              * (core/workspace.h divergence_type_t), as apply's skip label and
-             * update's census say it. Its --force is qualified as status's
-             * Conflicts header qualifies it: a directory in a blob row's way
-             * goes only with all it holds (core/deploy.c check_clearance). The
-             * user's edit is listed downstream too, which update refuses: its
-             * capture would commit disk over the move Git made */
+             * update's census say it. Its --force is qualified, as update's census
+             * qualifies it: a directory in a blob row's way goes only with all
+             * it holds (core/deploy.c check_clearance). The user's edit is listed
+             * downstream too, which update refuses: its capture would commit
+             * disk over the move Git made */
             return direction == DIFF_UPSTREAM
                    ? "changed in Git and on disk (apply --force <path> keeps Git's, "
                    "a directory only if all dotta's)"
@@ -193,10 +193,10 @@ static const char *diff_status_line(
         case WORKSPACE_ROUTE_KIND:
             /* Another kind the user put there, Git having moved nothing past
              * it, in the words update's census says it: --force's to replace, a
-             * directory only with all it holds. Listed both ways because status's
-             * Conflicts remedy sends the user here to compare, and hiding it
-             * answered that remedy with silence; downstream, update refuses it,
-             * no capture committing such a kind */
+             * directory only with all it holds. Listed both ways, as a conflict
+             * is: a user comparing the two sides before choosing one meets it
+             * in either direction; downstream, update refuses it, no capture
+             * committing such a kind */
             return direction == DIFF_UPSTREAM
                    ? "a different kind stands on disk (apply --force <path> keeps Git's, "
                    "a directory only if all dotta's)"
@@ -217,8 +217,9 @@ static const char *diff_status_line(
              * (core/workspace.c workspace_ask_bases), so no capture's sentence
              * is true of it — apply overwrites it only under --force, and update
              * skips it. Both directions, in the words status's Unconfirmed header
-             * and update's census say it; its --force unqualified, as that header's
-             * is: a file row with a file or a link standing */
+             * and update's census say it; its --force unqualified, as status's
+             * Unconfirmed legend line's is: a file row with a file or a link
+             * standing */
             return direction == DIFF_UPSTREAM
                    ? "not confirmed by dotta (apply --force <path> keeps Git's)"
                    : "not confirmed by dotta (update skips it)";
@@ -243,7 +244,8 @@ static const char *diff_status_line(
             /* A claim alone, named by the axes it differs on in the words status
              * tags the same row with (core/workspace.h divergence_type_t) — both,
              * where both differ — which apply restores unasked, a claim being
-             * never an edit, and update commits, as status's key for it says */
+             * never an edit, and update commits, as status's legend line for it
+             * says */
             if ((item->divergence & DIVERGENCE_MODE) &&
                 (item->divergence & DIVERGENCE_OWNERSHIP)) {
                 return direction == DIFF_UPSTREAM

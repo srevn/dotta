@@ -433,18 +433,19 @@ void output_hint(
  * block without being its remedy
  *
  * The format as it is written, its leading whitespace included, ended and dimmed
- * whole. A remedy is one line of its own (output_hint); this one is a key beneath
- * the list it keys (cmds/status.c status_print_legend, status_print_profiles'
- * repairs), or the cause a warning gives beneath it (cmds/revert.c cmd_revert's
- * "Reconstructed from the commit …").
+ * whole. A remedy is one line of its own (output_hint); this one is a legend
+ * beneath a block that is no list (cmds/status.c status_print_profiles' repairs),
+ * or the cause a warning gives beneath it (cmds/revert.c cmd_revert's
+ * "Reconstructed from the commit …"). A list's legend is the list's own
+ * (output_list_legend).
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
  * @param fmt Printf-style format string
  *
  * Example:
- *   output_hintline(out, OUTPUT_NORMAL, "  %-*s - %s", width, tags, meaning);
- *   → "  [unreadable] - permissions refused the read" (dimmed)
+ *   output_hintline(out, OUTPUT_NORMAL, "Reconstructed (mode=%04o)", mode);
+ *   → "Reconstructed (mode=0644)" (dimmed)
  */
 void output_hintline(
     output_t *ctx,
@@ -786,15 +787,38 @@ void output_list_add(
 );
 
 /**
+ * A legend line for a row's tags: what the rows carrying them take, said once
+ * per tag string, the first text kept, in the order the rows first show them
+ *
+ * Rendered beneath the rows (output_list_render), each line "<tags> - <text>",
+ * its tags in the rows' own column, so it reads back against the rows above it.
+ * The tags are a row's, as output_list_add took them: the column is the rows'
+ * widest, and a legend explains only what the rows show. Every string is copied
+ * into the list's arena; the caller keeps its inputs.
+ *
+ * @param list List builder (must not be NULL)
+ * @param tags A row's tags, as it shows them (must not be NULL)
+ * @param text What the rows carrying them take (NULL: nothing, the title's hint
+ *             answering for them)
+ */
+void output_list_legend(
+    output_list_t *list,
+    const char *tags,
+    const char *text
+);
+
+/**
  * Render list with auto-calculated alignment
  *
  * Opens with its own boundary (output_gap), so a list is separated from whatever
  * stands above it. The blank between its title and its first row is the list's
- * shape rather than a boundary, and is written either way. An empty list asks
- * for nothing and writes nothing.
+ * shape rather than a boundary, and is written either way, as is the one between
+ * its last row and its legend (output_list_legend), where it has one. An empty
+ * list asks for nothing and writes nothing.
  *
  * Two passes: the widest row's tags, as they show, then every row, its tags padded
- * to that width. Respects output context verbosity and color settings.
+ * to that width, and every legend line, dimmed whole, its tags padded to the
+ * same. Respects output context verbosity and color settings.
  *
  * @param list List builder (must not be NULL)
  */

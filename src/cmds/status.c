@@ -13,6 +13,7 @@
 
 #include "base/arena.h"
 #include "base/args.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "base/timeutil.h"
@@ -86,19 +87,12 @@ static void status_print_profiles(
     manifest_rows_t rows = manifest_rows(view);
     workspace_items_t active = workspace_active(ws);
 
-    /* Whether each repair has a line to stand under. The question is about the
-     * profiles this run *displays*, not the slices: -p filters the scope's profiles
-     * while the view is always the whole enabled one, so a legend keyed off a
-     * slice's own count would explain an annotation no line above it carries. */
-    bool unbound_shown = false;
-    bool unused_shown = false;
-    bool contradicted_shown = false;
-    bool missing_shown = false;
-
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
 
-        /* Format profile name, and the binding when the row has one */
+        /* Format profile name, and the binding when the row has one: each part
+         * of the row a space after the last, as a list row's metadata follows
+         * its path (base/output.h output_list_render) */
         output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
         const char *target = state_target(state, profile);
         if (target) {
@@ -130,7 +124,6 @@ static void status_print_profiles(
         for (size_t j = 0; j < unbound.count; j++) {
             if (strcmp(unbound.entries[j].profile, profile) == 0) unplaced++;
         }
-        if (unplaced > 0) unbound_shown = true;
 
         /* Nor are the paths the view does not use. One count and not two: the
          * repair is per path, and the file each of them reaches is on its own
@@ -139,7 +132,6 @@ static void status_print_profiles(
         for (size_t j = 0; j < unkept.count; j++) {
             if (strcmp(unkept.entries[j].profile, profile) == 0) unused++;
         }
-        if (unused > 0) unused_shown = true;
 
         /* Nor are the claims its own claims contradict: a file of the profile
          * stands at or above each, or claims of its own beneath it take its place,
@@ -148,7 +140,6 @@ static void status_print_profiles(
         for (size_t j = 0; j < contradicted.count; j++) {
             if (strcmp(contradicted.entries[j].profile, profile) == 0) voided++;
         }
-        if (voided > 0) contradicted_shown = true;
 
         /* Show per-profile last deployed timestamp */
         if (profile_deploy_time > 0) {
@@ -159,7 +150,7 @@ static void status_print_profiles(
 
             /* Display dimmed timestamp */
             output_print(
-                out, OUTPUT_NORMAL, "  {dim}(deployed %s){reset}",
+                out, OUTPUT_NORMAL, " {dim}(deployed %s){reset}",
                 relative_buf
             );
         }
@@ -167,21 +158,21 @@ static void status_print_profiles(
         if (unplaced > 0) {
             output_print(
                 out, OUTPUT_NORMAL,
-                "  {yellow}(%zu custom/ path%s need%s a deployment target){reset}",
+                " {yellow}(%zu custom/ path%s need%s a deployment target){reset}",
                 unplaced, unplaced == 1 ? "" : "s", unplaced == 1 ? "s" : ""
             );
         }
 
         if (unused > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  {yellow}(%zu unused path%s){reset}",
+                out, OUTPUT_NORMAL, " {yellow}(%zu unused path%s){reset}",
                 unused, unused == 1 ? "" : "s"
             );
         }
 
         if (voided > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  {yellow}(%zu contradicted path%s){reset}",
+                out, OUTPUT_NORMAL, " {yellow}(%zu contradicted path%s){reset}",
                 voided, voided == 1 ? "" : "s"
             );
         }
@@ -282,15 +273,15 @@ static void status_print_profiles(
             output_format_path(target, identity()->home, shown, sizeof(shown));
             output_print(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
         }
-        output_print(out, OUTPUT_NORMAL, "  {yellow}(no branch){reset}\n");
-        missing_shown = true;
+        output_print(out, OUTPUT_NORMAL, " {yellow}(no branch){reset}\n");
     }
 
-    /* The repairs, in the shape this screen spells a repair: a dimmed key and a
-     * sentence under the block it belongs to, keys aligned — what the keyed lists
-     * do for their tags (status_legend_t), with the yellow annotation above playing
-     * the tag's part. `Hint:` is apply's voice and sync's, and this channel was
-     * the only thing in status that spoke it.
+    /* The repairs, in the shape this screen spells a repair: a legend under the
+     * block it belongs to, each line a dimmed annotation and its sentence, the
+     * annotations aligned — what a list's legend does for its tags (base/output.h
+     * output_list_legend), with the yellow annotation above playing the tag's
+     * part. `Hint:` is apply's voice and sync's, and this channel was the only
+     * thing in status that spoke it.
      *
      * Generic in both the profile and the path. The annotations say which profiles
      * carry them, so one filled name would read as the only one wherever two
@@ -303,30 +294,47 @@ static void status_print_profiles(
      * one; the contradicted claim's because which verb keeps which turns on a
      * shape only the -v line shows; and the missing profile's because nothing
      * else on this screen names it. */
-    if (unbound_shown || unused_shown || contradicted_shown || missing_shown) {
-        output_gap(out, OUTPUT_NORMAL);
-        if (unbound_shown) {
+    output_gap(out, OUTPUT_NORMAL);
+
+    /* Each repair stands where a row this run displays carries its annotation:
+     * the question is about the profiles shown, not the slices — -p filters the
+     * scope's profiles while the view is always the whole enabled one, so a line
+     * asked of a slice's own count would explain an annotation no row above it
+     * carries. A block with none leaves its boundary owed to the next. */
+    for (size_t i = 0; i < unbound.count; i++) {
+        if (scope_accepts_profile(scope, unbound.entries[i].profile)) {
+            /* Placing them is the repair; stopping tracking one is every claim's
+             * way out (dotta remove), never this annotation's */
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "  custom/ paths - 'dotta profile enable <profile> --target /path' "
-                "sets the target; 'dotta remove <profile> <path>' stops tracking one"
+                "  custom/ paths - run 'dotta profile enable <profile> --target /path' "
+                "to place them"
             );
+            break;
         }
-        if (unused_shown) {
-            /* The trailing space is the alignment: one key short of the other. */
+    }
+
+    for (size_t i = 0; i < unkept.count; i++) {
+        if (scope_accepts_profile(scope, unkept.entries[i].profile)) {
+            /* The trailing space is the alignment: one annotation a column short
+             * of the other. */
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "  unused paths  - 'dotta remove --dry-run <profile> <path>' shows "
-                "what dropping one takes"
+                "  unused paths  - run 'dotta remove --dry-run <profile> <path>' to "
+                "preview it"
             );
+            break;
         }
-        if (contradicted_shown) {
-            /* Keyed to the shape the -v line names, one remedy a line. The
-             * directory is kept by taking the file, which names a blob and takes
-             * it alone (cmds/remove.c remove_resolve); on a machine whose disk
-             * holds the file, its record stays under the directory's row as dotta's
-             * own copy, which apply replaces with the directory — unasked where
-             * the copy is untouched, under --force where it was edited (the frame
+    }
+
+    for (size_t i = 0; i < contradicted.count; i++) {
+        if (scope_accepts_profile(scope, contradicted.entries[i].profile)) {
+            /* A line a shape the -v line names, one remedy a line. The directory
+             * is kept by taking the file, which names a blob and takes it alone
+             * (cmds/remove.c remove_resolve); on a machine whose disk holds the
+             * file, its record stays under the directory's row as dotta's own
+             * copy, which apply replaces with the directory — unasked where the
+             * copy is untouched, under --force where it was edited (the frame
              * across kinds, core/workspace.h workspace_displaced_t). The file
              * is kept by taking what leaves it no room: a claim beneath it by
              * its own path, which names that claim and never the file above it;
@@ -335,26 +343,38 @@ static void status_print_profiles(
              * which would name the file, by capturing the file over it. */
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "  contradicted  - 'dotta remove <profile> <file>' keeps the directory, "
+                "  contradicted  - run 'dotta remove <profile> <file>' to keep the directory, "
                 "which apply then creates in the file's place"
             );
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "                  'dotta remove <profile> <path>' keeps the file the path "
-                "is beneath, or whose place it takes"
+                "                  run 'dotta remove <profile> <path>' to keep the file the "
+                "path is beneath, or whose place it takes"
             );
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "                  'dotta add --force <profile> <file>' keeps the file "
-                "the directory is at"
+                "                  run 'dotta add --force <profile> <file>' to keep the "
+                "file the directory is at"
             );
+            break;
         }
-        if (missing_shown) {
+    }
+
+    for (size_t i = 0; i < missing.count; i++) {
+        if (scope_accepts_profile(scope, missing.entries[i])) {
+            /* Enable's two ways for the same fact, in its order (cmds/profile.c
+             * profile_enable): the profile let go, or its branch brought back
+             * from the remote, which sync says it cannot where the remote holds
+             * none */
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "  no branch     - 'dotta profile disable <profile>' drops it; "
-                "'dotta sync <profile>' brings its branch back where the remote holds it"
+                "  no branch     - run 'dotta profile disable <profile>' to drop it"
             );
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "                  or run 'dotta sync <profile>' to bring its branch back"
+            );
+            break;
         }
     }
 }
@@ -380,10 +400,13 @@ static void status_print_manifest(
     const workspace_t *ws,
     const scope_t *scope
 ) {
+    /* The one listing that asks nothing of the user, so its header says what it
+     * lists rather than a command — and what its two tags of agreement mean,
+     * since every row carries one — where every other header names one */
     output_list_t *list = output_list_create(
         out, "Manifest",
-        "every active path; [clean] where nothing diverged, [ancestor] where "
-        "dotta only passes through"
+        "every active path; [clean] where nothing diverged, [ancestor] where dotta "
+        "only passes through"
     );
 
     /* Each kind's items are in filesystem_path order and share no path (one row
@@ -426,7 +449,7 @@ static void status_print_manifest(
  * that settles it — and how many the filter hid
  *
  * One walk files every in-scope item into one slice (status_partition), read by
- * the status line's fold (status_print_summary) and by the sections that list
+ * the workspace line's fold (status_print_summary) and by the sections that list
  * them (status_print_workspace), in the order they print. The slices are one
  * classification's buckets (core/workspace.h workspace_buckets_t), each in the
  * diverged items' order, in the arena the partition was made in — the items
@@ -551,8 +574,8 @@ static void status_partition(
 
                     case WORKSPACE_ROUTE_CLEAN:
                         /* None: a diverged item has something to say
-                         * (workspace_diverged); the status line reads the sections,
-                         * so one filed nowhere would not count */
+                         * (workspace_diverged); the workspace's line reads the
+                         * sections, so one filed nowhere would not count */
                         break;
                 }
                 break;
@@ -583,8 +606,9 @@ static void status_partition(
                  * though --force only turns a skip into a prune, and never moves
                  * an orphan between the two sections: a reclaim and a release
                  * touch nothing on disk and are listed apart; a prune and a skip
-                 * are Issues, a directory's prune skipped all the same while an
-                 * orphan in it stays */
+                 * are Orphaned paths, apply's word for both (cmds/apply.c
+                 * apply_print_cleanup_receipt), a directory's prune skipped all
+                 * the same while an orphan in it stays */
                 switch (cleanup_verdict(item, false)) {
                     case CLEANUP_ABSENT:
                     case CLEANUP_RELEASED:
@@ -599,8 +623,9 @@ static void status_partition(
                 break;
 
             case WORKSPACE_STATE_OBSTRUCTING:
-                /* The landing's, of the rows beneath dotta's node: Issues, keyed
-                 * below by its own */
+                /* The landing's, of the rows beneath dotta's node: an orphan of
+                 * its own kind, among the Orphaned paths, its legend lines its
+                 * own */
                 workspace_buckets_add(buckets, item, &partition->orphaned);
                 break;
 
@@ -616,122 +641,62 @@ static void status_partition(
 }
 
 /**
- * A section's key: a line per tag string its rows show, with the hint the section
- * gave the first of them, in the order the rows show them — so the column beneath
- * reads back against the list above it
- *
- * Built a row at a time beside the list (status_legend_add) and printed after
- * it (status_print_legend). Each section picks a row's hint where it adds the
- * row, from what the tags say and nothing else, so one hint is true of every
- * row carrying its tags. A value of the frame its sections are made in: nothing
- * frees one.
- */
-typedef struct {
-    arena_t *arena;                                        /* The frame: the keys and their strings */
-    struct { const char *tags; const char *hint; } *keys;  /* One per tag string, as first shown */
-    size_t count;
-    size_t capacity;
-    size_t width;                                          /* The widest tag string: the column's */
-} status_legend_t;
-
-/**
- * Key a row's tags: once per tag string, the first row's hint kept
- *
- * @param legend The section's legend (must not be NULL)
- * @param tags The row's tags, as its line shows them (core/workspace.h
- *             workspace_line_t)
- * @param hint The section's hint for them (NULL: the header speaks for them)
- */
-static void status_legend_add(status_legend_t *legend, const char *tags, const char *hint) {
-    if (!hint) return;
-
-    for (size_t i = 0; i < legend->count; i++) {
-        if (strcmp(legend->keys[i].tags, tags) == 0) {
-            return;
-        }
-    }
-
-    legend->keys = arena_grow(
-        legend->arena, legend->keys, &legend->capacity, legend->count + 1,
-        sizeof(*legend->keys)
-    );
-    legend->keys[legend->count].tags = arena_strdup(legend->arena, tags);
-    legend->keys[legend->count].hint = hint;
-    legend->count++;
-
-    size_t len = strlen(tags);
-    if (len > legend->width) legend->width = len;
-}
-
-/**
- * Print a section's key beneath its list: a gap, then a dimmed line per tag string,
- * the strings aligned — nothing where no row was keyed
- *
- * @param out Output context (must not be NULL)
- * @param legend The section's legend (must not be NULL)
- */
-static void status_print_legend(output_t *out, const status_legend_t *legend) {
-    if (legend->count == 0) return;
-
-    output_gap(out, OUTPUT_NORMAL);
-    for (size_t i = 0; i < legend->count; i++) {
-        output_hintline(
-            out, OUTPUT_NORMAL, "  %-*s - %s",
-            (int) legend->width, legend->keys[i].tags, legend->keys[i].hint
-        );
-    }
-}
-
-/**
  * Print where the view, the record and the filesystem disagree: the diverged
  * items in actionable sections (git-like structure), each under the verb that
- * settles it — nothing where none is in scope — then what the filter hid
+ * settles it — nothing where none is in scope
+ *
+ * A header says what its rows are where the title's word needs it, then, as `run
+ * '<command>' to <act> them`, the verb that settles them by default — or, where
+ * no command does, what dotta does with them — and never catalogues. A legend
+ * line beneath the rows (base/output.h output_list_legend) speaks for one tag
+ * string, reading what those tags say and nothing else, so it is true of every
+ * row carrying them: what those rows take instead of the header's verb (`run
+ * …`), beside it (`or run …`), or, where no command applies, why (a clause). No
+ * legend line repeats its header, and none stands for a string whose rows the
+ * header answers.
  *
  * @param out Output context (must not be NULL)
- * @param ws Workspace (must not be NULL; the note on what the filter hid stands
- *           apart where a section printed)
  * @param partition The diverged items, filed (must not be NULL)
  * @param manifest The view the workspace was loaded over (must not be NULL; an
  *                 overridden copy's line names what stands over it, off the view)
- * @param config Configuration (must not be NULL; its switch words the key's remedy)
+ * @param config Configuration (must not be NULL; its switch words a [locked]
+ *               legend line's remedy)
  */
 static void status_print_workspace(
     output_t *out,
-    const workspace_t *ws,
     const status_partition_t *partition,
     const manifest_t *manifest,
     const config_t *config
 ) {
-    /* The sections' keys are the printer's own, in a frame it frees once they
-     * are printed — nothing here outlives the call (include/runtime.h "Memory") */
-    arena_t *frame = arena_create(0);
-
-    /* Section 1: Conflicts — the buckets no default verb resolves lead; this
-     * one's header carries the remedy, true of every row beneath it, in the words
-     * the frame and the route bind (core/workspace.h divergence_type_t,
-     * workspace_route_t): content or a kind moved on both sides, or a kind no
-     * capture commits on a row a plan can hold — a rung dotta only passes through,
-     * which the user squats, has its own section below, since no flag lifts it.
-     * Both --force verbs are qualified because each takes one shape and not
-     * another. `apply --force` replaces a directory in a blob row's way only
-     * with all it holds, and its walk stops at what no landing removes, --force
-     * included (core/deploy.c check_clearance) — which status, reading no
-     * clearance, cannot tell apart; and it is named with the path it lifts the
-     * skip at, since a bare one lifts every consent skip of the run, the edited
-     * copies other machines' deletions left among them. `add --force` keeps disk's
-     * bytes and not its kind: a kind change is a re-shaping of the tree and add
-     * refuses it by the claim standing at the path, naming `dotta remove`
-     * (cmds/add.c), which stops tracking the path and keeps the file. It is spelled
+    /* Section 1: Conflicts — the buckets no default verb resolves lead, each a
+     * choice between disk's side and Git's, in the words the frame and the route
+     * bind (core/workspace.h divergence_type_t, workspace_route_t): content or
+     * a kind moved on both sides, or a kind no capture commits on a row a plan
+     * can hold — a rung dotta only passes through, which the user squats, has
+     * its own section below, since no flag lifts it. The header names the side
+     * that loses nothing, as git's own conflict names "git add": `add --force`
+     * commits disk's bytes, and Git keeps the other side in its history, where
+     * `apply --force` would overwrite bytes nothing else holds. It is spelled
      * whole, the profile before the path: add reads its first word as the profile,
-     * so a path typed alone leaves it none (cmds/add.c add_post_parse). */
+     * so a path typed alone leaves it none (cmds/add.c add_post_parse). The legend
+     * names Git's side beside it, by the tag a row leads with. `add --force`
+     * keeps disk's bytes and not its kind: a change across file and directory
+     * is a re-shaping of the tree, which add refuses by the claim standing at
+     * the path, naming `dotta remove` (cmds/add.c), which stops tracking the
+     * path and keeps the node — so a [type] row's line names that instead, and
+     * never `apply --force`, which replaces a directory in a blob row's way only
+     * with all it holds, its walk stopping at what no landing removes, --force
+     * included (core/deploy.c check_clearance), which status, reading no clearance,
+     * cannot tell apart. A link standing at a file row is a file to add's kind
+     * test, so the [type] line says more than its row needs there (stated: the
+     * tag cannot tell the link from the directory). Every other row is a file
+     * row with a file or a link standing, whose bytes `apply --force` replaces,
+     * named with the path it lifts the skip at, since a bare one lifts every
+     * consent skip of the run, the edited copies other machines' deletions left
+     * among them. */
     if (partition->conflicts.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Conflicts",
-            "changed in Git and on disk, or a different kind stands on disk; "
-            "\"dotta diff\" to compare, \"dotta apply --force <path>\" to "
-            "keep Git's (a directory only if all dotta's), \"dotta add --force "
-            "<profile> <path>\" to keep disk's bytes when the kind matches, "
-            "\"dotta remove\" to stop tracking it"
+            out, "Conflicts", "run 'dotta add --force <profile> <path>' to keep disk's"
         );
 
         for (size_t i = 0; i < partition->conflicts.count; i++) {
@@ -739,6 +704,13 @@ static void status_print_workspace(
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
+
+            /* [type] where the line leads with it: no conflict is displaced (the
+             * DISPLACED_* routes file it below), so the tag is the bit */
+            const char *legend = (item->divergence & DIVERGENCE_TYPE)
+                ? "run 'dotta remove <profile> <path>' to stop tracking it"
+                : "or run 'dotta apply --force <path>' to keep Git's";
+            output_list_legend(list, line.tags, legend);
         }
 
         output_list_render(list);
@@ -750,19 +722,19 @@ static void status_print_workspace(
      * of what stands there, nor, where it could be asked, did the row's own branch
      * hold disk's bytes at the name (core/workspace.c workspace_ask_bases), so
      * nothing says whose move that is — the second bucket no default verb resolves,
-     * beside the conflicts. Its header carries the remedy as theirs does, each
-     * way out unqualified: every row is a file row with a regular file or a link
-     * standing — a directory row and every other kind answer at KIND, above —
-     * which `add --force` captures, a link being a file to add's kind test
-     * (cmds/add.c), spelled whole as the Conflicts header spells it, and `apply
-     * --force` replaces. No key: the header is true of every line. */
+     * beside the conflicts. Its header opens with what its rows are, in the route's
+     * words (core/workspace.h workspace_route_t), as update's census and diff's
+     * status line say it. Its header and its legend name the two sides as theirs
+     * do, each unqualified: every row is a file row with a regular file or a
+     * link standing — a directory row and every other kind answer at KIND, above
+     * — which `add --force` captures, a link being a file to add's kind test
+     * (cmds/add.c), and `apply --force` replaces. The header names disk's, the
+     * side that loses nothing, as the Conflicts header does; the legend names
+     * Git's, true of every row. */
     if (partition->unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
-            "differs from the profile, and is not confirmed by dotta; "
-            "\"dotta diff\" to compare, \"dotta apply --force <path>\" to "
-            "keep Git's, \"dotta add --force <profile> <path>\" to keep disk's, "
-            "\"dotta remove\" to stop tracking it"
+            "not confirmed by dotta; run 'dotta add --force <profile> <path>' to keep disk's"
         );
 
         for (size_t i = 0; i < partition->unconfirmed.count; i++) {
@@ -770,6 +742,9 @@ static void status_print_workspace(
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_legend(
+                list, line.tags, "or run 'dotta apply --force <path>' to keep Git's"
+            );
         }
 
         output_list_render(list);
@@ -778,13 +753,14 @@ static void status_print_workspace(
 
     /* Section 3: Squatted ancestors — a different kind stands at a directory
      * dotta only passes through (the route's KIND_DERIVED): never planned, so
-     * no flag lifts it and no decision pends. One verb, the named re-derivation,
-     * in the words update's counted line already uses. */
+     * no flag lifts it and no decision pends. The header opens with the route's
+     * words, as update's census and diff's status line say it, then its one verb,
+     * the named re-derivation, the word update's counted line already uses. */
     if (partition->squatted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Squatted ancestors",
-            "a different kind stands at a directory dotta only passes "
-            "through; \"dotta update <dir>\" re-derives it"
+            "a different kind stands at a directory dotta only passes through; run 'dotta "
+            "update <dir>' to re-derive them"
         );
 
         for (size_t i = 0; i < partition->squatted.count; i++) {
@@ -800,24 +776,23 @@ static void status_print_workspace(
 
     /* Section 4: Displaced paths — beneath a squatter Conflicts or Squatted
      * ancestors above holds, or Undeployed changes below where it is dotta's
-     * own copy Git moved past, untouched, or Issues where it is dotta's own node
-     * at no row, the landing's of the paths beneath it (the route's DISPLACED_*
-     * arms, the squatter's own route inherited): nothing there was looked at,
-     * so the line shows [displaced] and only what no look decides or disproves
-     * beside it (the blob's verdict, a reassignment), and the header sends the
-     * user to the squatter, whose own section names its verb. The header opens
-     * with the predicate, as every sentence about such a path does, and spells
-     * the squatter out where the other four name it with the word — this is where
-     * the word is grounded (core/workspace.h workspace_displaced_t). Named by
-     * section rather than "above": under -p the squatter's row may be filtered
-     * while a child is not, and the bare status lists both. */
+     * own copy Git moved past, untouched, or Orphaned paths where it is dotta's
+     * own node at no row, the landing's of the paths beneath it (the route's
+     * DISPLACED_* arms, the squatter's own route inherited): nothing there was
+     * looked at, so the line shows [displaced] and only what no look decides or
+     * disproves beside it (the blob's verdict, a reassignment), and the header
+     * sends the user to the squatter, whose own section names its verb — the
+     * one header with no command of its own, since the command is the squatter's.
+     * The header opens with the predicate, as every sentence about such a path
+     * does, and spells the squatter out where the other four name it with the
+     * word — this is where the word is grounded (core/workspace.h
+     * workspace_displaced_t). Under -p the squatter's row may be filtered while
+     * a child is not, and the bare status lists both. */
     if (partition->displaced.count > 0) {
         output_list_t *list = output_list_create(
             out, "Displaced paths",
-            "not looked at: a different kind stands at a directory above "
-            "them; resolve that directory first (\"dotta status\" lists "
-            "it under Conflicts, Squatted ancestors, Undeployed changes "
-            "or Issues)"
+            "not looked at: a different kind stands at a directory above them; resolve "
+            "that directory first"
         );
 
         for (size_t i = 0; i < partition->displaced.count; i++) {
@@ -832,23 +807,16 @@ static void status_print_workspace(
     }
 
     /* Section 5: Unverifiable paths — the bucket no verb resolves: dotta could
-     * not look, so no verb is promised. The header says only that, and a key
-     * beneath names each failed look, and its way out where it has one, one line
-     * per tag string the block shows — the Issues key's shape, for the reason
-     * that block has one: the tag is a word the reader has to be taught, and
-     * one sentence over three refusals is how a locked path came to be told to
-     * fix its permissions. A key rather than a closer because a closer speaks
-     * only for a class that has a remedy, and [unverified] has none — it would
-     * stand on the screen unexplained. */
+     * not look, so no verb acts on them. The header opens with what its rows
+     * are, as the headers that name a route's meaning do, then says what the
+     * verbs do with them, since no one command settles three failed looks. A
+     * legend beneath names each failed look's way out where it has one, one line
+     * per tag string the block shows: one sentence over three refusals is how a
+     * locked path came to be told to fix its permissions. */
     if (partition->unverifiable.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Unverifiable paths",
-            "dotta could not verify these paths"
+            out, "Unverifiable paths", "dotta could not verify them; apply and update skip them"
         );
-
-        /* Keyed by the exact tags the line shows, the way Issues is keyed, so
-         * the column below reads back against the one above */
-        status_legend_t legend = { .arena = frame };
 
         for (size_t i = 0; i < partition->unverifiable.count; i++) {
             const workspace_item_t *item = partition->unverifiable.entries[i];
@@ -856,60 +824,52 @@ static void status_print_workspace(
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
-            /* What the failed look was, then the way out of it: a key for the
-             * locked rows, and the switch before it where encryption is off, a
-             * run that holds no key at all; root for the unreadable ones and
-             * only where the run holds none — offered, never promised, since a
-             * policy may deny root the read as well. The residual class has no
-             * remedy to name — there is no one remedy for a foreign epoch, a
-             * cipher this build does not read and an I/O error — and no verb
-             * that lists the path prints its cause, the class being all the item
-             * carries (workspace_fault_t), so its line names no verb. */
-            const char *hint = NULL;
+            /* The failed look's way out: the key for the locked rows, and the
+             * switch before it where encryption is off, a run that holds no key
+             * at all; root for the unreadable ones and only where the run holds
+             * none — offered, never promised, since a policy may deny root the
+             * read as well. The residual class has no way out to name — there
+             * is no one remedy for a foreign epoch, a cipher this build does
+             * not read and an I/O error — and no verb that lists the path prints
+             * its cause, the class being all the item carries (workspace_fault_t),
+             * so its rows are the header's. */
+            const char *legend = NULL;
 
             switch (item->fault) {
                 case WORKSPACE_FAULT_LOCKED:
-                    hint = config->encryption_enabled
-                        ? "encrypted, and no key opened it; 'dotta key set' unlocks it"
-                        : "encrypted, and encryption is disabled; 'dotta key set' "
-                        "unlocks it once encryption.enabled = true";
+                    legend = config->encryption_enabled
+                        ? "run 'dotta key set' to unlock it"
+                        : "set encryption.enabled = true, then run 'dotta key set'";
                     break;
                 case WORKSPACE_FAULT_UNREADABLE:
-                    hint = identity()->privileged
-                        ? "permissions refused the read"
-                        : "permissions refused the read; "
-                        "sudo may lift it";
+                    legend = identity()->privileged ? NULL : "run under sudo to read it";
                     break;
                 case WORKSPACE_FAULT_NONE:
                 case WORKSPACE_FAULT_UNVERIFIED:
-                    hint = "no remedy dotta can name";
                     break;
             }
-            status_legend_add(&legend, line.tags, hint);
+            output_list_legend(list, line.tags, legend);
         }
 
         output_list_render(list);
         output_list_free(list);
-        status_print_legend(out, &legend);
     }
 
-    /* Section 6: Uncommitted changes — the user's moves, every line update's to
-     * commit, as the header says. A key beneath names what update reaches and
-     * the verb that settles a line the other way, by the tags each line shows,
-     * the Issues key's shape: a deletion, which reaches every machine's unchanged
-     * copy and which apply puts back — another enabled profile's claim taking
-     * the place where one claims the path, said per path by update's preview,
-     * whose header words the reach as the key does (cmds/update.c
-     * update_print_preview); and a claim alone, which apply restores, a claim
-     * being no edit (core/deploy.h deploy_content_conflicts). An edit, a kind a
-     * capture commits, and the blob's policy are keyed by no line: apply skips
-     * the first two, and the third is update's alone. */
+    /* Section 6: Uncommitted changes — the user's moves, every row update's to
+     * commit, as the header says. A legend beneath names apply where it settles
+     * a row the other way unasked, by the tags each row shows: it puts a deletion
+     * back, and restores a claim alone, a claim being no edit (core/deploy.h
+     * deploy_content_conflicts). An edit, a kind a capture commits, and the blob's
+     * policy take no legend line: apply skips the first two, and the third is
+     * update's alone. A deletion's line names what update's commit reaches —
+     * every machine's unchanged copy — as update's preview header words it
+     * (cmds/update.c update_print_preview), since a user reading only status
+     * could not guess it; another enabled profile's claim taking the place where
+     * one claims the path is said per path by that preview. */
     if (partition->uncommitted.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Uncommitted changes",
-            "use \"dotta update\" to commit these changes"
+            out, "Uncommitted changes", "run 'dotta update' to commit them"
         );
-        status_legend_t legend = { .arena = frame };
 
         for (size_t i = 0; i < partition->uncommitted.count; i++) {
             const workspace_item_t *item = partition->uncommitted.entries[i];
@@ -917,7 +877,7 @@ static void status_print_workspace(
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
-            const char *hint = NULL;
+            const char *legend = NULL;
 
             /* By the state, exhaustive as the partition's switch is, so a state
              * added to this bucket asks for an arm of its own here */
@@ -926,21 +886,19 @@ static void status_print_workspace(
                     /* The capture route, whose every bit is a tag of its own
                      * (workspace_item_route, workspace_item_line): the claim
                      * axes alone are [mode] and [ownership], a reassignment riding
-                     * beside them or not. The key names what update commits and
-                     * what apply restores, and no reach: a committed claim lands
-                     * where each machine's next apply lands the row, which an
-                     * edit there or an owner its run cannot set stops — where
-                     * the deletion's key names the copies its removal reaches */
+                     * beside them or not, which apply restores beside the header's
+                     * update — an owner a run under sudo left behind is what
+                     * the user usually means to undo, never to commit for every
+                     * machine */
                     if ((item->divergence & ~(DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ==
                         DIVERGENCE_NONE) {
-                        hint = "changed locally; 'dotta update' commits it, "
-                            "'dotta apply' restores it";
+                        legend = "or run 'dotta apply' to restore it";
                     }
                     break;
 
                 case WORKSPACE_STATE_DELETED:
-                    hint = "gone locally; 'dotta update' deletes it and every machine's "
-                        "unchanged copy, 'dotta apply' puts it back";
+                    legend = "or run 'dotta apply' to put it back; update deletes "
+                        "every machine's unchanged copy";
                     break;
 
                 case WORKSPACE_STATE_UNDEPLOYED:
@@ -955,21 +913,19 @@ static void status_print_workspace(
                         false, "the uncommitted bucket holds DEPLOYED and DELETED alone"
                     );
             }
-            status_legend_add(&legend, line.tags, hint);
+            output_list_legend(list, line.tags, legend);
         }
 
         output_list_render(list);
         output_list_free(list);
-        status_print_legend(out, &legend);
     }
 
     /* Section 7: Profile reassignments — a clean row whose record names another
      * profile, which apply acknowledges at its checkpoint in the record alone:
-     * listed, and the status line leaves it as it finds it */
+     * listed, and the workspace's line leaves it as it finds it */
     if (partition->reassigned.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Profile reassignments",
-            "run \"dotta apply\" to acknowledge"
+            out, "Profile reassignments", "run 'dotta apply' to acknowledge them"
         );
 
         for (size_t i = 0; i < partition->reassigned.count; i++) {
@@ -985,19 +941,17 @@ static void status_print_workspace(
 
     /* Section 8: Undeployed changes — apply's work, both kinds: what Git has
      * and disk does not, a path apply is to create or a move of Git's disk has
-     * not followed ([stale]). Named as its twin, Uncommitted changes, is. A key
-     * beneath names the one line a user meets after an act of their own: a copy
+     * not followed ([stale]). Named as its twin, Uncommitted changes, is. A legend
+     * beneath names the one row a user meets after an act of their own: a copy
      * removed where Git moved past what dotta last saw there, whose absence deletes
      * nothing the view holds (core/workspace.c classify_absent), so it is here
      * and not among the deletions above, the [stale] its record gives it beside
-     * [undeployed] saying why (workspace_item_line). Every other line is the
-     * header's. */
+     * [undeployed] saying why (workspace_item_line). It says that why alone,
+     * the act being the header's. Every other row is the header's. */
     if (partition->undeployed.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Undeployed changes",
-            "use \"dotta apply\" to deploy these changes"
+            out, "Undeployed changes", "run 'dotta apply' to deploy them"
         );
-        status_legend_t legend = { .arena = frame };
 
         for (size_t i = 0; i < partition->undeployed.count; i++) {
             const workspace_item_t *item = partition->undeployed.entries[i];
@@ -1005,7 +959,7 @@ static void status_print_workspace(
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
-            const char *hint = NULL;
+            const char *legend = NULL;
 
             /* By the state, exhaustive as the partition's switch is, so a state
              * added to this bucket asks for an arm of its own here */
@@ -1016,8 +970,7 @@ static void status_print_workspace(
                      * absence here, a reassignment or a violation beside it, is
                      * the header's */
                     if (item->record && workspace_stale(item->row, item->record)) {
-                        hint = "gone locally, and changed in Git since dotta saw it; "
-                            "'dotta apply' lands Git's";
+                        legend = "gone locally, and changed in Git since dotta saw it";
                     }
                     break;
 
@@ -1038,27 +991,24 @@ static void status_print_workspace(
                         false, "the undeployed bucket holds DEPLOYED and UNDEPLOYED alone"
                     );
             }
-            status_legend_add(&legend, line.tags, hint);
+            output_list_legend(list, line.tags, legend);
         }
 
         output_list_render(list);
         output_list_free(list);
-        status_print_legend(out, &legend);
     }
 
     /* Section 9: New files — what the scan found beneath a directory a profile
-     * tracks. The header names both verbs that settle every line: update tracks
-     * it, or a pattern in the profile's .dottaignore, which travels with it,
-     * keeps it out on every machine — the one way out for a file a removal took
-     * from inside a directory its profile still tracks, which every scan offers
-     * back otherwise. A form, never a command: a path holding a space or a glob
-     * character is the user's to quote and escape, and ignore's help says what
-     * a pattern is matched against. */
+     * tracks, every row update's to track, as the header says. The legend names
+     * the other way out, true of every row: a pattern in the profile's
+     * .dottaignore, which travels with it, keeps a file out on every machine —
+     * the one way out for a file a removal took from inside a directory its profile
+     * still tracks, which every scan offers back otherwise. A form, never a
+     * command: a path holding a space or a glob character is the user's to quote
+     * and escape, and ignore's help says what a pattern is matched against. */
     if (partition->new_files.count > 0) {
         output_list_t *list = output_list_create(
-            out, "New files",
-            "use \"dotta update --include-new\" to track these files, "
-            "\"dotta ignore <profile> --add <pattern>\" to keep one out"
+            out, "New files", "run 'dotta update --include-new' to track them"
         );
 
         for (size_t i = 0; i < partition->new_files.count; i++) {
@@ -1066,6 +1016,10 @@ static void status_print_workspace(
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_legend(
+                list, line.tags,
+                "or run 'dotta ignore <profile> --add <pattern>' to keep it out"
+            );
         }
 
         output_list_render(list);
@@ -1074,23 +1028,22 @@ static void status_print_workspace(
 
     /* Section 10: Overridden copies — orphans beneath a standing blob, each the
      * landing's of the row standing over it, which clears it (core/deploy.h
-     * deploy_clearance). The header promises no flag and keys no tag, since a
-     * line's tags name what moved and not which cell it is: a bare tag is a copy
-     * dotta confirmed — unasked — or one it never did — --force's — and an
-     * [unreadable] one a read that failed — --force's — or a look — no flag's.
-     * So it says what holds of every line: the landing clears the copy, or apply's
-     * skip names what keeps it. The status line counts none, a copy's work being
-     * its row's, which the status line counts where it shows that row (stated:
-     * a filter that hides it reads Clean over the copy). Its blob is the one
-     * each line names, found by the call the orphan analysis made the copy's
-     * state by (core/manifest.h manifest_blob_above), the profile's own or
-     * another's, read off the view, since the item's line reads the item alone,
-     * and composed onto its metadata in a buffer sized for the path. */
+     * deploy_clearance). The header promises no flag and no tag has a legend
+     * line, since a row's tags name what moved and not which cell it is: a bare
+     * tag is a copy dotta confirmed — unasked — or one it never did — --force's
+     * — and an [unreadable] one a read that failed — --force's — or a look — no
+     * flag's. So it says what holds of every row: the landing clears the copy
+     * where it can, and apply's skip names what keeps one. The workspace's line
+     * counts none, a copy's work being its row's, which the line counts where
+     * it shows that row (stated: a filter that hides it reads aligned over the
+     * copy). Its blob is the one each row names, found by the call the orphan
+     * analysis made the copy's state by (core/manifest.h manifest_blob_above),
+     * the profile's own or another's, read off the view, since the item's line
+     * reads the item alone, and composed onto its metadata in a buffer sized
+     * for the path. */
     if (partition->overridden.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Overridden copies",
-            "a file or link stands over each; \"dotta apply\" clears them as it lands it, "
-            "or says what keeps one"
+            out, "Overridden copies", "run 'dotta apply' to clear them where it can"
         );
 
         for (size_t i = 0; i < partition->overridden.count; i++) {
@@ -1117,34 +1070,32 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 11: Issues — the scope exit's orphans apply prunes or skips
-     * (core/cleanup.h cleanup_verdict: PRUNABLE, SKIPPED), and dotta's nodes
-     * the landing of the rows beneath them replaces */
+    /* Section 11: Orphaned paths — the scope exit's orphans apply prunes or skips
+     * (core/cleanup.h cleanup_verdict: PRUNABLE, SKIPPED), apply's word for both
+     * (cmds/apply.c apply_print_cleanup_receipt), and dotta's nodes the landing
+     * of the rows beneath them replaces */
     if (partition->orphaned.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Issues",
-            "run \"dotta apply\" to prune them, where no key below says otherwise"
+            out, "Orphaned paths", "run 'dotta apply' to prune them"
         );
 
-        /* Every hint is keyed below by the exact tags its line shows, once per
-         * distinct tag string, so the key reads back against the list it follows,
-         * and reads what those tags say and nothing else — never the kind, the
-         * relocation's class or what a directory holds, which no tag carries —
-         * so it is true of every line it stands over. The bare [orphaned] key
-         * is the header's, a file's and a directory's: apply prunes a directory
-         * once the orphans in it go, and skips it while one of them stays — that
-         * orphan's own line says why, and apply's preview names the skip. A key
-         * says what becomes of the item and not whether its parent admits the
-         * run: a parent that refuses it is apply's skip line to name (stated). */
-        status_legend_t legend = { .arena = frame };
-
+        /* Every legend line reads the exact tags its row shows, said once per
+         * tag string beneath the list, and reads what those tags say and nothing
+         * else — never the kind, the relocation's class or what a directory holds,
+         * which no tag carries — so it is true of every row it stands under.
+         * The bare [orphaned] string has none: it is the header's, a file's and
+         * a directory's: apply prunes a directory once the orphans in it go,
+         * and skips it while one of them stays — that orphan's own row says why,
+         * and apply's preview names the skip. A legend line says what becomes
+         * of the item and not whether its parent admits the run: a parent that
+         * refuses it is apply's skip line to name (stated). */
         for (size_t i = 0; i < partition->orphaned.count; i++) {
             const workspace_item_t *item = partition->orphaned.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
-            const char *hint = NULL;
+            const char *legend = NULL;
 
             /* By the state, exhaustive as the partition's switch is, so a state
              * added to this bucket asks for an arm of its own here */
@@ -1154,92 +1105,81 @@ static void status_print_workspace(
                      * partition's switch lists apart (section 12): the failed
                      * look or the bits, and the relocation beside them */
                     if (item->fault != WORKSPACE_FAULT_NONE) {
-                        /* Worded by whose remedy the failed look is, so the hint
-                         * and its tag say the same thing (workspace_fault_t). A
-                         * directory shares [unreadable] and [unverified], and
-                         * no flag lifts its skip, so neither names --force;
-                         * [locked] is a file's alone. Read before the relocation,
-                         * as the item's line ranks them. --force is named with
-                         * the path it lifts the skip at, here as on every screen
-                         * naming it (the Conflicts header above says why). */
+                        /* The way past the skip the failed look makes, by whose
+                         * remedy it is (workspace_fault_t), so the line and its
+                         * tag say the same thing: the key, or root where the
+                         * run holds none, lets the next apply look, and prune
+                         * what it finds unchanged. A directory shares [unreadable]
+                         * and [unverified], and no flag lifts its skip, so neither
+                         * names --force; [locked] is a file's alone, and names
+                         * the key rather than --force, which would discard the
+                         * copy unread — apply's skip block names that where it
+                         * meets the row (cmds/apply.c apply_print_cleanup_skips).
+                         * Read before the relocation, as the item's line ranks
+                         * them. */
                         switch (item->fault) {
                             case WORKSPACE_FAULT_LOCKED:
-                                hint = config->encryption_enabled
-                                    ? "encrypted, and no key opened it "
-                                    "('dotta key set'); apply skips it, "
-                                    "'dotta apply --force <path>' prunes it"
-                                    : "encrypted, and encryption is disabled "
-                                    "(encryption.enabled = true, then 'dotta key "
-                                    "set'); apply skips it, 'dotta apply --force <path>' "
-                                    "prunes it";
+                                legend = config->encryption_enabled
+                                    ? "run 'dotta key set' to let apply prune it"
+                                    : "set encryption.enabled = true, then run 'dotta key set'";
                                 break;
                             case WORKSPACE_FAULT_UNREADABLE:
-                                hint = "cannot be read; apply skips it";
+                                legend = identity()->privileged
+                                    ? "apply skips it"
+                                    : "run under sudo to let apply prune it";
                                 break;
                             case WORKSPACE_FAULT_NONE:
                             case WORKSPACE_FAULT_UNVERIFIED:
-                                hint = "could not be verified; apply skips it";
+                                legend = "apply skips it";
                                 break;
                         }
                     } else if (item->divergence &
                         (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-                        /* The key names what changed — [modified], [mode],
-                         * [ownership], a file's alone — so the hint says only
-                         * that it did: --force lifts the skip whatever [relocated]
-                         * beside them says */
-                        hint = "changed since deployment; apply skips it, "
-                            "'dotta apply --force <path>' prunes it";
+                        /* The tags name what changed — [modified], [mode],
+                         * [ownership], a file's alone — so the line says only
+                         * the way past the skip: --force lifts it whatever
+                         * [relocated] beside them says, named with the path it
+                         * lifts the skip at, here as on every screen naming it
+                         * (the Conflicts section above says why) */
+                        legend = "run 'dotta apply --force <path>' to prune it";
                     } else if (item->relocation != WORKSPACE_RELOCATION_NONE) {
-                        /* One sentence for every [relocated] key: a re-target
+                        /* One line for every [relocated] string: a re-target
                          * apply prunes and a moved home it skips share the tag
                          * string, and a claim that moved stands at its new path
-                         * or nowhere, so it says the claim moved, never where
-                         * it stands */
-                        hint = "the claim moved with its target or home; apply prunes "
-                            "the old copy, but under a moved home only 'dotta apply "
-                            "--force <path>' does";
+                         * or nowhere, so it names the one case the header's verb
+                         * does not settle, never where the claim stands */
+                        legend = "if home moved, run 'dotta apply --force <path>'";
                     }
                     break;
 
                 case WORKSPACE_STATE_OBSTRUCTING:
                     /* The landing's consent (core/deploy.h deploy_clearance),
-                     * by the tags in the order they rank: what moved, as a skipped
-                     * orphan's key says it, and the replace --force gives where
-                     * cleanup's would be a prune — save a claim, which is never
-                     * an edit, and the bare key, which says what the node is in
-                     * the way of */
+                     * by the tags in the order they rank: what moved, and the
+                     * replace --force gives where cleanup's would be a prune —
+                     * save a claim, which is never an edit, and the bare
+                     * [obstructing], whose line says what the landing does with
+                     * the node. The failed look's lines are the orphan's above,
+                     * the replace in the prune's place: a node whose look failed
+                     * is replaced only under --force (deploy_clearance), the
+                     * key the safe way for a locked one, which lets the landing
+                     * look first */
                     if (item->fault != WORKSPACE_FAULT_NONE) {
                         switch (item->fault) {
                             case WORKSPACE_FAULT_LOCKED:
-                                hint = config->encryption_enabled
-                                    ? "encrypted, and no key opened it "
-                                    "('dotta key set'); apply skips it, "
-                                    "'dotta apply --force <path>' replaces it"
-                                    : "encrypted, and encryption is disabled "
-                                    "(encryption.enabled = true, then 'dotta key "
-                                    "set'); apply skips it, 'dotta apply --force <path>' "
-                                    "replaces it";
+                                legend = config->encryption_enabled
+                                    ? "run 'dotta key set' to let apply replace it"
+                                    : "set encryption.enabled = true, then run 'dotta key set'";
                                 break;
                             case WORKSPACE_FAULT_UNREADABLE:
-                                hint = "cannot be read; "
-                                    "apply skips it, 'dotta apply --force <path>' replaces it";
-                                break;
                             case WORKSPACE_FAULT_NONE:
                             case WORKSPACE_FAULT_UNVERIFIED:
-                                hint = "could not be verified; "
-                                    "apply skips it, 'dotta apply --force <path>' replaces it";
+                                legend = "run 'dotta apply --force <path>' to replace it";
                                 break;
                         }
                     } else if (item->divergence & DIVERGENCE_CONTENT) {
-                        hint = "changed since deployment; "
-                            "apply skips it, 'dotta apply --force <path>' replaces it";
-                    } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-                        hint = "changed since deployment, its bytes dotta's; "
-                            "apply replaces it";
+                        legend = "run 'dotta apply --force <path>' to replace it";
                     } else {
-                        hint = "the paths beneath it need a directory here; "
-                            "apply replaces it, 'dotta apply --force <path>' where dotta "
-                            "has not confirmed it";
+                        legend = "run 'dotta apply' to replace it with a directory";
                     }
                     break;
 
@@ -1255,27 +1195,23 @@ static void status_print_workspace(
                         false, "the orphaned bucket holds ORPHANED and OBSTRUCTING alone"
                     );
             }
-            status_legend_add(&legend, line.tags, hint);
+            output_list_legend(list, line.tags, legend);
         }
 
         output_list_render(list);
         output_list_free(list);
-        status_print_legend(out, &legend);
     }
 
     /* Section 12: Released paths — the scope exit's orphans apply settles in
      * the record alone (core/cleanup.h cleanup_verdict: ABSENT, RELEASED): it
      * retires each record and touches nothing on disk, which is what the header
-     * says of every line; a line says why where the item can, and the key the
-     * rest, by the tags each line shows, the Issues key's shape. Last, since
-     * nothing here asks the user anything, and the status line leaves it as it
-     * finds it. */
+     * says of every row; a row says why where the item can, and the legend the
+     * rest, by the tags each row shows. Last, since nothing here asks the user
+     * anything, and the workspace's line leaves it as it finds it. */
     if (partition->released.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Released paths",
-            "run \"dotta apply\" to let them go; nothing on disk changes"
+            out, "Released paths", "run 'dotta apply' to release them; disk stays as is"
         );
-        status_legend_t legend = { .arena = frame };
 
         for (size_t i = 0; i < partition->released.count; i++) {
             const workspace_item_t *item = partition->released.entries[i];
@@ -1283,7 +1219,7 @@ static void status_print_workspace(
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
-            const char *hint = NULL;
+            const char *legend = NULL;
 
             /* By the state, exhaustive as the partition's switch is, so a state
              * added to this bucket asks for an arm of its own here */
@@ -1292,31 +1228,27 @@ static void status_print_workspace(
                     /* The line's ladder: absence, then a squatter above — the
                      * two an orphan is let go for here (cleanup_verdict) */
                     if (item->occupant == FS_OCCUPANT_NONE) {
-                        hint = "already gone from disk; apply reclaims it";
+                        legend = "already gone from disk";
                     } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-                        hint = "not looked at, beneath a squatted directory; "
-                            "apply releases it, the path stays";
+                        legend = "not looked at, beneath a squatted directory";
                     }
                     break;
 
                 case WORKSPACE_STATE_RELEASED:
-                    /* A line names what let it go wherever the item can say —
+                    /* A row names what let it go wherever the item can say —
                      * what its profile's history kept it for, or that dotta never
-                     * deployed it (core/workspace.c workspace_item_line) — so
-                     * the bare [released] key, a file's and a directory's, points
-                     * at the line, and names the two causes of a line that names
-                     * none: a row standing on the record's entry under another
-                     * spelling, and what no apply removes, in a directory — an
-                     * active path beneath it, an orphan the load released, a
-                     * node no record names. [type] names its own cause: the node
+                     * deployed it (core/workspace.c workspace_item_line) — and
+                     * the rest are the header's: a row standing on the record's
+                     * entry under another spelling, and what no apply removes,
+                     * in a directory — an active path beneath it, an orphan the
+                     * load released, a node no record names — which the bare
+                     * [released] cannot tell apart and a line could only explain
+                     * by dotta's model. [type] names its own cause: the node
                      * the record describes, one dotta deployed or only saw,
                      * gone. */
-                    hint = (item->divergence & DIVERGENCE_TYPE)
-                        ? "what dotta last saw there is gone, another kind of path "
-                        "stands in its place; apply releases it, the path stays"
-                        : "its line names why, else it is another spelling of a path "
-                        "dotta manages, or a directory holding what no apply removes; "
-                        "apply releases it, the path stays";
+                    if (item->divergence & DIVERGENCE_TYPE) {
+                        legend = "another kind of path stands in its place";
+                    }
                     break;
 
                 case WORKSPACE_STATE_DEPLOYED:
@@ -1331,29 +1263,11 @@ static void status_print_workspace(
                         false, "the released bucket holds ORPHANED and RELEASED alone"
                     );
             }
-            status_legend_add(&legend, line.tags, hint);
+            output_list_legend(list, line.tags, legend);
         }
 
         output_list_render(list);
         output_list_free(list);
-        status_print_legend(out, &legend);
-    }
-
-    /* The keys are printed, and their frame goes with them */
-    arena_free(frame);
-
-    /* The diverged items the filter hides, counted. Where a section printed —
-     * the filter hid fewer than all, and every item in scope is listed in one —
-     * the note is set apart from the last of them, whose last line it would read
-     * as; under the bare status line it is that line's own. */
-    if (partition->hidden > 0) {
-        if (workspace_diverged(ws).count > partition->hidden) {
-            output_gap(out, OUTPUT_NORMAL);
-        }
-        output_print(
-            out, OUTPUT_NORMAL, "  {dim}(%zu item%s hidden){reset}\n",
-            partition->hidden, partition->hidden == 1 ? "" : "s"
-        );
     }
 }
 
@@ -1427,11 +1341,11 @@ static status_remote_t status_remote(
     if (error_code(err) == ERR_NOT_FOUND) {
         /* No remote configured (sys/remote.h names this read): no section to
          * print, and where --remote asked for one, the resolver's words in its
-         * place, as remote's listing says them (cmds/remote.c) — the default
-         * scope has no remote half to report */
+         * place, as remote's listing says them (cmds/remote.c) — the half's
+         * summary, said here where the half ends — and the default scope has no
+         * remote half to report */
         if (opts->want_remote) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(out, OUTPUT_NORMAL, "%s", error_line(err));
+            output_summary(out, OUTPUT_NORMAL, "%s", error_line(err));
         }
         return (status_remote_t){ 0 };
     }
@@ -1526,8 +1440,8 @@ static status_remote_t status_remote(
 
 /**
  * Print the remote sync status: a row per profile of the set the transport chose,
- * each its reading against the remote, then the summary — nothing where no section
- * stands
+ * each its reading against the remote — nothing where no section stands; the
+ * summary counts them (status_print_summary)
  *
  * Reads what it prints and writes nothing: each row as the transport read it,
  * and at -v, beneath it, each head its relation names.
@@ -1560,60 +1474,33 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
         );
     }
 
-    /* Display each profile's reading */
-    size_t up_to_date = 0;
-    size_t ahead = 0;
-    size_t behind = 0;
-    size_t diverged = 0;
-    size_t recreated = 0;
-    size_t no_remote = 0;
-    size_t deleted = 0;
-    size_t no_local = 0;
-    size_t failed = 0;
-
     for (size_t i = 0; i < remote->row_count; i++) {
         const status_remote_row_t *row = &remote->rows[i];
         const remote_relation_t *relation = &row->relation;
 
         /* A profile whose reading could not be read is a row of the section like
          * any other, on the report's stream, its cause the error's own line and
-         * the outcome glyph sync gives a failed analysis; the summary counts
-         * it, and the report goes on past it. At both levels its one line: a
-         * failure read no head for -v to show beneath it. */
+         * the outcome glyph sync gives a failed analysis; the summary counts it
+         * (status_print_summary), and the report goes on past it. At both levels
+         * its one line: a failure read no head for -v to show beneath it. */
         if (row->error) {
             output_print(
-                out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {red}(✗ %s){reset}\n",
+                out, OUTPUT_NORMAL, "  {cyan}%s{reset} {red}(✗ %s){reset}\n",
                 row->profile, error_line(row->error)
             );
-            failed++;
             continue;
-        }
-
-        switch (relation->state) {
-            case REMOTE_STATE_UP_TO_DATE:         up_to_date++; break;
-            case REMOTE_STATE_AHEAD:              ahead++; break;
-            case REMOTE_STATE_BEHIND:             behind++; break;
-            case REMOTE_STATE_DIVERGED:           diverged++; break;
-            case REMOTE_STATE_RECREATED:
-            case REMOTE_STATE_RECREATED_AHEAD:    recreated++; break;
-            case REMOTE_STATE_NO_REMOTE:          no_remote++; break;
-            case REMOTE_STATE_DELETED:
-            case REMOTE_STATE_DELETED_AHEAD:      deleted++; break;
-            case REMOTE_STATE_NO_LOCAL:
-            case REMOTE_STATE_NO_LOCAL_AHEAD:
-            case REMOTE_STATE_NO_LOCAL_DELETED:
-            case REMOTE_STATE_NO_LOCAL_NO_REMOTE: no_local++; break;
         }
 
         /* The reading's face comes from the relation's map — its glyph and its
          * phrase, read as list's and profile fetch's rows read it (sys/remote.h);
-         * only the frame and the counter per first clause are status's. The frame
-         * is one line at every level, matching the enabled profiles' format,
-         * and list's remote rows take it too (cmds/list.c list_profiles). */
+         * only the frame is status's. The frame is one line at every level, the
+         * enabled profiles' format: the reading a space after the name, as a
+         * list row's metadata follows its path (base/output.h
+         * output_list_render) */
         char phrase[REMOTE_PHRASE_MAX];
         remote_state_phrase(relation, phrase, sizeof(phrase));
         output_print(
-            out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {dim}(%s %s){reset}\n",
+            out, OUTPUT_NORMAL, "  {cyan}%s{reset} {dim}(%s %s){reset}\n",
             row->profile, remote_state_symbol(relation->state), phrase
         );
 
@@ -1656,142 +1543,192 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
             );
         }
     }
-
-    /* Display summary section: each reading counted under its phrase's first
-     * clause (sys/remote.h remote_state_phrase) */
-    output_section(out, OUTPUT_NORMAL, "Sync summary");
-
-    if (up_to_date > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} up-to-date\n", up_to_date);
-    }
-    if (ahead > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} ahead\n", ahead);
-    }
-    if (behind > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} behind\n", behind);
-    }
-    if (diverged > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n", diverged);
-    }
-    if (recreated > 0) {
-        output_print(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} recreated on the remote\n", recreated
-        );
-    }
-    if (no_remote > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote branch\n", no_remote);
-    }
-    if (deleted > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} deleted on the remote\n", deleted);
-    }
-    if (no_local > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no local branch\n", no_local);
-    }
-    if (failed > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} failed\n", failed);
-    }
 }
 
 /**
- * Print the workspace's status line, under its title: Clean, Dirty or Invalid
+ * Print the run's summary: the workspace's verdict and what the filter hid, then
+ * where the set stands against the remote — a line each, one block, beneath
+ * everything the report listed, and nothing of a half that did not run
  *
- * Said on every run, a clean one included: it is the run's answer, and a clean
- * one says what it compared — the paths aligned — as an empty apply or diff says
- * its own. The line is one fold of the items that ask the disk or the user
- * something, over the scope, decided and worded the same whatever the filter:
- * under -p it speaks for the filtered profiles alone, so a clean one never reads
- * Dirty for another's divergence, and what the filter hides is counted beneath
- * the sections.
+ * The workspace's line is said on every run of its half, one with nothing diverged
+ * included: it is the run's answer, and where nothing diverged it says what it
+ * compared — the paths aligned — as an empty apply or diff says its own. It is
+ * one fold of the items that ask the disk or the user something, over the scope,
+ * decided and worded the same whatever the filter: under -p it speaks for the
+ * filtered profiles alone, so it never counts another's divergence, and what
+ * the filter hides is said beneath it. The remote's line counts the rows the
+ * transport read, each under its reading's first clause; where no remote is
+ * configured the transport said the resolver's line in its place (status_remote).
  *
- * @param out Output context (must not be NULL)
- * @param ws Workspace (must not be NULL; a clean line counts its active paths)
+ * @param ctx Dispatch context (must not be NULL)
+ * @param ws Workspace (NULL where the local half did not run: no line of it)
  * @param scope Operation scope (must not be NULL; its filter dimension drives
  *              the count)
- * @param partition The diverged items, filed (must not be NULL)
+ * @param partition The diverged items, filed (must not be NULL; read where the
+ *                  workspace is)
+ * @param remote The transport's answer (must not be NULL; its zero value no line)
  */
 static void status_print_summary(
-    output_t *out,
+    const dotta_ctx_t *ctx,
     const workspace_t *ws,
     const scope_t *scope,
-    const status_partition_t *partition
+    const status_partition_t *partition,
+    const status_remote_t *remote
 ) {
-    /* The status line, one fold whatever the filter: the items of the sections
-     * that ask the disk or the user something, and those of them dotta could
-     * not verify. Three sections are listed and leave the status line as they
-     * find it: an overridden copy, whose work is the landing of the row standing
-     * over it, which the status line counts where it shows that row (stated: a
-     * filter that hides the row reads Clean over the copy); and what apply settles
-     * in the record alone, nothing on disk changing — a pure reassignment, a
-     * release, a reclaim. A scope is Clean iff the status line counts none. Invalid
-     * is reserved for what the analysis could not establish: an item carrying a
-     * fault (an unreadable path, a comparison that could not run, a history that
-     * would not read) is one no verb resolves by default — apply skips it and
-     * the user must look. Anything else counted is Dirty: work that touches the
-     * disk or waits on the user, not an invalid workspace. With no filter every
-     * item is in scope and none is hidden. */
-    const workspace_items_t *counted[] = {
-        &partition->conflicts,  &partition->unconfirmed,  &partition->squatted,
-        &partition->displaced,  &partition->unverifiable, &partition->uncommitted,
-        &partition->undeployed, &partition->new_files,    &partition->orphaned,
-    };
-    size_t shown = 0;
-    size_t unverified = 0;
-    for (size_t b = 0; b < sizeof(counted) / sizeof(counted[0]); b++) {
-        shown += counted[b]->count;
-        for (size_t i = 0; i < counted[b]->count; i++) {
-            if (counted[b]->entries[i]->fault != WORKSPACE_FAULT_NONE) {
-                unverified++;
+    CHECK_NULL(ctx);
+    CHECK_NULL(scope);
+    CHECK_NULL(partition);
+    CHECK_NULL(remote);
+
+    output_t *out = ctx->out;
+
+    if (ws) {
+        /* The workspace's line, one fold whatever the filter: the items of the
+         * sections that ask the disk or the user something, and those of them
+         * dotta could not verify. Three sections are listed and leave the line
+         * as they find it: an overridden copy, whose work is the landing of the
+         * row standing over it, which the line counts where it shows that row
+         * (stated: a filter that hides the row reads aligned over the copy);
+         * and what apply settles in the record alone, nothing on disk changing
+         * — a pure reassignment, a release, a reclaim. A scope's paths are aligned
+         * iff the line counts none. What the analysis could not establish is
+         * named beside the count: an item carrying a fault (an unreadable path,
+         * a comparison that could not run, a history that would not read) is
+         * one no verb resolves by default — apply skips it and the user must
+         * look. Every other item counted is work that touches the disk or waits
+         * on the user. With no filter every item is in scope and none is hidden. */
+        const workspace_items_t *counted[] = {
+            &partition->conflicts,  &partition->unconfirmed,  &partition->squatted,
+            &partition->displaced,  &partition->unverifiable, &partition->uncommitted,
+            &partition->undeployed, &partition->new_files,    &partition->orphaned,
+        };
+        size_t shown = 0;
+        size_t unverified = 0;
+        for (size_t b = 0; b < sizeof(counted) / sizeof(counted[0]); b++) {
+            shown += counted[b]->count;
+            for (size_t i = 0; i < counted[b]->count; i++) {
+                if (counted[b]->entries[i]->fault != WORKSPACE_FAULT_NONE) {
+                    unverified++;
+                }
             }
+        }
+
+        /* The line: the fold's decision, in the same words filtered or not, the
+         * half it speaks for its label, as the remote's line names its remote */
+        if (shown == 0) {
+            /* Active paths the filter reaches, both kinds — what stands aligned
+             * at a path is not a question about which kind stands there. With
+             * no filter every item is accepted, so this is the whole view. Counted
+             * here, the one arm that prints it. */
+            workspace_items_t active = workspace_active(ws);
+            size_t scoped_paths = 0;
+            for (size_t i = 0; i < active.count; i++) {
+                if (scope_accepts_profile(scope, active.entries[i]->profile)) {
+                    scoped_paths++;
+                }
+            }
+
+            /* Where the scope reaches no path, the sentence names its subject:
+             * the filter's profiles, or the view, which holds none — whether or
+             * not the record still lists what apply lets go */
+            if (scoped_paths > 0) {
+                output_summary(
+                    out, OUTPUT_NORMAL, "Workspace: %zu path%s aligned",
+                    scoped_paths, scoped_paths == 1 ? "" : "s"
+                );
+            } else if (scope_filters_profiles(scope)) {
+                output_summary(out, OUTPUT_NORMAL, "Workspace: no paths in profile");
+            } else {
+                output_summary(out, OUTPUT_NORMAL, "Workspace: no active paths");
+            }
+        } else if (unverified > 0) {
+            /* What the run found, and how much of it dotta could not verify */
+            output_summary(
+                out, OUTPUT_NORMAL,
+                "Workspace: %zu item%s diverged, %zu dotta could not verify",
+                shown, shown == 1 ? "" : "s", unverified
+            );
+        } else {
+            output_summary(
+                out, OUTPUT_NORMAL, "Workspace: %zu item%s diverged",
+                shown, shown == 1 ? "" : "s"
+            );
+        }
+
+        /* The diverged items the filter hides, counted beneath the line that
+         * speaks for the rest */
+        if (partition->hidden > 0) {
+            output_summary(
+                out, OUTPUT_NORMAL, "%zu item%s hidden by the profile filter",
+                partition->hidden, partition->hidden == 1 ? "" : "s"
+            );
         }
     }
 
-    output_section(out, OUTPUT_NORMAL, "Workspace status");
+    if (remote->name) {
+        /* Each row counted under its reading's first clause (sys/remote.h
+         * remote_state_phrase), a row that would not read under its failure */
+        size_t up_to_date = 0; size_t ahead = 0; size_t behind = 0;
+        size_t diverged = 0; size_t recreated = 0; size_t no_remote = 0;
+        size_t deleted = 0; size_t no_local = 0; size_t failed = 0;
 
-    /* The status line: the fold's decision, in the same words filtered or not */
-    if (shown == 0) {
-        /* Active paths the filter reaches, both kinds — what stands aligned at
-         * a path is not a question about which kind stands there. With no filter
-         * every item is accepted, so this is the whole view. Counted here, the
-         * one arm that prints it. */
-        workspace_items_t active = workspace_active(ws);
-        size_t scoped_paths = 0;
-        for (size_t i = 0; i < active.count; i++) {
-            if (scope_accepts_profile(scope, active.entries[i]->profile)) {
-                scoped_paths++;
+        for (size_t i = 0; i < remote->row_count; i++) {
+            const status_remote_row_t *row = &remote->rows[i];
+
+            if (row->error) {
+                failed++;
+                continue;
+            }
+
+            switch (row->relation.state) {
+                case REMOTE_STATE_UP_TO_DATE:         up_to_date++; break;
+                case REMOTE_STATE_AHEAD:              ahead++; break;
+                case REMOTE_STATE_BEHIND:             behind++; break;
+                case REMOTE_STATE_DIVERGED:           diverged++; break;
+                case REMOTE_STATE_RECREATED:
+                case REMOTE_STATE_RECREATED_AHEAD:    recreated++; break;
+                case REMOTE_STATE_NO_REMOTE:          no_remote++; break;
+                case REMOTE_STATE_DELETED:
+                case REMOTE_STATE_DELETED_AHEAD:      deleted++; break;
+                case REMOTE_STATE_NO_LOCAL:
+                case REMOTE_STATE_NO_LOCAL_AHEAD:
+                case REMOTE_STATE_NO_LOCAL_DELETED:
+                case REMOTE_STATE_NO_LOCAL_NO_REMOTE: no_local++; break;
             }
         }
 
-        /* Where the scope reaches no path, the sentence names its subject: the
-         * filter's profiles, or the view, which holds none — whether or not the
-         * record still lists what apply lets go */
-        if (scoped_paths > 0) {
-            output_colored(
-                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                "  Clean - %zu path%s aligned\n",
-                scoped_paths, scoped_paths == 1 ? "" : "s"
-            );
-        } else if (scope_filters_profiles(scope)) {
-            output_colored(
-                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                "  Clean - no paths in profile\n"
-            );
-        } else {
-            output_colored(
-                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                "  Clean - no active paths\n"
-            );
+        /* One line, its non-zero counts in the readings' order, as sync's Manifest
+         * rows say theirs (cmds/sync.c sync_print_manifest) — composed first,
+         * since a summary's line is said whole and a count joined into a phrase
+         * is a datum, uncoloured (base/output.h "Layout and data") */
+        const struct {
+            size_t count;
+            const char *word;
+        } parts[] = {
+            { up_to_date, "up-to-date"              },
+            { ahead,      "ahead"                   },
+            { behind,     "behind"                  },
+            { diverged,   "diverged"                },
+            { recreated,  "recreated on the remote" },
+            { no_remote,  "no remote branch"        },
+            { deleted,    "deleted on the remote"   },
+            { no_local,   "no local branch"         },
+            { failed,     "failed"                  },
+        };
+
+        string_array_t counts;
+        string_array_init(&counts, ctx->arena, 0);
+        for (size_t k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) {
+            if (parts[k].count == 0) continue;
+
+            string_array_pushf(&counts, "%zu %s", parts[k].count, parts[k].word);
         }
-    } else if (unverified > 0) {
-        output_colored(
-            out, OUTPUT_NORMAL, OUTPUT_COLOR_RED,
-            "  Invalid - %zu item%s dotta could not verify\n",
-            unverified, unverified == 1 ? "" : "s"
-        );
-    } else {
-        output_colored(
-            out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW,
-            "  Dirty - %zu item%s diverged\n",
-            shown, shown == 1 ? "" : "s"
+        const char *phrase = string_array_join(ctx->arena, &counts, ", ");
+
+        /* The remote by its name alone: whether its rows were read with no contact
+         * is their section's title's to say (status_print_remote) */
+        output_summary(
+            out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}': %s", remote->name, phrase
         );
     }
 }
@@ -1847,34 +1784,36 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* The enabled profiles and the last deployment of each */
     status_print_profiles(out, state, scope, ws, manifest);
 
-    /* The whole view, on request — before the status line and the sections that
-     * name only what diverged from it */
+    /* The whole view, on request — before the sections that name only what diverged
+     * from it */
     if (opts->show_local && opts->full) {
         status_print_manifest(out, ws, scope);
     }
 
-    /* The workspace status (with profile filtering for Coherent Scope)
+    /* The workspace's half (with profile filtering for Coherent Scope)
      *
      * The workspace was loaded over the persistent enabled set (the view's) for
      * accurate divergence analysis. status_partition then applies the CLI filter
      * dimension via scope_accepts_profile so `dotta status -p work` matches `dotta
-     * apply -p work` behavior, and the status line and the sections read what
-     * it filed.
+     * apply -p work` behavior, and the sections and the summary read what it filed.
      */
+    status_partition_t partition = { 0 };
     if (opts->show_local) {
-        status_partition_t partition;
         status_partition(ws, scope, ctx->arena, &partition);
-        status_print_summary(out, ws, scope, &partition);
-        status_print_workspace(out, ws, &partition, manifest, config);
+        status_print_workspace(out, &partition, manifest, config);
     }
 
     /* The remote half (if requested): its transport, then its section — no remote
-     * configured is no section, said in its place where --remote asked for one,
-     * and every failure of its own is a line of it */
+     * configured is no section, said where --remote asked for one, and every
+     * failure of its own is a line of it */
+    status_remote_t remote = { 0 };
     if (opts->show_remote) {
-        const status_remote_t remote = status_remote(ctx, opts, scope);
+        remote = status_remote(ctx, opts, scope);
         status_print_remote(ctx, &remote);
     }
+
+    /* The summary, last: what each half found, a line each, in one block */
+    status_print_summary(ctx, ws, scope, &partition, &remote);
 
     return NULL;
 }

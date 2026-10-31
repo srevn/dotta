@@ -1894,12 +1894,12 @@ static void apply_print_cleanup_preview(
      * whose orphan the load never looked at (core/cleanup.c cleanup_verdict's
      * displaced arm) — and each row says its cause where its item can, as status's
      * line for it does, being that line's (core/workspace.c workspace_item_line):
-     * the first two named, whose alone for the rest, which status's keys say,
-     * cleanup having no per-row reason for a release the way cleanup_skip_reason
-     * answers for a skip. Hence the closer's one thing true of all five: nothing
-     * on disk was touched. A second half saying what dotta stops doing ("no longer
-     * managed by dotta") was false of the fourth, which is about a file this
-     * same run may adopt eleven lines above, and the header says the rest. */
+     * the first two named, whose alone for the rest, cleanup having no per-row
+     * reason for a release the way cleanup_skip_reason answers for a skip. Hence
+     * the closer's one thing true of all five: nothing on disk was touched. A
+     * second half saying what dotta stops doing ("no longer managed by dotta")
+     * was false of the fourth, which is about a file this same run may adopt
+     * eleven lines above, and the header says the rest. */
     if (verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
 

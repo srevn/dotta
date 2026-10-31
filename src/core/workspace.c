@@ -4851,7 +4851,7 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
              * ahead of it included, since it would have released the copy all
              * the same. The entry's release and a directory's, by what it holds,
              * leave the item nothing to tell them apart by: whose alone, and
-             * the key names both (cmds/status.c status_print_workspace). */
+             * the legend names both (cmds/status.c status_print_workspace). */
             if (item->departure) {
                 switch (item->departure->kind) {
                     case PROFILE_DEPARTURE_REMOVED:

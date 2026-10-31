@@ -143,15 +143,17 @@ In `OBTAIN` mode, dotta resolves passphrases in the following order:
 In commands like `dotta status`, `dotta update`, and `dotta apply`, files that cannot be verified are categorized by the remedy that resolves them:
 
 ```
-$ dotta status
-Workspace status
-  Invalid - 1 item dotta could not verify
+$ dotta status --local
+Enabled profiles
+  global (deployed 2 hours ago)
 
-Unverifiable paths (1 item) (dotta could not verify these paths)
+Unverifiable paths (1 item) (dotta could not verify them; apply and update skip them)
 
   [locked] /home/you/.ssh/id_ed25519 (from global)
 
-  [locked] - encrypted, and no key opened it; 'dotta key set' unlocks it
+  [locked] - run 'dotta key set' to unlock it
+
+Workspace: 1 item diverged, 1 dotta could not verify
 ```
 
 | Tag | Meaning | Remedy |

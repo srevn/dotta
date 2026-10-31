@@ -130,13 +130,8 @@ static int history_path_order(const void *a, const void *b) {
  * @param unread Gains each path whose way the parent's trees would not read
  */
 static void history_descend(
-    history_walk_t *walk,
-    const git_tree *parent,
-    const git_tree *child,
-    const size_t *positions,
-    size_t n,
-    size_t offset,
-    uint64_t *held,
+    history_walk_t *walk, const git_tree *parent, const git_tree *child,
+    const size_t *positions, size_t n, size_t offset, uint64_t *held,
     uint64_t *unread
 ) {
     for (size_t i = 0; i < n;) {
@@ -333,8 +328,8 @@ static void history_read(history_walk_t *walk, history_commit_t *reached) {
         memset(walk->parent_held, 0, walk->words * sizeof(*walk->parent_held));
         memset(walk->parent_unread, 0, walk->words * sizeof(*walk->parent_unread));
         history_descend(
-            walk, parent_tree, tree, walk->positions, n, 0, walk->parent_held,
-            walk->parent_unread
+            walk, parent_tree, tree, walk->positions, n, 0,
+            walk->parent_held, walk->parent_unread
         );
 
         for (size_t k = 0; k < walk->words; k++) {
@@ -382,12 +377,8 @@ static void history_read(history_walk_t *walk, history_commit_t *reached) {
 }
 
 void history_removals(
-    git_repository *repo,
-    const git_oid *head,
-    const char *const *paths,
-    size_t count,
-    arena_t *arena,
-    history_removals_t *out
+    git_repository *repo, const git_oid *head, const char *const *paths,
+    size_t count, arena_t *arena, history_removals_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(head);
@@ -469,9 +460,9 @@ void history_removals(
         out[walk.paths[p].index] = (history_removals_t){
             .entries = walk.found[p].entries,
             .count = walk.found[p].count,
-            .holding = history_set_has(walk.held, p) ? HISTORY_HOLDING_HELD
-                : history_set_has(walk.unread, p) ? HISTORY_HOLDING_UNREAD
-                : HISTORY_HOLDING_NONE,
+            .holding = history_set_has(walk.held, p)
+                ? HISTORY_HOLDING_HELD : history_set_has(walk.unread, p)
+                ? HISTORY_HOLDING_UNREAD : HISTORY_HOLDING_NONE,
         };
     }
 
@@ -510,12 +501,8 @@ static int history_since_order(const void *a, const void *b) {
  *            UNREAD where a read that failed could have answered it
  */
 static void history_search(
-    git_repository *repo,
-    const git_oid *head,
-    const history_entry_t *entries,
-    const history_entry_t **run,
-    size_t count,
-    history_holding_t *out
+    git_repository *repo, const git_oid *head, const history_entry_t *entries,
+    const history_entry_t **run, size_t count, history_holding_t *out
 ) {
     const git_oid *since = &run[0]->since;
 
@@ -587,11 +574,8 @@ static void history_search(
 }
 
 void history_held(
-    git_repository *repo,
-    const git_oid *head,
-    const history_entry_t *entries,
-    size_t count,
-    history_holding_t *out
+    git_repository *repo, const git_oid *head, const history_entry_t *entries,
+    size_t count, history_holding_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(head);
@@ -609,15 +593,28 @@ void history_held(
     const history_entry_t **asked = heap_calloc(count, sizeof(*asked));
     size_t owed = 0;
 
+    /* The store's packs read once, here, so an entry the store lacks — the usual
+     * one, the user's own bytes — costs its lookups and nothing more: a lookup
+     * left to refresh re-reads the pack directory and searches every pack again
+     * at each miss (lib/libgit2/src/libgit2/odb.c git_odb_exists_ext, odb_pack.c
+     * pack_backend__refresh), and the packs here are one a fetch, never repacked
+     * (sys/gitops.c gitops_init). Unchecked: a refresh refused leaves the packs
+     * already read, the ones a lookup searches before its own refresh, and a
+     * miss whose refresh is refused answers absent too. Stated: a pack another
+     * process writes into the store while the entries are asked is read at the
+     * next ask. */
     git_odb *odb = NULL;
     int rc = git_repository_odb(&odb, repo);
+    if (rc == 0) (void) git_odb_refresh(odb);
     for (size_t i = 0; i < count; i++) {
         out[i] = HISTORY_HOLDING_NONE;
 
         if (git_oid_equal(&entries[i].since, head)) continue;
         if (rc < 0) {
             out[i] = HISTORY_HOLDING_UNREAD;
-        } else if (git_odb_exists(odb, &entries[i].blob_oid) == 1) {
+        } else if (git_odb_exists_ext(
+            odb, &entries[i].blob_oid, GIT_ODB_LOOKUP_NO_REFRESH
+            ) == 1) {
             asked[owed++] = &entries[i];
         }
     }

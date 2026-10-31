@@ -143,19 +143,20 @@ typedef struct {
  *     its path, as a blob of its kind, and the store holds that blob. The two
  *     halves are what "Git holds these bytes there" means: a store that lost an
  *     object may keep a tree naming it, which then holds nothing. The store's
- *     half is presence, never whether the blob reads (git_odb_exists);
+ *     half is presence, never whether the blob reads (git_odb_exists_ext);
  *   - UNREAD: not held, and a commit or a tree it was owed would not read — the
  *     head's own among them — or the store would not open;
  *   - NONE: the store lacks the blob; or the entry is asked since the head itself,
  *     which leaves nothing to read; or every commit it was owed was read, and
  *     none holds it.
  *
- * The store is asked first, once an entry, and an entry it lacks costs no commit,
- * as one asked since the head does. The rest are owed a walk, one a `since`,
- * each entry done at its first holder: libgit2's revwalk, newest first by commit
- * time, each commit's tree asked at the path of every entry still sought
- * (git_tree_entry_bypath), each directory on the way read again for each entry
- * and found in the run's tree cache (sys/gitops.c gitops_init).
+ * The store is asked first, once an entry, its packs read once a call, and an
+ * entry it lacks costs no commit, as one asked since the head does. The rest
+ * are owed a walk, one a `since`, each entry done at its first holder: libgit2's
+ * revwalk, newest first by commit time, each commit's tree asked at the path of
+ * every entry still sought (git_tree_entry_bypath), each directory on the way
+ * read again for each entry and found in the run's tree cache (sys/gitops.c
+ * gitops_init).
  *   - Where `since` is zero the walk is unsorted, and reads nothing ahead of a
  *     commit but its parents (lib/libgit2/src/libgit2/revwalk.c get_revision:
  *     no sort and no hide, so no limit_list): a holder a few commits back costs

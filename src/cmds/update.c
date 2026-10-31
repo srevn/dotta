@@ -1552,15 +1552,19 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (refused[WORKSPACE_ROUTE_UNCONFIRMED] > 0) {
         /* Bytes no base proves: a plain update would commit what nobody has shown
          * is the user's over the profile's. Each way out unqualified: every such
-         * row is a file row with a file or a link standing — one the capture
-         * commits (core/workspace.h workspace_capturable), KIND answering first
-         * — which update --force commits and apply --force replaces, each named
-         * with its path; so under --force the arm counts none (update_partition) */
+         * row is a file row with a file or a link standing — one a capture commits
+         * (core/workspace.h workspace_capturable), KIND answering first — which
+         * apply --force replaces, named with its path, and which disk keeps in
+         * the place status's Unconfirmed header names: a profile of its own,
+         * what a machine new to dotta most often wants, where update --force
+         * would commit it into the row's profile for every machine. Under --force
+         * the arm counts none, every such row taken (update_partition) */
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: not confirmed by dotta — 'dotta diff' compares, "
-            "'dotta apply --force <path>' keeps Git's, 'dotta update --force <path>' "
-            "keeps disk's, 'dotta remove' stops tracking %s on every machine",
+            "'dotta apply --force <path>' keeps Git's, 'dotta add <new profile> <path>' "
+            "keeps disk's in a profile of its own, 'dotta remove' stops tracking %s on "
+            "every machine",
             refused[WORKSPACE_ROUTE_UNCONFIRMED],
             refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "it" : "them"

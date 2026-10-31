@@ -1281,10 +1281,10 @@ typedef struct {
  *                                  capture commits (workspace_capturable): update's
  *                                  verb where every consent skip at its row's
  *                                  own path that names one reads CAPTURE, update
- *                                  --force's where any reads either of the other
- *                                  two; and UNCONFIRMED, at that node, for the
- *                                  other place disk's can go, a profile of its
- *                                  own (cmds/apply.c apply_print_deploy_skips)
+ *                                  --force's where any reads CONFLICT; and
+ *                                  UNCONFIRMED on a line of its own, disk's kept
+ *                                  in a profile of its own (cmds/apply.c
+ *                                  apply_print_deploy_skips)
  *   diff's status line             every arm, both directions: the row's line,
  *                                  or none where the direction lists nothing;
  *                                  CONFLICT's downstream naming update --force
@@ -1480,12 +1480,17 @@ typedef enum {
  *                            profile's — and apply skips it, as it skips any
  *                            edit, since they may be bytes Git lacks: apply --force
  *                            keeps Git's, update --force keeps disk's, into the
- *                            profile the row is from. A kind a capture commits
- *                            (file ↔ symlink on a file row) reads here too, every
- *                            other kind having answered at KIND above, whose
- *                            remedies are its own; and so does a claim of Git's
- *                            riding beside the bytes, which never makes them
- *                            "changed in Git and on disk".
+ *                            profile the row is from — and a new profile's add
+ *                            keeps them in a profile of their own, the place a
+ *                            machine new to dotta most often wants and the one
+ *                            the screens name (cmds/status.c
+ *                            status_print_workspace, cmds/update.c cmd_update,
+ *                            cmds/apply.c apply_print_deploy_skips). A kind a
+ *                            capture commits (file ↔ symlink on a file row) reads
+ *                            here too, every other kind having answered at KIND
+ *                            above, whose remedies are its own; and so does a
+ *                            claim of Git's riding beside the bytes, which never
+ *                            makes them "changed in Git and on disk".
  *   CLAIM_MOVED beside       CONFLICT — a claim Git's to bring (divergence_type_t:
  *     CONTENT ∨ TYPE         moved past the record's, or naming an owner this host
  *                            cannot resolve) beside an edit a base proves the

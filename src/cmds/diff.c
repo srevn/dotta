@@ -226,10 +226,12 @@ static const char *diff_status_line(
              * is true of it — apply overwrites it only under --force, and update
              * commits it only under its own. Both directions, in the words status's
              * Unconfirmed header and update's census say it; each --force
-             * unqualified, as status's Unconfirmed header and legend line name
-             * them: a file row with a file or a link standing, a node the capture
-             * commits (core/workspace.h workspace_capturable), KIND answering
-             * first */
+             * unqualified, as status's Unconfirmed legend line names Git's: a
+             * file row with a file or a link standing, a node the capture commits
+             * (core/workspace.h workspace_capturable), KIND answering first.
+             * Downstream names update's own --force, the verb this direction
+             * previews, where status's header and update's census name the screens'
+             * example for such bytes, a profile of its own */
             return direction == DIFF_UPSTREAM
                    ? "not confirmed by dotta (apply --force <path> keeps Git's)"
                    : "not confirmed by dotta (update --force <path> keeps disk's)";

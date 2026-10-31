@@ -731,15 +731,20 @@ static void status_print_workspace(
      * status line say it. Its header and its legend name the two sides as theirs
      * do, each unqualified: every row is a file row with a regular file or a
      * link standing — a directory row and every other kind answer at KIND, above
-     * — which `update --force` commits (core/workspace.h workspace_capturable)
-     * and `apply --force` replaces, each named with its path. The header names
-     * disk's, the side that loses nothing, as the Conflicts header does; the
-     * legend names Git's, true of every row. */
+     * — which a capture commits (core/workspace.h workspace_capturable) and `apply
+     * --force` replaces, named with its path. The header names disk's, the side
+     * that loses nothing, as the Conflicts header does, in the place such bytes
+     * most often want: a machine new to dotta, whose own files meet the profiles
+     * it clones, keeps them in a profile of its own, created and enabled above
+     * the others while the row's own keeps its version — where `update --force`,
+     * which takes these rows too (cmds/update.c update_partition), would commit
+     * them into the row's profile for every machine. The legend names Git's,
+     * true of every row. */
     if (partition->unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
             "not confirmed by dotta; "
-            "run 'dotta update --force <path>' to keep disk's"
+            "run 'dotta add <new profile> <path>' to keep disk's in a profile of its own"
         );
 
         for (size_t i = 0; i < partition->unconfirmed.count; i++) {

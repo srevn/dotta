@@ -353,7 +353,7 @@ static void status_print_profiles(
             output_hintline(
                 out, OUTPUT_NORMAL,
                 "  no branch     - 'dotta profile disable <profile>' drops it; "
-                "'dotta profile fetch <profile>' brings its branch back"
+                "'dotta sync <profile>' brings its branch back where the remote holds it"
             );
         }
     }

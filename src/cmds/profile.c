@@ -583,8 +583,9 @@ static error_t profile_enable(
                     "Profile '%s' is enabled, and Git holds no branch for it", name
                 );
                 output_hint(
-                    out, OUTPUT_NORMAL, "Run 'dotta profile disable %s' to drop it, "
-                    "or 'dotta profile fetch %s' to bring its branch back", name, name
+                    out, OUTPUT_NORMAL, "Run 'dotta profile disable %s' to drop it, or "
+                    "'dotta sync %s' to bring its branch back where the remote holds it",
+                    name, name
                 );
                 break;
             }

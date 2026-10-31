@@ -2651,7 +2651,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Drop one with 'dotta profile disable <profile>', or bring its branch "
-                "back with 'dotta profile fetch <profile>'"
+                "back with 'dotta sync <profile>' where the remote holds it"
             );
         }
     }

@@ -178,7 +178,7 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
         if (!hashmap_find(profile_map, name, &found)) {
             /* Enabled, and Git lists no branch for it (core/manifest.h
              * manifest_missing): drawn at its rank and saved as it stands, so
-             * the two ways out status names — the disable, the fetch that brings
+             * the two ways out status names — the disable, the sync that brings
              * the branch back — stay the user's to pick. The name is a copy,
              * the listing holding none to borrow. */
             view->items[view->item_count++] = (item_t){

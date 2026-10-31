@@ -6,7 +6,7 @@ Profiles are the central organizing unit in dotta. Each profile is built on a Gi
 
 - **Available** -- exists as a local Git branch but is not enabled
 - **Enabled** -- switched on for this machine; every command acts on it (apply, update, sync, status)
-- **No branch** -- enabled, but Git holds no branch for it: it deploys nothing, and the listings mark it `(no branch)` until `dotta profile disable` drops it or `dotta profile fetch` brings its branch back
+- **No branch** -- enabled, but Git holds no branch for it: it deploys nothing, and the listings mark it `(no branch)` until `dotta profile disable` drops it, or `dotta sync` brings its branch back where the remote holds it
 - **Remote** -- exists on a remote but has not been fetched locally
 
 ## Enabling and Disabling
@@ -182,7 +182,7 @@ Keybindings:
 - `w` -- save changes
 - `q` / `Esc` -- quit
 
-Saving writes the enabled set and nothing else: `dotta apply` carries it out, and `dotta apply --dry-run` shows what that will do. An enabled profile whose branch is gone reads `(no branch)`: toggle it off to disable it, or fetch its branch back.
+Saving writes the enabled set and nothing else: `dotta apply` carries it out, and `dotta apply --dry-run` shows what that will do. An enabled profile whose branch is gone reads `(no branch)`: toggle it off to disable it, or let `dotta sync` bring its branch back where the remote holds it.
 
 ## Metadata Preservation
 

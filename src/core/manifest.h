@@ -79,7 +79,7 @@
  * the one verb that takes it away. And one thing a profile can fail to be: here.
  * An enabled profile Git holds no branch for is **missing** and contributes
  * nothing: manifest_missing, the channel's fourth slice, the repair a disable,
- * or a fetch that brings the branch back.
+ * or the next sync where the remote holds the branch.
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_profile walks one profile
@@ -850,13 +850,15 @@ typedef struct {
  * is left in it (core/workspace.c workspace_analyze_orphans). Missing is an
  * observation, never an error (manifest_build): the health channel's fact about
  * a profile, where manifest_unbound, manifest_unkept and manifest_contradicted
- * are its facts about claims. Only Git surgery, or a state write that failed
- * after `remove` deleted the branch, leaves one. Empty on every build whose enabled
- * profiles all have their branches, and on one profile's view.
+ * are its facts about claims. One is left by a deletion a sync learned — another
+ * machine deleted the profile, and its enabled row stays until `profile disable`
+ * (cmds/sync.c sync_execute) — by Git surgery, or by a state write that failed
+ * after `remove` deleted the branch. Empty on every build whose enabled profiles
+ * all have their branches, and on one profile's view.
  *
  * The screen says **no branch**: the header's word is what the build found of
- * the profile, the screen's is what it lacks — the branch a fetch brings back,
- * or the profile a disable lets go of.
+ * the profile, the screen's is what it lacks — the branch the next sync brings
+ * back where the remote holds it, or the profile a disable lets go of.
  *
  * Readers: the health channel's listing (cmds/status.c status_print_profiles)
  * and apply's (cmds/apply.c cmd_apply); and an enable that names one says so,

@@ -1192,8 +1192,10 @@ static error_t add_refuse_moves(const add_walk_t *walk) {
  * so a present owner implies a present group.
  *
  * The one voice for the file capture and the directory capture, which had drifted
- * apart; update's sibling line is not this one — it speaks at the receipt's indent
- * and carries the copy's encrypted suffix.
+ * apart. Update's captures are no line of this one: its receipt says each once
+ * its commit landed, a row an item in apply's receipt's form, the seal beside
+ * the claim (cmds/update.c update_print_receipt) — two writers in two voices
+ * until add's screen takes one (stated).
  *
  * @param out Output context (must not be NULL)
  * @param what The claim's noun: "metadata" or "directory metadata"

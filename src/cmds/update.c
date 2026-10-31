@@ -116,41 +116,60 @@ static error_t update_capture(
 }
 
 /**
+ * One capture a commit took: the item, what it committed, and its seal
+ *
+ * The record is the record phase's (update_write_record) — the node the capture
+ * held to, the blob the commit holds at the name, the triple its bytes were read
+ * with (a file's, the fstat of the descriptor it read; a link's, the lstat before
+ * its target; none for a directory, which confirms no content), and the claim
+ * the capture answered — so the phase writes what this commit put there, never
+ * what a later head of the branch says should be. The item and the seal are the
+ * receipt's (update_print_receipt): the path as the walk met it, its kind's slash
+ * read as a deletion's row reads its item, and whether the bytes landed sealed,
+ * which no column of the record holds (core/state.h state_record_t).
+ */
+typedef struct {
+    const workspace_item_t *item;      /* The item captured, the workspace's */
+    state_record_t record;             /* What the capture committed, as the record keeps it */
+    bool encrypted;                    /* The claim's seal: the bytes landed sealed */
+} update_captured_t;
+
+/**
  * What one profile's update commit did, path by path
  *
  * Filled by the walk that does the work — one edit per item on the profile's
  * draft: the capture for a file, the claim capture for a directory, the removal
- * for a deletion — and read back by the run's line and the record phase
+ * for a deletion — and by the climbs and the commit after it, and read back by
+ * the receipt (update_print_receipt), the run's line and the record phase
  * (update_write_record), so each follows the commit and nothing else: an item
- * the walk skipped (a path the race guard refused) lands in no list and gets no
- * record write. The message is the draft's, never these lists, and whether the
- * commit landed at all is the commit's own answer (core/profiles.h profile_commit)
- * — a walk whose edits leave both documents as the draft opened them lands none,
- * whatever its lists hold — and the executor hands on only the bookkeeping of a
- * commit that landed (update_execute).
+ * the walk skipped (a path the race guard refused) lands in no list, and gets
+ * no row and no record write. The message is the draft's, never these lists,
+ * and whether the commit landed at all is the commit's own answer (core/profiles.h
+ * profile_commit) — a walk whose edits leave both documents as the draft opened
+ * them lands none, whatever its lists hold — and the executor hands on only the
+ * bookkeeping of a commit that landed (update_execute).
  *
- * A capture is kept as the record of what it committed — the node the capture
- * held to, the blob the commit holds at the name, the triple its bytes were read
- * with (a file's, the fstat of the descriptor it read; a link's, the lstat before
- * its target; none for a directory, which confirms no content), and the claim
- * the capture answered — so the record phase writes what this commit put there,
- * never what a later head of the branch says should be. Its names are the item's
- * (workspace lifetime) and the command arena's (the claim's, which the capture
- * answers there). A deletion is kept as the item it took, the workspace's, which
- * the command arena holds past the record phase: its path is where the phase
- * reclaims the record of the node already gone. What the climbs retire and what
- * the prune takes, the walk counts at -v (update_profile); the record of each
- * is the next apply's to decide.
+ * A capture is kept whole (update_captured_t), its names the item's (workspace
+ * lifetime) and the command arena's (the claim's, which the capture answers there).
+ * A deletion is kept as the item it took, the workspace's, which the command
+ * arena holds past the record phase: its path is where the phase reclaims the
+ * record of the node already gone. What the climbs claim and retire and what
+ * the prune takes are counts — a derived claim is the way to the claims, never
+ * one (core/profiles.h profile_capture_ancestors) — which the receipt says; the
+ * record of each is the next apply's to decide.
  *
  * Memory: every member is the command arena's, and nothing frees a commit.
  */
 typedef struct {
     const char *profile;               /* Borrowed from the enabled set */
     git_oid oid;                       /* The commit, Git's null id where none landed: its own answer */
-    state_record_t *captured;          /* What each capture committed, as the record keeps it */
+    update_captured_t *captured;       /* What each capture committed */
     size_t captured_count;
     const workspace_item_t **deleted;  /* The DELETED items the deletions took (the workspace's) */
     size_t deleted_count;
+    size_t ancestors_captured;         /* Rungs the climbs claimed from the disk */
+    size_t ancestors_retired;          /* Derived claims the climbs retired */
+    size_t ancestors_pruned;           /* Derived claims the commit's prune took */
 } update_commit_t;
 
 /**
@@ -575,18 +594,12 @@ static error_t update_profile(
             error_t err = profile_remove(draft, item->item_kind, item->storage_path);
             if (err) return err;
 
-            output_info(
-                out, OUTPUT_VERBOSE, "  Deleted: %s%s", item->filesystem_path,
-                path_kind_suffix(item->item_kind)
-            );
             commit->deleted[commit->deleted_count++] = item;
             continue;
         }
 
         switch (item->item_kind) {
             case PATH_KIND_FILE: {
-                output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
-
                 /* The capture, and the entry and the claim it becomes on the
                  * profile's draft, at the name the seal was made under
                  * (infra/content.h). One tail past both: the bytes are released
@@ -614,45 +627,22 @@ static error_t update_profile(
                  * holds at the name under the look its bytes came off, and the
                  * claim the capture answered — its mode the type's floor where
                  * it claims none, a link's, the record's don't-care under its
-                 * kind */
-                commit->captured[commit->captured_count++] = (state_record_t){
-                    .filesystem_path = item->filesystem_path,
-                    .storage_path = item->storage_path,
-                    .profile = profile,
-                    .kind = item->occupant,
-                    .blob_oid = claim.blob_oid,
-                    .stat = state_stat_from_read(&capture.st),
-                    .mode = profile_claim_mode(&claim),
-                    .owner = claim.owner,
-                    .group = claim.group,
+                 * kind — and the seal the claim carries, for the receipt */
+                commit->captured[commit->captured_count++] = (update_captured_t){
+                    .item = item,
+                    .record = {
+                        .filesystem_path = item->filesystem_path,
+                        .storage_path    = item->storage_path,
+                        .profile         = profile,
+                        .kind            = item->occupant,
+                        .blob_oid        = claim.blob_oid,
+                        .stat            = state_stat_from_read(&capture.st),
+                        .mode            = profile_claim_mode(&claim),
+                        .owner           = claim.owner,
+                        .group           = claim.group,
+                    },
+                    .encrypted = claim.encrypted,
                 };
-
-                /* The claim decides the line: mode and ownership, the mode alone,
-                 * or the ownership alone — a link's, whose claim carries no mode
-                 * and no stamp — and none where the capture claims nothing, a
-                 * link the invoker owns. Ownership is both names or neither at
-                 * the capture (core/metadata.c metadata_capture_ownership), so
-                 * the owner alone is asked, as add asks it (cmds/add.c
-                 * add_print_capture) */
-                if (claim.mode != MODE_UNCLAIMED && claim.owner) {
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
-                        item->filesystem_path, claim.mode, claim.owner, claim.group,
-                        claim.encrypted ? ", encrypted" : ""
-                    );
-                } else if (claim.mode != MODE_UNCLAIMED) {
-                    output_info(
-                        out, OUTPUT_VERBOSE, "  Captured metadata: %s (mode: %04o%s)",
-                        item->filesystem_path, claim.mode,
-                        claim.encrypted ? ", encrypted" : ""
-                    );
-                } else if (claim.owner) {
-                    output_info(
-                        out, OUTPUT_VERBOSE, "  Captured metadata: %s (owner: %s:%s)",
-                        item->filesystem_path, claim.owner, claim.group
-                    );
-                }
                 break;
             }
 
@@ -682,32 +672,20 @@ static error_t update_profile(
 
                 /* What the capture committed, as the record keeps it: the directory
                  * the guard above just held it to, and the claim the capture
-                 * answered — no content, which a directory never confirms */
-                commit->captured[commit->captured_count++] = (state_record_t){
-                    .filesystem_path = item->filesystem_path,
-                    .storage_path = item->storage_path,
-                    .profile = profile,
-                    .kind = FS_OCCUPANT_DIRECTORY,
-                    .mode = profile_claim_mode(&claim),
-                    .owner = claim.owner,
-                    .group = claim.group,
+                 * answered — no content, which a directory never confirms, and
+                 * no seal */
+                commit->captured[commit->captured_count++] = (update_captured_t){
+                    .item = item,
+                    .record = {
+                        .filesystem_path = item->filesystem_path,
+                        .storage_path    = item->storage_path,
+                        .profile         = profile,
+                        .kind            = FS_OCCUPANT_DIRECTORY,
+                        .mode            = profile_claim_mode(&claim),
+                        .owner           = claim.owner,
+                        .group           = claim.group,
+                    },
                 };
-
-                /* The claim decides the line: its mode, and its owner where it
-                 * names one */
-                if (claim.owner) {
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
-                        item->filesystem_path, claim.mode, claim.owner, claim.group
-                    );
-                } else {
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "  Updated directory metadata: %s (mode: %04o)",
-                        item->filesystem_path, claim.mode
-                    );
-                }
                 break;
             }
         }
@@ -725,14 +703,12 @@ static error_t update_profile(
      * rung was skipped at the filter (the route's displaced arms), whichever
      * profile's claim the squatter displaced, so a chain that reaches here holds
      * directories at every claimed rung. Its two outs count the claims it authored
-     * and the ones it retired, for the lines below, the record of each the next
-     * apply's to decide. */
-    size_t ancestors_captured = 0;
-    size_t ancestors_retired = 0;
+     * and the ones it retired, into the bookkeeping for the receipt, the record
+     * of each the next apply's to decide. */
     for (size_t i = 0; i < commit->captured_count; i++) {
         error_t err = profile_capture_ancestors(
-            draft, ctx->run.mounts, commit->captured[i].storage_path,
-            &ancestors_captured, &ancestors_retired
+            draft, ctx->run.mounts, commit->captured[i].record.storage_path,
+            &commit->ancestors_captured, &commit->ancestors_retired
         );
         if (err) return err;
     }
@@ -751,22 +727,9 @@ static error_t update_profile(
     for (size_t i = 0; i < rows.count; i++) {
         error_t err = profile_derive_ancestors(
             draft, ctx->run.mounts, rows.entries[i]->storage_path, path_filter,
-            &ancestors_captured, &ancestors_retired
+            &commit->ancestors_captured, &commit->ancestors_retired
         );
         if (err) return err;
-    }
-
-    if (ancestors_captured > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE, "  Captured %zu ancestor claim%s",
-            ancestors_captured, ancestors_captured == 1 ? "" : "s"
-        );
-    }
-    if (ancestors_retired > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE, "  Retired %zu ancestor claim%s",
-            ancestors_retired, ancestors_retired == 1 ? "" : "s"
-        );
     }
 
     /* The commit, where an edit moved either document: a capture, a deletion,
@@ -775,30 +738,20 @@ static error_t update_profile(
      * the world moved under works at all — while imported redundancy rides a
      * commit and never drives one. Its message names what the commit changes of
      * the profile's claims, as the walk and both climbs left the draft, never
-     * the bookkeeping, which is the record's and the run line's. Its prune takes
-     * what nothing stands on any longer, counted for the line below: the claim
-     * leaves the view by this commit, and its record is the next apply's to decide.
-     * And the commit it made, the commit's own answer, Git's null id for captures
-     * that put back what the profile holds, which a hook rewriting a file between
-     * the decision and the capture makes */
+     * the bookkeeping, which is the receipt's, the record's and the run line's.
+     * Its prune takes what nothing stands on any longer, counted into the
+     * bookkeeping for the receipt: the claim leaves the view by this commit,
+     * and its record is the next apply's to decide. And the commit it made, the
+     * commit's own answer, Git's null id for captures that put back what the
+     * profile holds, which a hook rewriting a file between the decision and the
+     * capture makes */
     const commit_words_t words = {
         .action     = COMMIT_ACTION_UPDATE,
         .title      = ctx->config->commit_title,
         .body       = ctx->config->commit_body,
         .custom_msg = opts->message,
     };
-    size_t pruned = 0;
-    error_t err = profile_commit(draft, &words, &commit->oid, &pruned);
-    if (err) return err;
-
-    if (pruned > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE, "  Pruned %zu ancestor claim%s",
-            pruned, pruned == 1 ? "" : "s"
-        );
-    }
-
-    return NULL;
+    return profile_commit(draft, &words, &commit->oid, &commit->ancestors_pruned);
 }
 
 /**
@@ -909,7 +862,7 @@ static error_t update_write_record(
         for (size_t i = 0; i < commit->captured_count; i++) {
             /* What the capture committed, where its claim still stands, and the
              * phase's stamp: the ownership event */
-            state_record_t record = commit->captured[i];
+            state_record_t record = commit->captured[i].record;
             const manifest_row_t *row = manifest_lookup(manifest, record.filesystem_path);
             if (!manifest_is_claim(row, commit->profile, record.storage_path)) {
                 continue;
@@ -979,11 +932,11 @@ cleanup:
  *
  * The commits that landed cross the error boundary: out_commits receives one
  * bookkeeping entry per landed commit, written as the commit lands, so the caller
- * holds it even when a later profile fails and the record write follows what
- * Git shows. A profile whose commit did not land — a walk that touched nothing,
- * one whose captures put back what the profile holds, or a failure before its
- * commit — contributes no entry, and its items are not counted. A failure stops
- * the run at its profile, and its error says so over the cause: the profiles
+ * holds it even when a later profile fails, and the receipt and the record write
+ * follow what Git shows. A profile whose commit did not land — a walk that touched
+ * nothing, one whose captures put back what the profile holds, or a failure before
+ * its commit — contributes no entry, and its items are not counted. A failure
+ * stops the run at its profile, and its error says so over the cause: the profiles
  * before it committed, the ones after it are never visited.
  *
  * @param ctx Dispatch context (must not be NULL; the drafts are opened on the
@@ -1039,10 +992,11 @@ static error_t update_execute(
     const workspace_item_t **items = arena_calloc(ctx->arena, work.count, sizeof(*items));
     const manifest_row_t **rows = arena_calloc(ctx->arena, derive_rows.count, sizeof(*rows));
 
-    /* What the walks say at normal — a skip a change since the load forced — is
-     * one block beneath the preview: one boundary above every profile's walk,
-     * paid by whichever of their lines is the first to print. At verbose each
-     * profile's section opens its own. */
+    /* What the walks say — a skip a change since the load forced, at every
+     * verbosity — is one block beneath the preview: one boundary above every
+     * profile's walk, paid by whichever of their lines is the first to print.
+     * What each landed commit took is said once the walks are done, by the
+     * receipt's own sections (update_print_receipt). */
     output_gap(out, OUTPUT_NORMAL);
     for (size_t p = 0; p < enabled->count; p++) {
         const char *profile = enabled->entries[p];
@@ -1066,13 +1020,6 @@ static error_t update_execute(
         if (item_count == 0 && row_count == 0) {
             continue;
         }
-
-        /* The profile's header, framing the lines its walk says at verbose: at
-         * normal the preview named every item, and the run's one line says what
-         * landed */
-        output_section(
-            out, OUTPUT_VERBOSE, "Updating profile '{cyan}%s{reset}':", profile
-        );
 
         /* The profile's draft, opened at its head: the parent of the commit the
          * walk makes, and the profile every question of the walk is asked of,
@@ -1297,6 +1244,111 @@ static void update_print_preview(
 
         output_list_render(list);
         output_list_free(list);
+    }
+}
+
+/**
+ * Print the receipt: what each landed commit took, once it landed
+ *
+ * At verbose, a section a landed commit, in the enabled set's order: each item
+ * the commit took, a row each — a capture with the claim it committed, then a
+ * deletion as one — and beneath them the directories on their way the commit
+ * moved, counted. Read off the bookkeeping alone (update_commit_t), so a commit
+ * that did not land says nothing, however far its walk went, and an item the
+ * walk skipped has no row: the walk said that skip as it met it. The rows take
+ * apply's receipt's form (cmds/apply.c apply_print_deploy_receipt), where the
+ * sections are by outcome; these are by commit, update's act being one commit a
+ * profile, which its line counts across.
+ *
+ * @param out Output context (must not be NULL)
+ * @param commits One commit's bookkeeping per landed commit (may be NULL when
+ *                commit_count is 0)
+ * @param commit_count Number of landed commits
+ */
+static void update_print_receipt(
+    output_t *out,
+    const update_commit_t *commits,
+    size_t commit_count
+) {
+    CHECK_NULL(out);
+
+    for (size_t c = 0; c < commit_count; c++) {
+        const update_commit_t *commit = &commits[c];
+
+        output_section(
+            out, OUTPUT_VERBOSE, "Updated profile '{cyan}%s{reset}'", commit->profile
+        );
+
+        /* Each capture with the claim it committed, as the record keeps it: a
+         * link's claims no mode, so the row names the link instead, as apply's
+         * does; ownership is both names or neither at the capture (core/metadata.c
+         * metadata_capture_ownership), so the owner alone is asked; and the seal,
+         * which the record lacks, where the bytes landed sealed */
+        for (size_t i = 0; i < commit->captured_count; i++) {
+            const update_captured_t *captured = &commit->captured[i];
+            const state_record_t *record = &captured->record;
+
+            if (record->kind == FS_OCCUPANT_SYMLINK) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (symlink",
+                    captured->item->filesystem_path
+                );
+            } else {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  {green}✓{reset} %s%s (mode: %04o",
+                    captured->item->filesystem_path,
+                    path_kind_suffix(captured->item->item_kind), record->mode
+                );
+            }
+            if (record->owner) {
+                output_print(
+                    out, OUTPUT_VERBOSE, ", owner: %s:%s", record->owner, record->group
+                );
+            }
+            if (captured->encrypted) {
+                output_print(out, OUTPUT_VERBOSE, ", encrypted");
+            }
+            output_print(out, OUTPUT_VERBOSE, ")\n");
+        }
+
+        /* Each deletion, either kind, by its slash */
+        for (size_t i = 0; i < commit->deleted_count; i++) {
+            const workspace_item_t *item = commit->deleted[i];
+
+            output_print(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s%s (deleted)\n",
+                item->filesystem_path, path_kind_suffix(item->item_kind)
+            );
+        }
+
+        /* The directories on the way to the profile's files the commit moved,
+         * counted: a derived claim is the way to the claims, never one, so a
+         * count is the whole of what is said of it (core/profiles.h
+         * profile_capture_ancestors) — recorded off the disk where the profile
+         * did not pass through them yet or the run named them, let go where another
+         * kind stands at one, and pruned where no file stands beneath one any
+         * longer */
+        if (commit->ancestors_captured > 0) {
+            output_print(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %zu director%s above its files "
+                "recorded\n", commit->ancestors_captured,
+                commit->ancestors_captured == 1 ? "y" : "ies"
+            );
+        }
+        if (commit->ancestors_retired > 0) {
+            output_print(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %zu director%s another kind "
+                "stands at let go\n", commit->ancestors_retired,
+                commit->ancestors_retired == 1 ? "y" : "ies"
+            );
+        }
+        if (commit->ancestors_pruned > 0) {
+            output_print(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %zu director%s no file stands "
+                "beneath let go\n", commit->ancestors_pruned,
+                commit->ancestors_pruned == 1 ? "y" : "ies"
+            );
+        }
     }
 }
 
@@ -1690,6 +1742,10 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         ctx, scope_enabled(scope), work, derive_rows, scope_paths(scope), opts, &commits,
         &commit_count
     );
+
+    /* What each landed commit took, at verbose, whatever stopped the run: the
+     * bookkeeping holds every commit that landed */
+    update_print_receipt(out, commits, commit_count);
 
     /* The run's summary, once the act is done and before the record phase, which
      * may wait on the store's lock (core/state.h state_begin): what it skipped,

@@ -61,9 +61,10 @@ typedef struct {
  *
  * A profile's deletion is pushed first, leased: it deletes the remote's branch
  * only as this store last saw it — its remote-tracking ref — and is refused over
- * commits this store has not seen, nothing moved: sync, then delete again. The
- * branch here goes only once the remote's has, or where the remote cannot be
- * reached, its push then printed to run by hand, carrying the same lease.
+ * commits this store has not seen, nothing moved: the profile's fetch brings
+ * them, enabled here or not, and a deletion after it takes them. The branch here
+ * goes only once the remote's has, or where the remote cannot be reached, its
+ * push then printed to run by hand, carrying the same lease.
  *
  * This command modifies the Git repository and nothing on disk: the deployed
  * copies of what it removes are the next apply's to settle, decided with the

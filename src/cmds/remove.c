@@ -914,12 +914,17 @@ static void remove_print_deletion(
  * One sentence wherever the lease meets it (remove_profile): off the session's
  * listing, before anything moves, and at the push's own, where the remote moved
  * during the question or the hook (sys/remote.h remote_push's ERR_CONFLICT).
+ * Its way out is the profile's fetch, which reaches any profile the remote holds,
+ * enabled here or not, and moves its tracking ref forward to the remote's head
+ * (cmds/profile.c profile_fetch); where the remote created the profile again,
+ * the fetch leaves the ref on the old line, and the refusal stands until a sync
+ * of the profile takes the remote's (stated).
  */
 static error_t remove_moved(const char *profile, const char *remote_name) {
     return error_create(
         ERR_CONFLICT, "Profile '%s' moved on remote '%s' since this store last saw it; "
-        "'dotta sync' fetches its commits, and a deletion after it takes them",
-        profile, remote_name
+        "'dotta profile fetch %s' fetches its commits, and a deletion after it takes them",
+        profile, remote_name, profile
     );
 }
 

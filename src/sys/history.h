@@ -6,7 +6,9 @@
  * commit held each of a set of entries (history_held). "Holds" is Git's one-entry
  * rule: a blob of any filemode at the name; a subtree there, a gitlink, nothing,
  * or a blob or a gitlink above the name lacks it (core/profiles.h profile_entry's
- * rule, in Git's words).
+ * rule, in Git's words). Both answer each path or entry with its holding, one
+ * of three by one precedence (history_holding_t); a path's answer carries the
+ * commits that took it away beside its holding.
  *
  * A commit took a path away — it is a removal of the path — where it lacks the
  * path and every parent holds it. A path the head holds has not left, and no
@@ -29,12 +31,12 @@
  * minted once for each such commit (base/error.h): the walk's bound, and the
  * one failure it mints.
  *
- * A holding is any commit's, never a line's: an entry — a blob at a path, as a
- * kind — is held where a commit the head reaches holds that blob there as a blob
- * of that kind, and the store holds the blob. So no line is followed: one walk
- * of libgit2's reads each commit once for every entry asked past the same commit,
- * each entry done at its first holder, and a read that fails leaves unread the
- * entries it could have answered (history_held).
+ * An entry's holding is any commit's, never a line's: an entry — a blob at a
+ * path, as a kind — is held where a commit the head reaches holds that blob there
+ * as a blob of that kind, and the store holds the blob. So no line is followed:
+ * one walk of libgit2's reads each commit once for every entry asked past the
+ * same commit, each entry done at its first holder, and a read that fails leaves
+ * unread the entries it could have answered (history_held).
  *
  * Nothing is kept across calls. Over a tree a hand wrote out of Git's order, a
  * name's search can miss an entry the tree holds (lib/libgit2/src/libgit2/tree.c
@@ -50,6 +52,22 @@
 #include <types.h>
 
 /**
+ * A history's holding of what it was asked — a path, an entry: one of three, by
+ * one precedence
+ *
+ * Held decides, whatever a read that failed would have said. Else a read the
+ * answer was owed that would not read leaves it unread, and what an unread history
+ * may hold is no answer, so no caller keeps an unread as a none. Else every read
+ * it was owed was done, and nothing held it. What is held, and where, is each
+ * question's own (history_removals_t, history_held).
+ */
+typedef enum {
+    HISTORY_HOLDING_NONE,        /* Not held, and every read it was owed done */
+    HISTORY_HOLDING_HELD,        /* Held: the head holds the path, a commit the entry */
+    HISTORY_HOLDING_UNREAD       /* Not held, and a read it was owed would not read */
+} history_holding_t;
+
+/**
  * A commit that took a path away, and what it says of itself
  */
 typedef struct {
@@ -58,27 +76,27 @@ typedef struct {
 } history_removal_t;
 
 /**
- * What a branch's history says of one path
+ * What a branch's history says of one path: its holding, and the removals its
+ * lines ended at
  *
- * Held, where the head holds it: no removal, no line walked. Else the removals
+ * HELD where the head holds it: no removal, no line walked. Else the removals
  * its lines ended at — one a line at most, several only where lines part at a
- * merge — and whether a line went unread, which may stand beside a removal another
- * line ended at. No removal and every line read is a path no commit of the history
- * held.
+ * merge — UNREAD where a line went unread, which may stand beside a removal another
+ * line ended at, and NONE where every line was read to its end. NONE with no
+ * removal is a path no commit of the history held.
  */
 typedef struct {
     const history_removal_t *entries; /* The removals, in the order the walk met them */
     size_t count;
-    bool held;                        /* The head holds the path */
-    bool unread;                      /* A commit or a tree on one of its lines would not read */
+    history_holding_t holding;        /* The head's where it holds the path, else its lines' */
 } history_removals_t;
 
 /**
  * Which commits under `head` took each path away
  *
- * Per path, parallel to `paths`: held, or the removals its lines ended at and
- * whether a line went unread. No failure is raised: a read that fails is the
- * paths' `unread`, the head's own commit and its tree the first such reads.
+ * Per path, parallel to `paths`: its holding, and the removals its lines ended
+ * at. No failure is raised: a read that fails leaves UNREAD the paths whose lines
+ * reach it, the head's own commit and its tree the first such reads.
  *
  * Reader: core/profiles.c profile_departures.
  *
@@ -120,19 +138,17 @@ typedef struct {
 /**
  * Whether the history under `head` held each of a set of entries
  *
- * Per entry, parallel to `entries`, one of three answers:
- *   - held: a commit the head reaches past `since` holds the entry's blob at
+ * Per entry, parallel to `entries`, its holding:
+ *   - HELD: a commit the head reaches past `since` holds the entry's blob at
  *     its path, as a blob of its kind, and the store holds that blob. The two
  *     halves are what "Git holds these bytes there" means: a store that lost an
  *     object may keep a tree naming it, which then holds nothing. The store's
  *     half is presence, never whether the blob reads (git_odb_exists);
- *   - unread: not held, and a commit or a tree it was owed would not read — the
- *     head's own among them — or the store would not open. What an unread history
- *     may hold is no answer, so a caller that keeps a "none" keeps it only where
- *     neither is set;
- *   - neither: the store lacks the blob; or the entry is asked since the head
- *     itself, which leaves nothing to read; or every commit it was owed was read,
- *     and none holds it.
+ *   - UNREAD: not held, and a commit or a tree it was owed would not read — the
+ *     head's own among them — or the store would not open;
+ *   - NONE: the store lacks the blob; or the entry is asked since the head itself,
+ *     which leaves nothing to read; or every commit it was owed was read, and
+ *     none holds it.
  *
  * The store is asked first, once an entry, and an entry it lacks costs no commit,
  * as one asked since the head does. The rest are owed a walk, one a `since`,
@@ -166,17 +182,14 @@ typedef struct {
  * @param entries The entries, in any order, one more than once (must not be NULL
  *                where count > 0)
  * @param count How many
- * @param held Whether each was held, parallel to `entries` (must not be NULL)
- * @param unread Whether each not held went unanswered, parallel to `entries`
- *               (must not be NULL)
+ * @param out The holdings, parallel to `entries` (must not be NULL)
  */
 void history_held(
     git_repository *repo,
     const git_oid *head,
     const history_entry_t *entries,
     size_t count,
-    bool *held,
-    bool *unread
+    history_holding_t *out
 );
 
 #endif /* DOTTA_HISTORY_H */

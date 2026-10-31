@@ -463,13 +463,15 @@ void history_removals(
     }
 
     /* Each path's answer into its caller's slot: the removals the arena holds,
-     * and its two bits */
+     * and its holding — held where the head holds it, which walks no line and
+     * so leaves none unread, else unread where a line went unread */
     for (size_t p = 0; p < count; p++) {
         out[walk.paths[p].index] = (history_removals_t){
             .entries = walk.found[p].entries,
             .count = walk.found[p].count,
-            .held = history_set_has(walk.held, p),
-            .unread = history_set_has(walk.unread, p),
+            .holding = history_set_has(walk.held, p) ? HISTORY_HOLDING_HELD
+                : history_set_has(walk.unread, p) ? HISTORY_HOLDING_UNREAD
+                : HISTORY_HOLDING_NONE,
         };
     }
 
@@ -504,9 +506,8 @@ static int history_since_order(const void *a, const void *b) {
  * @param run The run's entries, pointers into `entries`, reordered as their holders
  *            are found (must not be NULL)
  * @param count How many the run holds, one at least
- * @param held Gains each entry a holder was found for, by its slot
- * @param unread Gains each entry a read that failed could have answered, by its
- *               slot
+ * @param out The holdings, by slot, each NONE on the call: HELD at its holder,
+ *            UNREAD where a read that failed could have answered it
  */
 static void history_search(
     git_repository *repo,
@@ -514,8 +515,7 @@ static void history_search(
     const history_entry_t *entries,
     const history_entry_t **run,
     size_t count,
-    bool *held,
-    bool *unread
+    history_holding_t *out
 ) {
     const git_oid *since = &run[0]->since;
 
@@ -538,7 +538,7 @@ static void history_search(
         git_commit *commit = NULL;
         git_tree *tree = NULL;
         if (git_commit_lookup(&commit, repo, &id) < 0 || git_commit_tree(&tree, commit) < 0) {
-            for (size_t k = 0; k < remaining; k++) unread[run[k] - entries] = true;
+            for (size_t k = 0; k < remaining; k++) out[run[k] - entries] = HISTORY_HOLDING_UNREAD;
             git_commit_free(commit);
             continue;
         }
@@ -553,7 +553,7 @@ static void history_search(
             git_tree_entry *entry = NULL;
             const int entry_rc = git_tree_entry_bypath(&entry, tree, run[k]->path);
             if (entry_rc < 0) {
-                if (entry_rc != GIT_ENOTFOUND) unread[slot] = true;
+                if (entry_rc != GIT_ENOTFOUND) out[slot] = HISTORY_HOLDING_UNREAD;
                 k++;
                 continue;
             }
@@ -562,9 +562,10 @@ static void history_search(
                 (git_tree_entry_filemode(entry) == GIT_FILEMODE_LINK) ==
                 (run[k]->mode == GIT_FILEMODE_LINK) &&
                 git_oid_equal(git_tree_entry_id(entry), &run[k]->blob_oid)) {
-                /* Held, whatever a commit that would not read held before it */
-                held[slot] = true;
-                unread[slot] = false;
+                /* Held, whatever a commit that would not read held before it:
+                 * an unread written there gives way, and the entry leaves the
+                 * run, so nothing writes over its holding again */
+                out[slot] = HISTORY_HOLDING_HELD;
                 run[k] = run[--remaining];
             } else {
                 k++;
@@ -581,7 +582,7 @@ static void history_search(
      * a head that would not read, a parent that would not parse, a hidden commit
      * that would not — answers none of the rest: each is unread */
     if (rc != GIT_ITEROVER) {
-        for (size_t k = 0; k < remaining; k++) unread[run[k] - entries] = true;
+        for (size_t k = 0; k < remaining; k++) out[run[k] - entries] = HISTORY_HOLDING_UNREAD;
     }
 }
 
@@ -590,34 +591,32 @@ void history_held(
     const git_oid *head,
     const history_entry_t *entries,
     size_t count,
-    bool *held,
-    bool *unread
+    history_holding_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(head);
-    CHECK_NULL(held);
-    CHECK_NULL(unread);
+    CHECK_NULL(out);
     if (count == 0) return;
     CHECK_NULL(entries);
 
-    /* The store's half first, once an entry, and the head's own: an entry whose
-     * blob the store lacks is held by nothing, whatever a tree names, and one
-     * asked since the head itself has nothing left to read — neither costs a
-     * commit. A store that will not open answers nothing it was asked. What is
-     * left is owed a walk, gathered in the call's one transient, the heap's
-     * (include/runtime.h "Memory"). */
+    /* The store's half first, once an entry, and the head's own, each holding
+     * written here before any walk: an entry whose blob the store lacks is held
+     * by nothing, whatever a tree names, and one asked since the head itself
+     * has nothing left to read — none, either, and neither costs a commit. A
+     * store that will not open leaves every other unread. What is left is owed
+     * a walk, gathered in the call's one transient, the heap's (include/runtime.h
+     * "Memory"). */
     const history_entry_t **asked = heap_calloc(count, sizeof(*asked));
     size_t owed = 0;
 
     git_odb *odb = NULL;
     int rc = git_repository_odb(&odb, repo);
     for (size_t i = 0; i < count; i++) {
-        held[i] = false;
-        unread[i] = false;
+        out[i] = HISTORY_HOLDING_NONE;
 
         if (git_oid_equal(&entries[i].since, head)) continue;
         if (rc < 0) {
-            unread[i] = true;
+            out[i] = HISTORY_HOLDING_UNREAD;
         } else if (git_odb_exists(odb, &entries[i].blob_oid) == 1) {
             asked[owed++] = &entries[i];
         }
@@ -630,7 +629,7 @@ void history_held(
         size_t end = start + 1;
         while (end < owed && git_oid_equal(&asked[end]->since, &asked[start]->since)) end++;
 
-        history_search(repo, head, entries, asked + start, end - start, held, unread);
+        history_search(repo, head, entries, asked + start, end - start, out);
         start = end;
     }
 

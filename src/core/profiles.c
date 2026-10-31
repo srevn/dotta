@@ -1047,14 +1047,14 @@ void profile_departures(
             }
         }
 
-        if (removals->held) {
+        if (removals->holding == HISTORY_HOLDING_HELD) {
             out[i] = (profile_departure_t){ .kind = PROFILE_DEPARTURE_HELD };
         } else if (kept) {
             out[i] = (profile_departure_t){
                 .kind = PROFILE_DEPARTURE_REMOVED,
                 .removal = kept->oid,
             };
-        } else if (removals->unread) {
+        } else if (removals->holding == HISTORY_HOLDING_UNREAD) {
             out[i] = (profile_departure_t){ .kind = PROFILE_DEPARTURE_UNVERIFIED };
         } else if (removals->count == 0) {
             out[i] = (profile_departure_t){ .kind = PROFILE_DEPARTURE_NEVER_HELD };

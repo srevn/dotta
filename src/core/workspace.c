@@ -2249,36 +2249,44 @@ static void workspace_ask_bases(workspace_t *ws) {
     }
 
     /* One ask a profile, at the head its rows were read from — a view over the
-     * enabled set holds one for every row's profile — and each answer completes
-     * its note or drops it. A history read short may hold anything, so it keeps
-     * nothing; a held blob is the base; none, the history read whole, is kept
-     * at the head. Stated: a blob the store lacked while a tree named it is held
-     * by no history (history_held's store half), so a store that regains it keeps
-     * that none until disk or the binding moves, a moved head being asked past
-     * the head it was kept at — the store's half is the head's only where the
-     * store keeps Git's connectivity. */
-    bool *held = arena_calloc(frame, entry_count, sizeof(*held));
-    bool *unread = arena_calloc(frame, entry_count, sizeof(*unread));
+     * enabled set holds one for every row's profile — and each holding completes
+     * its note or drops it */
+    history_holding_t *holdings = arena_calloc(frame, entry_count, sizeof(*holdings));
     for (size_t start = 0; start < entry_count;) {
         const char *profile = noted[start]->profile;
         size_t end = start + 1;
         while (end < entry_count && strcmp(noted[end]->profile, profile) == 0) end++;
 
         const git_oid *head = manifest_head(ws->manifest, profile);
-        history_held(ws->repo, head, entries + start, end - start, held + start, unread + start);
+        history_held(ws->repo, head, entries + start, end - start, holdings + start);
 
         for (size_t k = start; k < end; k++) {
             workspace_item_t *item = noted[k];
-            if (unread[k]) {
-                item->confirmation &= ~DIVERGENCE_CONTENT;
-            } else if (held[k]) {
-                item->divergence = (item->divergence & ~DIVERGENCE_CONTENT) | DIVERGENCE_STALE;
-                item->blob_oid = entries[k].blob_oid;
-                item->stat = stats[k];
-            } else {
-                item->disk_oid = entries[k].blob_oid;
-                item->head = *head;
-                item->stat = stats[k];
+            switch (holdings[k]) {
+                case HISTORY_HOLDING_UNREAD:
+                    /* A history read short may hold anything, so it keeps nothing */
+                    item->confirmation &= ~DIVERGENCE_CONTENT;
+                    break;
+
+                case HISTORY_HOLDING_HELD:
+                    /* A held blob is the base, STALE in CONTENT's place */
+                    item->divergence = (item->divergence & ~DIVERGENCE_CONTENT) | DIVERGENCE_STALE;
+                    item->blob_oid = entries[k].blob_oid;
+                    item->stat = stats[k];
+                    break;
+
+                case HISTORY_HOLDING_NONE:
+                    /* None, the history read whole, is kept at the head. Stated:
+                     * a blob the store lacked while a tree named it is held by
+                     * no history (history_held's store half), so a store that
+                     * regains it keeps that none until disk or the binding moves,
+                     * a moved head being asked past the head it was kept at —
+                     * the store's half is the head's only where the store keeps
+                     * Git's connectivity. */
+                    item->disk_oid = entries[k].blob_oid;
+                    item->head = *head;
+                    item->stat = stats[k];
+                    break;
             }
         }
 

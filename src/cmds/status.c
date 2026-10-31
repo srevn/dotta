@@ -726,24 +726,24 @@ static void status_print_workspace(
      * of what stands there, nor, where it could be asked, did the row's own branch
      * hold disk's bytes at the name (core/workspace.c workspace_ask_bases), so
      * nothing says whose move that is — the second bucket no default verb resolves,
-     * beside the conflicts. Its header opens with what its rows are, in the route's
-     * words (core/workspace.h workspace_route_t), as update's census and diff's
-     * status line say it. Its header and its legend name the two sides as theirs
-     * do, each unqualified: every row is a file row with a regular file or a
-     * link standing — a directory row and every other kind answer at KIND, above
-     * — which a capture commits (core/workspace.h workspace_capturable) and `apply
-     * --force` replaces, named with its path. The header names disk's, the side
-     * that loses nothing, as the Conflicts header does, in the place such bytes
-     * most often want: a machine new to dotta, whose own files meet the profiles
-     * it clones, keeps them in a profile of its own, created and enabled above
-     * the others while the row's own keeps its version — where `update --force`,
-     * which takes these rows too (cmds/update.c update_partition), would commit
-     * them into the row's profile for every machine. The legend names Git's,
-     * true of every row. */
+     * beside the conflicts. Its title is the route's label (core/workspace.h
+     * workspace_route_t), which update's census and diff's status line say as a
+     * sentence where no title stands, so its header says the way out alone, as
+     * the Conflicts header does. Its header and its legend name the two sides
+     * as theirs do, each unqualified: every row is a file row with a regular
+     * file or a link standing — a directory row and every other kind answer at
+     * KIND, above — which a capture commits (core/workspace.h workspace_capturable)
+     * and `apply --force` replaces, named with its path. The header names disk's,
+     * the side that loses nothing, as the Conflicts header does, in the place
+     * such bytes most often want: a machine new to dotta, whose own files meet
+     * the profiles it clones, keeps them in a profile of its own, created and
+     * enabled above the others while the row's own keeps its version — where
+     * `update --force`, which takes these rows too (cmds/update.c
+     * update_partition), would commit them into the row's profile for every
+     * machine. The legend names Git's, true of every row. */
     if (partition->unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
-            "not confirmed by dotta; "
             "run 'dotta add <new profile> <path>' to keep disk's in a profile of its own"
         );
 

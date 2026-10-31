@@ -1117,13 +1117,13 @@ static void update_print_preview(
     }
 
     /* Display unconfirmed paths section — the deployed files --force took whose
-     * bytes no base proves, under status's title and its header's opening words:
-     * their line reads as a modification's (workspace_item_line), so the title
-     * says what they are, and the hint the fate the modifications' says */
+     * bytes no base proves, under status's title: their line reads as a
+     * modification's (workspace_item_line), so the title says what they are,
+     * and the hint the fate the modifications' says */
     if (partition->unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
-            "not confirmed by dotta; will be committed to their profiles"
+            "will be committed to their profiles"
         );
 
         for (size_t i = 0; i < partition->unconfirmed.count; i++) {
@@ -2051,15 +2051,10 @@ const args_command_t spec_update = {
         "  ~/.config and of the directories in it that hold your files.\n"
         "\n"
         "Conflicts and Unconfirmed Paths:\n"
-        "  A plain update skips a file changed both on disk and in its\n"
-        "  profile, and one dotta has not confirmed (a file this machine\n"
-        "  already had, say); 'dotta status' lists them under those\n"
-        "  headings. --force commits each as it is on disk, permissions and\n"
-        "  owner included, to the profile status names, the way\n"
-        "  'apply --force' takes the profile's. It never commits a file\n"
-        "  only the profile changed, nor one that became a directory or\n"
-        "  the other way round. With no path it takes every such file, so\n"
-        "  name the files you mean to keep.\n",
+        "  A plain update skips the files 'dotta status' lists under these\n"
+        "  headings. --force commits them as they are on disk, the way\n"
+        "  'apply --force' takes the profile's version instead. With no path\n"
+        "  it takes all of them, so name the files you mean.\n",
     .examples     =
         "  %s update                             # Every modified path\n"
         "  %s update ~/.bashrc                   # Specific file\n"

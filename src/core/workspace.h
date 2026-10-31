@@ -1302,13 +1302,14 @@ typedef struct {
  *   KIND_DERIVED   "a different kind stands at a directory dotta only passes
  *                  through" — status's Squatted ancestors header, update's census,
  *                  diff's status line
- *   UNCONFIRMED    "not confirmed by dotta" — status's Unconfirmed paths header,
- *                  update's census and its preview's Unconfirmed paths under
- *                  --force (cmds/update.c update_print_preview), diff's status
- *                  line — and "unconfirmed" on apply's skip label; the sentence
- *                  is apply_consent_label's too, of an orphan whose record
- *                  confirmed no bytes: the same fact, read off no route
- *                  (cmds/apply.c)
+ *   UNCONFIRMED    "not confirmed by dotta", a sentence where no title stands —
+ *                  update's census, diff's status line — and the label beside
+ *                  it: "Unconfirmed paths", the title of status's section and
+ *                  of update's preview under --force (cmds/update.c
+ *                  update_print_preview), each header saying the way out alone,
+ *                  and "unconfirmed" on apply's skip label; the sentence is
+ *                  apply_consent_label's too, of an orphan whose record confirmed
+ *                  no bytes: the same fact, read off no route (cmds/apply.c)
  *   CAPTURE        what moved, by the bit, the kind first — "type changed
  *                  locally", "modified locally", "<axes> changed locally" — diff's
  *                  status line; the first two on apply's skip label, a claim

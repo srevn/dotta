@@ -64,7 +64,7 @@ dotta update --force ~/.bashrc           # Make this machine's version the profi
 dotta add hosts/$(hostname) ~/.bashrc    # Keep this machine's version on this machine only
 ```
 
-The last creates a profile of this machine's own, [layered](profiles.md#layering-and-precedence) above the others, the first time you use it. Only this machine uses it, but `dotta sync` sends it to your remote like any other profile. Name the files you mean: with no path, `dotta update --force` takes every file `dotta status` lists this way — on a machine you have just cloned onto, all of its own — and makes each the profile's for every machine. To stop managing the file instead, `dotta remove <profile> <path>` stops tracking it on every machine and leaves it on disk.
+The last creates a profile of this machine's own, [layered](profiles.md#layering-and-precedence) above the others, the first time you use it. Only this machine uses it, but `dotta sync` sends it to your remote like any other profile. Name the files you mean: with no path, `dotta update --force` takes every file `dotta status` lists this way — on a machine you have just cloned onto, all of its own — and commits each into the profile `dotta status` shows it from, which every machine using that profile then gets. To stop managing the file instead, `dotta remove <profile> <path>` stops tracking it on every machine and leaves it on disk.
 
 ### Updating (Filesystem to Repo)
 

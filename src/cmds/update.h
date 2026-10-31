@@ -44,7 +44,9 @@ typedef struct {
 /**
  * Update command implementation
  *
- * Finds the modified paths and commits each change to the profile it belongs to.
+ * Finds the modified paths and commits each change to the profile it belongs
+ * to; under --force, the conflicts and unconfirmed paths too, as disk holds them
+ * (cmds/update.c update_partition).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

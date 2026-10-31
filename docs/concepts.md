@@ -148,7 +148,7 @@ Filesystem (Live System)
 
 **The record** -- for each managed path, what dotta last confirmed was on disk, whether dotta put it there, and when it first saw it. A path dotta deployed or captured is *owned*; one it merely found on disk is *observed*. When a path stops being managed, dotta prunes an unchanged owned copy where the file was deleted from its profile, its profile disabled or its target moved, and leaves every other copy alone.
 
-**Workspace** -- what dotta finds when it compares the view against the actual filesystem, with the record saying what it last confirmed. This is what `dotta status` reports, and it is worked out when the command runs, so nothing it decides is out of date.
+**Workspace** -- what dotta finds when it compares the view against the actual filesystem, with the record saying what it last confirmed. This is what `dotta status` reports, and it is worked out when the command runs, so nothing it decides is out of date. A file whose contents the profile has never had, and which dotta has not confirmed — a machine's own file when it first meets the profile — is one neither `dotta apply` nor `dotta update` decides for you: see [A Machine That Already Has Its Own Files](workflows.md#a-machine-that-already-has-its-own-files).
 
 **Apply** -- walks the view and compares each path against disk, deploying only what actually changed: contents, permissions, owner, encryption. A path it lands takes its place whole: dotta's own file or link in its way is replaced, and dotta's own copies beneath a file it lands are cleared — or the path waits, and says why. It then prunes or releases the leftovers according to the record, and writes the record for what it did.
 

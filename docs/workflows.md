@@ -53,6 +53,19 @@ dotta apply --keep-orphans
 
 `apply` performs full synchronization: it deploys new and updated files, and prunes dotta's own unchanged copies of orphaned files — those of disabled profiles, and those deleted from their profiles.
 
+### A Machine That Already Has Its Own Files
+
+When you clone onto a machine or enable a profile, a file already there that matches the profile is simply taken over, and one holding an older version of the profile's is brought up to date by `dotta apply`. A file whose contents the profile has never had is yours to decide: `dotta status` lists it under Unconfirmed paths, and `dotta apply` leaves it alone until you choose.
+
+```bash
+dotta diff ~/.bashrc                     # Compare the two versions
+dotta apply --force ~/.bashrc            # Take the profile's version (this machine's is lost)
+dotta add --force global ~/.bashrc       # Make this machine's version the profile's, for every machine
+dotta add hosts/$(hostname) ~/.bashrc    # Keep this machine's version on this machine only
+```
+
+The last creates a profile of this machine's own, [layered](profiles.md#layering-and-precedence) above the others, the first time you use it. Only this machine uses it, but `dotta sync` sends it to your remote like any other profile. Name the files themselves: `dotta add --force` on a directory takes everything beneath it from this machine, including files the profile has since updated and files it never had. To stop managing the file instead, `dotta remove <profile> <path>` stops tracking it on every machine and leaves it on disk.
+
 ### Updating (Filesystem to Repo)
 
 After editing deployed files in place:

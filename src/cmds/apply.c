@@ -206,11 +206,15 @@ static const char *apply_route_label(const workspace_item_t *item) {
  * a file or the reverse, which the capture commits as the new kind), else 'dotta
  * update --force <path>', which commits what disk holds over a conflict and over
  * bytes no base proves, a plain update refusing both (cmds/update.c
- * update_partition), and the capture's rows as a plain update does. '-e' is how
- * to ignore a skip, not how to remedy one. The block sits between the deploy
- * preview and cleanup's, so each engine tells its story the same way — what it
- * will do, then what it will not and why. No total-count line: the exit error's
- * message is the count's one home.
+ * update_partition), and the capture's rows as a plain update does. Bytes no
+ * base proves have a second place to go, a family of its own beneath it: 'dotta
+ * add <new profile> <path>' keeps them in a profile created and enabled above
+ * the others, the one they are from keeping its version — true of every such
+ * row, and named where one is in the block. '-e' is how to ignore a skip, not
+ * how to remedy one. The block sits between the deploy preview and cleanup's,
+ * so each engine tells its story the same way — what it will do, then what it
+ * will not and why. No total-count line: the exit error's message is the count's
+ * one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -442,15 +446,16 @@ static void apply_print_deploy_skips(
      * none at dotta's node, which no row routes — its verb the one every such
      * row takes: update --force's where any is both sides' or bytes no base proves
      * (workspace_item_route), and update's only where that scan ran out, its
-     * loop guarded as the sudo line's is; a named squatter's second way out, by
-     * the claim that holds it (ancestry) — a wider scope plans a tracked ancestor,
-     * and a derived claim is never planned, so its way out is the named
-     * re-derivation, whose own preview names what the re-capture would commit,
-     * where a squatter nothing claims has none: its row names it, and the hand
-     * is all there is. Last, UNREADABLE's closing, a clearance's stop's among
-     * them, its line naming the path it could not read — an unreadable path is
-     * not "in the way", and a fix-or-widen instruction would misname a refusal
-     * to judge what could not be seen. */
+     * loop guarded as the sudo line's is; where any such skip is bytes no base
+     * proves, the other place disk's can go, a profile of its own; a named
+     * squatter's second way out, by the claim that holds it (ancestry) — a wider
+     * scope plans a tracked ancestor, and a derived claim is never planned, so
+     * its way out is the named re-derivation, whose own preview names what the
+     * re-capture would commit, where a squatter nothing claims has none: its
+     * row names it, and the hand is all there is. Last, UNREADABLE's closing, a
+     * clearance's stop's among them, its line naming the path it could not read
+     * — an unreadable path is not "in the way", and a fix-or-widen instruction
+     * would misname a refusal to judge what could not be seen. */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
@@ -484,6 +489,19 @@ static void apply_print_deploy_skips(
             output_info(
                 out, OUTPUT_NORMAL,
                 "  To keep what is on disk instead: 'dotta update <path>'"
+            );
+            break;
+        }
+    }
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
+
+        if (deploy_skip_needs_force(s->reason) && s->item->row &&
+            workspace_item_route(s->item) == WORKSPACE_ROUTE_UNCONFIRMED &&
+            workspace_capturable(s->item)) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  To keep it in a profile of its own: 'dotta add <new profile> <path>'"
             );
             break;
         }

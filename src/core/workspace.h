@@ -1282,7 +1282,9 @@ typedef struct {
  *                                  verb where every consent skip at its row's
  *                                  own path that names one reads CAPTURE, update
  *                                  --force's where any reads either of the other
- *                                  two (cmds/apply.c apply_print_deploy_skips)
+ *                                  two; and UNCONFIRMED, at that node, for the
+ *                                  other place disk's can go, a profile of its
+ *                                  own (cmds/apply.c apply_print_deploy_skips)
  *   diff's status line             every arm, both directions: the row's line,
  *                                  or none where the direction lists nothing;
  *                                  CONFLICT's downstream naming update --force

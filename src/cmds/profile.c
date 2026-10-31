@@ -365,8 +365,9 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
          * read three ways as status's rows read it (sys/remote.h remote_relation).
          * One with no local branch is made local where the relation says it comes
          * back from (remote_relation_t from), the one act a fetch takes on a
-         * profile; a branch already here is left where it stands — the fetch
-         * moved its remote-tracking ref, and merging the two is sync's. */
+         * profile, and its tracking ref then takes the remote's head (sys/remote.h
+         * remote_take); a branch already here is left where it stands — the fetch
+         * moved its remote-tracking ref forward, and merging the two is sync's. */
         remote_relation_t relation;
         error_t row_err = remote_relation(remote, profile, &relation);
         if (!row_err && !git_oid_is_zero(&relation.from)) {
@@ -374,6 +375,7 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
                 repo, profile, &relation.from, "profile fetch", "created from %s/%s",
                 remote_name, profile
             );
+            if (!row_err) remote_take(remote, profile);
         }
 
         /* A profile that fails is named and counted, its error dropped — at most

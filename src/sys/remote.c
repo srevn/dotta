@@ -427,6 +427,19 @@ error_t remote_fetch(
         }
         if (git_oid_equal(&read, &head)) continue;
 
+        /* Forward alone: a ref that stands moves only where the advertised head
+         * descends from it, its objects the download's; where the remote left
+         * its line it stands, for the act that takes the remote's head (the
+         * header) */
+        if (!git_oid_is_zero(&read)) {
+            int rc = git_graph_descendant_of(repo, &head, &read);
+            if (rc < 0) {
+                err = error_git(rc, "Cannot read '%s' against the remote's head", tracking_ref);
+                goto done;
+            }
+            if (rc == 0) continue;
+        }
+
         err = gitops_write_reference(
             repo, tracking_ref, &head, &read, remote->action, "fetched from %s", name
         );
@@ -446,27 +459,29 @@ done:
 /*
  * A branch's tracking ref, moved after a push that landed: to the commit it pushed,
  * or deleted where it pushed the branch's deletion and the ref stands — from
- * the ref's read, as every write is (sys/gitops.h gitops_write_reference). Its
- * failure is no push's: the push landed, and the next fetch writes the ref from
- * the remote's listing, so its one caller drops it (remote_push) — another writer's
- * move since the read, a name in its way in Git's namespace, a lock another process
- * holds.
+ * the ref's read, as every write is (sys/gitops.h gitops_write_reference). A
+ * follow that will not land — another writer's move since the read, a name in
+ * its way in Git's namespace, a lock another process holds — is no push's failure,
+ * the push having landed, and leaves the ref as it stands: the next fetch moves
+ * it where the remote's head continues its line, else the next act on the branch
+ * (remote_take).
  */
-static error_t remote_follow(remote_t *remote, const char *branch, const git_oid *target) {
+static void remote_follow(remote_t *remote, const char *branch, const git_oid *target) {
     const char *name = git_remote_name(remote->git);
 
     char ref[DOTTA_REFNAME_MAX];
     git_oid read;
     error_t err = gitops_remote_branch_refname(ref, sizeof(ref), name, branch);
     if (!err) err = gitops_reference_oid(remote->repo, ref, &read);
-    if (err || git_oid_equal(&read, target)) return err;
+    if (err || git_oid_equal(&read, target)) return;
 
     if (git_oid_is_zero(target)) {
-        return gitops_delete_reference(remote->repo, ref, &read);
+        (void) gitops_delete_reference(remote->repo, ref, &read);
+    } else {
+        (void) gitops_write_reference(
+            remote->repo, ref, target, &read, remote->action, "pushed to %s", name
+        );
     }
-    return gitops_write_reference(
-        remote->repo, ref, target, &read, remote->action, "pushed to %s", name
-    );
 }
 
 error_t remote_push(
@@ -564,12 +579,41 @@ error_t remote_push(
 
     if (sent) *sent = wire;
 
-    /* The branch's tracking ref follows it, or is the next fetch's to write */
+    /* The branch's tracking ref follows it, or is the next fetch's or act's to
+     * move */
     if (str_starts_with(refname, REMOTE_HEADS)) {
-        (void) remote_follow(remote, refname + strlen(REMOTE_HEADS), target);
+        remote_follow(remote, refname + strlen(REMOTE_HEADS), target);
     }
 
     return NULL;
+}
+
+void remote_take(remote_t *remote, const char *branch) {
+    CHECK_NULL(remote);
+    CHECK_NULL(branch);
+
+    const char *name = git_remote_name(remote->git);
+
+    /* The remote's head as the open listed it, under the branch's own ref: none
+     * listed, nothing to take */
+    char ref[DOTTA_REFNAME_MAX];
+    git_oid head;
+    error_t err = gitops_branch_refname(ref, sizeof(ref), branch);
+    if (err) return;
+    remote_advertised(remote, ref, &head);
+    if (git_oid_is_zero(&head)) return;
+
+    /* Its tracking ref from its read, left alone where it names that head, and
+     * where the read or the write will not land (the header) */
+    char tracking_ref[DOTTA_REFNAME_MAX];
+    git_oid read;
+    err = gitops_remote_branch_refname(tracking_ref, sizeof(tracking_ref), name, branch);
+    if (!err) err = gitops_reference_oid(remote->repo, tracking_ref, &read);
+    if (err || git_oid_equal(&read, &head)) return;
+
+    (void) gitops_write_reference(
+        remote->repo, tracking_ref, &head, &read, remote->action, "fetched from %s", name
+    );
 }
 
 void remote_free(remote_t *remote) {
@@ -675,8 +719,8 @@ static error_t remote_relate(git_repository *repo, remote_relation_t *relation) 
             err = remote_ahead(repo, &relation->local, &relation->tracking, &ahead, &shared);
             if (err) return err;
         }
-        relation->state = !shared ? REMOTE_STATE_NO_REMOTE
-                        : ahead == 0 ? REMOTE_STATE_DELETED : REMOTE_STATE_DELETED_AHEAD;
+        relation->state = !shared ? REMOTE_STATE_NO_REMOTE : ahead == 0
+                                  ? REMOTE_STATE_DELETED : REMOTE_STATE_DELETED_AHEAD;
         relation->ahead = ahead;
         return NULL;
     }
@@ -712,8 +756,8 @@ static error_t remote_relate(git_repository *repo, remote_relation_t *relation) 
     int rc = git_graph_ahead_behind(&ahead, &behind, repo, &relation->local, &relation->remote);
     if (rc < 0) return error_git(rc, "Cannot count the commits between two heads");
 
-    relation->state = behind == 0 ? REMOTE_STATE_AHEAD
-                    : ahead == 0 ? REMOTE_STATE_BEHIND : REMOTE_STATE_DIVERGED;
+    relation->state = behind == 0 ? REMOTE_STATE_AHEAD : ahead == 0
+                                  ? REMOTE_STATE_BEHIND : REMOTE_STATE_DIVERGED;
     relation->ahead = ahead;
     relation->behind = behind;
 

@@ -17,8 +17,9 @@
  * (scope_resolve_commit, scope_resolve_range) take the set as a value, and the
  * claim a file argument names (scope_resolve_claim) takes the set's view,
  * precedence resolved. The commands that build no scope would give one nothing
- * but the set to carry: each one's -p names any local profile, enabled or not,
- * and never reads the set.
+ * but the set to carry: sync narrows a set of its own, every enabled row whether
+ * its branch is here or not, by the same filter (scope_filter), and every other
+ * one's -p names any local profile, enabled or not, and never reads the set.
  *
  * A scope answers, for a command that holds the view, "what subset of the view
  * — every enabled profile at its head, precedence resolved — does this invocation
@@ -38,8 +39,8 @@
  *              the view's own set (manifest_profiles), borrowed — the enabled
  *              rows whose branch the build found, one list, so the scope and
  *              the view answer one instant's question once — the set the CLI
- *              filter is checked against, and the one the receipts attribute to
- *              (sync). The workspace reads the same names off the view itself.
+ *              filter is checked against. The workspace reads the same names
+ *              off the view itself.
  *   profiles — display/hook face of the scope. Equal to the CLI filter names
  *              when one was given, each once, else equal to enabled. "What the
  *              user asked for, not the underlying world."
@@ -211,7 +212,8 @@ error_t scope_resolve_enabled(
  * A name given twice is one profile, kept where it was first given. No name is
  * no filter: an empty one, which narrows nothing.
  *
- * Reader: scope_build, over the view's set.
+ * Readers: scope_build, over the view's set; cmds/sync.c cmd_sync, over every
+ * enabled row, its branch here or not.
  *
  * @param repo Repository: a name the set lacks is asked of it, to tell a profile
  *             not enabled from none here (must not be NULL)
@@ -241,11 +243,14 @@ error_t scope_filter(
  * two facts, and the rows say which: none is enabled, or each one is and Git
  * holds no branch for it — a row whose branch is here is in the set, since both
  * producers drop a row only on a proven absence and fail on every other answer.
+ * A set of every enabled row, its branch here or not, is empty only where none
+ * is enabled, and so earns the first fact alone.
  *
- * Readers: cmds/update.c cmd_update, cmds/sync.c cmd_sync, cmds/show.c cmd_show
- * — its commit search and its file search — and cmds/list.c list_file_history
- * refuse with it, each the set it searches or acts on; cmds/diff.c cmd_diff,
- * cmds/bootstrap.c cmd_bootstrap and cmds/ignore.c ignore_test warn it and go on.
+ * Readers: cmds/update.c cmd_update, cmds/show.c cmd_show — its commit search
+ * and its file search — and cmds/list.c list_file_history refuse with it, each
+ * the set it searches or acts on, and cmds/sync.c cmd_sync over every enabled
+ * row, its branch here or not; cmds/diff.c cmd_diff, cmds/bootstrap.c cmd_bootstrap
+ * and cmds/ignore.c ignore_test warn it and go on.
  *
  * @param state State handle (must not be NULL): its enabled rows
  * @param enabled The set the command reads (must not be NULL)

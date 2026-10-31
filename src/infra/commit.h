@@ -73,12 +73,11 @@ typedef enum {
  * profile's merge — and profile_departures, update's word against each removal's;
  * cmds/ignore.c ignore_edit and ignore_modify; cmds/bootstrap.c bootstrap_edit;
  * infra/epoch.c epoch_init, and epoch_adopt, the install's line; core/ignore.c
- * ignore_seed_baseline; cmds/sync.c sync_rebase and sync_reset, for every line
- * a rebase or a reset writes (sys/resolve.h resolve_init), and sync_fast_forward,
- * its line; cmds/clone.c land_profiles, the line of each branch it creates
- * (sys/gitops.h gitops_create_branch); cmds/sync.c cmd_sync, cmds/clone.c cmd_clone
- * and cmds/remove.c remove_profile, the word every line their session writes
- * names (sys/remote.h remote_open).
+ * ignore_seed_baseline; cmds/sync.c sync_execute, the line of each branch a pull
+ * moves or a create writes, and cmds/clone.c land_profiles, the line of each
+ * branch it creates (sys/gitops.h gitops_create_branch); cmds/sync.c cmd_sync,
+ * cmds/clone.c cmd_clone and cmds/remove.c remove_profile, the word every line
+ * their session writes names (sys/remote.h remote_open).
  *
  * @param action The action
  * @return Its word, static

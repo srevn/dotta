@@ -18,12 +18,17 @@
  * store's refs reach, whatever the fetch asks for
  * (lib/libgit2/src/libgit2/transports/local.c local_download_pack): there the
  * objects of every branch arrive, unnamed. Then the fetch writes each fetched
- * branch's remote-tracking ref itself — the remote as this store last saw it —
- * from the head it read there, as git's own fetch does (lib/git/builtin/fetch.c
- * update_local_ref): a tracking ref in a fetched name's way taken out first,
- * from its read, and never one beside a branch that stands here, whose way-held
- * name is then not fetched. A branch the remote no longer advertises keeps its
- * tracking ref.
+ * branch's remote-tracking ref itself — the remote's head on the line this store
+ * last took — from the head it read there, forward alone: where none stood, or
+ * the remote's head descends from it, as git's own fetch moves a ref its refspec
+ * does not force (lib/git/builtin/fetch.c update_local_ref). Where the remote
+ * left that line — a profile recreated there, a force push — the ref stands: an
+ * act that writes the branch here off the remote takes the remote's head
+ * (remote_take), and a branch's push that lands moves it to what it pushed
+ * (remote_push). A tracking ref in a fetched name's way is taken out first, from
+ * its read, and never one beside a branch that stands here, whose way-held name
+ * is then not fetched; a branch the remote no longer advertises keeps its tracking
+ * ref.
  *
  * A push is one update — a ref, the commit it is to name or Git's null id (a
  * deletion), and the head its writer read the remote naming or Git's null id (a
@@ -35,7 +40,8 @@
  * absence (transports/local.c local_push_update_remote_ref), and writes the
  * repository the fetch URL names whatever pushurl says (local_push). A branch's
  * push that lands moves its tracking ref after it, from its read; a tracking
- * ref that will not follow is left as it stands, the next fetch's to write.
+ * ref that will not follow is left as it stands, the next fetch's to move where
+ * the remote's head continues its line, else the next act's on the branch.
  *
  * Every op takes the proxy git's configuration names, as git's own transfers
  * do, which libgit2 takes only where asked (GIT_PROXY_AUTO): remote.<name>.proxy,
@@ -152,12 +158,12 @@ error_t remote_open(
  * (transports/smart.c git_smart__connect) — and absence is its answer, as a
  * reference that does not stand is gitops_reference_oid's.
  *
- * Readers: infra/epoch.c epoch_resolve (the epoch's verdict); remote_relation
- * (a branch against it); cmds/sync.c sync_push (a push's expectation); cmds/clone.c
- * cmd_clone (its gate, through the epoch's verdict) and land_profiles (the head
- * each branch is created at); cmds/remove.c remove_profile (the remote's branch
- * against the tracking ref its deletion is leased on, and whether there is one
- * to delete).
+ * Readers: infra/epoch.c epoch_resolve (the epoch's verdict); remote_fetch (the
+ * head each fetched name's tracking ref moves to), remote_relation (a branch
+ * against it) and remote_take (the head a take writes); cmds/clone.c cmd_clone
+ * (its gate, through the epoch's verdict) and land_profiles (the head each branch
+ * is created at); cmds/remove.c remove_profile (the remote's branch against the
+ * tracking ref its deletion is leased on, and whether there is one to delete).
  *
  * @param remote The session (must not be NULL)
  * @param refname Full reference name (must not be NULL)
@@ -230,21 +236,28 @@ string_array_t remote_last_branches(git_repository *repo, arena_t *arena);
  *
  * Then each fetched branch's tracking ref is written from the head it read there
  * — the listing's absence its null id, unread again — to the id the remote
- * advertised, wherever the remote moved the branch, a force push included, and
- * whatever fetch refspec the remote's configuration holds, or none; under `dotta
- * <action>: fetched from <remote>`, and left alone where the two agree; one another
- * writer moved since is refused, naming the ref. A branch the remote no longer
+ * advertised, forward alone: where none stood, or the advertised head descends
+ * from it (git_graph_descendant_of), whatever fetch refspec the remote's
+ * configuration holds, or none; under `dotta <action>: fetched from <remote>`,
+ * and left alone where the two agree. Where the remote left the line the ref
+ * names — a profile recreated there, a force push — the ref stands, for the act
+ * that takes the remote's head (remote_take). The question costs the commits
+ * between the two heads, and where they share none — a re-creation, until an
+ * act takes it — both histories whole (lib/libgit2/src/libgit2/graph.c
+ * git_graph_reachable_from_any). A walk that will not run, or a ref another writer
+ * moved since its read, is refused, naming the ref. A branch the remote no longer
  * advertises keeps its tracking ref, whatever fetch.prune says: pruned, its branch
  * here would read as never pushed, which the next sync would push back — a prune
  * is a hand's, `dotta git fetch --prune`. `refname`'s objects stand in the store
  * for its caller to judge, and nothing names them.
  *
- * Readers: cmds/sync.c cmd_sync (every profile in the run's scope, and the epoch)
- * and cmds/status.c status_remote (every profile its section lists), each asking
- * for branches here, none nested with another, so neither meets a barred name;
- * cmds/profile.c profile_fetch (the remote's own names), whose names a branch
- * here may bar; cmds/clone.c cmd_clone (the profiles it selected off the listing,
- * and the epoch), into a store it just made, which holds no tracking ref.
+ * Readers: cmds/sync.c cmd_sync (every row of the run, a branch here or none,
+ * and the epoch), whose branchless row a branch here may bar, the layering move
+ * undone on the remote; cmds/status.c status_remote (every profile its section
+ * lists, each a branch here, none nested with another, so it meets no barred
+ * name); cmds/profile.c profile_fetch (the remote's own names), whose names a
+ * branch here may bar; cmds/clone.c cmd_clone (the profiles it selected off the
+ * listing, and the epoch), into a store it just made, which holds no tracking ref.
  *
  * @param remote The session (must not be NULL)
  * @param branches Branch names, each once and through the branch rule (must not
@@ -254,8 +267,8 @@ string_array_t remote_last_branches(git_repository *repo, arena_t *arena);
  * @param received What the download moved, set where the fetch succeeds; zero
  *                 where nothing was fetched (NULL: not asked)
  * @return Error or NULL on success: "Cannot fetch from remote '<name>'" over
- *         the download's cause; a tracking ref the listing, a take-out or a write
- *         refused, naming the ref
+ *         the download's cause; a tracking ref the listing, a take-out, the forward
+ *         question or a write refused, naming the ref
  */
 error_t remote_fetch(
     remote_t *remote,
@@ -288,10 +301,10 @@ error_t remote_fetch(
  * ref after it, from its read — to `target`, or deleted where the push deleted
  * and the ref stands — under `dotta <action>: pushed to <remote>`. One that will
  * not follow, moved by another writer or refused by Git's namespace, is left as
- * it stands: the push landed, and the next fetch writes the ref from the remote's
- * listing.
+ * it stands: the push landed, and the next fetch moves the ref where the remote's
+ * head continues its line, else the next act on the branch (remote_take).
  *
- * Readers: cmds/sync.c sync_push (a profile's push, a resolution's) and
+ * Readers: cmds/sync.c sync_push (a row's push, and a merge's) and
  * sync_reconcile_epoch (the epoch's establish); cmds/remove.c remove_profile (a
  * deletion's, leased on the branch's tracking ref).
  *
@@ -303,9 +316,10 @@ error_t remote_fetch(
  * @return Error or NULL on success: ERR_CONFLICT "Reference '<refname>' on remote
  *         '<name>' was changed by another writer since this command read it"
  *         where the compare refuses, nothing sent, and nowhere else — read by
- *         cmds/remove.c remove_profile, which says it as its lease's refusal;
- *         "Cannot push '<refname>' to remote '<name>'" over the cause — the
- *         remote's words where it refused the ref
+ *         cmds/remove.c remove_profile, which says it as its lease's refusal,
+ *         and cmds/sync.c sync_push, as its row's; "Cannot push '<refname>' to
+ *         remote '<name>'" over the cause — the remote's words where it refused
+ *         the ref
  */
 error_t remote_push(
     remote_t *remote,
@@ -314,6 +328,32 @@ error_t remote_push(
     const git_oid *expected,
     transfer_wire_t *sent
 );
+
+/**
+ * Take the remote's head into a branch's tracking ref, once an act wrote the
+ * branch here off the remote
+ *
+ * The write the fetch leaves where the remote left the line the ref names
+ * (remote_fetch): an act that wrote the branch off the remote — a pull, a merge's
+ * commit, a branch created back — has taken the remote's line, so its tracking
+ * ref takes the head the open listed, from the ref's read, under `dotta <action>:
+ * fetched from <remote>`; nothing where the ref names that head already, or the
+ * remote holds no branch of the name. Its readers ask it once the act's own write
+ * landed: an act refused leaves the ref on the line this store last took, and
+ * the next contact reads the remote as this one did.
+ *
+ * Nothing is answered: a take that will not land — a ref another writer moved
+ * since its read, a lock another process holds — is no failure of the act, which
+ * landed, and leaves the ref as it stands, the next act on the branch moving it
+ * from its read; as a push's follow does (remote_push).
+ *
+ * Readers: cmds/sync.c sync_execute (a pull, a create) and sync_merge (a merge's
+ * commit); cmds/profile.c profile_fetch (a create).
+ *
+ * @param remote The session (must not be NULL)
+ * @param branch Branch name, the one the act wrote (must not be NULL)
+ */
+void remote_take(remote_t *remote, const char *branch);
 
 /**
  * Leave the remote: the listing's connection closed where it stands, the credential
@@ -367,7 +407,7 @@ typedef enum {
 typedef struct {
     remote_state_t state;   /* The reading */
     git_oid local;          /* L: the branch here, read now */
-    git_oid tracking;       /* T: its tracking ref, read now — the remote as this store last saw it */
+    git_oid tracking;       /* T: its tracking ref, read now — the remote's head on the line this store last took */
     git_oid remote;         /* R: the remote's head as the open listed it; T with no contact */
     git_oid from;           /* Where a branch none stands here is created; the null id elsewhere */
     size_t ahead;           /* The commits this store holds that the remote lacks */
@@ -391,7 +431,8 @@ typedef struct {
  * beneath a title naming the remote.
  *
  * Readers: cmds/status.c status_remote, each profile its section reports on where
- * the contact stands; cmds/profile.c profile_fetch, each profile it fetched.
+ * the contact stands; cmds/profile.c profile_fetch, each profile it fetched;
+ * cmds/sync.c sync_decide, each row of the run.
  *
  * @param remote The session (must not be NULL)
  * @param branch Branch name (must not be NULL)
@@ -438,7 +479,7 @@ error_t remote_last_relation(
  * does, and every screen shows a reading alike.
  *
  * Readers: cmds/status.c status_print_remote; cmds/list.c list_profiles;
- * cmds/profile.c profile_fetch.
+ * cmds/profile.c profile_fetch; cmds/sync.c sync_print_lead.
  */
 const char *remote_state_symbol(remote_state_t state);
 
@@ -457,7 +498,8 @@ const char *remote_state_symbol(remote_state_t state);
  *   NO_LOCAL     → DIM      (no local branch to compare)
  * each _AHEAD as its base, and every reading with no branch here as NO_LOCAL.
  *
- * Reader: cmds/profile.c profile_fetch, whose rows colour the glyph.
+ * Readers: cmds/profile.c profile_fetch and cmds/sync.c sync_print_lead, whose
+ * rows colour the glyph.
  */
 output_color_t remote_state_color(remote_state_t state);
 
@@ -484,7 +526,8 @@ output_color_t remote_state_color(remote_state_t state);
  * prints the phrase beside it.
  *
  * Readers: cmds/status.c status_print_remote; cmds/list.c list_profiles, whose
- * rows take status's frame; cmds/profile.c profile_fetch.
+ * rows take status's frame; cmds/profile.c profile_fetch; cmds/sync.c
+ * sync_print_state, the clause of a row the run does not act on.
  *
  * @param relation The reading and its counts (must not be NULL)
  * @param buffer Output buffer for the phrase (must not be NULL)

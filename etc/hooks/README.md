@@ -254,10 +254,9 @@ profiles and its remote are known
 - Exit 0: Continue with sync
 - Exit non-zero: Abort sync operation
 
-**Fire ordering:** Pre-sync fires before the fetch, so a run whose force push
-or reset is declined after it, or refused there off a terminal, has fired it
-with no post-sync after it. Network or push failures may suppress post-sync too
-— the same operational asymmetry every hook pair carries.
+**Fire ordering:** Pre-sync fires before the fetch, so a run whose fetch then
+fails has fired it with no post-sync after it — the same operational asymmetry
+every hook pair carries.
 
 ### `post-sync`
 
@@ -285,8 +284,8 @@ fetch that failed among them, fires none
 - Exit 0 or non-zero: a non-zero exit is warned, with the hook's output; the sync has already completed
 
 **Note:** post-sync fires once sync's report is printed, so individual
-profiles may still have diverged or failed — run `dotta status` inside the
-hook if per-profile detail is needed.
+profiles may still have failed, or been kept as they stand for you to decide —
+run `dotta status` inside the hook if per-profile detail is needed.
 
 ### `pre-revert`
 
@@ -352,10 +351,8 @@ makes refuses theirs and a branch it deletes comes back with their commit;
 update reads the profile after it and builds on the hook's commit;
 `remove --delete-profile` deletes the branch whatever the hook committed to it.
 
-sync decides after `pre-sync`: what to pull and push is decided after the fetch
-that follows the hook — a run that force pushes or resets asks once there,
-beneath what it will do and before any profile acts, and off a terminal is
-refused there. The enabled-set writers (`profile enable`, `disable`, `reorder`,
+sync decides after `pre-sync`: what to pull, push and merge is decided after the
+fetch that follows the hook, and nothing is asked. The enabled-set writers (`profile enable`, `disable`, `reorder`,
 `interactive`, `clone`) and dotta's own files (`ignore`, `bootstrap --edit`)
 fire none.
 

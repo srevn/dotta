@@ -14,17 +14,16 @@
  * object has one writer, the action that made it in its header
  * (gitops_create_commit). An option whose configured value would change what
  * dotta's own operation answers is dotta's, whatever the configuration says: a
- * merge's rename pairing and its driver in sys/stage, and each rebase pick's
- * here (gitops_rebase_inmemory_safe), the fetch's tags and its prune in sys/remote.
- * Beside the rules stand the passes the layers above share — a tree walked, a
- * blob read in place, two trees diffed, a merge base — and calls passed through,
- * each failure in Git's words. Nothing here meets a remote (sys/remote.h).
+ * merge's rename pairing and its driver in sys/stage, the fetch's tags and its
+ * prune in sys/remote. Beside the rules stand the passes the layers above share
+ * — a tree walked, a blob read in place, two trees diffed, a merge base — and
+ * calls passed through, each failure in Git's words. Nothing here meets a remote
+ * (sys/remote.h).
  *
  * Converting libgit2's errors includes its iterators, the ones easy to miss:
- * `git_reference_next_name` and `git_rebase_next` each return 0, GIT_ITEROVER
- * at the end, or a negative code, and a loop testing only for 0 cannot tell an
- * enumeration that finished from one that gave up. Every iteration here classifies
- * all three.
+ * `git_reference_next_name` returns 0, GIT_ITEROVER at the end, or a negative
+ * code, and a loop testing only for 0 cannot tell an enumeration that finished
+ * from one that gave up. Every iteration here classifies all three.
  *
  * For a ref listing that is necessary and not sufficient: libgit2's filesystem
  * refdb reads `packed-refs` loudly the first time on a handle — a parse it refused
@@ -96,12 +95,11 @@ void gitops_shutdown(void);
  * this host (sys/identity.h), `<invoker> <invoker@host>`, "dotta" for an invoker
  * with no name and "localhost" for a host gethostname cannot name.
  *
- * Readers: every writer of a commit object — the stage's commit (sys/stage.c
- * stage_commit), a merge's among them, and the rebase (gitops_rebase_inmemory_safe)
- * — and the handle's open and create, which hand it to libgit2 as the ident of
- * the reflog lines it signs itself (gitops_open_repository,
- * gitops_init_repository). Caller frees the returned signature via
- * `git_signature_free`.
+ * Readers: the one writer of a commit object, the stage's commit (sys/stage.c
+ * stage_commit), a merge's among them, and the handle's open and create, which
+ * hand it to libgit2 as the ident of the reflog lines it signs itself
+ * (gitops_open_repository, gitops_init_repository). Caller frees the returned
+ * signature via `git_signature_free`.
  *
  * @param out  Output signature (caller frees with git_signature_free)
  * @param repo Repository (must not be NULL)
@@ -245,8 +243,9 @@ error_t gitops_reference_exists(
  * Check if branch exists
  *
  * gitops_reference_exists of refs/heads/<name>, the name through the branch rule
- * (gitops_branch_refname) on the way. A reader asking of many names asks them
- * together (gitops_branches_exist), every miss proven at once.
+ * (gitops_branch_refname) on the way. A reader asking of many names whose misses
+ * recur — a branch gone stays gone, asked again at every load — asks them together
+ * (gitops_branches_exist), every miss proven at once.
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
@@ -421,9 +420,9 @@ error_t gitops_list_remote_tracking(
  * branch at a tag, which only a tool other than git writes, is no branch here.
  *
  * Readers: cmds/clone.c land_profiles (each profile the clone selected, into a
- * store it just made, at the remote's head) and cmds/profile.c profile_fetch (a
- * profile with no branch here, at the head its relation names: sys/remote.h
- * remote_relation_t from).
+ * store it just made, at the remote's head), and cmds/profile.c profile_fetch
+ * and cmds/sync.c sync_execute (a profile with no branch here, at the head its
+ * relation names: sys/remote.h remote_relation_t from).
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
@@ -488,7 +487,9 @@ error_t gitops_verify_branch(
  * stricter one and is not used. Per-branch config another tool wrote
  * (`branch.<name>.*`) is that tool's and stays; dotta writes none.
  *
- * Reader: cmds/remove.c remove_profile, from the head its preview read.
+ * Readers: cmds/remove.c remove_profile, from the head its preview read;
+ * cmds/sync.c sync_execute, a deletion the remote's answer teaches, from the
+ * head its relation read.
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
@@ -557,10 +558,9 @@ error_t gitops_reference_tree(
  * found standing, its claims read from the head's tree and the head's id kept
  * beside them, a branch gone since contributing nothing), core/workspace.c
  * workspace_ask_departures (each owned file orphan's disabled profile whose branch
- * it found standing, one gone since answering every name GONE), cmds/sync.c
- * sync_departure_counts (each profile whose files a pull's view lost) and
- * cmds/remove.c remove_profile (the head a deletion takes, read once, before it
- * says what it takes; a branch gone, no profile to delete).
+ * it found standing, one gone since answering every name GONE) and cmds/remove.c
+ * remove_profile (the head a deletion takes, read once, before it says what it
+ * takes; a branch gone, no profile to delete).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
@@ -777,9 +777,9 @@ error_t gitops_load_branch_commit(
  *
  * `refname` comes to name `target` only where it still stands as `expected` says
  * — git's update-ref <ref> <new> <old>:
- *   - an id: the head it must still name — the stage's commit, sync's resolutions
- *     and their rollback, its fast-forward, a remote-tracking ref the session
- *     moves, the epoch's install over the ref its census judged;
+ *   - an id: the head it must still name — the stage's commit, sync's pull, a
+ *     remote-tracking ref the session moves, the epoch's install over the ref
+ *     its census judged;
  *   - Git's null id: nothing, the name free — the stage's root, a branch's create
  *     (gitops_create_branch), a remote-tracking ref the session writes first,
  *     the epoch's install where none stood.
@@ -814,10 +814,10 @@ error_t gitops_load_branch_commit(
  * remote-tracking ref's (utils/repo.h repo_declare_store), not the epoch's or
  * the baseline's (refdb.c git_refdb_should_write_reflog). Its clock is the write's.
  *
- * Readers: sys/stage.c stage_commit; sys/resolve.c resolve_rebase_inmemory,
- * resolve_theirs and resolve_rollback; cmds/sync.c sync_fast_forward;
- * gitops_create_branch; sys/remote.c remote_fetch and remote_follow, a
- * remote-tracking ref after a fetch and a push; infra/epoch.c epoch_adopt.
+ * Readers: sys/stage.c stage_commit; cmds/sync.c sync_execute, a pull;
+ * gitops_create_branch; sys/remote.c remote_fetch, remote_follow and remote_take,
+ * a remote-tracking ref after a fetch, a push and an act; infra/epoch.c
+ * epoch_adopt.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL)
@@ -896,15 +896,13 @@ error_t gitops_delete_reference(
  * failure, not an absence, and so is a reference that stands at the null id:
  * git reads one as broken (lib/git/refs/files-backend.c), never as missing. The
  * delete reads the reference it takes so too (gitops_delete_reference). For the
- * readers that act on a reference's absence as an answer: sys/upstream.c
- * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
- * sync_fast_forward (nothing fetched to fast-forward to), infra/epoch.c
+ * readers that act on a reference's absence as an answer: infra/epoch.c
  * epoch_resolve (no local epoch), sys/remote.c remote_fetch (a tracking ref in
  * a fetched name's way gone since its listing, nothing to take out), remote_follow
- * (a pushed branch's tracking ref never written, a create) and remote_read_heads
- * (no branch here, no tracking ref: a branch against its remote),
- * gitops_reference_commit, which reads the commit at the id, and
- * gitops_resolve_reference_oid, which refuses it.
+ * and remote_take (a branch's tracking ref never written, a create) and
+ * remote_read_heads (no branch here, no tracking ref: a branch against its remote),
+ * cmds/remove.c remove_profile (no tracking ref its deletion's lease could name),
+ * and gitops_reference_commit, which reads the commit at the id.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -914,45 +912,6 @@ error_t gitops_delete_reference(
 error_t gitops_reference_oid(
     git_repository *repo,
     const char *ref_name,
-    git_oid *out
-);
-
-/**
- * Resolve reference name to OID
- *
- * gitops_reference_oid for a reader that needs the reference: its absence, proven,
- * is refused (ERR_NOT_FOUND, naming the reference), and every failure of the
- * read is its own — a symbolic reference that names nothing, in Git's words;
- * one at the null id, as broken.
- *
- * @param repo Repository (must not be NULL)
- * @param ref_name Full reference name (e.g., "refs/heads/main") (must not be NULL)
- * @param out Target OID (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_resolve_reference_oid(
-    git_repository *repo,
-    const char *ref_name,
-    git_oid *out
-);
-
-/**
- * Resolve a remote-tracking branch's current OID
- *
- * gitops_resolve_reference_oid of the branch's remote-tracking reference
- * (gitops_remote_branch_refname).
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (must not be NULL)
- * @param branch_name Branch name without refs/remotes/<remote>/ prefix (must
- *                    not be NULL)
- * @param out Target OID (must not be NULL)
- * @return Error or NULL on success (ERR_NOT_FOUND if remote branch missing)
- */
-error_t gitops_resolve_remote_branch_oid(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name,
     git_oid *out
 );
 
@@ -1016,9 +975,9 @@ error_t gitops_branch_refname(
  * reference. The branch half is the caller's: a profile's name, held to the branch
  * rule where its own ref is built (gitops_branch_refname).
  *
- * Readers: cmds/sync.c sync_fast_forward, sys/upstream.c upstream_analyze_profile,
- * sys/remote.c remote_fetch, remote_follow and remote_read_heads, and this file's
- * gitops_resolve_remote_branch_oid.
+ * Readers: sys/remote.c remote_fetch, remote_follow, remote_take and
+ * remote_read_heads; cmds/remove.c remove_profile, the tracking ref its deletion
+ * is leased on.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX
@@ -1095,10 +1054,10 @@ error_t gitops_diff_get_stats(
  * so a reader tests the id, as one reads a reference's absence
  * (gitops_reference_oid). Readers: sys/stage.c stage_merge_trees, which merges
  * two such histories over Git's empty tree; cmds/sync.c sync_disagreements, the
- * floor of the names a landed resolution's two sides took, where none is no line;
- * and sys/remote.c remote_relate and remote_ahead, where a branch against its
- * remote reads two histories sharing none: the remote's branch recreated, or a
- * tracking ref no counterpart.
+ * floor of the names a merge's two sides took, where none is no line; and
+ * sys/remote.c remote_relate and remote_ahead, where a branch against its remote
+ * reads two histories sharing none: the remote's branch recreated, or a tracking
+ * ref no counterpart.
  *
  * @param repo Repository (must not be NULL)
  * @param one First commit OID (must not be NULL)
@@ -1118,17 +1077,16 @@ error_t gitops_find_merge_base(
  *
  * git_commit_create_buffer's whole contract — the author, the committer, the
  * message's encoding, the message, the tree and the parents, each written as
- * handed, so a writer replaying another's commit keeps its author and its encoding
- * — and, where `action` names one, one header after the committer's lines: the
- * action that made the commit, in the word its writer names it by. libgit2 writes
- * a header only through a writer that moves no reference
+ * handed — and, where `action` names one, one header after the committer's lines:
+ * the action that made the commit, in the word its writer names it by. libgit2
+ * writes a header only through a writer that moves no reference
  * (lib/libgit2/src/libgit2/commit.c git_commit_create_with_signature). With no
  * action the object is the one git_commit_create writes from the same inputs,
  * byte for byte.
  *
  * The reference is its writer's to write, from the state it read
- * (gitops_write_reference). Readers: sys/stage.c stage_commit, with its writer's
- * action; and each replay of gitops_rebase_inmemory_safe, with its pick's.
+ * (gitops_write_reference). Reader: sys/stage.c stage_commit, with its writer's
+ * action.
  *
  * @param repo Repository (must not be NULL)
  * @param author The author (must not be NULL)
@@ -1165,8 +1123,8 @@ error_t gitops_create_commit(
  * such line — a hand's, git's own. The word is opaque here: what each one means
  * is infra/commit's.
  *
- * Readers: gitops_rebase_inmemory_safe, each pick's action carried onto its replay;
- * sys/history.c history_read, the word of each commit that took a path away.
+ * Reader: sys/history.c history_read, the word of each commit that took a path
+ * away.
  *
  * @param commit The commit (must not be NULL)
  * @param arena The arena the word lives in (must not be NULL)
@@ -1178,42 +1136,6 @@ error_t gitops_commit_action(
     const git_commit *commit,
     arena_t *arena,
     const char **out
-);
-
-/**
- * Rebase a branch's commits onto another commit, in memory, moving no reference
- *
- * Each commit `branch_oid` holds that `onto_oid` lacks — a pick — is replayed
- * onto the last replay written, the onto before any, in libgit2's in-memory mode:
- * HEAD, the index and a working tree untouched, and no rebase state left in the
- * repository. Each pick is merged under two of the options the stage's merge
- * takes (sys/stage.h): no rename paired, and Git's text driver named. A replay
- * keeps its pick's author, message and encoding, and the action its header names
- * (gitops_commit_action), written by the one object writer (gitops_create_commit)
- * under the committer every commit dotta writes carries (gitops_get_signature);
- * every other header a pick carries — a second action line among them — is dropped,
- * as git_commit_create drops them all. A pick whose change the onto already holds
- * — its replay would change nothing — is skipped, its action with it. The answer
- * is the last replay written, or the onto where none was: no pick to replay, or
- * every one skipped.
- *
- * A pick that conflicts is refused ERR_CONFLICT; the writer's own failure is
- * answered in its words, every other failure in Git's. Refused, nothing but loose
- * objects is written.
- *
- * Reader: sys/resolve.c resolve_rebase_inmemory.
- *
- * @param repo Repository (must not be NULL)
- * @param branch_oid Branch to rebase (must not be NULL)
- * @param onto_oid Target to rebase onto (must not be NULL)
- * @param out_oid Final rebased commit OID (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_rebase_inmemory_safe(
-    git_repository *repo,
-    const git_oid *branch_oid,
-    const git_oid *onto_oid,
-    git_oid *out_oid
 );
 
 #endif /* DOTTA_GITOPS_H */

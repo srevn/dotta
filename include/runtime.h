@@ -293,8 +293,7 @@ typedef enum dotta_verbosity {
  *
  * Who declares it: the commands whose subject is the view — the workspace commands
  * (status, diff, apply, update — `workspace_load` borrows the view rather than
- * building one), sync, whose Manifest block diffs the view before its pull against
- * the one after, and `profile enable`: its run builds the view after over every
+ * building one) — and `profile enable`: its run builds the view after over every
  * profile of the view before, so no enable completes on a set the build refuses,
  * and it reads the view before once — an enabled profile's claims placed nowhere
  * for want of a target (`manifest_unbound`), which an enable naming that profile
@@ -313,7 +312,10 @@ typedef enum dotta_verbosity {
  * and `add`, before its commit, at a link above an argument alone) or that must
  * run on a set the build refuses (`profile disable`; `remove` — its warning bit
  * and its record phase each build a view where needed and degrade when the build
- * fails) builds its own where it needs it, with the failure handling that path
+ * fails; `sync`, whose pull is the way a repair to such a set arrives — its live
+ * run builds the view before its acts and the one after them for its Manifest
+ * block, a failure of either warned and the block skipped, and a dry run builds
+ * none) builds its own where it needs it, with the failure handling that path
  * wants. A command that moves Git or the enabled set (add, update, remove, sync,
  * profile enable / disable, clone, interactive) builds the post-mutation view
  * itself — the builder called again over the rows as they now stand: `run.manifest`
@@ -365,10 +367,10 @@ typedef struct dotta_needs {
  *     is torn down before it.
  *   - `manifest` is the view over the enabled set as it stands at dispatch — a
  *     value of the command arena, rows and indexes alike, which nothing frees.
- *     Never reassigned: a command that moves Git (a commit, a pull) or the enabled
- *     set builds the post-mutation view itself, and `run.manifest` stays the
- *     view before — the one sync's Manifest block diffs the pull against
- *     (`manifest_diff`, `cmds/sync.c` `cmd_sync`).
+ *     Never reassigned: a command that moves Git (a commit) or the enabled set
+ *     builds the post-mutation view itself, and `run.manifest` stays the view
+ *     before — the one `profile enable` reads its missing branches and unbound
+ *     claims off (`cmds/profile.c` `profile_enable`).
  *
  * Owning-typed pointers where `close_run` frees (`content_cache_t *`, `keymgr
  * *`, `state_t *`, `git_repository *`); `const` where nothing does (`mounts`

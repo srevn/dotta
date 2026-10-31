@@ -97,7 +97,7 @@ dotta status -v
 
 `dotta status` groups paths by what to do about them and tags each one -- `[undeployed]`, `[clean]`, `[modified]`, `[deleted]`, `[orphaned]` and more. A path can carry several tags at once (`[orphaned] [relocated]`), and where a tag needs explaining, status prints a short legend under the group. `dotta status --full` lists every managed path with its state and the profile it comes from.
 
-**Remote state** -- `dotta status` and `dotta list --remote` say where each profile stands against its remote, a glyph beside the words: `= up-to-date`, `↑ 2 commits ahead`, `↓ 1 commit behind`, `↕ diverged (1 ahead, 2 behind)`, `• no remote branch` (never pushed there), `− deleted on the remote` (another machine deleted the profile; `− deleted on the remote, 2 commits ahead` where commits made here never reached it). `dotta status` asks the remote first. `dotta list --remote` and `dotta status --no-fetch` ask it nothing, and neither does a `dotta status` that cannot reach it: their section is then titled `Remote sync status (origin, as last seen)`, and shows each profile as it stood at the last fetch, so a profile deleted on the remote shows there as it last stood. What `dotta sync` does with a profile ahead, behind or diverged is its strategy's (see [Syncing with Remote](#syncing-with-remote)).
+**Remote state** -- `dotta status` and `dotta list --remote` say where each profile stands against its remote, a glyph beside the words: `= up-to-date`, `↑ 2 commits ahead`, `↓ 1 commit behind`, `↕ diverged (1 ahead, 2 behind)`, `• no remote branch` (never pushed there), `− deleted on the remote` (another machine deleted the profile; `− deleted on the remote, 2 commits ahead` where commits made here never reached it), `↻ recreated on the remote` (another machine deleted the profile and created it again; `, 2 commits ahead` likewise). `dotta status` asks the remote first. `dotta list --remote` and `dotta status --no-fetch` ask it nothing, and neither does a `dotta status` that cannot reach it: their section is then titled `Remote sync status (origin, as last seen)`, and shows each profile as it stood at the last fetch, so a profile deleted or recreated on the remote since shows there as it last stood. What `dotta sync` does with each is in [Syncing with Remote](#syncing-with-remote).
 
 ## Viewing Differences
 
@@ -198,20 +198,14 @@ dotta sync
 # Sync specific profiles
 dotta sync global darwin
 
-# Preview what would happen
+# Preview what would happen, conflicts included
 dotta sync --dry-run
 
-# Push only (no pulling)
-dotta sync --no-pull
-
-# Pull only (no pushing)
+# Pull and merge, push nothing
 dotta sync --no-push
 
-# Handle diverged branches with a specific strategy
-dotta sync --diverged rebase   # Options: warn, rebase, merge, ours, theirs
-
-# Merge, keeping the remote's side where both changed the same thing
-dotta sync --diverged merge --conflicts theirs
+# Where both machines changed the same thing, keep the remote's side
+dotta sync --conflicts theirs
 ```
 
 **Typical workflow:**
@@ -221,9 +215,11 @@ dotta update    # Commit local changes
 dotta sync      # Push/pull with remote
 ```
 
-`sync` moves commits and nothing else: it neither reads nor changes the files on this machine, so an edit not yet committed with `dotta update` stays here. A file you edited that a pull also changed then reads as changed in Git and on disk, for you to decide: `dotta apply --force <path>` keeps the pulled version, `dotta add --force <profile> <path>` keeps yours. Committed first, the two edits leave the profile diverged instead, for `dotta sync --diverged merge` (or `rebase`) to combine.
+`sync` moves commits and nothing else: it neither reads nor changes the files on this machine, so an edit not yet committed with `dotta update` stays here. A file you edited that a pull also changed then reads as changed in Git and on disk, for you to decide: `dotta apply --force <path>` keeps the pulled version, `dotta add --force <profile> <path>` keeps yours. Committed first, the two edits are merged by the sync instead.
 
-`dotta sync --diverged merge` combines what two machines changed in a profile wherever they changed different files, lines or permissions. Where both changed the same thing differently, the profile is not merged: the sync lists each conflict beneath it -- `home/.config/f (mode: 0640 ours, 0600 theirs)`, `home/.config/r (content)` -- and `--conflicts ours` keeps this machine's side of every one, `--conflicts theirs` the remote's: of a file both changed, that side's version. A change only one machine made, a permission or another file, stays either way, and the side not kept stays in the profile's history.
+Where both machines committed to a profile, `dotta sync` merges the two and pushes the merge: it combines what each changed wherever they changed different files, lines or permissions. Where both changed the same thing differently, the profile is not merged: the sync lists each conflict beneath it -- `home/.config/f (mode: 0640 ours, 0600 theirs)`, `home/.config/r (content)` -- and `--conflicts ours` keeps this machine's side of every one, `--conflicts theirs` the remote's: of a file both changed, that side's version. A change only one machine made, a permission or another file, stays either way, and the side not kept stays in the profile's history.
+
+A profile another machine deleted is deleted locally too, and one it recreated replaces the local one — unless this machine holds commits the remote never had: then the profile is kept as it stands, and the sync says how to keep those commits or let them go. An enabled profile with no local branch gets it back from the remote at the next sync; where the remote has none either, the sync says so until `dotta profile disable` drops it.
 
 After a pull, `sync` lists what it did to each profile's files — added, updated, reassigned to another profile, overridden by another profile's file, removed or deleted (see [Removing Files](#removing-files)); `dotta apply` lands what it brought.
 

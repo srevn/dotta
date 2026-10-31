@@ -831,8 +831,8 @@ error_t profile_sealed(profile_t *profile, const char *storage_path, bool *out);
  * names each released file's by its line (cmds/apply.c
  * apply_print_cleanup_preview); a sync's Manifest counts the acts (cmds/sync.c
  * sync_departure_counts), "deleted", "removed" for every answer that keeps, and
- * "unverified"; and the line beneath a resolution says each side's act, deleted
- * or removed (cmds/sync.c sync_print_disagreements).
+ * "unverified"; and the line beneath a merge says each side's act, deleted or
+ * removed (cmds/sync.c sync_print_disagreements).
  */
 typedef enum {
     PROFILE_DEPARTURE_HELD,         /* the head holds the name: it has not left */
@@ -867,10 +867,10 @@ typedef struct profile_departure {
  *
  * Readers: core/workspace.c workspace_ask_departures (each owned file orphan,
  * at the head the view read for an enabled profile, at its branch's head now
- * for a disabled one); cmds/sync.c sync_departure_counts (each file a pull's
- * view lost, at its profile's head as the pull left it) and sync_disagreements
- * (each name a rebase's or a merge's local side took since its merge base, at
- * the remote's head, the local one and the one the rebase or the merge left).
+ * for a disabled one); cmds/sync.c sync_departure_counts (each file the acts'
+ * view lost, at its profile's head as the view after read it) and
+ * sync_disagreements (each name a merge's local side took since its merge base,
+ * at the remote's head and the local one).
  *
  * @param repo The repository the history is read from (must not be NULL)
  * @param head The head's id, or NULL where the branch is gone (borrowed)
@@ -1114,7 +1114,7 @@ typedef struct {
  * moves the branch — its stage's second parent records the integration — its
  * writer's words its message (profile_commit).
  *
- * Reader: cmds/sync.c sync_merge.
+ * Reader: cmds/sync.c sync_decide, at the run's decision.
  *
  * @param repo Repository (must not be NULL; borrowed for the draft's life)
  * @param name The profile's name, which its branch is named by (must not be NULL;

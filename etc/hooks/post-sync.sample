@@ -13,8 +13,8 @@
 # Note: post-sync fires once sync's report is printed — a profile that
 # failed to push or pull included; a sync that stops before it, a fetch
 # that failed among them, fires none. Individual profiles may still have
-# diverged or failed — run 'dotta status' inside the hook if per-profile
-# detail is needed.
+# failed, or been kept as they stand for you to decide — run 'dotta status'
+# inside the hook if per-profile detail is needed.
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository

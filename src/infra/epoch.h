@@ -220,8 +220,8 @@ error_t epoch_load(git_repository *repo, kdf_epoch_t *out);
  * every command that must *read* the epoch fails at dispatch. The two are
  * consistent because the reconcile's subject is the ref, not the bytes under it.
  *
- * The verdict is the fact; the CLI gating (--no-push / --no-pull / --dry-run)
- * and all user-facing rendering are the caller's policy.
+ * The verdict is the fact; the CLI gating (--no-push / --dry-run) and all
+ * user-facing rendering are the caller's policy.
  *
  * ADOPT is one arm over three findings — an absent ref, one that yields no epoch
  * with nothing sealed here, and a readable epoch that keys nothing here — because

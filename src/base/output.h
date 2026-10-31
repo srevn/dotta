@@ -9,11 +9,14 @@
  * A format is its author's layout: its literal bytes and {tags} reach the stream
  * as written, newlines included. Every conversion is a datum: a string's or a
  * character's bytes as a terminal may show them (base/string.h str_display), a
- * number as printf writes it. A string handed to output any other way — a list's
- * title, tags and rows — is a datum whole. Bytes as they are reach the stream
- * through output_write alone: a payload the user asked to see verbatim — save
- * show's file text (cmds/show.c show_write), written past the layer because a
- * failed write is the run's error, and output_write returns nothing.
+ * number as printf writes it. A width pads a datum by its spelling's bytes, a
+ * column a byte for ASCII and every escape, so a character past one byte pads
+ * short by the bytes it takes past one (stated). A string handed to output any
+ * other way — a list's title, tags and rows — is a datum whole. Bytes as they
+ * are reach the stream through output_write alone: a payload the user asked to
+ * see verbatim — save show's file text (cmds/show.c show_write), written past
+ * the layer because a failed write is the run's error, and output_write returns
+ * nothing.
  *
  * A line closes as a message does (base/error.h "Messages"), with no period and
  * no exclamation mark: a question keeps its question mark.

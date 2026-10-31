@@ -1055,9 +1055,9 @@ error_t gitops_diff_get_stats(
  * (gitops_reference_oid). Readers: sys/stage.c stage_merge_trees, which merges
  * two such histories over Git's empty tree; cmds/sync.c sync_disagreements, the
  * floor of the names a merge's two sides took, where none is no line; and
- * sys/remote.c remote_relate and remote_ahead, where a branch against its remote
- * reads two histories sharing none: the remote's branch recreated, or a tracking
- * ref no counterpart.
+ * sys/remote.c remote_relate and remote_counterpart, where a branch against its
+ * remote reads two histories sharing none: the remote's branch recreated, or a
+ * tracking ref no counterpart.
  *
  * @param repo Repository (must not be NULL)
  * @param one First commit OID (must not be NULL)

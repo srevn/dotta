@@ -368,26 +368,26 @@ void remote_free(remote_t *remote);
  * A branch's reading against its remote
  *
  * One constant a row of the readings that differ in what a screen says of a branch,
- * read off its three heads (remote_relation_t) by what one holds against another:
- * within it (every commit of the one the other's), beyond it and sharing a commit,
- * or apart from it, sharing none (sys/gitops.h gitops_find_merge_base). Each
- * _AHEAD holds commits the remote lacks, which a screen counts (remote_relation_t
- * ahead).
+ * read off its three heads (remote_relation_t) by what one holds against another,
+ * its counterpart: within it (every commit of the one the other's), beyond it
+ * and sharing a commit, or apart from it, sharing none (sys/gitops.h
+ * gitops_find_merge_base) — no counterpart, read as no head at all. Each _AHEAD
+ * holds commits the remote lacks, which a screen counts (remote_relation_t ahead).
  */
 typedef enum {
     REMOTE_STATE_UP_TO_DATE,         /* The branch is the remote's head */
     REMOTE_STATE_AHEAD,              /* The branch holds the remote's head, and commits beyond it */
     REMOTE_STATE_BEHIND,             /* The branch is within the remote's head */
     REMOTE_STATE_DIVERGED,           /* Each holds commits the other lacks, sharing one or none */
-    REMOTE_STATE_RECREATED,          /* Recreated there: the remote's head shares nothing with the tracking ref; the branch within it */
-    REMOTE_STATE_RECREATED_AHEAD,    /* Recreated there; the branch beyond the tracking ref, sharing it */
-    REMOTE_STATE_NO_REMOTE,          /* The remote holds none, and no tracking ref shares the branch's history */
-    REMOTE_STATE_DELETED,            /* Deleted there: the remote holds none, the tracking ref stands; the branch within it */
-    REMOTE_STATE_DELETED_AHEAD,      /* Deleted there; the branch beyond its tracking ref, sharing it */
-    REMOTE_STATE_NO_LOCAL,           /* No branch here; the tracking ref within the remote's head, apart from it, or none */
-    REMOTE_STATE_NO_LOCAL_AHEAD,     /* No branch here; the tracking ref beyond the remote's head, sharing it */
-    REMOTE_STATE_NO_LOCAL_DELETED,   /* No branch here, none on the remote; the tracking ref stands */
-    REMOTE_STATE_NO_LOCAL_NO_REMOTE  /* No branch here, none on the remote, and no tracking ref */
+    REMOTE_STATE_RECREATED,          /* Recreated on the remote, apart from the tracking ref; the branch within it */
+    REMOTE_STATE_RECREATED_AHEAD,    /* Recreated on the remote, apart from the tracking ref; the branch beyond it */
+    REMOTE_STATE_NO_REMOTE,          /* None on the remote, and no tracking ref the branch's counterpart */
+    REMOTE_STATE_DELETED,            /* Deleted on the remote, the tracking ref standing; the branch within it */
+    REMOTE_STATE_DELETED_AHEAD,      /* Deleted on the remote, the tracking ref standing; the branch beyond it */
+    REMOTE_STATE_NO_LOCAL,           /* No branch here; the tracking ref within the remote's head, or no counterpart of it */
+    REMOTE_STATE_NO_LOCAL_AHEAD,     /* No branch here; the tracking ref beyond the remote's head */
+    REMOTE_STATE_NO_LOCAL_DELETED,   /* No branch here, none on the remote; the tracking ref standing */
+    REMOTE_STATE_NO_LOCAL_NO_REMOTE  /* No branch here, none on the remote; no tracking ref */
 } remote_state_t;
 
 /**
@@ -489,13 +489,13 @@ const char *remote_state_symbol(remote_state_t state);
  * Sibling to remote_state_symbol, read where it is — a pure function of the
  * reading, its first clause's, no policy:
  *   UP_TO_DATE   → GREEN
- *   AHEAD        → YELLOW   (local commits to push)
- *   BEHIND       → YELLOW   (the remote's commits to pull)
- *   DIVERGED     → RED      (manual resolution required)
- *   RECREATED    → YELLOW   (the remote's branch recreated)
- *   NO_REMOTE    → CYAN     (informational, not an issue)
- *   DELETED      → YELLOW   (the remote's branch deleted)
- *   NO_LOCAL     → DIM      (no local branch to compare)
+ *   AHEAD        → YELLOW
+ *   BEHIND       → YELLOW
+ *   DIVERGED     → RED
+ *   RECREATED    → YELLOW
+ *   NO_REMOTE    → CYAN
+ *   DELETED      → YELLOW
+ *   NO_LOCAL     → DIM
  * each _AHEAD as its base, and every reading with no branch here as NO_LOCAL.
  *
  * Readers: cmds/profile.c profile_fetch and cmds/sync.c sync_print_lead, whose

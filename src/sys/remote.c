@@ -629,138 +629,162 @@ void remote_free(remote_t *remote) {
 }
 
 /*
- * The branch here and its tracking ref, read now into a relation, each Git's
- * null id where none stands (sys/gitops.h gitops_reference_oid), and the branch's
- * ref into `ref` (DOTTA_REFNAME_MAX) through the branch rule: the name the remote's
- * listing holds it under. One read for the session's reading and the last one
- * (remote_relation, remote_last_relation), so the two relate what one read holds.
+ * The branch here and its tracking ref, read now, each Git's null id where none
+ * stands (sys/gitops.h gitops_reference_oid): the branch at `ref`, which its
+ * caller spells through the branch rule (gitops_branch_refname) and the remote's
+ * listing holds it under too, and its tracking ref, of the name past refs/heads/.
+ * One read for the session's reading and the last one (remote_relation,
+ * remote_last_relation), so the two relate what one read holds.
  */
 static error_t remote_read_heads(
-    git_repository *repo, const char *name, const char *branch, char *ref,
-    remote_relation_t *out
+    git_repository *repo, const char *name, const char *ref, git_oid *local,
+    git_oid *tracking
 ) {
     char tracking_ref[DOTTA_REFNAME_MAX];
-    error_t err = gitops_branch_refname(ref, DOTTA_REFNAME_MAX, branch);
-    if (!err) err = gitops_remote_branch_refname(tracking_ref, sizeof(tracking_ref), name, branch);
-    if (!err) err = gitops_reference_oid(repo, ref, &out->local);
-    if (!err) err = gitops_reference_oid(repo, tracking_ref, &out->tracking);
+    error_t err = gitops_remote_branch_refname(
+        tracking_ref, sizeof(tracking_ref), name, ref + strlen(REMOTE_HEADS)
+    );
+    if (!err) err = gitops_reference_oid(repo, ref, local);
+    if (!err) err = gitops_reference_oid(repo, tracking_ref, tracking);
 
     return err;
 }
 
 /*
- * One head against another: the commits `one` holds that `two` lacks, and whether
- * the two share a commit — the three answers a reading tells apart (remote.h
- * remote_state_t): within the other, beyond it and sharing one, or apart, sharing
- * none, where nothing of it is counted. One within the other, or the other within
- * it, shares it; two that each hold commits the other lacks are asked their merge
- * base, which two histories sharing none have not (sys/gitops.h
- * gitops_find_merge_base: the null id).
+ * A head against the line it is read against, its counterpart (remote_counterpart):
+ * the three answers a reading tells apart (remote.h remote_state_t)
  */
-static error_t remote_ahead(
-    git_repository *repo, const git_oid *one, const git_oid *two, size_t *ahead,
-    bool *shared
+typedef enum {
+    REMOTE_COUNTERPART_WITHIN,  /* Every commit of the head the line's: the two alike, or the head behind */
+    REMOTE_COUNTERPART_BEYOND,  /* The head shares the line's history and holds commits it lacks */
+    REMOTE_COUNTERPART_NONE     /* No counterpart: no commit shared, or no head or no line to read */
+} remote_counterpart_t;
+
+/*
+ * `head` read against the line `line` names, its counterpart: within it, beyond
+ * it, or none — and where beyond, the commits the head holds that the line lacks
+ * counted into `ahead`, which nothing else writes
+ */
+static error_t remote_counterpart(
+    git_repository *repo, const git_oid *head, const git_oid *line,
+    remote_counterpart_t *out, size_t *ahead
 ) {
-    size_t behind = 0;
-    int rc = git_graph_ahead_behind(ahead, &behind, repo, one, two);
-    if (rc < 0) return error_git(rc, "Cannot count the commits between two heads");
+    /* No head or no line is no counterpart, and two heads alike are within: no
+     * walk for either */
+    if (git_oid_is_zero(head) || git_oid_is_zero(line)) {
+        *out = REMOTE_COUNTERPART_NONE;
+        return NULL;
+    }
+    if (git_oid_equal(head, line)) {
+        *out = REMOTE_COUNTERPART_WITHIN;
+        return NULL;
+    }
 
-    *shared = *ahead == 0 || behind == 0;
-    if (*shared) return NULL;
-
+    /* Their merge base tells the three apart (sys/gitops.h gitops_find_merge_base):
+     * none, no commit shared; the head itself, within the line; any other, beyond
+     * it */
     git_oid base;
-    error_t err = gitops_find_merge_base(repo, one, two, &base);
+    error_t err = gitops_find_merge_base(repo, head, line, &base);
     if (err) return err;
 
-    *shared = !git_oid_is_zero(&base);
-    if (!*shared) *ahead = 0;
+    *out = git_oid_is_zero(&base)
+         ? REMOTE_COUNTERPART_NONE : git_oid_equal(&base, head)
+         ? REMOTE_COUNTERPART_WITHIN : REMOTE_COUNTERPART_BEYOND;
+
+    if (*out != REMOTE_COUNTERPART_BEYOND) return NULL;
+
+    /* Beyond it: the commits the head holds that the line lacks, counted */
+    size_t behind = 0;
+    int rc = git_graph_ahead_behind(ahead, &behind, repo, head, line);
+    if (rc < 0) return error_git(rc, "Cannot count the commits between two heads");
 
     return NULL;
 }
 
 /*
- * The reading of the three heads `relation` holds, into it, each question of
- * the history asked where the reading turns on its answer: no branch here, no
- * branch on the remote, the two alike, a re-creation, then the branch against
- * the remote's head
+ * The reading of three heads, into `out` with them, each question of the history
+ * asked where the reading turns on its answer: no branch here, no branch on the
+ * remote, the two alike, a re-creation, then the branch against the remote's head
  */
-static error_t remote_relate(git_repository *repo, remote_relation_t *relation) {
-    size_t ahead = 0;
-    bool shared = false;
-    error_t err = NULL;
+static error_t remote_relate(
+    git_repository *repo, const git_oid *local, const git_oid *tracking,
+    const git_oid *remote, remote_relation_t *out
+) {
+    *out = (remote_relation_t){ .local = *local, .tracking = *tracking, .remote = *remote };
 
     /* No branch here: none on the remote either, its tracking ref telling a
      * deletion from a name the remote never held; else created where it comes
-     * back from — the tracking ref where it holds commits the remote's head lacks
-     * and shares its history, the remote's head otherwise */
-    if (git_oid_is_zero(&relation->local)) {
-        if (git_oid_is_zero(&relation->remote)) {
-            relation->state = git_oid_is_zero(&relation->tracking)
-                ? REMOTE_STATE_NO_LOCAL_NO_REMOTE : REMOTE_STATE_NO_LOCAL_DELETED;
+     * back from — the tracking ref where the remote's head is its counterpart
+     * and it stands beyond it, the remote's head otherwise */
+    if (git_oid_is_zero(local)) {
+        if (git_oid_is_zero(remote)) {
+            out->state = git_oid_is_zero(tracking)
+                       ? REMOTE_STATE_NO_LOCAL_NO_REMOTE : REMOTE_STATE_NO_LOCAL_DELETED;
             return NULL;
         }
-        if (!git_oid_is_zero(&relation->tracking) &&
-            !git_oid_equal(&relation->tracking, &relation->remote)) {
-            err = remote_ahead(repo, &relation->tracking, &relation->remote, &ahead, &shared);
-            if (err) return err;
-        }
-        relation->state = ahead > 0 ? REMOTE_STATE_NO_LOCAL_AHEAD : REMOTE_STATE_NO_LOCAL;
-        relation->ahead = ahead;
-        relation->from = ahead > 0 ? relation->tracking : relation->remote;
+
+        remote_counterpart_t counterpart;
+        error_t err = remote_counterpart(repo, tracking, remote, &counterpart, &out->ahead);
+        if (err) return err;
+
+        out->state = counterpart == REMOTE_COUNTERPART_BEYOND
+                   ? REMOTE_STATE_NO_LOCAL_AHEAD : REMOTE_STATE_NO_LOCAL;
+
+        out->from = counterpart == REMOTE_COUNTERPART_BEYOND ? *tracking : *remote;
         return NULL;
     }
 
     /* No branch on the remote: deleted there where its tracking ref is the branch's
-     * counterpart — the branch within it, or beyond it and sharing it — and never
-     * published where none stands, or one sharing nothing with the branch (a
-     * profile recreated here) */
-    if (git_oid_is_zero(&relation->remote)) {
-        if (!git_oid_is_zero(&relation->tracking)) {
-            err = remote_ahead(repo, &relation->local, &relation->tracking, &ahead, &shared);
-            if (err) return err;
-        }
-        relation->state = !shared ? REMOTE_STATE_NO_REMOTE : ahead == 0
-                                  ? REMOTE_STATE_DELETED : REMOTE_STATE_DELETED_AHEAD;
-        relation->ahead = ahead;
+     * counterpart — the branch within it, or beyond it — and never published
+     * where it has none: no tracking ref, or one sharing nothing with the branch
+     * (a profile recreated here) */
+    if (git_oid_is_zero(remote)) {
+        remote_counterpart_t counterpart;
+        error_t err = remote_counterpart(repo, local, tracking, &counterpart, &out->ahead);
+        if (err) return err;
+
+        out->state = counterpart == REMOTE_COUNTERPART_WITHIN
+                   ? REMOTE_STATE_DELETED : counterpart == REMOTE_COUNTERPART_BEYOND
+                   ? REMOTE_STATE_DELETED_AHEAD : REMOTE_STATE_NO_REMOTE;
         return NULL;
     }
 
-    if (git_oid_equal(&relation->local, &relation->remote)) {
-        relation->state = REMOTE_STATE_UP_TO_DATE;
+    if (git_oid_equal(local, remote)) {
+        out->state = REMOTE_STATE_UP_TO_DATE;
         return NULL;
     }
 
     /* The remote's branch recreated apart from the line its tracking ref names
      * — the two share no commit — asked before the branch is counted against
      * the remote's head, which a re-creation shares nothing with either: the
-     * branch read against the old line, within it or beyond it and sharing it,
-     * and otherwise against the remote's head as every branch is */
-    if (!git_oid_is_zero(&relation->tracking) &&
-        !git_oid_equal(&relation->tracking, &relation->remote)) {
+     * branch read against the old line where that line is its counterpart, and
+     * otherwise against the remote's head as every branch is */
+    if (!git_oid_is_zero(tracking) && !git_oid_equal(tracking, remote)) {
         git_oid base;
-        err = gitops_find_merge_base(repo, &relation->tracking, &relation->remote, &base);
-        if (!err && git_oid_is_zero(&base)) {
-            err = remote_ahead(repo, &relation->local, &relation->tracking, &ahead, &shared);
-        }
+        error_t err = gitops_find_merge_base(repo, tracking, remote, &base);
         if (err) return err;
-        if (shared) {
-            relation->state = ahead == 0 ? REMOTE_STATE_RECREATED : REMOTE_STATE_RECREATED_AHEAD;
-            relation->ahead = ahead;
-            return NULL;
+
+        if (git_oid_is_zero(&base)) {
+            remote_counterpart_t counterpart;
+            err = remote_counterpart(repo, local, tracking, &counterpart, &out->ahead);
+            if (err) return err;
+
+            if (counterpart != REMOTE_COUNTERPART_NONE) {
+                out->state = counterpart == REMOTE_COUNTERPART_WITHIN
+                           ? REMOTE_STATE_RECREATED : REMOTE_STATE_RECREATED_AHEAD;
+                return NULL;
+            }
         }
     }
 
     /* The branch against the remote's head: two histories sharing no commit are
      * diverged too, each counted whole */
-    size_t behind = 0;
-    int rc = git_graph_ahead_behind(&ahead, &behind, repo, &relation->local, &relation->remote);
+    int rc = git_graph_ahead_behind(&out->ahead, &out->behind, repo, local, remote);
     if (rc < 0) return error_git(rc, "Cannot count the commits between two heads");
 
-    relation->state = behind == 0 ? REMOTE_STATE_AHEAD : ahead == 0
-                                  ? REMOTE_STATE_BEHIND : REMOTE_STATE_DIVERGED;
-    relation->ahead = ahead;
-    relation->behind = behind;
-
+    out->state = out->behind == 0
+               ? REMOTE_STATE_AHEAD : out->ahead == 0
+               ? REMOTE_STATE_BEHIND : REMOTE_STATE_DIVERGED;
     return NULL;
 }
 
@@ -769,16 +793,18 @@ error_t remote_relation(const remote_t *remote, const char *branch, remote_relat
     CHECK_NULL(branch);
     CHECK_NULL(out);
 
-    *out = (remote_relation_t){ 0 };
+    const char *name = git_remote_name(remote->git);
 
     /* The branch's two heads here, then the remote's as the open listed it, under
      * the branch's own ref */
     char ref[DOTTA_REFNAME_MAX];
-    error_t err = remote_read_heads(remote->repo, git_remote_name(remote->git), branch, ref, out);
+    git_oid local, tracking, head;
+    error_t err = gitops_branch_refname(ref, sizeof(ref), branch);
+    if (!err) err = remote_read_heads(remote->repo, name, ref, &local, &tracking);
     if (err) return err;
-    remote_advertised(remote, ref, &out->remote);
+    remote_advertised(remote, ref, &head);
 
-    return remote_relate(remote->repo, out);
+    return remote_relate(remote->repo, &local, &tracking, &head, out);
 }
 
 error_t remote_last_relation(
@@ -789,15 +815,14 @@ error_t remote_last_relation(
     CHECK_NULL(branch);
     CHECK_NULL(out);
 
-    *out = (remote_relation_t){ 0 };
-
     /* The branch's two heads here, the tracking ref standing for the remote's */
     char ref[DOTTA_REFNAME_MAX];
-    error_t err = remote_read_heads(repo, name, branch, ref, out);
+    git_oid local, tracking;
+    error_t err = gitops_branch_refname(ref, sizeof(ref), branch);
+    if (!err) err = remote_read_heads(repo, name, ref, &local, &tracking);
     if (err) return err;
-    out->remote = out->tracking;
 
-    return remote_relate(repo, out);
+    return remote_relate(repo, &local, &tracking, &tracking, out);
 }
 
 const char *remote_state_symbol(remote_state_t state) {

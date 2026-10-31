@@ -160,32 +160,37 @@ typedef struct {
  * One walk partitions every in-scope item five ways. Excluded — an -e pattern's,
  * whatever the state rule would say of it: answered for the command's trace,
  * and never touched. Accepted — the run's work: a deployed item on the capture
- * route, a deleted path, a new file under a tracked directory when a flag or
- * the config asked for it. Refused — a deployed item on any other route
- * (workspace_item_route), counted under that route so the census names the table's
- * own reason; a multi-bit divergence counts under the route that refused it.
- * Unscanned — a place the scan could not look: never accepted, since what it
- * could not judge may be what Git excludes, and listed by path rather than counted
- * (cmd_update), since no route refused it and status lists it only where the
- * config scans. Or neither — a state that is another verb's, and, under --only-new,
- * every deployed and deleted item: the user asked about new files, nothing about
- * the others answers that, so none is accepted and none is counted (a refused
- * route would name a reason the user did not ask for) — but a directory the load
- * could not look at, beneath which the scan never looked either, which is counted
- * under its route.
+ * route, and under --force one on either route no default takes, a conflict or
+ * bytes no base proves, where the capture commits the node standing
+ * (core/workspace.h workspace_capturable); a deleted path; a new file under a
+ * tracked directory when a flag or the config asked for it. Refused — a deployed
+ * item on any other route (workspace_item_route), counted under that route so
+ * the census names the table's own reason; a multi-bit divergence counts under
+ * the route that refused it. Unscanned — a place the scan could not look: never
+ * accepted, since what it could not judge may be what Git excludes, and listed
+ * by path rather than counted (cmd_update), since no route refused it and status
+ * lists it only where the config scans. Or neither — a state that is another
+ * verb's, and, under --only-new, every deployed and deleted item: the user asked
+ * about new files, nothing about the others answers that, so none is accepted
+ * and none is counted (a refused route would name a reason the user did not ask
+ * for) — but a directory the load could not look at, beneath which the scan never
+ * looked either, which is counted under its route.
  *
  * An accepted item is answered by its fate as well — the preview lists one section
  * per fate, and the new-files prompt counts new_files. The modified fate splits
  * by kind (a directory's modification is a claim recapture, not a content commit),
  * deleted deliberately does not (a deleted directory is a deletion), and the
  * deployed files split by what diverged (core/workspace.h divergence_type_t): a
- * path bit is a modification, the blob bit, ENCRYPTION, a policy violation the
- * commit seals. A file with both kinds of bit is in both; a violator with nothing
- * changed on disk only among the violations — it is committed for the re-store,
- * not for a modification; and one a link stands over only among the modifications
- * — its capture commits the link's target, never sealed (update_capture), which
- * resolves the violation by removing the plaintext, as a deletion's commit does.
- * So every accepted item has a fate, and a file may have two.
+ * path bit is a modification — a conflict --force took among them, its line's
+ * [stale] saying Git moved too — save over bytes no base proves, which --force
+ * takes into a fate of their own, their line reading as a modification's
+ * (workspace_item_line); the blob bit, ENCRYPTION, a policy violation the commit
+ * seals. A file with both kinds of bit is in both; a violator with nothing changed
+ * on disk only among the violations — it is committed for the re-store, not for
+ * a modification; and one a link stands over only in its path bit's fate — its
+ * capture commits the link's target, never sealed (update_capture), which resolves
+ * the violation by removing the plaintext, as a deletion's commit does. So every
+ * accepted item has a fate, and a file may have two.
  *
  * The lists are slices one classification fills (core/workspace.h
  * workspace_buckets_t), each in the diverged items' order, in the arena the
@@ -201,14 +206,17 @@ typedef struct {
  * refused[UNVERIFIABLE], and faults[NONE] is zero by construction: the route is
  * UNVERIFIABLE exactly where the fault is not NONE. CAPTURE's slot stays zero
  * (that arm is accepted) and CLEAN's (the diverged items hold no clean row);
- * REASSIGNED's counts a reassignment the census has no line for — apply
- * acknowledges it, the filter only declines it.
+ * under --force UNCONFIRMED's too — every such row is one a capture commits,
+ * KIND answering first — and CONFLICT's counts the conflicts across file and
+ * directory alone; REASSIGNED's counts a reassignment the census has no line
+ * for — apply acknowledges it, the filter only declines it.
  */
 typedef struct {
     workspace_items_t accepted;              /* The run's work */
 
     /* The accepted items by fate, in the preview's order */
-    workspace_items_t modified_files;        /* DEPLOYED files with a path bit: divergent content or metadata */
+    workspace_items_t modified_files;        /* DEPLOYED files with a path bit: content or metadata, a conflict --force took among them */
+    workspace_items_t unconfirmed;           /* DEPLOYED files --force took whose bytes no base proves */
     workspace_items_t new_files;             /* UNTRACKED files from tracked directories */
     workspace_items_t deleted;               /* DELETED paths, both kinds */
     workspace_items_t modified_dirs;         /* DEPLOYED directories: claim capture */
@@ -226,9 +234,9 @@ typedef struct {
  * The scope first: the profiles and paths the user named, then the patterns they
  * excluded — the order every scope reader asks in (core/scope.h
  * scope_accepts_entry). Then the state rule under the flags, and for a deployed
- * item the route: the partition (update_partition_t). It decides in silence:
- * what it answers, the command says (cmd_update traces the excluded, as apply
- * traces its plans').
+ * item the route, the two no default takes under --force's consent: the partition
+ * (update_partition_t). It decides in silence: what it answers, the command says
+ * (cmd_update traces the excluded, as apply traces its plans').
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
@@ -283,8 +291,9 @@ static void update_partition(
                 /* The route table partitions the deployed items — the same producer
                  * status's sections read (workspace_item_route; workspace.h carries
                  * each arm's why), one arm each as status files them, so the
-                 * compiler holds this filter to the table. CAPTURE is the one
-                 * arm update commits; every other arm is refused and counted
+                 * compiler holds this filter to the table. CAPTURE is update's
+                 * own, and the two arms no default takes, CONFLICT and UNCONFIRMED,
+                 * are its under --force; every other arm is refused and counted
                  * under its route, so the preview never promises an update the
                  * executor would refuse and the census says why in the table's
                  * words. Under --only-new the user asked about new files alone:
@@ -312,6 +321,32 @@ static void update_partition(
                         }
                         break;
 
+                    case WORKSPACE_ROUTE_CONFLICT:
+                        /* Both sides moved: under --force disk's, where the capture
+                         * commits the node standing (workspace_capturable) —
+                         * never a change across file and directory, which STALE
+                         * answers before KIND. Its fate is an edit's, its line's
+                         * [stale] saying the commit goes over a move of Git's */
+                        if (opts->force && workspace_capturable(item)) {
+                            workspace_buckets_add(buckets, item, &partition->modified_files);
+                            break;
+                        }
+                        partition->refused[route]++;
+                        continue;
+
+                    case WORKSPACE_ROUTE_UNCONFIRMED:
+                        /* No base proves who moved: under --force disk's, where
+                         * the capture commits the node standing — every such
+                         * row, KIND answering first, asked as its twin above
+                         * asks it. Listed apart, its line reading as a
+                         * modification's (workspace_item_line) */
+                        if (opts->force && workspace_capturable(item)) {
+                            workspace_buckets_add(buckets, item, &partition->unconfirmed);
+                            break;
+                        }
+                        partition->refused[route]++;
+                        continue;
+
                     case WORKSPACE_ROUTE_UNVERIFIABLE:
                         /* A look that failed, counted again by whose remedy it
                          * is: the census says a line per class */
@@ -324,11 +359,9 @@ static void update_partition(
                     case WORKSPACE_ROUTE_DISPLACED_DERIVED:
                     case WORKSPACE_ROUTE_DISPLACED_STALE:
                     case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
-                    case WORKSPACE_ROUTE_CONFLICT:
                     case WORKSPACE_ROUTE_STALE:
                     case WORKSPACE_ROUTE_KIND:
                     case WORKSPACE_ROUTE_KIND_DERIVED:
-                    case WORKSPACE_ROUTE_UNCONFIRMED:
                     case WORKSPACE_ROUTE_REASSIGNED:
                         /* Another verb's, or no verb's by default: the census's
                          * line says which, off this count */
@@ -518,7 +551,12 @@ static error_t update_profile(
                  * (infra/content.h). One tail past both: the bytes are released
                  * whichever refused, the look staying readable for the record,
                  * and each refusal names the path itself — the capture's the
-                 * file, the commit's the name it lands at */
+                 * file, the commit's the name it lands at. Either stops the run
+                 * at this profile (update_execute), an owner or a group this
+                 * host cannot name among them (core/profiles.h
+                 * profile_capture_file), which the directory arm below skips:
+                 * the preview listed the file among what the run commits, no
+                 * item carrying what its owner's lookup answers (stated) */
                 content_capture_t capture = { 0 };
                 profile_claim_t claim;
                 error_t err = update_capture(ctx, profile_draft_base(draft), item, &capture);
@@ -1034,12 +1072,12 @@ static error_t update_execute(
 /**
  * Render the preview: the run's work, grouped by fate
  *
- * One section per fate the partition answered — modified, new, deleted (both
- * kinds), directory claims, encryption violations — each listing its fate's items
- * and none when it holds none, every hint speaking update's own voice: what this
- * run will do, and of a deletion how far it reaches. A dry run renders identically;
- * whether anything was written is the summary's one line at the end of the run,
- * not the preview's.
+ * One section per fate the partition answered — modified, unconfirmed (what --force
+ * takes over no base), new, deleted (both kinds), directory claims, encryption
+ * violations — each listing its fate's items and none when it holds none, every
+ * hint speaking update's own voice: what this run will do, and of a deletion
+ * how far it reaches. A dry run renders identically; whether anything was written
+ * is the summary's one line at the end of the run, not the preview's.
  *
  * @param out Output context (must not be NULL)
  * @param manifest The view the run was loaded over (must not be NULL; a deleted
@@ -1059,7 +1097,8 @@ static void update_print_preview(
     CHECK_NULL(partition);
 
     /* Display modified files section — the deployed files with a path bit:
-     * divergent content or metadata */
+     * divergent content or metadata, a conflict --force took among them, its
+     * line's [stale] saying Git moved too */
     if (partition->modified_files.count > 0) {
         output_list_t *list = output_list_create(
             out, "Modified files",
@@ -1068,6 +1107,27 @@ static void update_print_preview(
 
         for (size_t i = 0; i < partition->modified_files.count; i++) {
             const workspace_item_t *item = partition->modified_files.entries[i];
+            const workspace_line_t line = workspace_item_line(item);
+
+            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Display unconfirmed paths section — the deployed files --force took whose
+     * bytes no base proves, under status's title and its header's opening words:
+     * their line reads as a modification's (workspace_item_line), so the title
+     * says what they are, and the hint the fate the modifications' says */
+    if (partition->unconfirmed.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Unconfirmed paths",
+            "not confirmed by dotta; will be committed to their profiles"
+        );
+
+        for (size_t i = 0; i < partition->unconfirmed.count; i++) {
+            const workspace_item_t *item = partition->unconfirmed.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
@@ -1339,14 +1399,17 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * names paths is the named re-derivation itself, so its two DERIVED lines
      * say what was skipped and name no remedy: what came of the climb beneath
      * the user's squatter at a rung is the run's own outcome to say — its receipt,
-     * or, at a lost blob's place, the line below the leaves' gather. A line that
-     * names `dotta remove` names its reach with it, every machine: the removal
-     * is the profile's, so every machine's next apply lets its copy go, where
-     * the path skipped here reads as this machine's to settle (status's [type]
-     * legend says it the same way). The lines are one block: one boundary above
-     * them, asked here and paid by whichever of them is the first to print — a
-     * block that says nothing leaves the debt standing for the next one
-     * (base/output.h). */
+     * or, at a lost blob's place, the line below the leaves' gather. Under --force
+     * the two arms no default takes count only what the flag could not take
+     * (update_partition): CONFLICT a change across file and directory, said in
+     * its own words as a named run's DERIVED lines are, and UNCONFIRMED nothing,
+     * so its line never prints. A line that names `dotta remove` names its reach
+     * with it, every machine: the removal is the profile's, so every machine's
+     * next apply lets its copy go, where the path skipped here reads as this
+     * machine's to settle (status's [type] legend says it the same way). The
+     * lines are one block: one boundary above them, asked here and paid by
+     * whichever of them is the first to print — a block that says nothing leaves
+     * the debt standing for the next one (base/output.h). */
     const size_t *refused = partition.refused;
     output_gap(out, OUTPUT_NORMAL);
 
@@ -1432,18 +1495,22 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
     if (refused[WORKSPACE_ROUTE_CONFLICT] > 0) {
-        /* A kind both sides moved among them: a directory row's too, and add
-         * keeps disk's only where the kind matches, refusing a change across
-         * file and directory; apply --force replaces a directory only with all
-         * it holds, which no load reads (core/deploy.c check_clearance), and is
-         * named with its path, for the reasons status's Conflicts section gives;
-         * add is spelled whole, the profile before the path (cmds/add.c
-         * add_post_parse) */
+        /* A kind both sides moved among them: a directory row's too, and update
+         * --force keeps disk's only where the kind matches — where the capture
+         * commits the node standing (core/workspace.h workspace_capturable) —
+         * so under it the arm counts a change across file and directory alone,
+         * said in its own words as the KIND line below says its. apply --force
+         * replaces a directory only with all it holds, which no load reads
+         * (core/deploy.c check_clearance), and each --force is named with its
+         * path, for the reasons status's Conflicts section gives */
         output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
+            out, OUTPUT_NORMAL, opts->force
+                ? "%zu path%s skipped: changed in Git and on disk, and a different kind "
+            "stands on disk — 'dotta apply --force <path>' keeps Git's (a directory "
+            "only if all dotta's), 'dotta remove' stops tracking %s on every machine"
+                : "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
             "'dotta apply --force <path>' keeps Git's (a directory only if all dotta's), "
-            "'dotta add --force <profile> <path>' keeps disk's when the kind matches, "
+            "'dotta update --force <path>' keeps disk's when the kind matches, "
             "'dotta remove' stops tracking %s on every machine",
             refused[WORKSPACE_ROUTE_CONFLICT],
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "" : "s",
@@ -1483,15 +1550,17 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         );
     }
     if (refused[WORKSPACE_ROUTE_UNCONFIRMED] > 0) {
-        /* Bytes no base proves: the capture would commit what nobody has shown
+        /* Bytes no base proves: a plain update would commit what nobody has shown
          * is the user's over the profile's. Each way out unqualified: every such
-         * row is a file row with a file or a link standing, which add captures
-         * and apply --force replaces, each spelled whole */
+         * row is a file row with a file or a link standing — one the capture
+         * commits (core/workspace.h workspace_capturable), KIND answering first
+         * — which update --force commits and apply --force replaces, each named
+         * with its path; so under --force the arm counts none (update_partition) */
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: not confirmed by dotta — 'dotta diff' compares, "
-            "'dotta apply --force <path>' keeps Git's, 'dotta add --force <profile> "
-            "<path>' keeps disk's, 'dotta remove' stops tracking %s on every machine",
+            "'dotta apply --force <path>' keeps Git's, 'dotta update --force <path>' "
+            "keeps disk's, 'dotta remove' stops tracking %s on every machine",
             refused[WORKSPACE_ROUTE_UNCONFIRMED],
             refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "it" : "them"
@@ -1814,12 +1883,20 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
  * Profiles from `-p` are already populated in `profiles` by the APPEND row; a
  * positional profile appends onto that list. Paths go into a fresh arena-backed
  * array.
+ *
+ * One pair is refused ahead of the routing: --force beside --only-new, which
+ * leaves every deployed row before its route is asked (update_partition), so
+ * the first would take nothing.
  */
 static error_t update_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) cmd;
     cmd_update_options_t *o = opts_v;
+
+    if (o->force && o->only_new) {
+        return error_create(ERR_INVALID_ARG, "--force and --only-new are mutually exclusive");
+    }
 
     if (o->positional_count == 0) {
         return NULL;
@@ -1912,6 +1989,11 @@ static const args_opt_t update_opts[] = {
         "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
+        "f force",
+        cmd_update_options_t,force,
+        "Also commit conflicts and unconfirmed paths, as they are on disk"
+    ),
+    ARGS_FLAG(
         "n dry-run",
         cmd_update_options_t,dry_run,
         "Preview without committing"
@@ -1962,7 +2044,18 @@ const args_command_t spec_update = {
         "  Updating a file never changes the permissions recorded for the\n"
         "  directories above it. To record a directory's current\n"
         "  permissions, name it: 'dotta update ~/.config' records those of\n"
-        "  ~/.config and of the directories in it that hold your files.\n",
+        "  ~/.config and of the directories in it that hold your files.\n"
+        "\n"
+        "Conflicts and Unconfirmed Paths:\n"
+        "  A plain update skips a file changed both on disk and in its\n"
+        "  profile, and one dotta has not confirmed (a file this machine\n"
+        "  already had, say); 'dotta status' lists them under those\n"
+        "  headings. --force commits each as it is on disk, permissions and\n"
+        "  owner included, to the profile status names, the way\n"
+        "  'apply --force' takes the profile's. It never commits a file\n"
+        "  only the profile changed, nor one that became a directory or\n"
+        "  the other way round. With no path it takes every such file, so\n"
+        "  name the files you mean to keep.\n",
     .examples     =
         "  %s update                             # Every modified path\n"
         "  %s update ~/.bashrc                   # Specific file\n"
@@ -1970,6 +2063,7 @@ const args_command_t spec_update = {
         "  %s update -p global                   # Filter to 'global'\n"
         "  %s update --include-new               # Modified + new files\n"
         "  %s update --only-new                  # New files only\n"
+        "  %s update --force ~/.bashrc           # Keep your version over the profile's\n"
         "  %s update -n                          # Preview without committing\n"
         "  %s update --exclude '*.log'           # Skip log files\n"
         "  %s update -m \"Update shell config\"    # Custom commit message\n",

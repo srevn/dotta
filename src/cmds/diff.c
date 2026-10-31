@@ -33,18 +33,18 @@
  * The line a direction says of a row, or NULL where it lists nothing there
  *
  * What differs, then the act of the verb the direction previews or that verb's
- * refusal: the "# Status:" line heading the row's entry, and the listing's one
- * decision — a direction lists a row where it has a line for it, and only there,
- * so no row is listed without a line and no line is said of a row no direction
- * lists. Upstream previews apply at the rows: every row it lands, restores,
- * converges or acknowledges, and every one it skips for --force or for a look
- * that failed. Downstream previews update: every row a local difference or a
- * failed look stands on, which it commits or refuses — a listing that left out
- * a refusal would call "no local changes" over a difference — and never a row
- * only Git moved, nor one nothing looked at, neither carrying a difference of
- * disk's. Read off the row's state and, deployed, its route (core/workspace.h
- * workspace_item_route), each switch exhaustive, so an arm either gains is a
- * build error here.
+ * refusal, its --force named where one lifts it: the "# Status:" line heading
+ * the row's entry, and the listing's one decision — a direction lists a row where
+ * it has a line for it, and only there, so no row is listed without a line and
+ * no line is said of a row no direction lists. Upstream previews apply at the
+ * rows: every row it lands, restores, converges or acknowledges, and every one
+ * it skips for --force or for a look that failed. Downstream previews update:
+ * every row a local difference or a failed look stands on, which it commits or
+ * refuses — a listing that left out a refusal would call "no local changes" over
+ * a difference — and never a row only Git moved, nor one nothing looked at, neither
+ * carrying a difference of disk's. Read off the row's state and, deployed, its
+ * route (core/workspace.h workspace_item_route), each switch exhaustive, so an
+ * arm either gains is a build error here.
  *
  * @param item One of the diverged items, a row of the view's (must not be NULL)
  * @param direction The direction asking: one of the two
@@ -152,14 +152,22 @@ static const char *diff_status_line(
             /* Both sides moved: the user's bytes or kind beside a move Git made,
              * to the bytes, the kind or a claim — in the frame's words
              * (core/workspace.h divergence_type_t), as apply's skip label and
-             * update's census say it. Its --force is qualified, as update's census
-             * qualifies it: a directory in a blob row's way goes only with all
-             * it holds (core/deploy.c check_clearance). The user's edit is listed
-             * downstream too, which update refuses: its capture would commit
-             * disk over the move Git made */
-            return direction == DIFF_UPSTREAM
-                   ? "changed in Git and on disk (apply --force <path> keeps Git's, "
-                   "a directory only if all dotta's)"
+             * update's census say it. Upstream its --force is qualified, as
+             * update's census qualifies it: a directory in a blob row's way goes
+             * only with all it holds (core/deploy.c check_clearance) */
+            if (direction == DIFF_UPSTREAM) {
+                return "changed in Git and on disk (apply --force <path> keeps Git's, "
+                       "a directory only if all dotta's)";
+            }
+
+            /* The user's edit is listed downstream too, which a plain update
+             * refuses, its capture committing disk over the move Git made: the
+             * --force that commits it where the capture commits the node standing
+             * (core/workspace.h workspace_capturable) — exact for the one row,
+             * where update's census qualifies it for many — and update's skip
+             * where none does, a change across file and directory */
+            return workspace_capturable(item)
+                   ? "changed in Git and on disk (update --force <path> keeps disk's)"
                    : "changed in Git and on disk (update skips it)";
 
         case WORKSPACE_ROUTE_STALE:
@@ -214,15 +222,17 @@ static const char *diff_status_line(
             /* Bytes no base proves: disk is not the row's, and dotta holds no
              * confirmation of what stands there, nor, where it could be asked,
              * did the row's own branch hold disk's bytes at the name
-             * (core/workspace.c workspace_ask_bases), so no capture's sentence
+             * (core/workspace.c workspace_ask_bases), so no default's sentence
              * is true of it — apply overwrites it only under --force, and update
-             * skips it. Both directions, in the words status's Unconfirmed header
-             * and update's census say it; its --force unqualified, as status's
-             * Unconfirmed legend line's is: a file row with a file or a link
-             * standing */
+             * commits it only under its own. Both directions, in the words status's
+             * Unconfirmed header and update's census say it; each --force
+             * unqualified, as status's Unconfirmed header and legend line name
+             * them: a file row with a file or a link standing, a node the capture
+             * commits (core/workspace.h workspace_capturable), KIND answering
+             * first */
             return direction == DIFF_UPSTREAM
                    ? "not confirmed by dotta (apply --force <path> keeps Git's)"
-                   : "not confirmed by dotta (update skips it)";
+                   : "not confirmed by dotta (update --force <path> keeps disk's)";
 
         case WORKSPACE_ROUTE_CAPTURE:
             /* The user's own, over a base: update's to commit. TYPE never rides

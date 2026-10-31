@@ -675,31 +675,31 @@ static void status_print_workspace(
      * a kind moved on both sides, or a kind no capture commits on a row a plan
      * can hold — a rung dotta only passes through, which the user squats, has
      * its own section below, since no flag lifts it. The header names the side
-     * that loses nothing, as git's own conflict names "git add": `add --force`
-     * commits disk's bytes, and Git keeps the other side in its history, where
-     * `apply --force` would overwrite bytes nothing else holds. It is spelled
-     * whole, the profile before the path: add reads its first word as the profile,
-     * so a path typed alone leaves it none (cmds/add.c add_post_parse). The legend
-     * names Git's side beside it, by the tag a row leads with. `add --force`
-     * keeps disk's bytes and not its kind: a change across file and directory
-     * is a re-shaping of the tree, which add refuses by the claim standing at
-     * the path, naming `dotta remove` (cmds/add.c), which stops tracking the
-     * path on every machine and keeps the node — so a [type] row's line names
-     * that instead, its reach said with it, since a row on this machine reads
-     * as this machine's to settle (update's census says it the same way), and
-     * never `apply --force`, which replaces a directory in a blob row's way only
-     * with all it holds, its walk stopping at what no landing removes, --force
-     * included (core/deploy.c check_clearance), which status, reading no clearance,
-     * cannot tell apart. A link standing at a file row is a file to add's kind
-     * test, so the [type] line says more than its row needs there (stated: the
-     * tag cannot tell the link from the directory). Every other row is a file
-     * row with a file or a link standing, whose bytes `apply --force` replaces,
-     * named with the path it lifts the skip at, since a bare one lifts every
-     * consent skip of the run, the edited copies other machines' deletions left
-     * among them. */
+     * that loses nothing, as git's own conflict names "git add": `update --force`
+     * commits disk's bytes into the profile each row is from, and Git keeps the
+     * other side in its history, where `apply --force` would overwrite bytes
+     * nothing else holds. It is named with the path it takes, as `apply --force`
+     * is, since a bare one takes every conflict and unconfirmed path of the run.
+     * The legend names Git's side beside it, by the tag a row leads with. `update
+     * --force` keeps disk's bytes and not its kind: a change across file and
+     * directory is a re-shaping of the tree no capture commits (core/workspace.h
+     * workspace_capturable), which update's census refuses naming `dotta remove`
+     * (cmds/update.c cmd_update), which stops tracking the path on every machine
+     * and keeps the node — so a [type] row's line names that instead, its reach
+     * said with it, since a row on this machine reads as this machine's to settle
+     * (update's census says it the same way), and never `apply --force`, which
+     * replaces a directory in a blob row's way only with all it holds, its walk
+     * stopping at what no landing removes, --force included (core/deploy.c
+     * check_clearance), which status, reading no clearance, cannot tell apart.
+     * A link standing at a file row is a node the capture commits, so the [type]
+     * line says more than its row needs there (stated: the tag cannot tell the
+     * link from the directory). Every other row is a file row with a file or a
+     * link standing, whose bytes `apply --force` replaces, named with the path
+     * it lifts the skip at, since a bare one lifts every consent skip of the
+     * run, the edited copies other machines' deletions left among them. */
     if (partition->conflicts.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Conflicts", "run 'dotta add --force <profile> <path>' to keep disk's"
+            out, "Conflicts", "run 'dotta update --force <path>' to keep disk's"
         );
 
         for (size_t i = 0; i < partition->conflicts.count; i++) {
@@ -731,15 +731,15 @@ static void status_print_workspace(
      * status line say it. Its header and its legend name the two sides as theirs
      * do, each unqualified: every row is a file row with a regular file or a
      * link standing — a directory row and every other kind answer at KIND, above
-     * — which `add --force` captures, a link being a file to add's kind test
-     * (cmds/add.c), and `apply --force` replaces. The header names disk's, the
-     * side that loses nothing, as the Conflicts header does; the legend names
-     * Git's, true of every row. */
+     * — which `update --force` commits (core/workspace.h workspace_capturable)
+     * and `apply --force` replaces, each named with its path. The header names
+     * disk's, the side that loses nothing, as the Conflicts header does; the
+     * legend names Git's, true of every row. */
     if (partition->unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
             "not confirmed by dotta; "
-            "run 'dotta add --force <profile> <path>' to keep disk's"
+            "run 'dotta update --force <path>' to keep disk's"
         );
 
         for (size_t i = 0; i < partition->unconfirmed.count; i++) {

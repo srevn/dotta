@@ -204,12 +204,13 @@ static const char *apply_route_label(const workspace_item_t *item) {
  * verb true of every row it names: 'dotta update <path>' where each is the user's
  * own over a base (the route's CAPTURE: an edit, or a link where the row holds
  * a file or the reverse, which the capture commits as the new kind), else 'dotta
- * add --force <profile> <path>', which re-captures what disk holds whoever moved
- * it (cmds/add.h) — the verb a conflict and bytes no base proves need, update
- * refusing both. '-e' is how to ignore a skip, not how to remedy one. The block
- * sits between the deploy preview and cleanup's, so each engine tells its story
- * the same way — what it will do, then what it will not and why. No total-count
- * line: the exit error's message is the count's one home.
+ * update --force <path>', which commits what disk holds over a conflict and over
+ * bytes no base proves, a plain update refusing both (cmds/update.c
+ * update_partition), and the capture's rows as a plain update does. '-e' is how
+ * to ignore a skip, not how to remedy one. The block sits between the deploy
+ * preview and cleanup's, so each engine tells its story the same way — what it
+ * will do, then what it will not and why. No total-count line: the exit error's
+ * message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -439,7 +440,7 @@ static void apply_print_deploy_skips(
      * moved too (CONFLICT) or not (KIND), none where Git alone moved (STALE) or
      * the row lies beneath a squatter, whose own line carries the remedy, and
      * none at dotta's node, which no row routes — its verb the one every such
-     * row takes: add --force's where any is both sides' or bytes no base proves
+     * row takes: update --force's where any is both sides' or bytes no base proves
      * (workspace_item_route), and update's only where that scan ran out, its
      * loop guarded as the sudo line's is; a named squatter's second way out, by
      * the claim that holds it (ancestry) — a wider scope plans a tracked ancestor,
@@ -470,7 +471,7 @@ static void apply_print_deploy_skips(
             workspace_capturable(s->item)) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "  To keep what is on disk instead: 'dotta add --force <profile> <path>'"
+                "  To keep what is on disk instead: 'dotta update --force <path>'"
             );
             break;
         }

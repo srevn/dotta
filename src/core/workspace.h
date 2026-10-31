@@ -1089,8 +1089,10 @@ static inline bool workspace_untouched(const workspace_item_t *item) {
  * (workspace_item_route), never this.
  *
  * Readers: workspace_item_route (the KIND rung: a kind Git did not move that no
- * capture commits), cmds/apply.c apply_print_deploy_skips (whether a consent
- * skip has a disk-wins verb). A reader not on this list is a bug.
+ * capture commits), cmds/update.c update_partition (whether --force takes a
+ * conflict or bytes no base proves), cmds/apply.c apply_print_deploy_skips (whether
+ * a consent skip has a disk-wins verb), cmds/diff.c diff_status_line (whether a
+ * conflict's downstream line names one). A reader not on this list is a bug.
  */
 static inline bool workspace_capturable(const workspace_item_t *item) {
     switch (item->occupant) {
@@ -1263,9 +1265,11 @@ typedef struct {
  *                                  workspace_item_line)
  *   status's section partition     every arm, one bucket each
  *   update's filter                every arm, each its own answer: CAPTURE
- *                                  accepted; every other arm refused and counted
- *                                  under its route, one slot per arm
- *                                  (WORKSPACE_ROUTE_COUNT), which the census
+ *                                  accepted, and under --force CONFLICT and
+ *                                  UNCONFIRMED at a node a capture commits
+ *                                  (workspace_capturable); every other arm refused
+ *                                  and counted under its route, one slot per
+ *                                  arm (WORKSPACE_ROUTE_COUNT), which the census
  *                                  reads back as one line per refusing arm —
  *                                  the census the one reader the compiler does
  *                                  not hold to the table: an arm the filter refuses
@@ -1276,11 +1280,15 @@ typedef struct {
  *   apply's disk-wins closer       CAPTURE, CONFLICT, UNCONFIRMED, at a node a
  *                                  capture commits (workspace_capturable): update's
  *                                  verb where every consent skip at its row's
- *                                  own path that names one reads CAPTURE, add
+ *                                  own path that names one reads CAPTURE, update
  *                                  --force's where any reads either of the other
  *                                  two (cmds/apply.c apply_print_deploy_skips)
  *   diff's status line             every arm, both directions: the row's line,
- *                                  or none where the direction lists nothing
+ *                                  or none where the direction lists nothing;
+ *                                  CONFLICT's downstream naming update --force
+ *                                  at a node a capture commits
+ *                                  (workspace_capturable), update's skip at any
+ *                                  other
  *
  * The words on screen, beside the bindings this table does not repeat — the frame's
  * for CONFLICT and STALE (divergence_type_t), the squatter's for the four DISPLACED
@@ -1293,10 +1301,12 @@ typedef struct {
  *                  through" — status's Squatted ancestors header, update's census,
  *                  diff's status line
  *   UNCONFIRMED    "not confirmed by dotta" — status's Unconfirmed paths header,
- *                  update's census, diff's status line — and "unconfirmed" on
- *                  apply's skip label; the sentence is apply_consent_label's
- *                  too, of an orphan whose record confirmed no bytes: the same
- *                  fact, read off no route (cmds/apply.c)
+ *                  update's census and its preview's Unconfirmed paths under
+ *                  --force (cmds/update.c update_print_preview), diff's status
+ *                  line — and "unconfirmed" on apply's skip label; the sentence
+ *                  is apply_consent_label's too, of an orphan whose record
+ *                  confirmed no bytes: the same fact, read off no route
+ *                  (cmds/apply.c)
  *   CAPTURE        what moved, by the bit, the kind first — "type changed
  *                  locally", "modified locally", "<axes> changed locally" — diff's
  *                  status line; the first two on apply's skip label, a claim
@@ -1414,7 +1424,9 @@ typedef enum {
  *                            the row rather than overwrite the edit without
  *                            --force, which replaces a directory only with all
  *                            it holds (core/deploy.c check_clearance). Neither
- *                            verb's by default; the user decides.
+ *                            verb's by default; the user decides: apply --force
+ *                            keeps Git's, update --force disk's where the capture
+ *                            commits the node standing (workspace_capturable).
  *   STALE alone              STALE — Git moved past what dotta last saw of the
  *                            content, the bytes or the kind, and disk did not
  *                            follow: overwriting loses nothing, so it is apply's
@@ -1460,17 +1472,18 @@ typedef enum {
  *                            route is read, its answer kept (core/workspace.c
  *                            workspace_ask_bases), a blob it held reading STALE
  *                            above: nothing proves the user moved, nor that Git
- *                            did, and no default rests on what is not known.
- *                            update refuses it — its capture would commit bytes
- *                            nobody has shown are the user's over the profile's
- *                            — and apply skips it, as it skips any edit, since
- *                            they may be bytes Git lacks: apply --force keeps
- *                            Git's, add --force keeps disk's. A kind a capture
- *                            commits (file ↔ symlink on a file row) reads here
- *                            too, every other kind having answered at KIND above,
- *                            whose remedies are its own; and so does a claim of
- *                            Git's riding beside the bytes, which never makes
- *                            them "changed in Git and on disk".
+ *                            did, and no default rests on what is not known. A
+ *                            plain update refuses it — its capture would commit
+ *                            bytes nobody has shown are the user's over the
+ *                            profile's — and apply skips it, as it skips any
+ *                            edit, since they may be bytes Git lacks: apply --force
+ *                            keeps Git's, update --force keeps disk's, into the
+ *                            profile the row is from. A kind a capture commits
+ *                            (file ↔ symlink on a file row) reads here too, every
+ *                            other kind having answered at KIND above, whose
+ *                            remedies are its own; and so does a claim of Git's
+ *                            riding beside the bytes, which never makes them
+ *                            "changed in Git and on disk".
  *   CLAIM_MOVED beside       CONFLICT — a claim Git's to bring (divergence_type_t:
  *     CONTENT ∨ TYPE         moved past the record's, or naming an owner this host
  *                            cannot resolve) beside an edit a base proves the

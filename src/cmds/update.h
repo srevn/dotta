@@ -30,6 +30,7 @@ typedef struct {
     const char *message;            /* Custom commit message */
     char **exclude_patterns;        /* Exclude patterns (glob) - read-only */
     size_t exclude_count;           /* Number of exclude patterns */
+    bool force;                     /* Keep disk's over conflicts and unconfirmed paths */
     bool dry_run;                   /* Don't commit, just show changes */
     int verbosity;                  /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool include_new;               /* Include new files from tracked directories */

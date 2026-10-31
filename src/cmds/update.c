@@ -26,6 +26,7 @@
 #include "infra/commit.h"
 #include "infra/content.h"
 #include "infra/path.h"
+#include "infra/pathspec.h"
 #include "sys/filesystem.h"
 #include "utils/hooks.h"
 
@@ -266,8 +267,9 @@ typedef struct {
 /**
  * Partition the workspace's diverged items for update
  *
- * The scope first: the profiles and paths the user named, then the patterns they
- * excluded — the order every scope reader asks in (core/scope.h
+ * The scope first: the profiles and paths the user named — a place the scan could
+ * not look reached by a path the filter may select beneath it — then the patterns
+ * they excluded, the order every scope reader asks in (core/scope.h
  * scope_accepts_entry). Then the state rule under the flags, and for a deployed
  * item the route, the two no default takes under --force's consent: the partition
  * (update_partition_t). It decides in silence: what it answers, the command says
@@ -304,11 +306,18 @@ static void update_partition(
         const workspace_item_t *item = diverged.entries[i];
 
         /* Outside the profiles and the paths the user named: invisible, as to
-         * every scope reader — the path filter reads both names */
-        if (!scope_accepts_profile(scope, item->profile) ||
-            !scope_accepts_path(
+         * every scope reader — the path filter reads both names. A place the
+         * scan could not look answers for every path beneath it, so a path the
+         * filter may select there reaches it too (infra/pathspec.h
+         * pathspec_matches_beneath): nothing beneath it was looked at, a named
+         * one included */
+        if (!scope_accepts_profile(scope, item->profile)) continue;
+        if (!scope_accepts_path(
             scope, item->filesystem_path, item->storage_path, item->item_kind
-            )) {
+            ) &&
+            !(item->state == WORKSPACE_STATE_UNSCANNED && pathspec_matches_beneath(
+                scope_paths(scope), item->filesystem_path, item->storage_path
+            ))) {
             continue;
         }
 

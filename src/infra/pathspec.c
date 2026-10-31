@@ -356,6 +356,36 @@ bool pathspec_matches(
     return verdict == VERDICT_IN;
 }
 
+bool pathspec_matches_beneath(
+    const pathspec_t *spec, const char *filesystem_path, const char *storage_path
+) {
+    /* NULL pathspec selects everything (no filter applied). */
+    if (!spec) return true;
+
+    for (size_t i = 0; i < spec->count; i++) {
+        const entry_t *e = &spec->entries[i];
+        const char *subject = own_subject(e, filesystem_path, storage_path);
+
+        /* No name in the entry's vocabulary, or a negation, which selects nothing
+         * alone */
+        if (!subject || (e->rule && gitignore_rule_negated(e->rule))) continue;
+
+        /* A storage rule keeps no head to rule the directory out: its pattern
+         * may match at any depth */
+        if (e->rule && e->key == PATH_KEY_STORAGE) return true;
+
+        /* An exact entry's spelling, or a filesystem rule's anchor, on one line
+         * with the directory: either at or beneath the other (base/string.h
+         * str_path_under) */
+        if (str_path_under(subject, e->prefix, e->prefix_len) ||
+            str_path_under(e->prefix, subject, strlen(subject))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 size_t pathspec_count(const pathspec_t *spec) {
     return spec ? spec->count : 0;
 }

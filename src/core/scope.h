@@ -443,8 +443,10 @@ const string_array_t *scope_profiles(const scope_t *s);
  * this with the pathspec accessors (pathspec_count / pathspec_entry_at /
  * pathspec_entry_matches_at); update's named re-derivation hands it to the draft,
  * which asks it of each rung of the chains it climbs (cmds/update.c cmd_update,
- * core/profiles.h profile_derive_ancestors). Per-iteration path-vs-filter checks
- * should use scope_accepts_path instead.
+ * core/profiles.h profile_derive_ancestors); and update's partition asks it of
+ * a place the scan could not look, whether a path it may select lies beneath
+ * (cmds/update.c update_partition, infra/pathspec.h pathspec_matches_beneath).
+ * Per-iteration checks of a path itself should use scope_accepts_path instead.
  *
  * Borrowed from the scope.
  */

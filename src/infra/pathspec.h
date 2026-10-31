@@ -143,6 +143,42 @@ bool pathspec_matches(
 );
 
 /**
+ * Return true when the matcher may select a path at or beneath a directory.
+ *
+ * The question a place no look reached asks: a directory the scan could not list
+ * answers for every path beneath it, so it is in scope wherever a path there
+ * could be. Read entry by entry, each against the directory's name in its own
+ * vocabulary:
+ *   - an exact entry, where it and the directory lie on one line, either at or
+ *     beneath the other: it selects the path it names and everything beneath;
+ *   - a filesystem rule likewise by its anchor, beneath which alone it reads,
+ *     so a directory off the anchor's line holds nothing it selects;
+ *   - a storage rule always: its pattern may match at any depth, and no head of
+ *     it is kept to rule a directory out (stated: conservative);
+ *   - a negation never, since it selects nothing alone — wholesale, so one that
+ *     excludes the directory itself leaves the entries that select around it to
+ *     answer, and the answer may be true where every path there is excluded
+ *     (stated: "may" allows it).
+ * A subject the caller has no name for is read by no entry of that vocabulary.
+ * Never fails.
+ *
+ * Reader: cmds/update.c update_partition, a place the scan could not look. A
+ * reader not on this list is a bug.
+ *
+ * @param spec            Pathspec (NULL selects everything: true)
+ * @param filesystem_path Where the directory stands (NULL: no filesystem entry
+ *                        reads it)
+ * @param storage_path    The directory's storage path (NULL: no storage entry
+ *                        reads it)
+ * @return true when a path at or beneath the directory may be selected
+ */
+bool pathspec_matches_beneath(
+    const pathspec_t *spec,
+    const char *filesystem_path,
+    const char *storage_path
+);
+
+/**
  * Total number of compiled entries (exact paths + rules).
  *
  * NULL-safe (returns 0 for a NULL pathspec, matching the "no filter" semantics

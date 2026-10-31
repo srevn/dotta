@@ -60,11 +60,11 @@ When you clone onto a machine or enable a profile, a file already there that mat
 ```bash
 dotta diff ~/.bashrc                     # Compare the two versions
 dotta apply --force ~/.bashrc            # Take the profile's version (this machine's is lost)
-dotta add --force global ~/.bashrc       # Make this machine's version the profile's, for every machine
+dotta update --force ~/.bashrc           # Make this machine's version the profile's, for every machine
 dotta add hosts/$(hostname) ~/.bashrc    # Keep this machine's version on this machine only
 ```
 
-The last creates a profile of this machine's own, [layered](profiles.md#layering-and-precedence) above the others, the first time you use it. Only this machine uses it, but `dotta sync` sends it to your remote like any other profile. Name the files themselves: `dotta add --force` on a directory takes everything beneath it from this machine, including files the profile has since updated and files it never had. To stop managing the file instead, `dotta remove <profile> <path>` stops tracking it on every machine and leaves it on disk.
+The last creates a profile of this machine's own, [layered](profiles.md#layering-and-precedence) above the others, the first time you use it. Only this machine uses it, but `dotta sync` sends it to your remote like any other profile. Name the files you mean: with no path, `dotta update --force` takes every file `dotta status` lists this way — on a machine you have just cloned onto, all of its own — and makes each the profile's for every machine. To stop managing the file instead, `dotta remove <profile> <path>` stops tracking it on every machine and leaves it on disk.
 
 ### Updating (Filesystem to Repo)
 
@@ -83,9 +83,14 @@ dotta update --dry-run
 # Also pick up new files in tracked directories
 dotta update --include-new
 
+# Keep your version of a file status lists under Conflicts or Unconfirmed paths
+dotta update --force ~/.bashrc
+
 # Custom commit message
 dotta update -m "Update shell config"
 ```
+
+A plain `update` leaves alone a file that changed both on disk and in its profile -- a pull over an edit you had not committed -- and one dotta has not confirmed, such as a file this machine already had: `dotta status` lists them under Conflicts and Unconfirmed paths. `dotta apply --force <path>` takes the profile's version; `dotta update --force <path>` keeps yours, its permissions and owner with it, in the profile `dotta status` names. It never commits a file only the profile changed -- `dotta apply` brings that one to you -- nor one that became a directory or the other way round.
 
 To delete a file everywhere, delete it and run `dotta update`: see [Removing Files](#removing-files).
 
@@ -137,7 +142,7 @@ dotta diff b3e1f9a a4f2c8e
 dotta diff --name-only
 ```
 
-Each listed path opens with a status line: what differs, then what the previewed verb does about it, or why it skips the path -- `modified locally (would be committed by update)`, `changed in Git (would be deployed by apply)`, `changed in Git and on disk (update skips it)`. A directory is listed as a file is, for its mode, its ownership or its kind. Beneath the line, differing bytes draw a hunk, and a differing kind names both kinds. `dotta diff` compares the paths your enabled profiles claim: new files in tracked directories are listed by `dotta update --dry-run`, and the copies apply would remove by `dotta apply --dry-run`.
+Each listed path opens with a status line: what differs, then what the previewed verb does about it, the `--force` that does it where the verb leaves the choice to you, or why it skips the path -- `modified locally (would be committed by update)`, `changed in Git (would be deployed by apply)`, `changed in Git and on disk (update --force <path> keeps disk's)`, `a different kind stands on disk (update skips it)`. A directory is listed as a file is, for its mode, its ownership or its kind. Beneath the line, differing bytes draw a hunk, and a differing kind names both kinds. `dotta diff` compares the paths your enabled profiles claim: new files in tracked directories are listed by `dotta update --dry-run`, and the copies apply would remove by `dotta apply --dry-run`.
 
 ## Listing Files and History
 
@@ -228,7 +233,7 @@ dotta update    # Commit local changes
 dotta sync      # Push/pull with remote
 ```
 
-`sync` moves commits and nothing else: it neither reads nor changes the files on this machine, so an edit not yet committed with `dotta update` stays here. A file you edited that a pull also changed then reads as changed in Git and on disk, for you to decide: `dotta apply --force <path>` keeps the pulled version, `dotta add --force <profile> <path>` keeps yours. Committed first, the two edits are merged by the sync instead.
+`sync` moves commits and nothing else: it neither reads nor changes the files on this machine, so an edit not yet committed with `dotta update` stays here. A file you edited that a pull also changed then reads as changed in Git and on disk, for you to decide: `dotta apply --force <path>` keeps the pulled version, `dotta update --force <path>` keeps yours. Committed first, the two edits are merged by the sync instead.
 
 Where both machines committed to a profile, `dotta sync` merges the two and pushes the merge: it combines what each changed wherever they changed different files, lines or permissions. Where both changed the same thing differently, the profile is not merged: the sync lists each conflict beneath it -- `home/.config/f (mode: 0640 ours, 0600 theirs)`, `home/.config/r (content)`, or `home/.config/r (content: file ours, none theirs)` where the remote deleted a file this machine changed -- and `--conflicts ours` keeps this machine's side of every one, `--conflicts theirs` the remote's: of a file both changed, that side's version, or its deletion. A change only one machine made, a permission or another file, stays either way, and the side not kept stays in the profile's history.
 

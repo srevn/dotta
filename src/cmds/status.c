@@ -422,6 +422,200 @@ static void status_print_manifest(
 }
 
 /**
+ * What status made of the diverged items, in scope: each filed once, in the section
+ * that settles it — and how many the filter hid
+ *
+ * One walk files every in-scope item into one slice (status_partition), read by
+ * the status line's fold (status_print_summary) and by the sections that list
+ * them (status_print_workspace), in the order they print. The slices are one
+ * classification's buckets (core/workspace.h workspace_buckets_t), each in the
+ * diverged items' order, in the arena the partition was made in — the items
+ * borrowed, the workspace's.
+ */
+typedef struct {
+    workspace_items_t conflicts;     /* CONFLICT and KIND: neither verb's by default */
+    workspace_items_t unconfirmed;   /* UNCONFIRMED: no base proves who moved */
+    workspace_items_t squatted;      /* KIND_DERIVED: one verb, and no decision */
+    workspace_items_t displaced;     /* DISPLACED_*: beneath a squatter, not looked at */
+    workspace_items_t unverifiable;  /* UNVERIFIABLE, and UNSCANNED: the looks that failed */
+    workspace_items_t uncommitted;   /* CAPTURE, and DELETED: update's */
+    workspace_items_t reassigned;    /* REASSIGNED: apply's, in the record alone */
+    workspace_items_t undeployed;    /* STALE, and UNDEPLOYED: apply's */
+    workspace_items_t new_files;     /* UNTRACKED: update's, where it is asked */
+    workspace_items_t overridden;    /* OVERRIDDEN: the landing's above each */
+    workspace_items_t orphaned;      /* PRUNABLE and SKIPPED, and OBSTRUCTING: apply's */
+    workspace_items_t released;      /* ABSENT and RELEASED: the record's alone */
+    size_t hidden;                   /* The diverged items the filter hides */
+} status_partition_t;
+
+/**
+ * File the workspace's diverged items for status: each in scope in the section
+ * that settles it, the rest counted as hidden
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param scope Operation scope (must not be NULL; its filter dimension decides
+ *              what is filed)
+ * @param arena Arena the partition's slices live in: the command's (must not be
+ *              NULL)
+ * @param partition Output, zeroed then filled (must not be NULL)
+ */
+static void status_partition(
+    const workspace_t *ws,
+    const scope_t *scope,
+    arena_t *arena,
+    status_partition_t *partition
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(scope);
+    CHECK_NULL(arena);
+    CHECK_NULL(partition);
+
+    *partition = (status_partition_t){ 0 };
+
+    /* The sections' slices: each item in scope is added to its section's as the
+     * walk decides it, and the twelve are filled once the walk is done
+     * (core/workspace.h workspace_buckets_t) — in the arena the partition was
+     * made in, so they outlive the printers that read them (include/runtime.h
+     * "Memory") */
+    workspace_items_t diverged = workspace_diverged(ws);
+    workspace_buckets_t *buckets = workspace_buckets_create(arena);
+
+    for (size_t i = 0; i < diverged.count; i++) {
+        const workspace_item_t *item = diverged.entries[i];
+
+        /* Coherent Scope: under a profile filter only its profiles' items are
+         * shown, so status matches what apply would do; the rest are hidden,
+         * and counted beneath the sections. A landing's orphan is filtered by
+         * its record's profile and a derived rung by its own, where apply -p
+         * reaches each from another row: under -p a status can list one apply
+         * leaves, or hide one it acts on (stated) */
+        if (!scope_accepts_profile(scope, item->profile)) {
+            partition->hidden++;
+            continue;
+        }
+
+        switch (item->state) {
+            case WORKSPACE_STATE_DEPLOYED:
+                /* One bucket per route — the same table update's filter and skip
+                 * counter read (workspace_item_route), so no section promises a
+                 * verb the verb refuses */
+                switch (workspace_item_route(item)) {
+                    case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+                    case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                    case WORKSPACE_ROUTE_DISPLACED_STALE:
+                    case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
+                        /* Not looked at, so no path bit of its own — the squatter's
+                         * section names the way out */
+                        workspace_buckets_add(buckets, item, &partition->displaced);
+                        break;
+
+                    case WORKSPACE_ROUTE_CONFLICT:
+                    case WORKSPACE_ROUTE_KIND:
+                        /* Neither verb's by default — its own header names the
+                         * way out */
+                        workspace_buckets_add(buckets, item, &partition->conflicts);
+                        break;
+
+                    case WORKSPACE_ROUTE_UNCONFIRMED:
+                        /* Neither verb's by default either, and for another reason:
+                         * no base proves who moved — its own header names both
+                         * ways out */
+                        workspace_buckets_add(buckets, item, &partition->unconfirmed);
+                        break;
+
+                    case WORKSPACE_ROUTE_KIND_DERIVED:
+                        /* One verb and no decision — its own header names the
+                         * verb */
+                        workspace_buckets_add(buckets, item, &partition->squatted);
+                        break;
+
+                    case WORKSPACE_ROUTE_UNVERIFIABLE:
+                        workspace_buckets_add(buckets, item, &partition->unverifiable);
+                        break;
+
+                    case WORKSPACE_ROUTE_STALE:
+                        /* Apply's work, the same bucket as a path never deployed;
+                         * the [stale] tag says which */
+                        workspace_buckets_add(buckets, item, &partition->undeployed);
+                        break;
+
+                    case WORKSPACE_ROUTE_CAPTURE:
+                        /* Real divergence → uncommitted changes */
+                        workspace_buckets_add(buckets, item, &partition->uncommitted);
+                        break;
+
+                    case WORKSPACE_ROUTE_REASSIGNED:
+                        /* Pure profile reassignment (no filesystem divergence) */
+                        workspace_buckets_add(buckets, item, &partition->reassigned);
+                        break;
+
+                    case WORKSPACE_ROUTE_CLEAN:
+                        /* None: a diverged item has something to say
+                         * (workspace_diverged); the status line reads the sections,
+                         * so one filed nowhere would not count */
+                        break;
+                }
+                break;
+
+            case WORKSPACE_STATE_DELETED:
+                /* Deleted paths, either kind → uncommitted changes */
+                workspace_buckets_add(buckets, item, &partition->uncommitted);
+                break;
+
+            case WORKSPACE_STATE_UNDEPLOYED:
+                workspace_buckets_add(buckets, item, &partition->undeployed);
+                break;
+
+            case WORKSPACE_STATE_UNTRACKED:
+                workspace_buckets_add(buckets, item, &partition->new_files);
+                break;
+
+            case WORKSPACE_STATE_UNSCANNED:
+                /* Where the scan could not look: no verb is promised, and New
+                 * files' closer would send it to an update that never takes it */
+                workspace_buckets_add(buckets, item, &partition->unverifiable);
+                break;
+
+            case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
+                /* A scope exit's, filed by what apply does with it, read off
+                 * the item alone (core/cleanup.h cleanup_verdict) — unforced,
+                 * though --force only turns a skip into a prune, and never moves
+                 * an orphan between the two sections: a reclaim and a release
+                 * touch nothing on disk and are listed apart; a prune and a skip
+                 * are Issues, a directory's prune skipped all the same while an
+                 * orphan in it stays */
+                switch (cleanup_verdict(item, false)) {
+                    case CLEANUP_ABSENT:
+                    case CLEANUP_RELEASED:
+                        workspace_buckets_add(buckets, item, &partition->released);
+                        break;
+
+                    case CLEANUP_SKIPPED:
+                    case CLEANUP_PRUNABLE:
+                        workspace_buckets_add(buckets, item, &partition->orphaned);
+                        break;
+                }
+                break;
+
+            case WORKSPACE_STATE_OBSTRUCTING:
+                /* The landing's, of the rows beneath dotta's node: Issues, keyed
+                 * below by its own */
+                workspace_buckets_add(buckets, item, &partition->orphaned);
+                break;
+
+            case WORKSPACE_STATE_OVERRIDDEN:
+                /* The landing's too, of the blob standing over it — listed apart,
+                 * each line naming that blob (section 10) */
+                workspace_buckets_add(buckets, item, &partition->overridden);
+                break;
+        }
+    }
+
+    workspace_buckets_fill(buckets);
+}
+
+/**
  * A section's key: a line per tag string its rows show, with the hint the section
  * gave the first of them, in the order the rows show them — so the column beneath
  * reads back against the list above it
@@ -489,273 +683,28 @@ static void status_print_legend(output_t *out, const status_legend_t *legend) {
 }
 
 /**
- * Print the workspace status
- *
- * Shows the consistency between the view, the record and the filesystem: the
- * status line, then the diverged items in actionable sections (git-like structure).
- * The status line is said on every run, a clean one included: it is the run's
- * answer, and a clean one says what it compared — the paths aligned — as an empty
- * apply or diff says its own.
- *
- * The status line is one fold of the items that ask the disk or the user something,
- * over the scope, decided and worded the same whatever the filter: under -p it
- * speaks for the filtered profiles alone, so a clean one never reads Dirty for
- * another's divergence, and what the filter hides is counted beneath the sections.
+ * Print where the view, the record and the filesystem disagree: the diverged
+ * items in actionable sections (git-like structure), each under the verb that
+ * settles it — nothing where none is in scope — then what the filter hid
  *
  * @param out Output context (must not be NULL)
- * @param ws Workspace (must not be NULL, borrowed from caller)
+ * @param ws Workspace (must not be NULL; the note on what the filter hid stands
+ *           apart where a section printed)
+ * @param partition The diverged items, filed (must not be NULL)
  * @param manifest The view the workspace was loaded over (must not be NULL; an
  *                 overridden copy's line names what stands over it, off the view)
- * @param scope Operation scope (must not be NULL; its filter dimension drives
- *              display)
  * @param config Configuration (must not be NULL; its switch words the key's remedy)
  */
 static void status_print_workspace(
     output_t *out,
     const workspace_t *ws,
+    const status_partition_t *partition,
     const manifest_t *manifest,
-    const scope_t *scope,
     const config_t *config
 ) {
-    /* The diverged items, read by the status line's fold and by the sections */
-    workspace_items_t diverged = workspace_diverged(ws);
-
-    /* The diverged items the filter hides, counted beneath the sections */
-    size_t hidden = 0;
-
-    /* The sections, in the order they print: each item in scope is added to its
-     * section's bucket as the walk decides it, and the twelve are filled once
-     * the walk is done (core/workspace.h workspace_buckets_t). They are the
-     * printer's own, in a frame it frees once they are printed — nothing here
-     * outlives the call (include/runtime.h "Memory"). */
+    /* The sections' keys are the printer's own, in a frame it frees once they
+     * are printed — nothing here outlives the call (include/runtime.h "Memory") */
     arena_t *frame = arena_create(0);
-    workspace_buckets_t *buckets = workspace_buckets_create(frame);
-
-    workspace_items_t conflicts = { 0 };
-    workspace_items_t unconfirmed = { 0 };
-    workspace_items_t squatted = { 0 };
-    workspace_items_t displaced = { 0 };
-    workspace_items_t unverifiable = { 0 };
-    workspace_items_t uncommitted = { 0 };
-    workspace_items_t reassigned = { 0 };
-    workspace_items_t undeployed = { 0 };
-    workspace_items_t new_files = { 0 };
-    workspace_items_t overridden = { 0 };
-    workspace_items_t orphaned = { 0 };
-    workspace_items_t released = { 0 };
-
-    for (size_t i = 0; i < diverged.count; i++) {
-        const workspace_item_t *item = diverged.entries[i];
-
-        /* Coherent Scope: under a profile filter only its profiles' items are
-         * shown, so status matches what apply would do; the rest are hidden,
-         * and counted beneath the sections. A landing's orphan is filtered by
-         * its record's profile and a derived rung by its own, where apply -p
-         * reaches each from another row: under -p a status can list one apply
-         * leaves, or hide one it acts on (stated) */
-        if (!scope_accepts_profile(scope, item->profile)) {
-            hidden++;
-            continue;
-        }
-
-        switch (item->state) {
-            case WORKSPACE_STATE_DEPLOYED:
-                /* One bucket per route — the same table update's filter and skip
-                 * counter read (workspace_item_route), so no section promises a
-                 * verb the verb refuses */
-                switch (workspace_item_route(item)) {
-                    case WORKSPACE_ROUTE_DISPLACED_TRACKED:
-                    case WORKSPACE_ROUTE_DISPLACED_DERIVED:
-                    case WORKSPACE_ROUTE_DISPLACED_STALE:
-                    case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
-                        /* Not looked at, so no path bit of its own — the squatter's
-                         * section names the way out */
-                        workspace_buckets_add(buckets, item, &displaced);
-                        break;
-
-                    case WORKSPACE_ROUTE_CONFLICT:
-                    case WORKSPACE_ROUTE_KIND:
-                        /* Neither verb's by default — its own header names the
-                         * way out */
-                        workspace_buckets_add(buckets, item, &conflicts);
-                        break;
-
-                    case WORKSPACE_ROUTE_UNCONFIRMED:
-                        /* Neither verb's by default either, and for another reason:
-                         * no base proves who moved — its own header names both
-                         * ways out */
-                        workspace_buckets_add(buckets, item, &unconfirmed);
-                        break;
-
-                    case WORKSPACE_ROUTE_KIND_DERIVED:
-                        /* One verb and no decision — its own header names the
-                         * verb */
-                        workspace_buckets_add(buckets, item, &squatted);
-                        break;
-
-                    case WORKSPACE_ROUTE_UNVERIFIABLE:
-                        workspace_buckets_add(buckets, item, &unverifiable);
-                        break;
-
-                    case WORKSPACE_ROUTE_STALE:
-                        /* Apply's work, the same bucket as a path never deployed;
-                         * the [stale] tag says which */
-                        workspace_buckets_add(buckets, item, &undeployed);
-                        break;
-
-                    case WORKSPACE_ROUTE_CAPTURE:
-                        /* Real divergence → uncommitted changes */
-                        workspace_buckets_add(buckets, item, &uncommitted);
-                        break;
-
-                    case WORKSPACE_ROUTE_REASSIGNED:
-                        /* Pure profile reassignment (no filesystem divergence) */
-                        workspace_buckets_add(buckets, item, &reassigned);
-                        break;
-
-                    case WORKSPACE_ROUTE_CLEAN:
-                        /* None: a diverged item has something to say
-                         * (workspace_diverged); the status line reads the sections,
-                         * so one filed nowhere would not count */
-                        break;
-                }
-                break;
-
-            case WORKSPACE_STATE_DELETED:
-                /* Deleted paths, either kind → uncommitted changes */
-                workspace_buckets_add(buckets, item, &uncommitted);
-                break;
-
-            case WORKSPACE_STATE_UNDEPLOYED:
-                workspace_buckets_add(buckets, item, &undeployed);
-                break;
-
-            case WORKSPACE_STATE_UNTRACKED:
-                workspace_buckets_add(buckets, item, &new_files);
-                break;
-
-            case WORKSPACE_STATE_UNSCANNED:
-                /* Where the scan could not look: no verb is promised, and New
-                 * files' closer would send it to an update that never takes it */
-                workspace_buckets_add(buckets, item, &unverifiable);
-                break;
-
-            case WORKSPACE_STATE_ORPHANED:
-            case WORKSPACE_STATE_RELEASED:
-                /* A scope exit's, filed by what apply does with it, read off
-                 * the item alone (core/cleanup.h cleanup_verdict) — unforced,
-                 * though --force only turns a skip into a prune, and never moves
-                 * an orphan between the two sections: a reclaim and a release
-                 * touch nothing on disk and are listed apart; a prune and a skip
-                 * are Issues, a directory's prune skipped all the same while an
-                 * orphan in it stays */
-                switch (cleanup_verdict(item, false)) {
-                    case CLEANUP_ABSENT:
-                    case CLEANUP_RELEASED:
-                        workspace_buckets_add(buckets, item, &released);
-                        break;
-
-                    case CLEANUP_SKIPPED:
-                    case CLEANUP_PRUNABLE:
-                        workspace_buckets_add(buckets, item, &orphaned);
-                        break;
-                }
-                break;
-
-            case WORKSPACE_STATE_OBSTRUCTING:
-                /* The landing's, of the rows beneath dotta's node: Issues, keyed
-                 * below by its own */
-                workspace_buckets_add(buckets, item, &orphaned);
-                break;
-
-            case WORKSPACE_STATE_OVERRIDDEN:
-                /* The landing's too, of the blob standing over it — listed apart,
-                 * each line naming that blob (section 10) */
-                workspace_buckets_add(buckets, item, &overridden);
-                break;
-        }
-    }
-
-    workspace_buckets_fill(buckets);
-
-    /* The status line, one fold whatever the filter: the items of the sections
-     * that ask the disk or the user something, and those of them dotta could
-     * not verify. Three sections are listed and leave the status line as they
-     * find it: an overridden copy, whose work is the landing of the row standing
-     * over it, which the status line counts where it shows that row (stated: a
-     * filter that hides the row reads Clean over the copy); and what apply settles
-     * in the record alone, nothing on disk changing — a pure reassignment, a
-     * release, a reclaim. A scope is Clean iff the status line counts none. Invalid
-     * is reserved for what the analysis could not establish: an item carrying a
-     * fault (an unreadable path, a comparison that could not run, a history that
-     * would not read) is one no verb resolves by default — apply skips it and
-     * the user must look. Anything else counted is Dirty: work that touches the
-     * disk or waits on the user, not an invalid workspace. With no filter every
-     * item is in scope and none is hidden. */
-    const workspace_items_t *counted[] = {
-        &conflicts,  &unconfirmed, &squatted, &displaced, &unverifiable, &uncommitted,
-        &undeployed, &new_files,   &orphaned,
-    };
-    size_t shown = 0;
-    size_t unverified = 0;
-    for (size_t b = 0; b < sizeof(counted) / sizeof(counted[0]); b++) {
-        shown += counted[b]->count;
-        for (size_t i = 0; i < counted[b]->count; i++) {
-            if (counted[b]->entries[i]->fault != WORKSPACE_FAULT_NONE) {
-                unverified++;
-            }
-        }
-    }
-
-    output_section(out, OUTPUT_NORMAL, "Workspace status");
-
-    /* The status line: the fold's decision, in the same words filtered or not */
-    if (shown == 0) {
-        /* Active paths the filter reaches, both kinds — what stands aligned at
-         * a path is not a question about which kind stands there. With no filter
-         * every item is accepted, so this is the whole view. Counted here, the
-         * one arm that prints it. */
-        workspace_items_t active = workspace_active(ws);
-        size_t scoped_paths = 0;
-        for (size_t i = 0; i < active.count; i++) {
-            if (scope_accepts_profile(scope, active.entries[i]->profile)) {
-                scoped_paths++;
-            }
-        }
-
-        /* Where the scope reaches no path, the sentence names its subject: the
-         * filter's profiles, or the view, which holds none — whether or not the
-         * record still lists what apply lets go */
-        if (scoped_paths > 0) {
-            output_colored(
-                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                "  Clean - %zu path%s aligned\n",
-                scoped_paths, scoped_paths == 1 ? "" : "s"
-            );
-        } else if (scope_filters_profiles(scope)) {
-            output_colored(
-                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                "  Clean - no paths in profile\n"
-            );
-        } else {
-            output_colored(
-                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                "  Clean - no active paths\n"
-            );
-        }
-    } else if (unverified > 0) {
-        output_colored(
-            out, OUTPUT_NORMAL, OUTPUT_COLOR_RED,
-            "  Invalid - %zu item%s dotta could not verify\n",
-            unverified, unverified == 1 ? "" : "s"
-        );
-    } else {
-        output_colored(
-            out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW,
-            "  Dirty - %zu item%s diverged\n",
-            shown, shown == 1 ? "" : "s"
-        );
-    }
 
     /* Section 1: Conflicts — the buckets no default verb resolves lead; this
      * one's header carries the remedy, true of every row beneath it, in the words
@@ -775,7 +724,7 @@ static void status_print_workspace(
      * (cmds/add.c), which stops tracking the path and keeps the file. It is spelled
      * whole, the profile before the path: add reads its first word as the profile,
      * so a path typed alone leaves it none (cmds/add.c add_post_parse). */
-    if (conflicts.count > 0) {
+    if (partition->conflicts.count > 0) {
         output_list_t *list = output_list_create(
             out, "Conflicts",
             "changed in Git and on disk, or a different kind stands on disk; "
@@ -785,8 +734,8 @@ static void status_print_workspace(
             "\"dotta remove\" to stop tracking it"
         );
 
-        for (size_t i = 0; i < conflicts.count; i++) {
-            const workspace_item_t *item = conflicts.entries[i];
+        for (size_t i = 0; i < partition->conflicts.count; i++) {
+            const workspace_item_t *item = partition->conflicts.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
@@ -807,7 +756,7 @@ static void status_print_workspace(
      * which `add --force` captures, a link being a file to add's kind test
      * (cmds/add.c), spelled whole as the Conflicts header spells it, and `apply
      * --force` replaces. No key: the header is true of every line. */
-    if (unconfirmed.count > 0) {
+    if (partition->unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
             "differs from the profile, and is not confirmed by dotta; "
@@ -816,8 +765,8 @@ static void status_print_workspace(
             "\"dotta remove\" to stop tracking it"
         );
 
-        for (size_t i = 0; i < unconfirmed.count; i++) {
-            const workspace_item_t *item = unconfirmed.entries[i];
+        for (size_t i = 0; i < partition->unconfirmed.count; i++) {
+            const workspace_item_t *item = partition->unconfirmed.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
@@ -831,15 +780,15 @@ static void status_print_workspace(
      * dotta only passes through (the route's KIND_DERIVED): never planned, so
      * no flag lifts it and no decision pends. One verb, the named re-derivation,
      * in the words update's counted line already uses. */
-    if (squatted.count > 0) {
+    if (partition->squatted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Squatted ancestors",
             "a different kind stands at a directory dotta only passes "
             "through; \"dotta update <dir>\" re-derives it"
         );
 
-        for (size_t i = 0; i < squatted.count; i++) {
-            const workspace_item_t *item = squatted.entries[i];
+        for (size_t i = 0; i < partition->squatted.count; i++) {
+            const workspace_item_t *item = partition->squatted.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
@@ -862,7 +811,7 @@ static void status_print_workspace(
      * the word is grounded (core/workspace.h workspace_displaced_t). Named by
      * section rather than "above": under -p the squatter's row may be filtered
      * while a child is not, and the bare status lists both. */
-    if (displaced.count > 0) {
+    if (partition->displaced.count > 0) {
         output_list_t *list = output_list_create(
             out, "Displaced paths",
             "not looked at: a different kind stands at a directory above "
@@ -871,8 +820,8 @@ static void status_print_workspace(
             "or Issues)"
         );
 
-        for (size_t i = 0; i < displaced.count; i++) {
-            const workspace_item_t *item = displaced.entries[i];
+        for (size_t i = 0; i < partition->displaced.count; i++) {
+            const workspace_item_t *item = partition->displaced.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
@@ -891,7 +840,7 @@ static void status_print_workspace(
      * fix its permissions. A key rather than a closer because a closer speaks
      * only for a class that has a remedy, and [unverified] has none — it would
      * stand on the screen unexplained. */
-    if (unverifiable.count > 0) {
+    if (partition->unverifiable.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unverifiable paths",
             "dotta could not verify these paths"
@@ -901,8 +850,8 @@ static void status_print_workspace(
          * the column below reads back against the one above */
         status_legend_t legend = { .arena = frame };
 
-        for (size_t i = 0; i < unverifiable.count; i++) {
-            const workspace_item_t *item = unverifiable.entries[i];
+        for (size_t i = 0; i < partition->unverifiable.count; i++) {
+            const workspace_item_t *item = partition->unverifiable.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
@@ -955,22 +904,22 @@ static void status_print_workspace(
      * being no edit (core/deploy.h deploy_content_conflicts). An edit, a kind a
      * capture commits, and the blob's policy are keyed by no line: apply skips
      * the first two, and the third is update's alone. */
-    if (uncommitted.count > 0) {
+    if (partition->uncommitted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Uncommitted changes",
             "use \"dotta update\" to commit these changes"
         );
         status_legend_t legend = { .arena = frame };
 
-        for (size_t i = 0; i < uncommitted.count; i++) {
-            const workspace_item_t *item = uncommitted.entries[i];
+        for (size_t i = 0; i < partition->uncommitted.count; i++) {
+            const workspace_item_t *item = partition->uncommitted.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             const char *hint = NULL;
 
-            /* By the state, exhaustive as the section switch above is, so a state
+            /* By the state, exhaustive as the partition's switch is, so a state
              * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:
@@ -1001,7 +950,7 @@ static void status_print_workspace(
                 case WORKSPACE_STATE_RELEASED:
                 case WORKSPACE_STATE_OVERRIDDEN:
                 case WORKSPACE_STATE_OBSTRUCTING:
-                    /* The section switch above files no other state here */
+                    /* The partition's switch files no other state here */
                     CHECK_ARG(
                         false, "the uncommitted bucket holds DEPLOYED and DELETED alone"
                     );
@@ -1017,14 +966,14 @@ static void status_print_workspace(
     /* Section 7: Profile reassignments — a clean row whose record names another
      * profile, which apply acknowledges at its checkpoint in the record alone:
      * listed, and the status line leaves it as it finds it */
-    if (reassigned.count > 0) {
+    if (partition->reassigned.count > 0) {
         output_list_t *list = output_list_create(
             out, "Profile reassignments",
             "run \"dotta apply\" to acknowledge"
         );
 
-        for (size_t i = 0; i < reassigned.count; i++) {
-            const workspace_item_t *item = reassigned.entries[i];
+        for (size_t i = 0; i < partition->reassigned.count; i++) {
+            const workspace_item_t *item = partition->reassigned.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
@@ -1043,22 +992,22 @@ static void status_print_workspace(
      * and not among the deletions above, the [stale] its record gives it beside
      * [undeployed] saying why (workspace_item_line). Every other line is the
      * header's. */
-    if (undeployed.count > 0) {
+    if (partition->undeployed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Undeployed changes",
             "use \"dotta apply\" to deploy these changes"
         );
         status_legend_t legend = { .arena = frame };
 
-        for (size_t i = 0; i < undeployed.count; i++) {
-            const workspace_item_t *item = undeployed.entries[i];
+        for (size_t i = 0; i < partition->undeployed.count; i++) {
+            const workspace_item_t *item = partition->undeployed.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             const char *hint = NULL;
 
-            /* By the state, exhaustive as the section switch above is, so a state
+            /* By the state, exhaustive as the partition's switch is, so a state
              * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_UNDEPLOYED:
@@ -1084,7 +1033,7 @@ static void status_print_workspace(
                 case WORKSPACE_STATE_RELEASED:
                 case WORKSPACE_STATE_OVERRIDDEN:
                 case WORKSPACE_STATE_OBSTRUCTING:
-                    /* The section switch above files no other state here */
+                    /* The partition's switch files no other state here */
                     CHECK_ARG(
                         false, "the undeployed bucket holds DEPLOYED and UNDEPLOYED alone"
                     );
@@ -1105,15 +1054,15 @@ static void status_print_workspace(
      * back otherwise. A form, never a command: a path holding a space or a glob
      * character is the user's to quote and escape, and ignore's help says what
      * a pattern is matched against. */
-    if (new_files.count > 0) {
+    if (partition->new_files.count > 0) {
         output_list_t *list = output_list_create(
             out, "New files",
             "use \"dotta update --include-new\" to track these files, "
             "\"dotta ignore <profile> --add <pattern>\" to keep one out"
         );
 
-        for (size_t i = 0; i < new_files.count; i++) {
-            const workspace_item_t *item = new_files.entries[i];
+        for (size_t i = 0; i < partition->new_files.count; i++) {
+            const workspace_item_t *item = partition->new_files.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
@@ -1137,15 +1086,15 @@ static void status_print_workspace(
      * state by (core/manifest.h manifest_blob_above), the profile's own or
      * another's, read off the view, since the item's line reads the item alone,
      * and composed onto its metadata in a buffer sized for the path. */
-    if (overridden.count > 0) {
+    if (partition->overridden.count > 0) {
         output_list_t *list = output_list_create(
             out, "Overridden copies",
             "a file or link stands over each; \"dotta apply\" clears them as it lands it, "
             "or says what keeps one"
         );
 
-        for (size_t i = 0; i < overridden.count; i++) {
-            const workspace_item_t *item = overridden.entries[i];
+        for (size_t i = 0; i < partition->overridden.count; i++) {
+            const workspace_item_t *item = partition->overridden.entries[i];
             const workspace_line_t line = workspace_item_line(item);
             const manifest_row_t *above = manifest_blob_above(manifest, item->filesystem_path);
             char metadata[256 + PATH_MAX];
@@ -1171,7 +1120,7 @@ static void status_print_workspace(
     /* Section 11: Issues — the scope exit's orphans apply prunes or skips
      * (core/cleanup.h cleanup_verdict: PRUNABLE, SKIPPED), and dotta's nodes
      * the landing of the rows beneath them replaces */
-    if (orphaned.count > 0) {
+    if (partition->orphaned.count > 0) {
         output_list_t *list = output_list_create(
             out, "Issues",
             "run \"dotta apply\" to prune them, where no key below says otherwise"
@@ -1189,21 +1138,21 @@ static void status_print_workspace(
          * run: a parent that refuses it is apply's skip line to name (stated). */
         status_legend_t legend = { .arena = frame };
 
-        for (size_t i = 0; i < orphaned.count; i++) {
-            const workspace_item_t *item = orphaned.entries[i];
+        for (size_t i = 0; i < partition->orphaned.count; i++) {
+            const workspace_item_t *item = partition->orphaned.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             const char *hint = NULL;
 
-            /* By the state, exhaustive as the section switch above is, so a state
+            /* By the state, exhaustive as the partition's switch is, so a state
              * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_ORPHANED:
                     /* The line's ladder past absence and a squatter, which the
-                     * section switch lists apart (section 12): the failed look
-                     * or the bits, and the relocation beside them */
+                     * partition's switch lists apart (section 12): the failed
+                     * look or the bits, and the relocation beside them */
                     if (item->fault != WORKSPACE_FAULT_NONE) {
                         /* Worded by whose remedy the failed look is, so the hint
                          * and its tag say the same thing (workspace_fault_t). A
@@ -1301,7 +1250,7 @@ static void status_print_workspace(
                 case WORKSPACE_STATE_UNSCANNED:
                 case WORKSPACE_STATE_RELEASED:
                 case WORKSPACE_STATE_OVERRIDDEN:
-                    /* The section switch above files no other state here */
+                    /* The partition's switch files no other state here */
                     CHECK_ARG(
                         false, "the orphaned bucket holds ORPHANED and OBSTRUCTING alone"
                     );
@@ -1321,22 +1270,22 @@ static void status_print_workspace(
      * rest, by the tags each line shows, the Issues key's shape. Last, since
      * nothing here asks the user anything, and the status line leaves it as it
      * finds it. */
-    if (released.count > 0) {
+    if (partition->released.count > 0) {
         output_list_t *list = output_list_create(
             out, "Released paths",
             "run \"dotta apply\" to let them go; nothing on disk changes"
         );
         status_legend_t legend = { .arena = frame };
 
-        for (size_t i = 0; i < released.count; i++) {
-            const workspace_item_t *item = released.entries[i];
+        for (size_t i = 0; i < partition->released.count; i++) {
+            const workspace_item_t *item = partition->released.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
             output_list_add(list, line.tags, line.color, line.path, line.metadata);
 
             const char *hint = NULL;
 
-            /* By the state, exhaustive as the section switch above is, so a state
+            /* By the state, exhaustive as the partition's switch is, so a state
              * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_ORPHANED:
@@ -1377,7 +1326,7 @@ static void status_print_workspace(
                 case WORKSPACE_STATE_UNSCANNED:
                 case WORKSPACE_STATE_OVERRIDDEN:
                 case WORKSPACE_STATE_OBSTRUCTING:
-                    /* The section switch above files no other state here */
+                    /* The partition's switch files no other state here */
                     CHECK_ARG(
                         false, "the released bucket holds ORPHANED and RELEASED alone"
                     );
@@ -1390,18 +1339,20 @@ static void status_print_workspace(
         status_print_legend(out, &legend);
     }
 
-    /* The sections are printed, and their frame goes with them */
+    /* The keys are printed, and their frame goes with them */
     arena_free(frame);
 
     /* The diverged items the filter hides, counted. Where a section printed —
      * the filter hid fewer than all, and every item in scope is listed in one —
      * the note is set apart from the last of them, whose last line it would read
      * as; under the bare status line it is that line's own. */
-    if (hidden > 0) {
-        if (diverged.count > hidden) output_gap(out, OUTPUT_NORMAL);
+    if (partition->hidden > 0) {
+        if (workspace_diverged(ws).count > partition->hidden) {
+            output_gap(out, OUTPUT_NORMAL);
+        }
         output_print(
             out, OUTPUT_NORMAL, "  {dim}(%zu item%s hidden){reset}\n",
-            hidden, hidden == 1 ? "" : "s"
+            partition->hidden, partition->hidden == 1 ? "" : "s"
         );
     }
 }
@@ -1742,6 +1693,110 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
 }
 
 /**
+ * Print the workspace's status line, under its title: Clean, Dirty or Invalid
+ *
+ * Said on every run, a clean one included: it is the run's answer, and a clean
+ * one says what it compared — the paths aligned — as an empty apply or diff says
+ * its own. The line is one fold of the items that ask the disk or the user
+ * something, over the scope, decided and worded the same whatever the filter:
+ * under -p it speaks for the filtered profiles alone, so a clean one never reads
+ * Dirty for another's divergence, and what the filter hides is counted beneath
+ * the sections.
+ *
+ * @param out Output context (must not be NULL)
+ * @param ws Workspace (must not be NULL; a clean line counts its active paths)
+ * @param scope Operation scope (must not be NULL; its filter dimension drives
+ *              the count)
+ * @param partition The diverged items, filed (must not be NULL)
+ */
+static void status_print_summary(
+    output_t *out,
+    const workspace_t *ws,
+    const scope_t *scope,
+    const status_partition_t *partition
+) {
+    /* The status line, one fold whatever the filter: the items of the sections
+     * that ask the disk or the user something, and those of them dotta could
+     * not verify. Three sections are listed and leave the status line as they
+     * find it: an overridden copy, whose work is the landing of the row standing
+     * over it, which the status line counts where it shows that row (stated: a
+     * filter that hides the row reads Clean over the copy); and what apply settles
+     * in the record alone, nothing on disk changing — a pure reassignment, a
+     * release, a reclaim. A scope is Clean iff the status line counts none. Invalid
+     * is reserved for what the analysis could not establish: an item carrying a
+     * fault (an unreadable path, a comparison that could not run, a history that
+     * would not read) is one no verb resolves by default — apply skips it and
+     * the user must look. Anything else counted is Dirty: work that touches the
+     * disk or waits on the user, not an invalid workspace. With no filter every
+     * item is in scope and none is hidden. */
+    const workspace_items_t *counted[] = {
+        &partition->conflicts,  &partition->unconfirmed,  &partition->squatted,
+        &partition->displaced,  &partition->unverifiable, &partition->uncommitted,
+        &partition->undeployed, &partition->new_files,    &partition->orphaned,
+    };
+    size_t shown = 0;
+    size_t unverified = 0;
+    for (size_t b = 0; b < sizeof(counted) / sizeof(counted[0]); b++) {
+        shown += counted[b]->count;
+        for (size_t i = 0; i < counted[b]->count; i++) {
+            if (counted[b]->entries[i]->fault != WORKSPACE_FAULT_NONE) {
+                unverified++;
+            }
+        }
+    }
+
+    output_section(out, OUTPUT_NORMAL, "Workspace status");
+
+    /* The status line: the fold's decision, in the same words filtered or not */
+    if (shown == 0) {
+        /* Active paths the filter reaches, both kinds — what stands aligned at
+         * a path is not a question about which kind stands there. With no filter
+         * every item is accepted, so this is the whole view. Counted here, the
+         * one arm that prints it. */
+        workspace_items_t active = workspace_active(ws);
+        size_t scoped_paths = 0;
+        for (size_t i = 0; i < active.count; i++) {
+            if (scope_accepts_profile(scope, active.entries[i]->profile)) {
+                scoped_paths++;
+            }
+        }
+
+        /* Where the scope reaches no path, the sentence names its subject: the
+         * filter's profiles, or the view, which holds none — whether or not the
+         * record still lists what apply lets go */
+        if (scoped_paths > 0) {
+            output_colored(
+                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
+                "  Clean - %zu path%s aligned\n",
+                scoped_paths, scoped_paths == 1 ? "" : "s"
+            );
+        } else if (scope_filters_profiles(scope)) {
+            output_colored(
+                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
+                "  Clean - no paths in profile\n"
+            );
+        } else {
+            output_colored(
+                out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
+                "  Clean - no active paths\n"
+            );
+        }
+    } else if (unverified > 0) {
+        output_colored(
+            out, OUTPUT_NORMAL, OUTPUT_COLOR_RED,
+            "  Invalid - %zu item%s dotta could not verify\n",
+            unverified, unverified == 1 ? "" : "s"
+        );
+    } else {
+        output_colored(
+            out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW,
+            "  Dirty - %zu item%s diverged\n",
+            shown, shown == 1 ? "" : "s"
+        );
+    }
+}
+
+/**
  * Status command implementation
  */
 error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
@@ -1801,12 +1856,16 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* The workspace status (with profile filtering for Coherent Scope)
      *
      * The workspace was loaded over the persistent enabled set (the view's) for
-     * accurate divergence analysis. status_print_workspace then applies the CLI
-     * filter dimension via scope_accepts_profile so `dotta status -p work` matches
-     * `dotta apply -p work` behavior.
+     * accurate divergence analysis. status_partition then applies the CLI filter
+     * dimension via scope_accepts_profile so `dotta status -p work` matches `dotta
+     * apply -p work` behavior, and the status line and the sections read what
+     * it filed.
      */
     if (opts->show_local) {
-        status_print_workspace(out, ws, manifest, scope, config);
+        status_partition_t partition;
+        status_partition(ws, scope, ctx->arena, &partition);
+        status_print_summary(out, ws, scope, &partition);
+        status_print_workspace(out, ws, &partition, manifest, config);
     }
 
     /* The remote half (if requested): its transport, then its section — no remote

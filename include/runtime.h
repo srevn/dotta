@@ -498,7 +498,7 @@ typedef struct dotta_run {
  *         profile's need of a target is asked of (`core/profiles.c`
  *         profile_needs_target), a listing read to decide (`sys/filesystem.c`
  *         fs_remove_empty_dir, `sys/gitops.c` gitops_branches_exist and
- *         gitops_create_branch, `infra/epoch.c` epoch_walk), a printer's sections
+ *         gitops_create_branch, `infra/epoch.c` epoch_walk), a printer's keys
  *         (`cmds/status.c` status_print_workspace), and a walk whose answer is
  *         an error (`sys/filesystem.c` fs_remove_dir).
  *

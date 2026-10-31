@@ -501,11 +501,11 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * and cleanup_verdict, core/deploy.c deploy_needs_work and deploy_preflight;
  * and the screens: workspace_item_line (the tag — [locked] / [unreadable] /
  * [unverified], the same word on every arm — and the line's magenta beside it),
- * cmds/status.c status_print_workspace (the status line, Unverifiable's key and
- * Issues'), cmds/update.c update_partition and cmd_update's census, cmds/apply.c
- * apply_fault_label, apply_consent_label and the sudo and key closers of
- * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's status
- * line (diff_status_line). A reader not on this list is a bug.
+ * cmds/status.c status_print_summary (the status line) and status_print_workspace
+ * (Unverifiable's key and Issues'), cmds/update.c update_partition and cmd_update's
+ * census, cmds/apply.c apply_fault_label, apply_consent_label and the sudo and
+ * key closers of apply_print_deploy_skips and apply_print_cleanup_skips, and
+ * cmds/diff.c's status line (diff_status_line). A reader not on this list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
@@ -1233,9 +1233,8 @@ bool workspace_pending(
  *   items (workspace_diverged) — borrow for the workspace's life;
  * - a classification's buckets (workspace_buckets_t: deploy's plan, core/deploy.h
  *   deploy_partition_t; cleanup's plan and verdicts, core/cleanup.h; status's
- *   sections, cmds/status.c status_print_workspace; update's partition,
- *   cmds/update.c update_partition) point into arrays in the arena its buckets
- *   were made in;
+ *   partition, cmds/status.c status_partition; update's partition, cmds/update.c
+ *   update_partition) point into arrays in the arena its buckets were made in;
  * - update's per-profile share of its work (cmds/update.c update_execute) points
  *   into an array the next profile refills: valid for one update_profile call.
  * The items are the workspace's however long a slice lives. Nothing frees a slice.
@@ -1523,13 +1522,13 @@ typedef struct workspace workspace_t;
  *   directory the ladder leaves a scope exit's. Read by core/cleanup.c
  *   cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
  *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies
- *   it clears) and cmds/status.c status_print_workspace (Issues, Released paths
- *   and Overridden copies).
+ *   it clears) and cmds/status.c status_partition (Issues, Released paths and
+ *   Overridden copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
  *   by cmds/update.c update_partition (the new files, and the places listed by
- *   path) and cmds/status.c status_print_workspace (New files, and Unverifiable).
+ *   path) and cmds/status.c status_partition (New files, and Unverifiable).
  *   Declined for a second reason the orphan analysis has no equivalent of:
  *   auto_detect_new_files and --include-new are the user saying whether to look
  *   at all, so this one is a config read where the other is a per-command constant.
@@ -1784,8 +1783,9 @@ error_t workspace_load(
  * row's look found gone). An active path with none of these is not among them,
  * and is lent among the active items all the same (workspace_active, and its
  * kind's: workspace_directories, workspace_files). So a load holding none is
- * clean. cmds/status.c status_print_workspace reads its status line off them,
- * filtered or not, and says there which of them the line counts.
+ * clean. cmds/status.c status_partition files them, filtered or not, and
+ * status_print_summary reads its status line off what it filed, saying there
+ * which of them the line counts.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the diverged items
@@ -1905,7 +1905,7 @@ workspace_items_t workspace_orphans(const workspace_t *ws);
  *
  * Readers: core/deploy.c deploy_plan_build (through deploy_classify) and
  * deploy_preflight (the copies its clearances vouch for), core/cleanup.c
- * cleanup_plan_build and cleanup_preflight, cmds/status.c status_print_workspace,
+ * cleanup_plan_build and cleanup_preflight, cmds/status.c status_partition,
  * cmds/update.c update_partition. A reader not on this list is a bug.
  */
 typedef struct workspace_buckets workspace_buckets_t;

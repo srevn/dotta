@@ -30,10 +30,14 @@
  *
  * Quiet keeps what the exit counts: a refusal that counts failures is read with
  * them, so every row it counts prints at OUTPUT_QUIET and names its own subject,
- * since the line above it is the report's and does not print.
+ * since the line above it is the report's and does not print. A row whose cause
+ * runs on past its line — a merge's conflicts beneath it, the remote's words a
+ * push brings above it — would say half of it at quiet, so there the refusal
+ * names each failure's subject itself, and the rows stay the report's (cmds/sync.c
+ * sync_failure).
  */
 typedef enum {
-    OUTPUT_QUIET   = 0,   /* Errors alone: the refusal, and every row its exit counts */
+    OUTPUT_QUIET   = 0,   /* Errors alone: the refusal, and each failure it counts */
     OUTPUT_NORMAL  = 1,   /* Normal output */
     OUTPUT_VERBOSE = 2    /* Verbose output */
 } output_verbosity_t;

@@ -1267,8 +1267,9 @@ static void sync_print_remedies(
  * Pure, and deliberately so: the per-profile errors stay in the rows that borrow
  * them and are never rethrown, since each was already said where it happened.
  * The message carries what no row says — how much of the run the failures were
- * — and names their profiles in the scope's order: the one line a configured
- * quiet, which says no row, reads which failed by.
+ * — and names their profiles in the run's order: the one line a configured quiet,
+ * which says no row, reads which failed by, a row's cause running on past its
+ * line (base/output.h OUTPUT_QUIET).
  */
 static error_t sync_failure(arena_t *arena, const sync_rows_t *rows) {
     string_array_t failed;
@@ -1567,7 +1568,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     };
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_SYNC,
-        .profile    = string_array_join(ctx->arena, profiles, " "),
+        .profile    = string_array_join(ctx->arena,profiles,  " "),
         .paths      = NULL,
         .path_count = 0,
         .extras     = sync_extras,

@@ -1552,9 +1552,9 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
 }
 
 /**
- * Print the run's summary: the workspace's verdict and what the filter hid, then
- * where the set stands against the remote — a line each, one block, beneath
- * everything the report listed, and nothing of a half that did not run
+ * Print the run's summary: the workspace's verdict, with what the filter hid,
+ * then where the set stands against the remote — a line each half, one block,
+ * beneath everything the report listed, and nothing of a half that did not run
  *
  * The workspace's line is said on every run of its half, one with nothing diverged
  * included: it is the run's answer, and where nothing diverged it says what it
@@ -1562,7 +1562,7 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
  * one fold of the items that ask the disk or the user something, over the scope,
  * decided and worded the same whatever the filter: under -p it speaks for the
  * filtered profiles alone, so it never counts another's divergence, and what
- * the filter hides is said beneath it. The remote's line counts the rows the
+ * the filter hides is its last clause. The remote's line counts the rows the
  * transport read, each under its reading's first clause; where no remote is
  * configured the transport said the resolver's line in its place (status_remote).
  *
@@ -1619,8 +1619,12 @@ static void status_print_summary(
             }
         }
 
-        /* The line: the fold's decision, in the same words filtered or not, the
-         * half it speaks for its label, as the remote's line names its remote */
+        /* The line: the fold's decision, in the same words filtered or not, a
+         * clause a fact, joined and said once under the half's name, as the
+         * remote's line says its counts */
+        string_array_t clauses;
+        string_array_init(&clauses, ctx->arena, 0);
+
         if (shown == 0) {
             /* Active paths the filter reaches, both kinds — what stands aligned
              * at a path is not a question about which kind stands there. With
@@ -1638,37 +1642,35 @@ static void status_print_summary(
              * the filter's profiles, or the view, which holds none — whether or
              * not the record still lists what apply lets go */
             if (scoped_paths > 0) {
-                output_summary(
-                    out, OUTPUT_NORMAL, "Workspace: %zu path%s aligned",
+                string_array_pushf(
+                    &clauses, "%zu path%s aligned",
                     scoped_paths, scoped_paths == 1 ? "" : "s"
                 );
             } else if (scope_filters_profiles(scope)) {
-                output_summary(out, OUTPUT_NORMAL, "Workspace: no paths in profile");
+                string_array_push(&clauses, "no paths in profile");
             } else {
-                output_summary(out, OUTPUT_NORMAL, "Workspace: no active paths");
+                string_array_push(&clauses, "no active paths");
             }
-        } else if (unverified > 0) {
-            /* What the run found, and how much of it dotta could not verify */
-            output_summary(
-                out, OUTPUT_NORMAL,
-                "Workspace: %zu item%s diverged, %zu dotta could not verify",
-                shown, shown == 1 ? "" : "s", unverified
-            );
         } else {
-            output_summary(
-                out, OUTPUT_NORMAL, "Workspace: %zu item%s diverged",
-                shown, shown == 1 ? "" : "s"
-            );
+            string_array_pushf(&clauses, "%zu item%s diverged", shown, shown == 1 ? "" : "s");
+
+            /* What the run found, and how much of it dotta could not verify */
+            if (unverified > 0) {
+                string_array_pushf(&clauses, "%zu dotta could not verify", unverified);
+            }
         }
 
-        /* The diverged items the filter hides, counted beneath the line that
-         * speaks for the rest */
+        /* The diverged items the filter hides, the line's last clause: what it
+         * speaks for, then what it leaves out */
         if (partition->hidden > 0) {
-            output_summary(
-                out, OUTPUT_NORMAL, "%zu item%s hidden by the profile filter",
+            string_array_pushf(
+                &clauses, "%zu item%s hidden by the profile filter",
                 partition->hidden, partition->hidden == 1 ? "" : "s"
             );
         }
+
+        const char *phrase = string_array_join(ctx->arena, &clauses, ", ");
+        output_summary(out, OUTPUT_NORMAL, "Workspace: %s", phrase);
     }
 
     if (remote->name) {
@@ -1722,14 +1724,14 @@ static void status_print_summary(
             { failed,     "failed"                  },
         };
 
-        string_array_t counts;
-        string_array_init(&counts, ctx->arena, 0);
+        string_array_t clauses;
+        string_array_init(&clauses, ctx->arena, 0);
         for (size_t k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) {
             if (parts[k].count == 0) continue;
 
-            string_array_pushf(&counts, "%zu %s", parts[k].count, parts[k].word);
+            string_array_pushf(&clauses, "%zu %s", parts[k].count, parts[k].word);
         }
-        const char *phrase = string_array_join(ctx->arena, &counts, ", ");
+        const char *phrase = string_array_join(ctx->arena, &clauses, ", ");
 
         /* The remote by its name alone: whether its rows were read with no contact
          * is their section's title's to say (status_print_remote) */

@@ -57,8 +57,9 @@
  * alone: the helper answers for the remote, and its answer never reaches a proxy.
  *
  * The callbacks libgit2 calls during each op are sys/transfer's, made at the
- * open and freed at the free, which commits the credential helper's one verdict.
- * Which remote: "origin", or the one configured (remote_default).
+ * open and freed at the free, which tells the credential helper each credential's
+ * verdict, against the URL that asked for it. Which remote: "origin", or the
+ * one configured (remote_default).
  *
  * A branch against its remote (remote_relation_t): three heads — the branch here
  * (L) and its tracking ref (T), read now, and the remote's (R) as the open listed
@@ -393,8 +394,8 @@ error_t remote_forget(git_repository *repo, const char *name, size_t *forgotten)
 
 /**
  * Leave the remote: the listing's connection closed where it stands, the credential
- * helper told its one verdict (sys/transfer.h transfer_context_free), and the
- * session's arena with everything it lent
+ * helper told each credential's verdict (sys/transfer.h transfer_context_free),
+ * and the session's arena with everything it lent
  *
  * NULL-safe.
  */

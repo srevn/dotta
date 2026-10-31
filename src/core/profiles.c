@@ -2578,7 +2578,9 @@ static error_t profile_merge_claims(profile_merge_t *merge, path_kind_t kind) {
  */
 static profile_conflicts_t profile_merge_conflicts(const profile_merge_t *merge) {
     const ptr_array_t *const lists[] = {
-        &merge->content_conflicts, &merge->file_conflicts, &merge->directory_conflicts,
+        &merge->content_conflicts,
+        &merge->file_conflicts,
+        &merge->directory_conflicts,
     };
     size_t next[] = { 0, 0, 0 };
     const size_t count = lists[0]->count + lists[1]->count + lists[2]->count;
@@ -2635,13 +2637,13 @@ error_t profile_draft_merge(
      * at the merge base and at theirs beside the base, and a list of conflicts
      * for the content and for each kind of claim */
     profile_merge_t merge = {
-        .draft = draft,
-        .side  = side,
-        .sheet = metadata_create(draft->arena),
-        .arena = arena,
+        .draft      = draft,
+        .merge_base = profile_open(name, stage_merge_base(stage)),
+        .theirs     = profile_open(name, stage_theirs(stage)),
+        .side       = side,
+        .sheet      = metadata_create(draft->arena),
+        .arena      = arena,
     };
-    merge.merge_base = profile_open(name, stage_merge_base(stage));
-    merge.theirs = profile_open(name, stage_theirs(stage));
     ptr_array_init(&merge.content_conflicts, arena, 0);
     ptr_array_init(&merge.file_conflicts, arena, 0);
     ptr_array_init(&merge.directory_conflicts, arena, 0);

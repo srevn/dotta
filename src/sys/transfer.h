@@ -2,10 +2,14 @@
  * transfer.h - What libgit2 calls back into while one network op runs
  *
  * libgit2 hands every callback of an op one pointer (git_remote_callbacks'
- * payload), so what they share is one context, one a session: the credential
- * session — asked once, its answer cached for the session's later ops, refused
- * at the second ask within one op, judged by the ops it served and committed to
- * the helper once, at the free; the op's progress — its counts drawn as
+ * payload), so what they share is one context, one a session: the credentials
+ * the helper fills, each pair kept under the key git keeps it by — the protocol
+ * and host of the URL that asked, and the user where that URL names one
+ * (lib/git/credential.c credential_match) — replayed where its key asks again
+ * and nowhere else, refused at the second ask within one op, judged by the ops
+ * it served and told its own verdict at the free, so a push URL on another host
+ * is asked of the helper once, never handed the fetch host's pair, and stored
+ * by the helper once its push lands; the op's progress — its counts drawn as
  * base/output's progress line while objects move, a push that sends nothing drawing
  * none, the frame taken down at the op's end; what the op moved, answered there;
  * the remote's words a push's side band carries, said by the hooks' rule; and a
@@ -41,25 +45,24 @@ typedef struct {
  * Create a transfer context.
  *
  * @param output The run's output, borrowed for the session (must not be NULL)
- * @param url The remote's URL; NULL is legal — SSH agent and unauthenticated
- *        paths still work, and the helper's approve and reject become no-ops
  * @return The context (caller frees via transfer_context_free)
  */
-transfer_context_t *transfer_context_create(output_t *output, const char *url);
+transfer_context_t *transfer_context_create(output_t *output);
 
 /**
  * Free a transfer context.
  *
- * Before freeing, commits the session's credential decision to the helper exactly
- * once: approve on VALIDATED, reject on REJECTED, neither on NOT_ACQUIRED
- * (SSH/anonymous) or unresolved ACQUIRED. NULL-safe.
+ * Before freeing, tells the helper each pair's verdict, once, against the key
+ * it was filled for: approve on VALIDATED, reject on REJECTED, neither on an
+ * ACQUIRED pair no op judged. NULL-safe.
  */
 void transfer_context_free(transfer_context_t *xfer);
 
 /**
  * Begin an op on this transfer session.
  *
- * Resets per-op scratch (anti-loop attempts, the op's wire, the remote's words).
+ * Resets per-op scratch (anti-loop attempts, the pair it offered, the op's wire,
+ * the remote's words).
  *
  * Pair with transfer_op_end() around each libgit2 network call (the open's
  * git_remote_connect_ext, a push's git_remote_connect, git_remote_download,
@@ -85,9 +88,9 @@ void transfer_op_begin(transfer_context_t *xfer);
  * left open, the others said as they arrived; otherwise, where the op failed,
  * every line, a block of its own at OUTPUT_NORMAL — and where it succeeded, none.
  *
- * Advances the credential state machine on `rc`:
+ * Judges the pair the op offered on `rc` — none where it offered an SSH key or
+ * the anonymous pair, or was asked for no credentials:
  *
- *   NOT_ACQUIRED  + anything     → NOT_ACQUIRED   (no helper fill happened)
  *   ACQUIRED      + 0            → VALIDATED      (terminal)
  *   ACQUIRED      + GIT_EAUTH    → REJECTED       (terminal)
  *   ACQUIRED      + any other    → ACQUIRED       (network hiccup, etc.)
@@ -155,6 +158,12 @@ void transfer_configure_callbacks(
 
 /**
  * libgit2 credential callback (payload = transfer_context_t *).
+ *
+ * An HTTPS ask is answered with the pair its key holds, or the helper's fill,
+ * kept as the key's pair. libgit2 asks once a connection, keeping the answer
+ * until the connection closes (lib/libgit2/src/libgit2/transports/http.c
+ * handle_auth, http_close), so a sync pushing three profiles to a push URL on
+ * another host fills once there and replays twice.
  *
  * A helper's fill runs on a row of its own: git asks at the terminal where no
  * helper answers (lib/git/prompt.c git_prompt), past the output layer, so the

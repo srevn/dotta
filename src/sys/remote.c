@@ -180,17 +180,17 @@ error_t remote_open(
 
     /* The handle in an arena of its own, made here and freed with it, beside
      * the listing it copies and the names it lends: from here every failure frees
-     * through remote_free. The transfer is told the URL the lookup resolved,
-     * insteadOf applied (lib/libgit2/src/libgit2/remote.c apply_insteadof), which
-     * the credential helper is answered for: NULL where the remote has none,
-     * which the connect then refuses (remote.c git_remote__urlfordirection). */
+     * through remote_free. The transfer is told no URL: each credential the helper
+     * fills is kept under the URL that asked for it, the fetch URL's or the push
+     * URL's (lib/libgit2/src/libgit2/remote.c git_remote__urlfordirection), and
+     * judged there (sys/transfer.h). */
     arena_t *arena = arena_create(0);
     remote_t *remote = arena_calloc(arena, 1, sizeof(*remote));
     remote->arena = arena;
     remote->repo = repo;
     remote->git = git;
     remote->action = action;
-    remote->xfer = transfer_context_create(output, git_remote_url(git));
+    remote->xfer = transfer_context_create(output);
 
     /* The open's one op: the connect for upload-pack, which reads the remote's
      * advertisement — no byte of a pack moves, so no frame is drawn */
@@ -660,8 +660,8 @@ void remote_free(remote_t *remote) {
 
     /* What the arena does not hold first, read off the handle while it stands:
      * the remote, its listing's connection closed where it stands (remote.c
-     * git_remote_free), then the transfer — the credential helper's one verdict;
-     * then the arena, and the handle with it and every name it lent */
+     * git_remote_free), then the transfer — each credential's verdict, told the
+     * helper; then the arena, and the handle with it and every name it lent */
     git_remote_free(remote->git);
     transfer_context_free(remote->xfer);
     arena_free(remote->arena);

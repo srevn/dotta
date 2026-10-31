@@ -7,9 +7,10 @@
  *   - HTTPS credential helper IPC (fill / approve / reject)
  *   - Thin libgit2 cred constructors
  *
- * Holds no session state. Cache-once policy, anti-loop counters, and the
- * approve/reject decision belong to the session owner (sys/transfer.c) — a
- * credential session has a lifetime that this module deliberately does not model.
+ * Holds no session state. The pairs a session keeps, one a key, their replay,
+ * anti-loop counters, and each pair's approve/reject decision belong to the session
+ * owner (sys/transfer.c) — a credential session has a lifetime that this module
+ * deliberately does not model.
  */
 
 #ifndef DOTTA_CREDENTIALS_H
@@ -20,6 +21,9 @@
 
 /**
  * Parsed remote URL (protocol + host).
+ *
+ * The key a git credential helper stores a pair under, and the one a session
+ * keeps the helper's pairs by (sys/transfer.c), beside the user a URL names.
  *
  * Both fields are validated at parse time:
  *   - protocol is free of \r/\n (required for the line-based git credential

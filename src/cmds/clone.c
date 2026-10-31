@@ -64,11 +64,8 @@
  * @return Error or NULL on success
  */
 static error_t select_profiles(
-    const cmd_clone_options_t *opts,
-    const char *remote_name,
-    const string_array_t *remote_names,
-    arena_t *arena,
-    output_t *out,
+    const cmd_clone_options_t *opts, const char *remote_name,
+    const string_array_t *remote_names, arena_t *arena, output_t *out,
     string_array_t *selection
 ) {
     CHECK_NULL(opts);
@@ -180,12 +177,8 @@ static error_t select_profiles(
  * @return The names made local, in the selection's order
  */
 static string_array_t land_profiles(
-    git_repository *repo,
-    const remote_t *remote,
-    const char *remote_name,
-    const string_array_t *selection,
-    arena_t *arena,
-    output_t *out
+    git_repository *repo, const remote_t *remote, const char *remote_name,
+    const string_array_t *selection, arena_t *arena, output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote);
@@ -253,9 +246,7 @@ static string_array_t land_profiles(
  * @return Error or NULL on success
  */
 static error_t initialize_state(
-    git_repository *repo,
-    arena_t *arena,
-    const string_array_t *profiles,
+    git_repository *repo, arena_t *arena, const string_array_t *profiles,
     output_t *out
 ) {
     CHECK_NULL(repo);
@@ -319,9 +310,7 @@ static error_t initialize_state(
  * unwound still stands, so a removal failure only warns.
  */
 static void rollback_clone_dir(
-    const dotta_ctx_t *ctx,
-    const char *path,
-    bool path_preexisted
+    const dotta_ctx_t *ctx, const char *path, bool path_preexisted
 ) {
     error_t err = NULL;
 
@@ -433,7 +422,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* The remote, met once (sys/remote.h): its refusal names the act and the
      * remote, under the section that printed the URL; the URL goes in no sentence,
      * since one may carry a password. */
-    err = remote_open(repo, "origin", commit_action_word(COMMIT_ACTION_CLONE), out, &remote);
+    err = remote_open(
+        repo, "origin", commit_action_word(COMMIT_ACTION_CLONE), out, &remote
+    );
     if (err) goto cleanup;
 
     /* Identity gate, off the advertisement and before any download.
@@ -467,7 +458,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * is fetched: a name the line gives that the remote lacks refuses the clone
      * here, nothing downloaded */
     string_array_t selection;
-    err = select_profiles(opts, "origin", remote_branches(remote), ctx->arena, out, &selection);
+    err = select_profiles(
+        opts, "origin", remote_branches(remote), ctx->arena, out, &selection
+    );
     if (err) goto cleanup;
 
     /* One fetch, with progress: each selected profile, landing as a remote-tracking
@@ -610,7 +603,8 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                         break;
                     case OUTPUT_ANSWER_NONE:
                         output_summary(
-                            out, OUTPUT_NORMAL, "Bootstrap scripts not run: no answer was read"
+                            out, OUTPUT_NORMAL,
+                            "Bootstrap scripts not run: no answer was read"
                         );
                         break;
                 }
@@ -658,7 +652,8 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     if (elsewhere) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(
-            out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
+            out, OUTPUT_NORMAL,
+            "dotta looks for its repository at %s", elsewhere
         );
         output_hint(
             out, OUTPUT_NORMAL, "Run 'export DOTTA_REPO_DIR=%s', or set core.repo_dir in "

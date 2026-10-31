@@ -2947,6 +2947,7 @@ const args_command_t spec_add = {
         "    --exclude '*.log' --exclude '*.tmp'  # Multiple patterns\n",
     .examples    =
         "  %s add global ~/.bashrc                   # Basic add\n"
+        "  %s add hosts/laptop ~/.bashrc             # This machine's own version\n"
         "  %s add darwin ~/.config/nvim              # Directory\n"
         "  %s add -n -v darwin ~/.config/nvim        # Preview the names\n"
         "  %s add global ~/.ssh/config -e '*.pub'    # With exclude\n"

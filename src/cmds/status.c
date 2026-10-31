@@ -684,7 +684,9 @@ static void status_print_workspace(
      * keeps disk's bytes and not its kind: a change across file and directory
      * is a re-shaping of the tree, which add refuses by the claim standing at
      * the path, naming `dotta remove` (cmds/add.c), which stops tracking the
-     * path and keeps the node — so a [type] row's line names that instead, and
+     * path on every machine and keeps the node — so a [type] row's line names
+     * that instead, its reach said with it, since a row on this machine reads
+     * as this machine's to settle (update's census says it the same way), and
      * never `apply --force`, which replaces a directory in a blob row's way only
      * with all it holds, its walk stopping at what no landing removes, --force
      * included (core/deploy.c check_clearance), which status, reading no clearance,
@@ -709,7 +711,8 @@ static void status_print_workspace(
             /* [type] where the line leads with it: no conflict is displaced (the
              * DISPLACED_* routes file it below), so the tag is the bit */
             const char *legend = (item->divergence & DIVERGENCE_TYPE)
-                ? "run 'dotta remove <profile> <path>' to stop tracking it"
+                ? "run 'dotta remove <profile> <path>' to stop tracking it "
+                "on every machine"
                 : "or run 'dotta apply --force <path>' to keep Git's";
             output_list_legend(list, line.tags, legend);
         }

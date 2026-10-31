@@ -1315,10 +1315,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * names paths is the named re-derivation itself, so its two DERIVED lines
      * say what was skipped and name no remedy: what came of the climb beneath
      * the user's squatter at a rung is the run's own outcome to say — its receipt,
-     * or, at a lost blob's place, the line below the leaves' gather. The lines
-     * are one block: one boundary above them, asked here and paid by whichever
-     * of them is the first to print — a block that says nothing leaves the debt
-     * standing for the next one (base/output.h). */
+     * or, at a lost blob's place, the line below the leaves' gather. A line that
+     * names `dotta remove` names its reach with it, every machine: the removal
+     * is the profile's, so every machine's next apply lets its copy go, where
+     * the path skipped here reads as this machine's to settle (status's [type]
+     * legend says it the same way). The lines are one block: one boundary above
+     * them, asked here and paid by whichever of them is the first to print — a
+     * block that says nothing leaves the debt standing for the next one
+     * (base/output.h). */
     const size_t *refused = partition.refused;
     output_gap(out, OUTPUT_NORMAL);
 
@@ -1416,7 +1420,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
             "'dotta apply --force <path>' keeps Git's (a directory only if all dotta's), "
             "'dotta add --force <profile> <path>' keeps disk's when the kind matches, "
-            "'dotta remove' stops tracking %s",
+            "'dotta remove' stops tracking %s on every machine",
             refused[WORKSPACE_ROUTE_CONFLICT],
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "it" : "them"
@@ -1435,7 +1439,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: a different kind stands on disk — "
             "'dotta apply --force <path>' replaces %s (a directory only if all "
-            "dotta's), 'dotta remove' stops tracking %s",
+            "dotta's), 'dotta remove' stops tracking %s on every machine",
             refused[WORKSPACE_ROUTE_KIND],
             refused[WORKSPACE_ROUTE_KIND] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_KIND] == 1 ? "it" : "them",
@@ -1463,7 +1467,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: not confirmed by dotta — 'dotta diff' compares, "
             "'dotta apply --force <path>' keeps Git's, 'dotta add --force <profile> "
-            "<path>' keeps disk's, 'dotta remove' stops tracking %s",
+            "<path>' keeps disk's, 'dotta remove' stops tracking %s on every machine",
             refused[WORKSPACE_ROUTE_UNCONFIRMED],
             refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "it" : "them"

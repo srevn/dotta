@@ -1323,15 +1323,14 @@ error_t gitops_find_merge_base(
     CHECK_NULL(two);
     CHECK_NULL(out_oid);
 
+    /* None shared is the answer libgit2 gives GIT_ENOTFOUND for alone, leaving
+     * the id as it found it (merge.c git_merge_base): the null id, here */
     int rc = git_merge_base(out_oid, repo, one, two);
-    if (rc < 0) {
-        if (rc == GIT_ENOTFOUND) {
-            return error_create(
-                ERR_NOT_FOUND, "No merge base found between commits"
-            );
-        }
-        return error_git(rc, "Cannot find the merge base of two commits");
+    if (rc == GIT_ENOTFOUND) {
+        memset(out_oid, 0, sizeof(*out_oid));
+        return NULL;
     }
+    if (rc < 0) return error_git(rc, "Cannot find the merge base of two commits");
 
     return NULL;
 }

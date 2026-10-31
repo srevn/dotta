@@ -119,7 +119,7 @@ static error_t stage_merge_trees(stage_t *st, const git_oid *theirs) {
     error_t err = gitops_find_merge_base(
         st->repo, git_commit_id(st->parent), git_commit_id(st->theirs), &base
     );
-    if (error_code(err) == ERR_NOT_FOUND) {
+    if (!err && git_oid_is_zero(&base)) {
         err = stage_empty_tree(st, &st->merge_base);
         if (err) return err;
     } else {

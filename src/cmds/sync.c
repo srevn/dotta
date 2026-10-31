@@ -543,7 +543,8 @@ static sync_disagreements_t sync_disagreements(
      * names point into it, which lives until the end */
     git_oid base;
     error_t err = gitops_find_merge_base(repo, local_oid, remote_oid, &base);
-    if (!err) err = gitops_get_tree_from_commit(repo, &base, &base_tree);
+    if (err || git_oid_is_zero(&base)) goto done;
+    err = gitops_get_tree_from_commit(repo, &base, &base_tree);
     if (!err) err = gitops_get_tree_from_commit(repo, local_oid, &local_tree);
     if (!err) err = gitops_diff_trees(repo, base_tree, local_tree, NULL, &diff);
     if (err) goto done;

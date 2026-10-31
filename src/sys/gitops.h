@@ -1085,23 +1085,25 @@ error_t gitops_diff_get_stats(
 );
 
 /**
- * Find merge base between two commits
+ * The merge base of two commits, or Git's null id where they share none
  *
- * Finds the best common ancestor for a three-way merge — the first of several,
- * where a criss-cross leaves more than one (lib/libgit2/src/libgit2/merge.c
- * git_merge_base). Two commits that share no history are ERR_NOT_FOUND — libgit2's
- * GIT_ENOTFOUND, which it answers for that alone, a commit it could not load
- * being -1 (merge.c merge_bases) — read by sys/stage.c stage_merge_trees, which
- * merges two such histories over Git's empty tree; by cmds/sync.c
- * sync_disagreements, the floor of the names a landed resolution's two sides
- * took, where no base is no line; and by sys/remote.c remote_relate and
- * remote_ahead, where a branch against its remote reads two histories sharing
- * none: the remote's branch recreated, or a tracking ref no counterpart.
+ * The best common ancestor for a three-way merge — the first of several, where
+ * a criss-cross leaves more than one (lib/libgit2/src/libgit2/merge.c
+ * git_merge_base). Two commits that share no history are an answer, never a
+ * failure: the null id, where libgit2 answers GIT_ENOTFOUND, which it answers
+ * for that alone — a commit it could not load being -1 (merge.c merge_bases) —
+ * so a reader tests the id, as one reads a reference's absence
+ * (gitops_reference_oid). Readers: sys/stage.c stage_merge_trees, which merges
+ * two such histories over Git's empty tree; cmds/sync.c sync_disagreements, the
+ * floor of the names a landed resolution's two sides took, where none is no line;
+ * and sys/remote.c remote_relate and remote_ahead, where a branch against its
+ * remote reads two histories sharing none: the remote's branch recreated, or a
+ * tracking ref no counterpart.
  *
  * @param repo Repository (must not be NULL)
  * @param one First commit OID (must not be NULL)
  * @param two Second commit OID (must not be NULL)
- * @param out_oid Merge base commit OID (must not be NULL)
+ * @param out_oid The merge base, or the null id: none shared (must not be NULL)
  * @return Error or NULL on success
  */
 error_t gitops_find_merge_base(

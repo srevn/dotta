@@ -611,7 +611,7 @@ static error_t remote_read_heads(
  * none, where nothing of it is counted. One within the other, or the other within
  * it, shares it; two that each hold commits the other lacks are asked their merge
  * base, which two histories sharing none have not (sys/gitops.h
- * gitops_find_merge_base: ERR_NOT_FOUND).
+ * gitops_find_merge_base: the null id).
  */
 static error_t remote_ahead(
     git_repository *repo, const git_oid *one, const git_oid *two, size_t *ahead,
@@ -626,9 +626,9 @@ static error_t remote_ahead(
 
     git_oid base;
     error_t err = gitops_find_merge_base(repo, one, two, &base);
-    if (err && error_code(err) != ERR_NOT_FOUND) return err;
+    if (err) return err;
 
-    *shared = !err;
+    *shared = !git_oid_is_zero(&base);
     if (!*shared) *ahead = 0;
 
     return NULL;
@@ -695,7 +695,7 @@ static error_t remote_relate(git_repository *repo, remote_relation_t *relation) 
         !git_oid_equal(&relation->tracking, &relation->remote)) {
         git_oid base;
         err = gitops_find_merge_base(repo, &relation->tracking, &relation->remote, &base);
-        if (error_code(err) == ERR_NOT_FOUND) {
+        if (!err && git_oid_is_zero(&base)) {
             err = remote_ahead(repo, &relation->local, &relation->tracking, &ahead, &shared);
         }
         if (err) return err;

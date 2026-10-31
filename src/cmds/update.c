@@ -282,45 +282,69 @@ static void update_partition(
             case WORKSPACE_STATE_DEPLOYED: {
                 /* The route table partitions the deployed items — the same producer
                  * status's sections read (workspace_item_route; workspace.h carries
-                 * each arm's why). CAPTURE is the one arm update commits; every
-                 * other arm is refused and counted under its route, so the preview
-                 * never promises an update the executor would refuse and the
-                 * census says why in the table's words. Under --only-new the
-                 * user asked about new files alone: neither accepted nor counted
-                 * — but a directory the load could not look at, beneath which
-                 * the scan did not look either (no root is registered where the
-                 * join's look failed, and the walk adds no item where a rung's
-                 * did), so the new files asked for may stand there. */
+                 * each arm's why), one arm each as status files them, so the
+                 * compiler holds this filter to the table. CAPTURE is the one
+                 * arm update commits; every other arm is refused and counted
+                 * under its route, so the preview never promises an update the
+                 * executor would refuse and the census says why in the table's
+                 * words. Under --only-new the user asked about new files alone:
+                 * neither accepted nor counted — but a directory the load could
+                 * not look at, beneath which the scan did not look either (no
+                 * root is registered where the join's look failed, and the walk
+                 * adds no item where a rung's did), so the new files asked for
+                 * may stand there. */
                 const workspace_route_t route = workspace_item_route(item);
                 if (opts->only_new && (route != WORKSPACE_ROUTE_UNVERIFIABLE ||
                     item->item_kind != PATH_KIND_DIRECTORY)) {
                     continue;
                 }
-                if (route != WORKSPACE_ROUTE_CAPTURE) {
-                    partition->refused[route]++;
-                    if (route == WORKSPACE_ROUTE_UNVERIFIABLE) {
+
+                switch (route) {
+                    case WORKSPACE_ROUTE_CAPTURE:
+                        /* The user's own, over a base: a directory's fate is
+                         * its claim; a file's, a path bit standing, a modification
+                         * — a violator nothing changed on disk has the blob bit's
+                         * fate alone, below */
+                        if (item->item_kind == PATH_KIND_DIRECTORY) {
+                            workspace_buckets_add(buckets, item, &partition->modified_dirs);
+                        } else if ((item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE) {
+                            workspace_buckets_add(buckets, item, &partition->modified_files);
+                        }
+                        break;
+
+                    case WORKSPACE_ROUTE_UNVERIFIABLE:
+                        /* A look that failed, counted again by whose remedy it
+                         * is: the census says a line per class */
+                        partition->refused[route]++;
                         partition->faults[item->fault]++;
-                    }
-                    continue;
+                        continue;
+
+                    case WORKSPACE_ROUTE_CLEAN:
+                    case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+                    case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                    case WORKSPACE_ROUTE_DISPLACED_STALE:
+                    case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
+                    case WORKSPACE_ROUTE_CONFLICT:
+                    case WORKSPACE_ROUTE_STALE:
+                    case WORKSPACE_ROUTE_KIND:
+                    case WORKSPACE_ROUTE_KIND_DERIVED:
+                    case WORKSPACE_ROUTE_UNCONFIRMED:
+                    case WORKSPACE_ROUTE_REASSIGNED:
+                        /* Another verb's, or no verb's by default: the census's
+                         * line says which, off this count */
+                        partition->refused[route]++;
+                        continue;
                 }
 
-                /* The capture's fate: a directory's is its claim; a file's is
-                 * what diverged — a path bit a modification, the ENCRYPTION bit
-                 * a violation the commit seals, so a file with both is both,
-                 * and a violator nothing changed on disk only a violation. A
-                 * link standing over a violator is captured as its target, never
-                 * sealed (update_capture): a modification alone, whose commit
-                 * removes the plaintext as a deletion's does */
-                if (item->item_kind == PATH_KIND_DIRECTORY) {
-                    workspace_buckets_add(buckets, item, &partition->modified_dirs);
-                } else {
-                    if ((item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE) {
-                        workspace_buckets_add(buckets, item, &partition->modified_files);
-                    }
-                    if ((item->divergence & DIVERGENCE_ENCRYPTION) &&
-                        item->occupant != FS_OCCUPANT_SYMLINK) {
-                        workspace_buckets_add(buckets, item, &partition->unencrypted);
-                    }
+                /* The blob bit's fate, beside the path bit's: the ENCRYPTION
+                 * bit a violation the commit seals, so a file with both is in
+                 * both, and a directory, which holds no blob, never here. A link
+                 * standing over a violator is captured as its target, never sealed
+                 * (update_capture): its path bit's fate alone, whose commit removes
+                 * the plaintext as a deletion's does */
+                if ((item->divergence & DIVERGENCE_ENCRYPTION) &&
+                    item->occupant != FS_OCCUPANT_SYMLINK) {
+                    workspace_buckets_add(buckets, item, &partition->unencrypted);
                 }
                 break;
             }

@@ -1262,12 +1262,14 @@ typedef struct {
  *                                  work at no cost to the user (workspace.c
  *                                  workspace_item_line)
  *   status's section partition     every arm, one bucket each
- *   update's filter                CAPTURE accepted; every other arm refused
- *                                  and counted under its route, one slot per
- *                                  arm (WORKSPACE_ROUTE_COUNT), which the census
+ *   update's filter                every arm, each its own answer: CAPTURE
+ *                                  accepted; every other arm refused and counted
+ *                                  under its route, one slot per arm
+ *                                  (WORKSPACE_ROUTE_COUNT), which the census
  *                                  reads back as one line per refusing arm —
- *                                  the one reader the compiler does not hold to
- *                                  the table: a new arm needs its line there
+ *                                  the census the one reader the compiler does
+ *                                  not hold to the table: an arm the filter refuses
+ *                                  needs its line there
  *   apply's skip label             CONFLICT, STALE, KIND, UNCONFIRMED, CAPTURE:
  *                                  a TYPE or a CONTENT skip's at its row's own
  *                                  path (cmds/apply.c apply_route_label)

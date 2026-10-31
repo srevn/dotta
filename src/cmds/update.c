@@ -520,9 +520,10 @@ static void update_partition(
  *              where the profile has only chains to re-derive)
  * @param rows The named run's in-scope view rows for this profile, each the leaf
  *             of a chain re-derived where `path_filter` selects it, none beneath
- *             a squatter the view keeps (empty on a bare run, which names no paths)
- * @param path_filter The run's path filter (core/scope.h scope_paths); NULL on
- *                    a bare run, which hands no rows
+ *             a squatter the view keeps (empty on a bare run, which names no
+ *             paths, and under --only-new, which asks about new files alone)
+ * @param path_filter The run's path filter (core/scope.h scope_paths), read with
+ *                    the rows alone; NULL on a bare run
  * @param opts Update options (must not be NULL)
  * @param commit The commit's bookkeeping, zero-filled by the caller; the walk
  *               fills it (must not be NULL)
@@ -928,7 +929,8 @@ cleanup:
  * when it has items to commit or chains to re-derive: a named run's row slice
  * reaches profiles whose items all held still, which is what makes the derivation's
  * consent trigger — and the remedy it carries — work on a quiet tree at all. A
- * bare run hands no rows and visits exactly the profiles it always did.
+ * bare run hands no rows, nor does a run under --only-new, and each visits exactly
+ * the profiles its items name.
  *
  * The commits that landed cross the error boundary: out_commits receives one
  * bookkeeping entry per landed commit, written as the commit lands, so the caller
@@ -943,10 +945,11 @@ cleanup:
  *            run's repository, the capture reads the key and the encryption policy)
  * @param enabled The enabled set, in order (must not be NULL)
  * @param work The run's work: the accepted items, less the new files where the
- *             user declined them (empty where a named run has only chains to
- *             re-derive)
+ *             question left them out (empty where a named run has only chains
+ *             to re-derive)
  * @param derive_rows The named run's in-scope view rows, the chains to re-derive,
- *                    none beneath a squatter the view keeps (empty on a bare run)
+ *                    none beneath a squatter the view keeps (empty on a bare
+ *                    run and under --only-new)
  * @param path_filter The run's path filter, which selects the rungs of each row's
  *                    chain the run re-derives (core/scope.h scope_paths; NULL
  *                    on a bare run)
@@ -1566,12 +1569,15 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * rule guarantees exist. The exclude gate binds here (the user excluded the
      * path from this operation), where the chain riding a captured leaf stays
      * scope-blind like add's — an exclusion names a path, never the way to it.
-     * A bare run names nothing and derives nothing. The rows are walked as the
-     * active items, one a row, each carrying the look the load took at it; the
-     * leaves grow as the walk finds them rather than into room for the whole
-     * view: a named path picks a few rows out of all of them. */
+     * A bare run names nothing and derives nothing; nor does a run under
+     * --only-new, where the user asked about new files alone and a re-derivation
+     * is a move of the way, never a new file — a new file's own capture still
+     * climbs its way, the first capture's rule (update_profile). The rows are
+     * walked as the active items, one a row, each carrying the look the load
+     * took at it; the leaves grow as the walk finds them rather than into room
+     * for the whole view: a named path picks a few rows out of all of them. */
     manifest_rows_t derive_rows = { 0 };
-    if (opts->path_count > 0) {
+    if (opts->path_count > 0 && !opts->only_new) {
         workspace_items_t active = workspace_active(ws);
         const manifest_row_t **leaves = NULL;
         size_t leaf_count = 0;

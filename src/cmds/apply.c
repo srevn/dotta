@@ -205,7 +205,7 @@ static const char *apply_route_label(const workspace_item_t *item) {
  * own over a base (the route's CAPTURE: an edit, or a link where the row holds
  * a file or the reverse, which the capture commits as the new kind), else 'dotta
  * update --force <path>', which commits what disk holds over a conflict, a plain
- * update refusing it (cmds/update.c update_partition), and the capture's rows
+ * update skipping it (cmds/update.c update_partition), and the capture's rows
  * as a plain update does. Bytes no base proves close on a line of their own,
  * the place a machine new to dotta most often wants its own files: 'dotta add
  * <new profile> <path>' keeps them in a profile created and enabled above the

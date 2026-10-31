@@ -122,7 +122,7 @@ static const char *diff_status_line(
 
         case WORKSPACE_ROUTE_UNVERIFIABLE:
             /* A look that failed: no bit was settled, so no verb's act is true
-             * of the path — apply skips the row at preflight, update in its census.
+             * of the path — apply skips the row at preflight, update at its filter.
              * Listed both ways, its fault a difference nobody has ruled out:
              * hiding it said no difference over a file the user had just edited.
              * Worded by whose remedy the failure is (workspace_fault_t), the
@@ -151,10 +151,9 @@ static const char *diff_status_line(
         case WORKSPACE_ROUTE_CONFLICT:
             /* Both sides moved: the user's bytes or kind beside a move Git made,
              * to the bytes, the kind or a claim — in the frame's words
-             * (core/workspace.h divergence_type_t), as apply's skip label and
-             * update's census say it. Upstream its --force is qualified, as
-             * update's census qualifies it: a directory in a blob row's way goes
-             * only with all it holds (core/deploy.c check_clearance) */
+             * (core/workspace.h divergence_type_t), as apply's skip label says
+             * it. Upstream its --force is qualified: a directory in a blob row's
+             * way goes only with all it holds (core/deploy.c check_clearance) */
             if (direction == DIFF_UPSTREAM) {
                 return "changed in Git and on disk (apply --force <path> keeps Git's, "
                        "a directory only if all dotta's)";
@@ -163,9 +162,9 @@ static const char *diff_status_line(
             /* The user's edit is listed downstream too, which a plain update
              * refuses, its capture committing disk over the move Git made: the
              * --force that commits it where the capture commits the node standing
-             * (core/workspace.h workspace_capturable) — exact for the one row,
-             * where update's census qualifies it for many — and update's skip
-             * where none does, a change across file and directory */
+             * (core/workspace.h workspace_capturable) — exact for the one row —
+             * and update's skip where none does, a change across file and
+             * directory */
             return workspace_capturable(item)
                    ? "changed in Git and on disk (update --force <path> keeps disk's)"
                    : "changed in Git and on disk (update skips it)";
@@ -200,11 +199,10 @@ static const char *diff_status_line(
 
         case WORKSPACE_ROUTE_KIND:
             /* Another kind the user put there, Git having moved nothing past
-             * it, in the words update's census says it: --force's to replace, a
-             * directory only with all it holds. Listed both ways, as a conflict
-             * is: a user comparing the two sides before choosing one meets it
-             * in either direction; downstream, update refuses it, no capture
-             * committing such a kind */
+             * it: --force's to replace, a directory only with all it holds. Listed
+             * both ways, as a conflict is: a user comparing the two sides before
+             * choosing one meets it in either direction; downstream, update skips
+             * it, no capture committing such a kind */
             return direction == DIFF_UPSTREAM
                    ? "a different kind stands on disk (apply --force <path> keeps Git's, "
                    "a directory only if all dotta's)"
@@ -225,13 +223,13 @@ static const char *diff_status_line(
              * (core/workspace.c workspace_ask_bases), so no default's sentence
              * is true of it — apply overwrites it only under --force, and update
              * commits it only under its own. Both directions, in the words status's
-             * Unconfirmed header and update's census say it; each --force
-             * unqualified, as status's Unconfirmed legend line names Git's: a
-             * file row with a file or a link standing, a node the capture commits
-             * (core/workspace.h workspace_capturable), KIND answering first.
-             * Downstream names update's own --force, the verb this direction
-             * previews, where status's header and update's census name the screens'
-             * example for such bytes, a profile of its own */
+             * Unconfirmed header says it; each --force unqualified, as status's
+             * Unconfirmed legend line names Git's: a file row with a file or a
+             * link standing, a node the capture commits (core/workspace.h
+             * workspace_capturable), KIND answering first. Downstream names
+             * update's own --force, the verb this direction previews, where
+             * status's header names the screens' example for such bytes, a profile
+             * of its own */
             return direction == DIFF_UPSTREAM
                    ? "not confirmed by dotta (apply --force <path> keeps Git's)"
                    : "not confirmed by dotta (update --force <path> keeps disk's)";

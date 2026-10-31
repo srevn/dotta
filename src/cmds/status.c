@@ -455,6 +455,11 @@ static void status_print_manifest(
  * classification's buckets (core/workspace.h workspace_buckets_t), each in the
  * diverged items' order, in the arena the partition was made in — the items
  * borrowed, the workspace's.
+ *
+ * Update's summary counts what it skipped under these sections' titles, in their
+ * order (cmds/update.c update_partition_t's skipped): a second fold of the route
+ * table, held to this one by the two docs alone, so a section moved here moves
+ * its count there.
  */
 typedef struct {
     workspace_items_t conflicts;     /* CONFLICT and KIND: neither verb's by default */
@@ -683,20 +688,20 @@ static void status_print_workspace(
      * The legend names Git's side beside it, by the tag a row leads with. `update
      * --force` keeps disk's bytes and not its kind: a change across file and
      * directory is a re-shaping of the tree no capture commits (core/workspace.h
-     * workspace_capturable), which update's census refuses naming `dotta remove`
-     * (cmds/update.c cmd_update), which stops tracking the path on every machine
-     * and keeps the node — so a [type] row's line names that instead, its reach
-     * said with it, since a row on this machine reads as this machine's to settle
-     * (update's census says it the same way), and never `apply --force`, which
-     * replaces a directory in a blob row's way only with all it holds, its walk
-     * stopping at what no landing removes, --force included (core/deploy.c
-     * check_clearance), which status, reading no clearance, cannot tell apart.
-     * A link standing at a file row is a node the capture commits, so the [type]
-     * line says more than its row needs there (stated: the tag cannot tell the
-     * link from the directory). Every other row is a file row with a file or a
-     * link standing, whose bytes `apply --force` replaces, named with the path
-     * it lifts the skip at, since a bare one lifts every consent skip of the
-     * run, the edited copies other machines' deletions left among them. */
+     * workspace_capturable), which update skips whatever its flags (cmds/update.c
+     * update_partition) — so a [type] row's line names `dotta remove` instead,
+     * which stops tracking the path on every machine and keeps the node, its
+     * reach said with it, since a row on this machine reads as this machine's
+     * to settle, and never `apply --force`, which replaces a directory in a blob
+     * row's way only with all it holds, its walk stopping at what no landing
+     * removes, --force included (core/deploy.c check_clearance), which status,
+     * reading no clearance, cannot tell apart. A link standing at a file row is
+     * a node the capture commits, so the [type] line says more than its row needs
+     * there (stated: the tag cannot tell the link from the directory). Every
+     * other row is a file row with a file or a link standing, whose bytes `apply
+     * --force` replaces, named with the path it lifts the skip at, since a bare
+     * one lifts every consent skip of the run, the edited copies other machines'
+     * deletions left among them. */
     if (partition->conflicts.count > 0) {
         output_list_t *list = output_list_create(
             out, "Conflicts", "run 'dotta update --force <path>' to keep disk's"
@@ -727,20 +732,20 @@ static void status_print_workspace(
      * hold disk's bytes at the name (core/workspace.c workspace_ask_bases), so
      * nothing says whose move that is — the second bucket no default verb resolves,
      * beside the conflicts. Its title is the route's label (core/workspace.h
-     * workspace_route_t), which update's census and diff's status line say as a
-     * sentence where no title stands, so its header says the way out alone, as
-     * the Conflicts header does. Its header and its legend name the two sides
-     * as theirs do, each unqualified: every row is a file row with a regular
-     * file or a link standing — a directory row and every other kind answer at
-     * KIND, above — which a capture commits (core/workspace.h workspace_capturable)
-     * and `apply --force` replaces, named with its path. The header names disk's,
-     * the side that loses nothing, as the Conflicts header does, in the place
-     * such bytes most often want: a machine new to dotta, whose own files meet
-     * the profiles it clones, keeps them in a profile of its own, created and
-     * enabled above the others while the row's own keeps its version — where
-     * `update --force`, which takes these rows too (cmds/update.c
-     * update_partition), would commit them into the row's profile for every
-     * machine. The legend names Git's, true of every row. */
+     * workspace_route_t), which diff's status line says as a sentence where no
+     * title stands, so its header says the way out alone, as the Conflicts header
+     * does. Its header and its legend name the two sides as theirs do, each
+     * unqualified: every row is a file row with a regular file or a link standing
+     * — a directory row and every other kind answer at KIND, above — which a
+     * capture commits (core/workspace.h workspace_capturable) and `apply --force`
+     * replaces, named with its path. The header names disk's, the side that loses
+     * nothing, as the Conflicts header does, in the place such bytes most often
+     * want: a machine new to dotta, whose own files meet the profiles it clones,
+     * keeps them in a profile of its own, created and enabled above the others
+     * while the row's own keeps its version — where `update --force`, which takes
+     * these rows too (cmds/update.c update_partition), would commit them into
+     * the row's profile for every machine. The legend names Git's, true of every
+     * row. */
     if (partition->unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
@@ -764,8 +769,9 @@ static void status_print_workspace(
     /* Section 3: Squatted ancestors — a different kind stands at a directory
      * dotta only passes through (the route's KIND_DERIVED): never planned, so
      * no flag lifts it and no decision pends. The header opens with the route's
-     * words, as update's census and diff's status line say it, then its one verb,
-     * the named re-derivation, the word update's counted line already uses. */
+     * words, as diff's status line says it, then its one verb, the named
+     * re-derivation, the word update's summary says of it (cmds/update.c
+     * cmd_update). */
     if (partition->squatted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Squatted ancestors",

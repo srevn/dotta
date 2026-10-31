@@ -185,28 +185,28 @@ typedef enum {
  * status_print_workspace) — and a sentence that names both says "mode and
  * ownership", never "permissions", which is one word for two axes. STALE and
  * CLAIM_MOVED are one word: [stale] on a tag (workspace_item_line), and "changed
- * in Git" in a sentence — update's census (cmds/update.c cmd_update), apply's
- * count (cmds/apply.c cmd_apply) and skip label (cmds/apply.c apply_route_label),
- * diff's status line (cmds/diff.c diff_status_line), which names a claim's axes
- * in the act after it, this one bit for both axes attributing none — and "changed
- * in Git and on disk" where the route reads both sides moved (CONFLICT,
- * workspace_item_route): update's census, apply's skip label and diff's status
- * line, status's Conflicts header naming the way out instead (cmds/status.c
- * status_print_workspace). The words are the three-way frame's: Git's side differs
- * from what dotta last saw or left at the path — the record, save the mode of a
- * directory a run could not narrow back (core/deploy.h deploy_working_mode,
- * stated), or a first look where none stands: its claim, or a blob the row's
- * own branch held, which it found disk at. Read as "a commit moved it" they are
- * true of a move of Git's alone, and not of a claim dotta never saw disk stand
- * on, which the record cannot tell apart from one Git moved once the first flush
- * has written what the look found, nor of a blob disk held when dotta first looked,
- * which Git had moved past before it, nor of an owner no host here can name
- * (stated). The frame's other side, a move of the user's said in a clause of
- * its own, is "locally", never "here": what a capture commits — "modified locally",
- * "type changed locally", "<axes> changed locally" (workspace_route_t) — a
- * deletion's "deleted locally" on diff's status line, and status's Undeployed
- * legend, "gone locally" (cmds/status.c status_print_workspace); "changed in
- * Git and on disk" names both moves in one phrase, and keeps it.
+ * in Git" in a sentence — apply's count (cmds/apply.c cmd_apply) and skip label
+ * (cmds/apply.c apply_route_label), diff's status line (cmds/diff.c
+ * diff_status_line), which names a claim's axes in the act after it, this one
+ * bit for both axes attributing none — and "changed in Git and on disk" where
+ * the route reads both sides moved (CONFLICT, workspace_item_route): apply's
+ * skip label and diff's status line, status's Conflicts header naming the way
+ * out instead (cmds/status.c status_print_workspace). The words are the three-way
+ * frame's: Git's side differs from what dotta last saw or left at the path —
+ * the record, save the mode of a directory a run could not narrow back
+ * (core/deploy.h deploy_working_mode, stated), or a first look where none stands:
+ * its claim, or a blob the row's own branch held, which it found disk at. Read
+ * as "a commit moved it" they are true of a move of Git's alone, and not of a
+ * claim dotta never saw disk stand on, which the record cannot tell apart from
+ * one Git moved once the first flush has written what the look found, nor of a
+ * blob disk held when dotta first looked, which Git had moved past before it,
+ * nor of an owner no host here can name (stated). The frame's other side, a move
+ * of the user's said in a clause of its own, is "locally", never "here": what a
+ * capture commits — "modified locally", "type changed locally", "<axes> changed
+ * locally" (workspace_route_t) — a deletion's "deleted locally" on diff's status
+ * line, and status's Undeployed legend, "gone locally" (cmds/status.c
+ * status_print_workspace); "changed in Git and on disk" names both moves in one
+ * phrase, and keeps it.
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -276,9 +276,9 @@ typedef enum {
  *                       a path beneath it names the squatter's verb. At a lost
  *                       blob's place (core/manifest.c manifest_layer) no
  *                       re-derivation frees a DERIVED squatter, the blob's explicit
- *                       claim naming the path: the named one says to move the
- *                       node aside instead (cmds/update.c cmd_update), one hop
- *                       past the verb the screens name.
+ *                       claim naming the path: the named one re-derives nothing
+ *                       there (cmds/update.c cmd_update), and the way out — the
+ *                       node moved aside — is one no screen names (stated).
  *   RECORD              only a record remembers a directory there — the view
  *                       requires none — and none stands there: a record of a
  *                       directory with another kind of node in its place, or a
@@ -323,18 +323,18 @@ typedef enum {
  * another kind stands at is *squatted*, the path beneath it is *displaced* —
  * the tag, status's section, this class — and every sentence about such a path
  * opens "not looked at", the predicate its neighbours spell "locked", "cannot
- * be read" and "could not be verified". The three that name the squatter say
- * "beneath a squatted directory" (cmds/update.c cmd_update's four census lines,
- * cmds/diff.c diff_status_line, cmds/status.c status_print_workspace's legend
- * line for a displaced orphan), and where the squatter is dotta's own copy the
- * first two add its state in the squatter's own words — "changed in Git", "changed
- * in Git and on disk"; the Displaced paths header, where the word is grounded,
- * spells the squatter out instead; and apply's label for a row beneath a squatter
- * it skipped names the squatter by its path, "not looked at, beneath <dir>",
- * the squatter's own line listed above it (cmds/apply.c apply_print_deploy_skips).
- * A landing's reason is no such sentence: it names the way, never the look, and
- * apply's ANCESTOR says the squatter "is not a directory" — the one line that
- * names it where the run gives the squatter no fate.
+ * be read" and "could not be verified". The two that name the squatter say "beneath
+ * a squatted directory" (cmds/diff.c diff_status_line, cmds/status.c
+ * status_print_workspace's legend line for a displaced orphan), and where the
+ * squatter is dotta's own copy the first adds its state in the squatter's own
+ * words — "changed in Git", "changed in Git and on disk"; the Displaced paths
+ * header, where the word is grounded, spells the squatter out instead; and apply's
+ * label for a row beneath a squatter it skipped names the squatter by its path,
+ * "not looked at, beneath <dir>", the squatter's own line listed above it
+ * (cmds/apply.c apply_print_deploy_skips). A landing's reason is no such sentence:
+ * it names the way, never the look, and apply's ANCESTOR says the squatter "is
+ * not a directory" — the one line that names it where the run gives the squatter
+ * no fate.
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
@@ -427,10 +427,10 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * Why a look failed, by whose remedy it is — NONE where none did
  *
  * One field, two questions. Against NONE it answers the verb's: no verb resolves
- * an item a look failed at — apply skips it, update refuses it, cleanup skips
- * the orphan — and every engine asks it so. Its class answers the user's, what
- * do I do, and the things that can make a look fail have three different answers
- * to that: a missing key, a permission, and a list of one-offs no key or privilege
+ * an item a look failed at — apply skips it, update skips it, cleanup skips the
+ * orphan — and every engine asks it so. Its class answers the user's, what do I
+ * do, and the things that can make a look fail have three different answers to
+ * that: a missing key, a permission, and a list of one-offs no key or privilege
  * settles. One remedy over all three is how a locked path came to be told to
  * fix its permissions.
  *
@@ -477,23 +477,23 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  *
  * The words on screen: a tag says the class on every arm (workspace_item_line),
  * and a sentence says it "locked", "cannot be read" or "could not be verified"
- * — diff's status line (cmds/diff.c diff_status_line) and update's census
- * (cmds/update.c cmd_update) — where apply's label says "locked", "unreadable"
- * or "cannot verify" (cmds/apply.c apply_fault_label). Status's legends, beneath
- * Unverifiable paths and Orphaned paths (cmds/status.c status_print_workspace),
- * name the remedy alone, and "permissions refused the read" is update's census's,
- * after its word. The remedy is the class's:
+ * — diff's status line (cmds/diff.c diff_status_line) — where apply's label says
+ * "locked", "unreadable" or "cannot verify" (cmds/apply.c apply_fault_label).
+ * Status's legends, beneath Unverifiable paths and Orphaned paths (cmds/status.c
+ * status_print_workspace), name the remedy alone. Update says no class: its summary
+ * counts every failed look at a row under status's Unverifiable paths, whose
+ * rows each carry their own (cmds/update.c update_print_skipped). The remedy is
+ * the class's:
  *   LOCKED       the key, 'dotta key set', the switch first where encryption is
- *                off — status's legends, update's census, apply's key closers
+ *                off — status's legends, apply's key closers
  *   UNREADABLE   root, offered and never promised, to a run that holds none
  *                (sys/identity.h): "run under sudo to <its act>" on status's
  *                legends, "sudo may lift it" in its help (cmds/status.c
  *                spec_status), and "Run under sudo to <its act> them" closing
- *                update's census and apply's two skip blocks
+ *                apply's two skip blocks
  *   UNVERIFIED   none: status's Unverifiable paths header says what apply and
  *                update do with it, they skip it, as its Orphaned paths legend
- *                does of an orphan; update's census sends the user to the listing
- *                that names each path
+ *                does of an orphan
  *
  * Readers — the engines, which ask it against NONE: workspace_item_route (the
  * UNVERIFIABLE arm), workspace_untouched, the orphan analysis's directory pass
@@ -502,11 +502,10 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * and the screens: workspace_item_line (the tag — [locked] / [unreadable] /
  * [unverified], the same word on every arm — and the line's magenta beside it),
  * cmds/status.c status_print_summary (the workspace's line) and
- * status_print_workspace (Unverifiable's legend and Orphaned paths'), cmds/update.c
- * update_partition and cmd_update's census, cmds/apply.c apply_fault_label,
- * apply_consent_label and the sudo and key closers of apply_print_deploy_skips
- * and apply_print_cleanup_skips, and cmds/diff.c's status line (diff_status_line).
- * A reader not on this list is a bug.
+ * status_print_workspace (Unverifiable's legend and Orphaned paths'), cmds/apply.c
+ * apply_fault_label, apply_consent_label and the sudo and key closers of
+ * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's status
+ * line (diff_status_line). A reader not on this list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
@@ -514,10 +513,6 @@ typedef enum {
     WORKSPACE_FAULT_UNREADABLE,   /* Refused by permissions — sudo may lift it */
     WORKSPACE_FAULT_UNVERIFIED    /* Anything else — no remedy dotta can name */
 } workspace_fault_t;
-
-/* The classes' arity, for an array with one slot per class. A macro, not an
- * enumerator, for the reason WORKSPACE_ROUTE_COUNT is one. */
-#define WORKSPACE_FAULT_COUNT (WORKSPACE_FAULT_UNVERIFIED + 1)
 
 /**
  * One path the workspace knows — a row of the view, a record the view lacks, or
@@ -1090,7 +1085,8 @@ static inline bool workspace_untouched(const workspace_item_t *item) {
  *
  * Readers: workspace_item_route (the KIND rung: a kind Git did not move that no
  * capture commits), cmds/update.c update_partition (whether --force takes a
- * conflict or bytes no base proves), cmds/apply.c apply_print_deploy_skips (whether
+ * conflict or bytes no base proves — asked of a KIND too, the conflicts' section
+ * mate, which it always refuses), cmds/apply.c apply_print_deploy_skips (whether
  * a consent skip has a disk-wins verb), cmds/diff.c diff_status_line (whether a
  * conflict's downstream line names one). A reader not on this list is a bug.
  */
@@ -1264,16 +1260,15 @@ typedef struct {
  *                                  work at no cost to the user (workspace.c
  *                                  workspace_item_line)
  *   status's section partition     every arm, one bucket each
- *   update's filter                every arm, each its own answer: CAPTURE
- *                                  accepted, and under --force CONFLICT and
- *                                  UNCONFIRMED at a node a capture commits
- *                                  (workspace_capturable); every other arm refused
- *                                  and counted under its route, one slot per
- *                                  arm (WORKSPACE_ROUTE_COUNT), which the census
- *                                  reads back as one line per refusing arm —
- *                                  the census the one reader the compiler does
- *                                  not hold to the table: an arm the filter refuses
- *                                  needs its line there
+ *   update's filter                every arm, an arm a section as status's
+ *                                  partition files them: CAPTURE accepted, and
+ *                                  under --force CONFLICT and UNCONFIRMED at a
+ *                                  node a capture commits (workspace_capturable);
+ *                                  every other arm skipped and counted under
+ *                                  the section status lists it in, which the
+ *                                  summary says in status's titles (cmds/update.c
+ *                                  update_print_skipped); REASSIGNED and CLEAN
+ *                                  neither taken nor counted
  *   apply's skip label             CONFLICT, STALE, KIND, UNCONFIRMED, CAPTURE:
  *                                  a TYPE or a CONTENT skip's at its row's own
  *                                  path (cmds/apply.c apply_route_label)
@@ -1297,19 +1292,20 @@ typedef struct {
  * arms (workspace_displaced_t), the failed look's for UNVERIFIABLE
  * (workspace_fault_t). A sentence says the route, a tag the bit: [type] stands
  * beside every arm a kind reaches.
- *   KIND           "a different kind stands on disk" — update's census, diff's
- *                  status line — and "a different kind" on apply's skip label
+ *   KIND           "a different kind stands on disk" — diff's status line —
+ *                  and "a different kind" on apply's skip label
  *   KIND_DERIVED   "a different kind stands at a directory dotta only passes
- *                  through" — status's Squatted ancestors header, update's census,
- *                  diff's status line
+ *                  through" — status's Squatted ancestors header, diff's status
+ *                  line
  *   UNCONFIRMED    "not confirmed by dotta", a sentence where no title stands —
- *                  update's census, diff's status line — and the label beside
- *                  it: "Unconfirmed paths", the title of status's section and
- *                  of update's preview under --force (cmds/update.c
- *                  update_print_preview), each header saying the way out alone,
- *                  and "unconfirmed" on apply's skip label; the sentence is
- *                  apply_consent_label's too, of an orphan whose record confirmed
- *                  no bytes: the same fact, read off no route (cmds/apply.c)
+ *                  diff's status line — and the label beside it: "Unconfirmed
+ *                  paths", the title of status's section and of update's preview
+ *                  under --force (cmds/update.c update_print_preview), each header
+ *                  saying the way out alone, the noun of update's skipped count
+ *                  (cmds/update.c update_print_skipped), and "unconfirmed" on
+ *                  apply's skip label; the sentence is apply_consent_label's
+ *                  too, of an orphan whose record confirmed no bytes: the same
+ *                  fact, read off no route (cmds/apply.c)
  *   CAPTURE        what moved, by the bit, the kind first — "type changed
  *                  locally", "modified locally", "<axes> changed locally" — diff's
  *                  status line; the first two on apply's skip label, a claim
@@ -1364,11 +1360,6 @@ typedef enum {
     WORKSPACE_ROUTE_CAPTURE,            /* Any other divergence — update's to commit */
     WORKSPACE_ROUTE_REASSIGNED          /* No divergence; the record names another profile */
 } workspace_route_t;
-
-/* The table's arity, for an array with one slot per arm. A macro, not an
- * enumerator: the switches over the table are exhaustive and must not have to
- * name a sentinel. */
-#define WORKSPACE_ROUTE_COUNT (WORKSPACE_ROUTE_REASSIGNED + 1)
 
 /**
  * Decide which verb's work a deployed item is, from the item alone
@@ -1476,7 +1467,7 @@ typedef enum {
  *                            workspace_ask_bases), a blob it held reading STALE
  *                            above: nothing proves the user moved, nor that Git
  *                            did, and no default rests on what is not known. A
- *                            plain update refuses it — its capture would commit
+ *                            plain update skips it — its capture would commit
  *                            bytes nobody has shown are the user's over the
  *                            profile's — and apply skips it, as it skips any
  *                            edit, since they may be bytes Git lacks: apply --force
@@ -1485,13 +1476,13 @@ typedef enum {
  *                            keeps them in a profile of their own, the place a
  *                            machine new to dotta most often wants and the one
  *                            the screens name (cmds/status.c
- *                            status_print_workspace, cmds/update.c cmd_update,
- *                            cmds/apply.c apply_print_deploy_skips). A kind a
- *                            capture commits (file ↔ symlink on a file row) reads
- *                            here too, every other kind having answered at KIND
- *                            above, whose remedies are its own; and so does a
- *                            claim of Git's riding beside the bytes, which never
- *                            makes them "changed in Git and on disk".
+ *                            status_print_workspace, cmds/apply.c
+ *                            apply_print_deploy_skips). A kind a capture commits
+ *                            (file ↔ symlink on a file row) reads here too, every
+ *                            other kind having answered at KIND above, whose
+ *                            remedies are its own; and so does a claim of Git's
+ *                            riding beside the bytes, which never makes them
+ *                            "changed in Git and on disk".
  *   CLAIM_MOVED beside       CONFLICT — a claim Git's to bring (divergence_type_t:
  *     CONTENT ∨ TYPE         moved past the record's, or naming an owner this host
  *                            cannot resolve) beside an edit a base proves the
@@ -1796,7 +1787,8 @@ error_t workspace_load(
  * the workspace's lifetime.
  *
  * The scan's items follow every other item, an order a reader may keep:
- * cmds/update.c cmd_update declines the new files as its accepted items' suffix.
+ * cmds/update.c cmd_update leaves the new files out as its accepted items' suffix,
+ * and update_print_skipped counts them off it.
  *
  * Every item it holds has something to say: a state but DEPLOYED, or a DEPLOYED
  * item the route does not call clean (workspace_item_route) — a squatter above

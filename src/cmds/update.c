@@ -27,7 +27,6 @@
 #include "infra/content.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
-#include "sys/identity.h"
 #include "utils/hooks.h"
 
 /**
@@ -163,18 +162,24 @@ typedef struct {
  * route, and under --force one on either route no default takes, a conflict or
  * bytes no base proves, where the capture commits the node standing
  * (core/workspace.h workspace_capturable); a deleted path; a new file under a
- * tracked directory when a flag or the config asked for it. Refused — a deployed
- * item on any other route (workspace_item_route), counted under that route so
- * the census names the table's own reason; a multi-bit divergence counts under
- * the route that refused it. Unscanned — a place the scan could not look: never
- * accepted, since what it could not judge may be what Git excludes, and listed
- * by path rather than counted (cmd_update), since no route refused it and status
- * lists it only where the config scans. Or neither — a state that is another
- * verb's, and, under --only-new, every deployed and deleted item: the user asked
- * about new files, nothing about the others answers that, so none is accepted
- * and none is counted (a refused route would name a reason the user did not ask
- * for) — but a directory the load could not look at, beneath which the scan never
- * looked either, which is counted under its route.
+ * tracked directory when a flag or the config asked for it. Skipped — a deployed
+ * item on any other route (workspace_item_route), and a row no copy stands at
+ * yet, each counted under the section status lists it in (cmds/status.c
+ * status_partition_t), so the summary names what the run left in status's words
+ * (update_print_skipped) and a count is status's where the scopes agree; a
+ * multi-bit divergence counts once, in the section of the route that skipped
+ * it. Unscanned — a place the scan could not look: never accepted, since what
+ * it could not judge may be what Git excludes, and listed by path rather than
+ * counted (cmd_update), since this run may have scanned on its own flag where
+ * status, which scans only where the config asks, has no row of it — where it
+ * has one, its Unverifiable paths lists it beside the failed looks the count of
+ * that name holds. Or neither — a reassignment apply settles in the record alone,
+ * an orphan's state, which this load never makes, and, under --only-new, every
+ * deployed, deleted and undeployed item: the user asked about new files, nothing
+ * about the others answers that, so none is accepted and none is counted (a skip
+ * would name a section the user did not ask about) — but a directory the load
+ * could not look at, beneath which the scan never looked either, which is counted
+ * among the skipped.
  *
  * An accepted item is answered by its fate as well — the preview lists one section
  * per fate, and the new-files prompt counts new_files. The modified fate splits
@@ -196,20 +201,23 @@ typedef struct {
  * workspace_buckets_t), each in the diverged items' order, in the arena the
  * partition was made in — the items borrowed, the workspace's. The discoveries
  * follow every other diverged item (workspace_diverged), so the new files are
- * accepted's suffix: what cmd_update's decline drops.
+ * accepted's suffix: what cmd_update's question drops, and what the summary counts
+ * beside the skipped (update_print_skipped).
+ *
+ * The skipped counts are status's sections, folded off the route table here as
+ * status_partition folds them there — two folds the compiler holds to the table
+ * and not to each other, so a section moved there moves its count here. The one
+ * section of this load they leave out is the reassignments, which ask nothing
+ * of the disk or the user — apply acknowledges them in the record alone — as
+ * status's workspace line leaves them uncounted (cmds/status.c
+ * status_print_summary).
  *
  * The equation: in-scope deployed items no pattern spared = accepted deployed ∪
- * Σ refused[arm], by one switch that routes each item once — nothing is counted
- * twice, nothing falls through. The UNVERIFIABLE arm keeps a second index beside
- * it, for the same reason the first one exists: one route, three ways out
- * (workspace_fault_t), and the census prints a line per class. Σ faults[f] ==
- * refused[UNVERIFIABLE], and faults[NONE] is zero by construction: the route is
- * UNVERIFIABLE exactly where the fault is not NONE. CAPTURE's slot stays zero
- * (that arm is accepted) and CLEAN's (the diverged items hold no clean row);
- * under --force UNCONFIRMED's too — every such row is one a capture commits,
- * KIND answering first — and CONFLICT's counts the conflicts across file and
- * directory alone; REASSIGNED's counts a reassignment the census has no line
- * for — apply acknowledges it, the filter only declines it.
+ * skipped deployed ∪ the reassignments, by one switch that routes each item once
+ * — nothing is counted twice, nothing falls through, and the diverged items hold
+ * no clean row. Under --force the unconfirmed count is zero — every such row is
+ * one a capture commits, KIND answering first — and the conflicts count every
+ * KIND and the conflicts across file and directory alone.
  */
 typedef struct {
     workspace_items_t accepted;              /* The run's work */
@@ -224,8 +232,16 @@ typedef struct {
 
     workspace_items_t excluded;              /* In scope, spared by -e — traced, never touched */
     workspace_items_t unscanned;             /* In scope, where the scan could not look — listed, never taken */
-    size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
-    size_t faults[WORKSPACE_FAULT_COUNT];    /* The UNVERIFIABLE arm again — by whose remedy the look is */
+
+    /* In scope, skipped — by the section status lists each in */
+    struct {
+        size_t conflicts;                    /* CONFLICT --force did not take, and KIND */
+        size_t unconfirmed;                  /* UNCONFIRMED --force did not take */
+        size_t squatted;                     /* KIND_DERIVED */
+        size_t displaced;                    /* DISPLACED_*: beneath a squatter, not looked at */
+        size_t unverifiable;                 /* UNVERIFIABLE: a look at a row that failed */
+        size_t undeployed;                   /* STALE, and UNDEPLOYED: apply's */
+    } skipped;
 } update_partition_t;
 
 /**
@@ -290,18 +306,18 @@ static void update_partition(
             case WORKSPACE_STATE_DEPLOYED: {
                 /* The route table partitions the deployed items — the same producer
                  * status's sections read (workspace_item_route; workspace.h carries
-                 * each arm's why), one arm each as status files them, so the
-                 * compiler holds this filter to the table. CAPTURE is update's
+                 * each arm's why), one arm a section as status files them, so
+                 * the compiler holds this filter to the table. CAPTURE is update's
                  * own, and the two arms no default takes, CONFLICT and UNCONFIRMED,
-                 * are its under --force; every other arm is refused and counted
-                 * under its route, so the preview never promises an update the
-                 * executor would refuse and the census says why in the table's
-                 * words. Under --only-new the user asked about new files alone:
-                 * neither accepted nor counted — but a directory the load could
-                 * not look at, beneath which the scan did not look either (no
-                 * root is registered where the join's look failed, and the walk
-                 * adds no item where a rung's did), so the new files asked for
-                 * may stand there. */
+                 * are its under --force; every other arm is skipped, counted
+                 * under its section, so the preview never promises an update
+                 * the executor would refuse and the summary names what the run
+                 * left in status's words. Under --only-new the user asked about
+                 * new files alone: neither accepted nor counted — but a directory
+                 * the load could not look at, beneath which the scan did not
+                 * look either (no root is registered where the join's look failed,
+                 * and the walk adds no item where a rung's did), so the new files
+                 * asked for may stand there. */
                 const workspace_route_t route = workspace_item_route(item);
                 if (opts->only_new && (route != WORKSPACE_ROUTE_UNVERIFIABLE ||
                     item->item_kind != PATH_KIND_DIRECTORY)) {
@@ -322,16 +338,22 @@ static void update_partition(
                         break;
 
                     case WORKSPACE_ROUTE_CONFLICT:
-                        /* Both sides moved: under --force disk's, where the capture
-                         * commits the node standing (workspace_capturable) —
-                         * never a change across file and directory, which STALE
-                         * answers before KIND. Its fate is an edit's, its line's
-                         * [stale] saying the commit goes over a move of Git's */
+                    /* Both sides moved: under --force disk's, where the capture
+                     * commits the node standing (workspace_capturable) — never
+                     * a change across file and directory, which STALE answers
+                     * before KIND. Its fate is an edit's, its line's [stale]
+                     * saying the commit goes over a move of Git's */
+                    case WORKSPACE_ROUTE_KIND:
+                        /* A kind no capture commits, Git having moved nothing
+                         * past it: the ladder reads KIND only where
+                         * workspace_capturable answers no, so no --force takes
+                         * one, and it is counted beside the conflicts, as status
+                         * files it */
                         if (opts->force && workspace_capturable(item)) {
                             workspace_buckets_add(buckets, item, &partition->modified_files);
                             break;
                         }
-                        partition->refused[route]++;
+                        partition->skipped.conflicts++;
                         continue;
 
                     case WORKSPACE_ROUTE_UNCONFIRMED:
@@ -344,28 +366,41 @@ static void update_partition(
                             workspace_buckets_add(buckets, item, &partition->unconfirmed);
                             break;
                         }
-                        partition->refused[route]++;
+                        partition->skipped.unconfirmed++;
                         continue;
 
-                    case WORKSPACE_ROUTE_UNVERIFIABLE:
-                        /* A look that failed, counted again by whose remedy it
-                         * is: the census says a line per class */
-                        partition->refused[route]++;
-                        partition->faults[item->fault]++;
+                    case WORKSPACE_ROUTE_KIND_DERIVED:
+                        /* A kind at a rung dotta only passes through, which no
+                         * flag lifts: the squatted ancestors */
+                        partition->skipped.squatted++;
                         continue;
 
-                    case WORKSPACE_ROUTE_CLEAN:
                     case WORKSPACE_ROUTE_DISPLACED_TRACKED:
                     case WORKSPACE_ROUTE_DISPLACED_DERIVED:
                     case WORKSPACE_ROUTE_DISPLACED_STALE:
                     case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
+                        /* Beneath a squatter, not looked at: one section whoever
+                         * the squatter is, its own section naming the way out */
+                        partition->skipped.displaced++;
+                        continue;
+
+                    case WORKSPACE_ROUTE_UNVERIFIABLE:
+                        /* A look that failed, whatever its class */
+                        partition->skipped.unverifiable++;
+                        continue;
+
                     case WORKSPACE_ROUTE_STALE:
-                    case WORKSPACE_ROUTE_KIND:
-                    case WORKSPACE_ROUTE_KIND_DERIVED:
+                        /* Git moved and disk did not follow: apply's, beside
+                         * the rows no copy stands at yet */
+                        partition->skipped.undeployed++;
+                        continue;
+
                     case WORKSPACE_ROUTE_REASSIGNED:
-                        /* Another verb's, or no verb's by default: the census's
-                         * line says which, off this count */
-                        partition->refused[route]++;
+                    /* Apply's, in the record alone: neither taken nor counted
+                     * (update_partition_t) */
+                    case WORKSPACE_ROUTE_CLEAN:
+                        /* None: a diverged item has something to say
+                         * (workspace_diverged) */
                         continue;
                 }
 
@@ -404,22 +439,28 @@ static void update_partition(
             case WORKSPACE_STATE_UNSCANNED:
                 /* Where the scan could not look: never accepted — what it could
                  * not judge may be what Git excludes — and listed by path, not
-                 * counted (cmd_update): no route refused it, and status may not
-                 * have it */
+                 * counted (cmd_update): this run may have scanned on its own
+                 * flag, and status may have no row of it */
                 workspace_buckets_add(buckets, item, &partition->unscanned);
                 continue;
 
             case WORKSPACE_STATE_UNDEPLOYED:
+                /* A row no copy stands at yet: apply's to deploy, counted where
+                 * status lists it, beside a move of Git's disk has not followed
+                 * — unless the user asked about new files alone */
+                if (opts->only_new) continue;
+                partition->skipped.undeployed++;
+                continue;
+
             case WORKSPACE_STATE_ORPHANED:
             case WORKSPACE_STATE_RELEASED:
             case WORKSPACE_STATE_OVERRIDDEN:
             case WORKSPACE_STATE_OBSTRUCTING:
-                /* Another verb's: not deployed yet (apply's), a record the view
-                 * lacks (cleanup prunes or releases it), a copy beneath a blob,
-                 * which that blob's landing clears, or dotta's node above a row,
-                 * which the landing beneath it replaces — never update's to commit,
-                 * and the four orphans' never met here: this load declines their
-                 * analysis */
+                /* Another verb's: a record the view lacks (cleanup prunes or
+                 * releases it), a copy beneath a blob, which that blob's landing
+                 * clears, or dotta's node above a row, which the landing beneath
+                 * it replaces — never update's to commit, and never met here:
+                 * this load declines the orphans' analysis */
                 continue;
         }
 
@@ -681,7 +722,7 @@ static error_t update_profile(
      * tracked directory having a chain of its own; and never over a deleted item
      * — the absence of a leaf says nothing about the chain that led to it. This
      * trigger authors but structurally never retires: a leaf beneath a squatted
-     * rung was refused at the filter (the route's displaced arms), whichever
+     * rung was skipped at the filter (the route's displaced arms), whichever
      * profile's claim the squatter displaced, so a chain that reaches here holds
      * directories at every claimed rung. Its two outs count the claims it authored
      * and the ones it retired, for the lines below, the record of each the next
@@ -1163,14 +1204,15 @@ static void update_print_preview(
      * (core/workspace.c workspace_analyze_orphans), its content and its claim
      * (core/cleanup.h cleanup_skip_reason). Where another profile claims the
      * path, its claim takes the place instead, and the line names it — the header
-     * true of it all the same, since the copy goes. A copy dotta only observed,
-     * which no apply on its machine has adopted, is released however unchanged:
-     * the one the header leaves out (stated). */
+     * true of it all the same, since the copy goes — the reach in the words
+     * status's Uncommitted changes legend gives it (cmds/status.c
+     * status_print_workspace). A copy dotta only observed, which no apply on
+     * its machine has adopted, is released however unchanged: the one the header
+     * leaves out (stated). */
     if (partition->deleted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Deleted paths",
-            "will be deleted from their profiles, and every machine's next apply "
-            "deletes their unchanged copies"
+            "will be deleted from their profiles, with every machine's unchanged copy"
         );
 
         /* The view's profiles, lowest precedence first, each asked below for
@@ -1215,11 +1257,12 @@ static void update_print_preview(
     }
 
     /* Display modified directories section — the deployed directories, whose
-     * capture is their claim */
+     * capture is their claim: committed as a file's is, in the act the other
+     * sections say */
     if (partition->modified_dirs.count > 0) {
         output_list_t *list = output_list_create(
             out, "Modified directories",
-            "directory metadata will be updated"
+            "will be committed to their profiles"
         );
 
         for (size_t i = 0; i < partition->modified_dirs.count; i++) {
@@ -1234,11 +1277,15 @@ static void update_print_preview(
     }
 
     /* Display encryption policy violations section — the deployed violators the
-     * commit seals, a path bit beside each or not */
+     * commit seals, a path bit beside each or not: the one place a reader sees
+     * every file the commit seals, an edited violator among the modifications
+     * too (update_partition_t). Its header says the act and the way out, as a
+     * status header does: the policy decides the seal (core/policy.h), so a file
+     * meant to stay plaintext leaves the patterns before the commit */
     if (partition->unencrypted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Encryption policy violations",
-            "match auto-encrypt patterns but are stored as plaintext"
+            "will be encrypted; narrow auto_encrypt to keep one plaintext"
         );
 
         for (size_t i = 0; i < partition->unencrypted.count; i++) {
@@ -1250,17 +1297,67 @@ static void update_print_preview(
 
         output_list_render(list);
         output_list_free(list);
+    }
+}
 
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
-            out, OUTPUT_NORMAL, "These files will be encrypted on the next commit, "
-            "per auto_encrypt in your config's [encryption] section"
-        );
-        output_info(
-            out, OUTPUT_NORMAL, "To keep a file as plaintext, "
-            "narrow the pattern that matches it before this commit"
+/**
+ * Say what the run skipped: the summary's line before its arm's own
+ *
+ * One clause a section the run left something in, in status's titles and in its
+ * order (cmds/status.c status_print_workspace), so each count reads as the section
+ * that lists those paths with their way out — the skipped counts
+ * (update_partition_t), then the new files the question left out, status's New
+ * files. Nothing where the run skipped nothing. Said at each of the run's three
+ * ends (cmd_update: the nothing-exit, the dry run, the run's line), the line
+ * before its arm's, so every arm's verdict is the last word of the summary.
+ *
+ * @param ctx Dispatch context (must not be NULL; the clauses are joined in its
+ *            arena)
+ * @param partition The partition, whose skipped counts are read (must not be NULL)
+ * @param work The run's work: the accepted items, less the new files where the
+ *             question left them out
+ */
+static void update_print_skipped(
+    const dotta_ctx_t *ctx,
+    const update_partition_t *partition,
+    workspace_items_t work
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(partition);
+
+    /* Status's section titles in its order, the new files the question left out
+     * last: the discoveries are accepted's suffix (update_partition_t), so the
+     * work lacks exactly them — none where nothing was asked */
+    const struct {
+        size_t count;
+        const char *word;
+    } parts[] = {
+        { partition->skipped.conflicts,           "conflict"          },
+        { partition->skipped.unconfirmed,         "unconfirmed path"  },
+        { partition->skipped.squatted,            "squatted ancestor" },
+        { partition->skipped.displaced,           "displaced path"    },
+        { partition->skipped.unverifiable,        "unverifiable path" },
+        { partition->skipped.undeployed,          "undeployed change" },
+        { partition->accepted.count - work.count, "new file"          },
+    };
+
+    string_array_t clauses;
+    string_array_init(&clauses, ctx->arena, 0);
+    for (size_t k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) {
+        if (parts[k].count == 0) continue;
+
+        string_array_pushf(
+            &clauses, "%zu %s%s", parts[k].count, parts[k].word,
+            parts[k].count == 1 ? "" : "s"
         );
     }
+    if (clauses.count == 0) return;
+
+    /* One line, composed first, since a summary's line is said whole and a count
+     * joined into a phrase is a datum, uncoloured (base/output.h "Layout and
+     * data") */
+    const char *phrase = string_array_join(ctx->arena, &clauses, ", ");
+    output_summary(ctx->out, OUTPUT_NORMAL, "Skipped: %s", phrase);
 }
 
 /**
@@ -1339,9 +1436,10 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (err) return err;
 
     /* The run's filter context, ahead of everything the filter says against it:
-     * the verbose "Excluded" log, the census, the preview and the nothing-exit.
-     * Verbose, as the log it heads is: at NORMAL it would say back the flags
-     * the user typed, the nothing-exit naming the two modes in its own words */
+     * the verbose "Excluded" log, the places the scan could not look, the preview
+     * and the summary. Verbose, as the log it heads is: at NORMAL it would say
+     * back the flags the user typed, the nothing-exit naming the two modes in
+     * its own words */
     if (opts->only_new) {
         output_info(
             out, OUTPUT_VERBOSE,
@@ -1380,194 +1478,6 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         output_info(
             out, OUTPUT_VERBOSE, "Excluded: %s",
             partition.excluded.entries[i]->filesystem_path
-        );
-    }
-
-    /* What the filter refused, said once — above the exit below, so a workspace
-     * whose only divergence is stale explains itself, and above the prompt. One
-     * line per refusing arm, read off the partition's counts in the table's order
-     * (workspace_item_route), each naming its route's way out. The displaced
-     * four are the squatter's own route inherited, each naming the squatter's
-     * verb — the split apply prints from the fate-borne ancestry: DISPLACED_TRACKED
-     * beneath the user's squatter a plan holds, which --force replaces;
-     * DISPLACED_DERIVED beneath the user's squatter at a rung, which the named
-     * re-derivation retires; DISPLACED_STALE and DISPLACED_CONFLICT beneath dotta's
-     * own copy Git moved past, said in the squatter's own words, which apply
-     * replaces unasked and under --force. And the retyped pair arrives split
-     * from the route by the claim that holds the offender (KIND on a row a plan
-     * can hold, KIND_DERIVED on a rung dotta only passes through). A run that
-     * names paths is the named re-derivation itself, so its two DERIVED lines
-     * say what was skipped and name no remedy: what came of the climb beneath
-     * the user's squatter at a rung is the run's own outcome to say — its receipt,
-     * or, at a lost blob's place, the line below the leaves' gather. Under --force
-     * the two arms no default takes count only what the flag could not take
-     * (update_partition): CONFLICT a change across file and directory, said in
-     * its own words as a named run's DERIVED lines are, and UNCONFIRMED nothing,
-     * so its line never prints. A line that names `dotta remove` names its reach
-     * with it, every machine: the removal is the profile's, so every machine's
-     * next apply lets its copy go, where the path skipped here reads as this
-     * machine's to settle (status's [type] legend says it the same way). The
-     * lines are one block: one boundary above them, asked here and paid by
-     * whichever of them is the first to print — a block that says nothing leaves
-     * the debt standing for the next one (base/output.h). */
-    const size_t *refused = partition.refused;
-    output_gap(out, OUTPUT_NORMAL);
-
-    if (refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: not looked at, beneath a squatted directory — "
-            "'dotta apply --force <dir>' replaces the squatter first",
-            refused[WORKSPACE_ROUTE_DISPLACED_TRACKED],
-            refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] == 1 ? "" : "s"
-        );
-    }
-    if (refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, opts->path_count > 0
-                ? "%zu path%s skipped: not looked at, beneath a squatted directory"
-                : "%zu path%s skipped: not looked at, beneath a squatted directory — "
-            "'dotta update <dir>' re-derives the way there",
-            refused[WORKSPACE_ROUTE_DISPLACED_DERIVED],
-            refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] == 1 ? "" : "s"
-        );
-    }
-    if (refused[WORKSPACE_ROUTE_DISPLACED_STALE] > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: not looked at, beneath a squatted directory changed "
-            "in Git — 'dotta apply' replaces the squatter first",
-            refused[WORKSPACE_ROUTE_DISPLACED_STALE],
-            refused[WORKSPACE_ROUTE_DISPLACED_STALE] == 1 ? "" : "s"
-        );
-    }
-    if (refused[WORKSPACE_ROUTE_DISPLACED_CONFLICT] > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: not looked at, beneath a squatted directory changed "
-            "in Git and on disk — 'dotta apply --force <dir>' replaces the squatter "
-            "first",
-            refused[WORKSPACE_ROUTE_DISPLACED_CONFLICT],
-            refused[WORKSPACE_ROUTE_DISPLACED_CONFLICT] == 1 ? "" : "s"
-        );
-    }
-    if (refused[WORKSPACE_ROUTE_UNVERIFIABLE] > 0) {
-        /* One arm, up to three lines — by whose remedy the failed look is
-         * (workspace_fault_t), because one sentence over the three is how a locked
-         * path came to be told to fix its permissions. The key's rows name the
-         * verb that unlocks them, and the switch first where encryption is off;
-         * the unreadable ones the permissions that refused the read, and root,
-         * offered, where the run holds none — never a fix by hand for a path
-         * dotta could not read, nor -e, which ignores a skip and remedies nothing;
-         * the rest have no remedy to name and point at the listing that names
-         * each path. */
-        const size_t *faults = partition.faults;
-
-        if (faults[WORKSPACE_FAULT_LOCKED] > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, config->encryption_enabled
-                    ? "%zu path%s skipped: locked — run 'dotta key set'"
-                    : "%zu path%s skipped: locked, and encryption is disabled — set "
-                "encryption.enabled = true, then run 'dotta key set'",
-                faults[WORKSPACE_FAULT_LOCKED],
-                faults[WORKSPACE_FAULT_LOCKED] == 1 ? "" : "s"
-            );
-        }
-        if (faults[WORKSPACE_FAULT_UNREADABLE] > 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "%zu path%s skipped: cannot be read — permissions refused the read",
-                faults[WORKSPACE_FAULT_UNREADABLE],
-                faults[WORKSPACE_FAULT_UNREADABLE] == 1 ? "" : "s"
-            );
-            if (!identity()->privileged) {
-                output_info(out, OUTPUT_NORMAL, "  Run under sudo to read them");
-            }
-        }
-        if (faults[WORKSPACE_FAULT_UNVERIFIED] > 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "%zu path%s skipped: could not be verified — 'dotta status' lists %s",
-                faults[WORKSPACE_FAULT_UNVERIFIED],
-                faults[WORKSPACE_FAULT_UNVERIFIED] == 1 ? "" : "s",
-                faults[WORKSPACE_FAULT_UNVERIFIED] == 1 ? "it" : "them"
-            );
-        }
-    }
-    if (refused[WORKSPACE_ROUTE_CONFLICT] > 0) {
-        /* A kind both sides moved among them: a directory row's too, and update
-         * --force keeps disk's only where the kind matches — where the capture
-         * commits the node standing (core/workspace.h workspace_capturable) —
-         * so under it the arm counts a change across file and directory alone,
-         * said in its own words as the KIND line below says its. apply --force
-         * replaces a directory only with all it holds, which no load reads
-         * (core/deploy.c check_clearance), and each --force is named with its
-         * path, for the reasons status's Conflicts section gives */
-        output_info(
-            out, OUTPUT_NORMAL, opts->force
-                ? "%zu path%s skipped: changed in Git and on disk, and a different kind "
-            "stands on disk — 'dotta apply --force <path>' keeps Git's (a directory "
-            "only if all dotta's), 'dotta remove' stops tracking %s on every machine"
-                : "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
-            "'dotta apply --force <path>' keeps Git's (a directory only if all dotta's), "
-            "'dotta update --force <path>' keeps disk's when the kind matches, "
-            "'dotta remove' stops tracking %s on every machine",
-            refused[WORKSPACE_ROUTE_CONFLICT],
-            refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "" : "s",
-            refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "it" : "them"
-        );
-    }
-    if (refused[WORKSPACE_ROUTE_STALE] > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: changed in Git — run 'dotta apply' first",
-            refused[WORKSPACE_ROUTE_STALE],
-            refused[WORKSPACE_ROUTE_STALE] == 1 ? "" : "s"
-        );
-    }
-    if (refused[WORKSPACE_ROUTE_KIND] > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: a different kind stands on disk — "
-            "'dotta apply --force <path>' replaces %s (a directory only if all "
-            "dotta's), 'dotta remove' stops tracking %s on every machine",
-            refused[WORKSPACE_ROUTE_KIND],
-            refused[WORKSPACE_ROUTE_KIND] == 1 ? "" : "s",
-            refused[WORKSPACE_ROUTE_KIND] == 1 ? "it" : "them",
-            refused[WORKSPACE_ROUTE_KIND] == 1 ? "it" : "them"
-        );
-    }
-    if (refused[WORKSPACE_ROUTE_KIND_DERIVED] > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, opts->path_count > 0
-                ? "%zu path%s skipped: a different kind stands at a directory dotta "
-            "only passes through"
-                : "%zu path%s skipped: a different kind stands at a directory dotta "
-            "only passes through — 'dotta update <dir>' re-derives %s",
-            refused[WORKSPACE_ROUTE_KIND_DERIVED],
-            refused[WORKSPACE_ROUTE_KIND_DERIVED] == 1 ? "" : "s",
-            refused[WORKSPACE_ROUTE_KIND_DERIVED] == 1 ? "it" : "them"
-        );
-    }
-    if (refused[WORKSPACE_ROUTE_UNCONFIRMED] > 0) {
-        /* Bytes no base proves: a plain update would commit what nobody has shown
-         * is the user's over the profile's. Each way out unqualified: every such
-         * row is a file row with a file or a link standing — one a capture commits
-         * (core/workspace.h workspace_capturable), KIND answering first — which
-         * apply --force replaces, named with its path, and which disk keeps in
-         * the place status's Unconfirmed header names: a profile of its own,
-         * what a machine new to dotta most often wants, where update --force
-         * would commit it into the row's profile for every machine. Under --force
-         * the arm counts none, every such row taken (update_partition) */
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: not confirmed by dotta — 'dotta diff' compares, "
-            "'dotta apply --force <path>' keeps Git's, 'dotta add <new profile> <path>' "
-            "keeps disk's in a profile of its own, 'dotta remove' stops tracking %s on "
-            "every machine",
-            refused[WORKSPACE_ROUTE_UNCONFIRMED],
-            refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "" : "s",
-            refused[WORKSPACE_ROUTE_UNCONFIRMED] == 1 ? "it" : "them"
         );
     }
 
@@ -1614,7 +1524,6 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         const manifest_row_t **leaves = NULL;
         size_t leaf_count = 0;
         size_t leaf_capacity = 0;
-        size_t refused_leaves = 0;
 
         for (size_t i = 0; i < active.count; i++) {
             const workspace_item_t *item = active.entries[i];
@@ -1649,9 +1558,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
              * (core/manifest.c manifest_layer): the rung standing there makes
              * the squatter DERIVED, but the blob's explicit claim names the path,
              * so the view requires the directory whatever any sheet holds and
-             * no retire is the remedy. Every enabled profile is asked for an
-             * explicit claim there, whatever the run's -p, and a leaf beneath
-             * it is counted for the line below */
+             * no retire is the remedy — a climb would commit one for every machine
+             * and free nothing. Every enabled profile is asked for an explicit
+             * claim there, whatever the run's -p. The leaf is counted among the
+             * displaced (update_partition), and the way out is status's to give,
+             * which at that place names the re-derivation this test refuses: a
+             * named run there re-derives nothing, and no screen names moving
+             * the node aside (stated) */
             if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
                 const workspace_squatted_t *above = workspace_squatted_ancestor(
                     ws, item->filesystem_path
@@ -1665,10 +1578,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                     );
                     if (held && !manifest_is_derived(held)) break;
                 }
-                if (p < profiles->count) {
-                    refused_leaves++;
-                    continue;
-                }
+                if (p < profiles->count) continue;
             }
 
             leaves = arena_grow(
@@ -1678,28 +1588,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
 
         derive_rows = (manifest_rows_t){ .entries = leaves, .count = leaf_count };
-
-        /* The leaves at a lost blob's place, said once and above the exit below,
-         * so a run that re-derives nothing says why: the census's DERIVED lines
-         * name no remedy in a named run, and moving the squatter aside is the
-         * one there is */
-        if (refused_leaves > 0) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(
-                out, OUTPUT_NORMAL,
-                "%zu path%s not re-derived: a profile needs the squatted directory — "
-                "move what stands there aside",
-                refused_leaves, refused_leaves == 1 ? "" : "s"
-            );
-        }
     }
 
     /* Preview: what this run will do, grouped by the fates the partition answered,
      * and nothing where it accepted nothing */
     update_print_preview(out, manifest, &partition);
 
-    /* The run's work: the accepted items — less the new files, where the user
-     * declines them below. A value the command holds; the partition's list is
+    /* The run's work: the accepted items — less the new files, where the question
+     * below leaves them out. A value the command holds; the partition's list is
      * never edited. */
     workspace_items_t work = partition.accepted;
 
@@ -1707,36 +1603,31 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * only with consent: a question that narrows the run, so the decision's,
      * asked beneath the preview that lists what it narrows and before the hook,
      * and binding no dry run, which executes nothing. Declining keeps the rest
-     * of the run — the preview named the new files separately, and the receipt
-     * reports what actually happens — and the nothing-exit below asks what is
-     * left, so a named run whose only accepted items were new files still
-     * re-derives the chains it named. */
+     * of the run — the preview named the new files separately, and the summary
+     * counts what the question left out (update_print_skipped) — and the
+     * nothing-exit below asks what is left, so a named run whose only accepted
+     * items were new files still re-derives the chains it named. */
     if (!opts->dry_run && partition.new_files.count > 0 && config->confirm_new_files &&
         !opts->include_new && !opts->only_new) {
 
-        /* The new files are an extra the run stands without: declined, or
-         * unanswered and said so with the flag that adds them, they leave the
-         * work alike. They are the accepted items' suffix: the discoveries follow
-         * every other diverged item (core/workspace.h workspace_diverged), and
-         * the partition keeps the order it walks in — so the rest of the run is
-         * the prefix before them. */
+        /* The new files are an extra the run stands without, each offered to
+         * the profile whose tracked directory holds it. They are the accepted
+         * items' suffix: the discoveries follow every other diverged item
+         * (core/workspace.h workspace_diverged), and the partition keeps the
+         * order it walks in — so the rest of the run is the prefix before them. */
         switch (output_ask(
-            out, false, "Found %zu new file%s. Add %s to profiles?",
+            out, false, "Found %zu new file%s. Add %s to %s?",
             partition.new_files.count, partition.new_files.count == 1 ? "" : "s",
-            partition.new_files.count == 1 ? "it" : "them"
+            partition.new_files.count == 1 ? "it" : "them",
+            partition.new_files.count == 1 ? "its profile" : "their profiles"
             )) {
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
-                work.count -= partition.new_files.count;
-                break;
+            /* Declined: the user's word */
             case OUTPUT_ANSWER_NONE:
-                output_summary(
-                    out, OUTPUT_NORMAL, "%zu new file%s not added: no answer was "
-                    "read; --include-new adds %s", partition.new_files.count,
-                    partition.new_files.count == 1 ? "" : "s",
-                    partition.new_files.count == 1 ? "it" : "them"
-                );
+                /* Unanswered: nobody declined, and the run stands without the
+                 * extra all the same — the summary counts what it left out */
                 work.count -= partition.new_files.count;
                 break;
         }
@@ -1748,12 +1639,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * decided, so a run the question emptied — its new files the whole of it,
      * left out — ends in the same verdict as one that accepted nothing, in the
      * words of the mode it ran in (the question is asked under neither flag),
-     * and fires no hook */
+     * beneath what the run skipped, and fires no hook */
     if (work.count == 0 && derive_rows.count == 0) {
+        update_print_skipped(ctx, &partition, work);
         if (opts->only_new) {
             output_summary(out, OUTPUT_NORMAL, "No new files to add");
         } else if (opts->include_new) {
-            output_summary(out, OUTPUT_NORMAL, "No modified or new files/directories to update");
+            output_summary(out, OUTPUT_NORMAL, "No modified or new files to update");
         } else {
             output_summary(out, OUTPUT_NORMAL, "No modified files or directories to update");
         }
@@ -1778,8 +1670,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (err) return err;
 
     /* A dry run ends here, beneath its pre-hook, in the act it did not do: the
-     * sections above are its preview */
+     * sections above are its preview, and what it would skip is said before its
+     * verdict. A named run's re-derivation is the walk's to discover — its climbs
+     * read the disk rung by rung against a draft that opens beneath the pre-hook
+     * (update_execute) — so a dry run says nothing of it (stated). It reaches
+     * only a directory dotta only passes through: a tracked directory's moved
+     * mode is an item, listed under Modified directories above. */
     if (opts->dry_run) {
+        update_print_skipped(ctx, &partition, work);
         output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         return NULL;
     }
@@ -1793,10 +1691,12 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         &commit_count
     );
 
-    /* The run's one line, once the act is done and before the record phase, which
-     * may wait on the store's lock (core/state.h state_begin): what it committed
-     * — whole, or before the stop the error below names — or that it committed
-     * nothing */
+    /* The run's summary, once the act is done and before the record phase, which
+     * may wait on the store's lock (core/state.h state_begin): what it skipped,
+     * then its one line — what it committed, whole or before the stop the error
+     * below names, or that it committed nothing. The walk's own skips, a race's,
+     * are said as the walk meets them and counted nowhere here */
+    update_print_skipped(ctx, &partition, work);
     if (commit_count == 0) {
         /* Every profile committed nothing (the walk's race guard refused what
          * the plan admitted, the captures put back what the profile holds, or
@@ -1820,7 +1720,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             /* Every landed commit was derivation-only: say what moved instead
              * of counting zero items */
             output_success(
-                out, OUTPUT_NORMAL, "Re-derived the ancestry across %zu profile%s",
+                out, OUTPUT_NORMAL, "Re-derived directories across %zu profile%s",
                 commit_count, commit_count == 1 ? "" : "s"
             );
         }

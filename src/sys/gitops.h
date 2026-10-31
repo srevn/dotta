@@ -37,9 +37,9 @@
  * each ref file up (gitops_list_refs). A LISTING IS COMPLETE OR AN ERROR — Git's
  * own words for the ref, the same a singular lookup says of it, or the walk's
  * for a directory it could not read — and a caller acting on an absence in one
- * (the census, the blocker, init's adoption test) holds no proof of its own. A
- * singular lookup that misses proves no absence either, and the one that must
- * says so (gitops_reference_find).
+ * (the census, the blocker, init's adoption test, the forget) holds no proof of
+ * its own. A singular lookup that misses proves no absence either, and the one
+ * that must says so (gitops_reference_find).
  */
 
 #ifndef DOTTA_GITOPS_H
@@ -867,8 +867,10 @@ error_t gitops_write_reference(
  * the reference standing where its writer left it.
  *
  * Readers: gitops_delete_branch; sys/remote.c remote_fetch, each tracking ref
- * it takes out of a fetched name's way, and remote_follow, a branch's tracking
- * ref after its deletion's push, each from the id it read there.
+ * it takes out of a fetched name's way, remote_follow, a branch's tracking ref
+ * after its deletion's push, and remote_forget, each tracking ref beside a branch
+ * once the remote's URL reaches another repository — each from the id it read
+ * there.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL or empty)
@@ -899,8 +901,9 @@ error_t gitops_delete_reference(
  * readers that act on a reference's absence as an answer: infra/epoch.c
  * epoch_resolve (no local epoch), sys/remote.c remote_fetch (a tracking ref in
  * a fetched name's way gone since its listing, nothing to take out), remote_follow
- * and remote_take (a branch's tracking ref never written, a create) and
- * remote_read_heads (no branch here, no tracking ref: a branch against its remote),
+ * and remote_take (a branch's tracking ref never written, a create),
+ * remote_read_heads (no branch here, no tracking ref: a branch against its remote)
+ * and remote_forget (a tracking ref gone since its listing, nothing to forget),
  * cmds/remove.c remove_profile (no tracking ref its deletion's lease could name),
  * and gitops_reference_commit, which reads the commit at the id.
  *
@@ -975,9 +978,9 @@ error_t gitops_branch_refname(
  * reference. The branch half is the caller's: a profile's name, held to the branch
  * rule where its own ref is built (gitops_branch_refname).
  *
- * Readers: sys/remote.c remote_fetch, remote_follow, remote_take and
- * remote_read_heads; cmds/remove.c remove_profile, the tracking ref its deletion
- * is leased on.
+ * Readers: sys/remote.c remote_fetch, remote_follow, remote_take, remote_forget
+ * and remote_read_heads; cmds/remove.c remove_profile, the tracking ref its
+ * deletion is leased on.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX

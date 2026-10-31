@@ -221,6 +221,8 @@ Where both machines committed to a profile, `dotta sync` merges the two and push
 
 A profile another machine deleted is deleted locally too, and one it recreated replaces the local one — unless this machine holds commits the remote never had: then the profile is kept as it stands, and the sync says how to keep those commits or let them go. An enabled profile with no local branch gets it back from the remote at the next sync; where the remote has none either, the sync says so until `dotta profile disable` drops it.
 
+`dotta remote set-url origin <url>` points the remote at another URL, and the next sync pushes every profile the new URL lacks. Sync before changing it: a profile another machine deleted or recreated since this machine's last sync would otherwise be pushed back, or merged with its old history.
+
 After a pull, `sync` lists what it did to each profile's files — added, updated, reassigned to another profile, overridden by another profile's file, removed or deleted (see [Removing Files](#removing-files)); `dotta apply` lands what it brought.
 
 ## Removing Files

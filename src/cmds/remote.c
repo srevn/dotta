@@ -6,12 +6,15 @@
 
 #include <git2.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "base/args.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
+#include "sys/remote.h"
 
 /**
  * List remotes
@@ -129,6 +132,11 @@ static error_t remote_add(
 
 /**
  * Remove remote
+ *
+ * libgit2 deletes the remote's tracking refs with it, every ref its fetch refspec
+ * names, from no read (lib/libgit2/src/libgit2/remote.c git_remote_delete,
+ * remove_remote_tracking): the namespace goes with the remote, and a write landing
+ * in it meanwhile goes with it, so no writer's read is owed one.
  */
 static error_t remote_remove(
     git_repository *repo,
@@ -161,8 +169,33 @@ static error_t remote_remove(
     return NULL;
 }
 
+/*
+ * A remote's URL as its configuration holds it — the string its lookup reads
+ * before insteadOf rewrites it (lib/libgit2/src/libgit2/remote.c git_remote_lookup,
+ * get_optional_config) — into `out` (GIT_BUF_INIT), left empty where the
+ * configuration holds none for it, a push URL alone
+ */
+static error_t remote_configured_url(git_repository *repo, const char *name, git_buf *out) {
+    git_config *config = NULL;
+    int rc = git_repository_config_snapshot(&config, repo);
+    if (rc < 0) return error_git(rc, "Cannot read the repository's configuration");
+
+    char *key = heap_str_format("remote.%s.url", name);
+    rc = git_config_get_string_buf(out, config, key);
+    error_t err = rc < 0 && rc != GIT_ENOTFOUND ? error_git(rc, "Cannot read %s", key) : NULL;
+
+    free(key);
+    git_config_free(config);
+    return err;
+}
+
 /**
  * Set remote URL — the name and the URL Git's to judge, as remote_add's are
+ *
+ * The URL the configuration holds already changes nothing. One that reaches another
+ * repository forgets what this store took of the old one before it is written
+ * (sys/remote.h remote_forget); one that reaches the same repository under another
+ * spelling is written, nothing forgotten.
  */
 static error_t remote_set_url(
     git_repository *repo,
@@ -182,23 +215,77 @@ static error_t remote_set_url(
     } else if (rc < 0) {
         return error_git(rc, "Cannot set the URL of remote '%s'", name);
     }
-    git_remote_free(remote);
+
+    /* The new URL judged as the write will judge it, and read as the lookup read
+     * the configured one, insteadOf applied, nothing written (remote.c
+     * git_remote_create_with_opts): a URL refused forgets nothing */
+    git_remote *reached = NULL;
+    git_buf configured = GIT_BUF_INIT;
+    size_t forgotten = 0;
+    error_t err = NULL;
+    rc = git_remote_create_anonymous(&reached, repo, new_url);
+    if (rc < 0) {
+        err = error_git(rc, "Cannot set the URL of remote '%s'", name);
+        goto done;
+    }
+
+    err = remote_configured_url(repo, name, &configured);
+    if (err) goto done;
+    if (configured.ptr && strcmp(configured.ptr, new_url) == 0) {
+        output_summary(out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' URL unchanged", name);
+        goto done;
+    }
+
+    /* Another repository reached: what this store took of the old one forgotten
+     * before the URL is written — each tracking ref beside a branch here, which
+     * would read the old remote's line as the new one's (sys/remote.h
+     * remote_forget). So a refusal of either leaves the old URL, whose next contact
+     * writes each forgotten ref again from none, and the same run again completes
+     * it; written first, a refused forget would leave the old refs under the
+     * new URL, which the run again would find unchanged. The same repository
+     * under another spelling forgets nothing. */
+    if (!git_remote_url(remote) || strcmp(git_remote_url(reached), git_remote_url(remote)) != 0) {
+        err = remote_forget(repo, name, &forgotten);
+        if (err) {
+            err = error_wrap(err, "Cannot set the URL of remote '%s'", name);
+            goto done;
+        }
+    }
 
     /* Set new URL */
     rc = git_remote_set_url(repo, name, new_url);
-    if (rc < 0) return error_git(rc, "Cannot set the URL of remote '%s'", name);
+    if (rc < 0) {
+        err = error_git(rc, "Cannot set the URL of remote '%s'", name);
+        goto done;
+    }
 
-    /* Success message */
+    /* Success message, and what the forget leaves the next sync */
     output_success(
         out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' URL updated",
         name
     );
+    if (forgotten > 0) {
+        output_print(
+            out, OUTPUT_NORMAL, "  Forgot where %zu profile%s stood on the old URL: "
+            "the next sync pushes each one the new URL lacks\n",
+            forgotten, forgotten == 1 ? "" : "s"
+        );
+    }
 
-    return NULL;
+done:
+    git_buf_dispose(&configured);
+    git_remote_free(reached);
+    git_remote_free(remote);
+    return err;
 }
 
 /**
  * Rename remote — both names Git's to judge, as remote_add's is
+ *
+ * libgit2 renames each tracking ref and its log, under a line of its own, "renamed
+ * remote <old> to <new>" (lib/libgit2/src/libgit2/remote.c
+ * rename_one_remote_reference): a move no writer of dotta's makes, so those lines
+ * name no dotta command, and the history each log holds is kept.
  */
 static error_t remote_rename(
     git_repository *repo,
@@ -505,6 +592,11 @@ static const args_command_t spec_remote_set_url = {
     .name          = "remote set-url",
     .summary       = "Set remote URL",
     .usage         = "%s remote set-url <name> <url>",
+    .description   =
+        "Points the remote at another URL: the next sync pushes every profile the\n"
+        "new URL lacks. Sync first — a profile another machine deleted or recreated\n"
+        "since this machine's last sync is otherwise pushed back, or merged with its\n"
+        "old history.\n",
     .opts_size     = sizeof(cmd_remote_options_t),
     .opts          = remote_set_url_opts,
     .init_defaults = remote_set_url_defaults,

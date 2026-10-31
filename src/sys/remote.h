@@ -28,7 +28,9 @@
  * (remote_push). A tracking ref in a fetched name's way is taken out first, from
  * its read, and never one beside a branch that stands here, whose way-held name
  * is then not fetched; a branch the remote no longer advertises keeps its tracking
- * ref.
+ * ref. Where the remote's URL comes to reach another repository, each tracking
+ * ref beside a branch here is forgotten (remote_forget): what it names is the
+ * old remote's line.
  *
  * A push is one update — a ref, the commit it is to name or Git's null id (a
  * deletion), and the head its writer read the remote naming or Git's null id (a
@@ -354,6 +356,40 @@ error_t remote_push(
  * @param branch Branch name, the one the act wrote (must not be NULL)
  */
 void remote_take(remote_t *remote, const char *branch);
+
+/**
+ * Forget what this store took of the remote: each tracking ref beside a branch
+ * here, deleted from its read
+ *
+ * A tracking ref names the remote's head on the line this store last took there,
+ * so once the remote's URL reaches another repository, one beside a branch here
+ * reads the old remote's line as the new one's: the branch reads deleted on the
+ * remote where the new one lacks it, and recreated there where it holds a history
+ * of its own. So each goes, and the branch reads against the new remote's head
+ * alone, as one this store never fetched does: pushed where the remote lacks
+ * it, merged where it holds one apart. A tracking ref with no branch beside it
+ * is kept, a deletion this store learned among them
+ * (REMOTE_STATE_NO_LOCAL_DELETED): the history this store holds of a branch it
+ * does not, which no reading acts on but by creating the branch at it. Nothing
+ * is asked of the remote.
+ *
+ * Both namespaces are listed whole first, each complete or an error (sys/gitops.h
+ * gitops_list_remote_tracking, gitops_list_branches): a tracking ref is kept
+ * only where a listing proves no branch beside it. Each is deleted from its read
+ * (sys/gitops.h gitops_delete_reference) — one gone since the listing is nothing
+ * to forget — and one moved since its read, or locked by another process, refuses
+ * the forget, naming it, those before it forgotten.
+ *
+ * Reader: cmds/remote.c remote_set_url, before the URL is written.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param name The remote's name (must not be NULL)
+ * @param forgotten How many were forgotten, those before a refusal included (must
+ *                  not be NULL)
+ * @return Error or NULL on success: a listing's refusal, or a delete's naming
+ *         its ref
+ */
+error_t remote_forget(git_repository *repo, const char *name, size_t *forgotten);
 
 /**
  * Leave the remote: the listing's connection closed where it stands, the credential

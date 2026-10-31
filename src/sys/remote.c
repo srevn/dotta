@@ -10,9 +10,10 @@
  * remote's credential is never a proxy's answer. Its failure's sentence is read
  * before anything closes: a close may set libgit2's error over the op's
  * (transports/smart.c git_smart__close writes a flush to the connection). Every
- * ref the session writes, here or on the remote, is written from its writer's
+ * ref written here, in the store or on the remote, is written from its writer's
  * read: a tracking ref through sys/gitops' writers (gitops_write_reference,
- * gitops_delete_reference), the remote's through the push's compare.
+ * gitops_delete_reference) — the session's and the forget's — the remote's through
+ * the push's compare.
  */
 
 #include "sys/remote.h"
@@ -614,6 +615,44 @@ void remote_take(remote_t *remote, const char *branch) {
     (void) gitops_write_reference(
         remote->repo, tracking_ref, &head, &read, remote->action, "fetched from %s", name
     );
+}
+
+error_t remote_forget(git_repository *repo, const char *name, size_t *forgotten) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(forgotten);
+
+    *forgotten = 0;
+
+    /* The remote's tracking refs and the branches here, each listed whole, in a
+     * frame of this call's own: its answer is a count */
+    arena_t *frame = arena_create(0);
+    string_array_t tracking, branches;
+    error_t err = gitops_list_remote_tracking(repo, name, frame, &tracking);
+    if (!err) err = gitops_list_branches(repo, frame, &branches);
+    if (err) goto done;
+
+    /* Each beside a branch here forgotten from its read: one gone since the listing
+     * leaves nothing to forget, one moved since its read refuses (sys/gitops.h
+     * gitops_delete_reference) */
+    for (size_t i = 0; i < tracking.count; i++) {
+        if (!string_array_contains(&branches, tracking.entries[i])) continue;
+
+        char ref[DOTTA_REFNAME_MAX];
+        git_oid id;
+        err = gitops_remote_branch_refname(ref, sizeof(ref), name, tracking.entries[i]);
+        if (!err) err = gitops_reference_oid(repo, ref, &id);
+        if (err) goto done;
+        if (git_oid_is_zero(&id)) continue;
+
+        err = gitops_delete_reference(repo, ref, &id);
+        if (err) goto done;
+        (*forgotten)++;
+    }
+
+done:
+    arena_free(frame);
+    return err;
 }
 
 void remote_free(remote_t *remote) {

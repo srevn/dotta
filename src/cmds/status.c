@@ -343,13 +343,13 @@ static void status_print_profiles(
              * which would name the file, by capturing the file over it. */
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "  contradicted  - run 'dotta remove <profile> <file>' to keep the directory, "
-                "which apply then creates in the file's place"
+                "  contradicted  - run 'dotta remove <profile> <file>' to keep the "
+                "directory, which apply then creates in the file's place"
             );
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "                  run 'dotta remove <profile> <path>' to keep the file the "
-                "path is beneath, or whose place it takes"
+                "                  run 'dotta remove <profile> <path>' to keep "
+                "the file the path is beneath, or whose place it takes"
             );
             output_hintline(
                 out, OUTPUT_NORMAL,
@@ -372,7 +372,8 @@ static void status_print_profiles(
             );
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "                  or run 'dotta sync <profile>' to bring its branch back"
+                "                  or run 'dotta sync <profile>' "
+                "to bring its branch back"
             );
             break;
         }
@@ -734,7 +735,8 @@ static void status_print_workspace(
     if (partition->unconfirmed.count > 0) {
         output_list_t *list = output_list_create(
             out, "Unconfirmed paths",
-            "not confirmed by dotta; run 'dotta add --force <profile> <path>' to keep disk's"
+            "not confirmed by dotta; "
+            "run 'dotta add --force <profile> <path>' to keep disk's"
         );
 
         for (size_t i = 0; i < partition->unconfirmed.count; i++) {
@@ -759,8 +761,8 @@ static void status_print_workspace(
     if (partition->squatted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Squatted ancestors",
-            "a different kind stands at a directory dotta only passes through; run 'dotta "
-            "update <dir>' to re-derive them"
+            "a different kind stands at a directory dotta only passes through; "
+            "run 'dotta update <dir>' to re-derive them"
         );
 
         for (size_t i = 0; i < partition->squatted.count; i++) {
@@ -791,8 +793,8 @@ static void status_print_workspace(
     if (partition->displaced.count > 0) {
         output_list_t *list = output_list_create(
             out, "Displaced paths",
-            "not looked at: a different kind stands at a directory above them; resolve "
-            "that directory first"
+            "not looked at: a different kind stands at a directory above them; "
+            "resolve that directory first"
         );
 
         for (size_t i = 0; i < partition->displaced.count; i++) {
@@ -815,7 +817,8 @@ static void status_print_workspace(
      * locked path came to be told to fix its permissions. */
     if (partition->unverifiable.count > 0) {
         output_list_t *list = output_list_create(
-            out, "Unverifiable paths", "dotta could not verify them; apply and update skip them"
+            out, "Unverifiable paths",
+            "dotta could not verify them; apply and update skip them"
         );
 
         for (size_t i = 0; i < partition->unverifiable.count; i++) {
@@ -1121,7 +1124,8 @@ static void status_print_workspace(
                             case WORKSPACE_FAULT_LOCKED:
                                 legend = config->encryption_enabled
                                     ? "run 'dotta key set' to let apply prune it"
-                                    : "set encryption.enabled = true, then run 'dotta key set'";
+                                    : "set encryption.enabled = true, then run "
+                                    "'dotta key set'";
                                 break;
                             case WORKSPACE_FAULT_UNREADABLE:
                                 legend = identity()->privileged
@@ -1168,12 +1172,14 @@ static void status_print_workspace(
                             case WORKSPACE_FAULT_LOCKED:
                                 legend = config->encryption_enabled
                                     ? "run 'dotta key set' to let apply replace it"
-                                    : "set encryption.enabled = true, then run 'dotta key set'";
+                                    : "set encryption.enabled = true, then run "
+                                    "'dotta key set'";
                                 break;
                             case WORKSPACE_FAULT_UNREADABLE:
                             case WORKSPACE_FAULT_NONE:
                             case WORKSPACE_FAULT_UNVERIFIED:
-                                legend = "run 'dotta apply --force <path>' to replace it";
+                                legend = "run 'dotta apply --force <path>' "
+                                    "to replace it";
                                 break;
                         }
                     } else if (item->divergence & DIVERGENCE_CONTENT) {

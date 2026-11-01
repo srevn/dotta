@@ -732,8 +732,9 @@ error_t profile_contradicted(
 /**
  * Walk visitor: one claim, tallied by its kind
  *
- * A blob is a file, whatever its type; a directory claim counts where the profile
- * tracks it, and an ancestor claim not at all (profile_counts_t).
+ * A blob is a file, whatever its type, counted again where its stamp says
+ * encrypted; a directory claim counts where the profile tracks it, and an ancestor
+ * claim not at all (profile_counts_t).
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
  * @param payload The counts so far (profile_counts_t)
@@ -744,6 +745,7 @@ static error_t profile_count_claim(const profile_claim_t *claim, void *payload) 
 
     if (claim->type != PATH_TYPE_DIRECTORY) {
         counts->file_count++;
+        if (claim->encrypted) counts->encrypted_count++;
     } else if (claim->tracked) {
         counts->directory_count++;
     }

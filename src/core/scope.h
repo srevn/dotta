@@ -178,10 +178,11 @@ error_t scope_build(
  * scope_require_enabled, which tells the two apart.
  *
  * Readers: show's commit search (cmds/show.c cmd_show), cmds/bootstrap.c
- * cmd_bootstrap, and cmds/ignore.c ignore_test, for either key it takes. A command
- * that holds the view reads the same set off it (core/manifest.h
- * manifest_profiles): the scope it builds borrows it (scope_build), and show's
- * and list's file arms ask it there.
+ * cmd_bootstrap, cmds/ignore.c ignore_test, for either key it takes, and cmds/key.c
+ * key_status, the profiles whose encrypted files it counts. A command that holds
+ * the view reads the same set off it (core/manifest.h manifest_profiles): the
+ * scope it builds borrows it (scope_build), and show's and list's file arms ask
+ * it there.
  *
  * Asks every enabled branch at once whether it is here (sys/gitops.h
  * gitops_branches_exist), as the view's build does, and loads no tree.

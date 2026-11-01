@@ -222,11 +222,11 @@ typedef struct stage stage_t;
  * list_collect_file, for list_files (the mark, and the framing taken off the
  * size beside it), and list_size_claim (the same framing, in the fold the rows'
  * total must agree with), cmds/show.c show_print_blob (the annotation),
- * core/profiles.c profile_sealed (the seal), the verbose capture lines of add
- * and update (cmds/add.c add_capture, cmds/update.c update_profile) and, onto
- * the view's rows (core/manifest.h manifest_row_t.encrypted), cmds/export.c
- * export_entry_from_row, core/workspace.c workspace_analyze_file and cmds/key.c
- * key_status.
+ * core/profiles.c profile_sealed (the seal) and profile_count_claim (the tally
+ * cmds/key.c key_status sums), the verbose capture lines of add and update
+ * (cmds/add.c add_capture, cmds/update.c update_profile) and, onto the view's
+ * rows (core/manifest.h manifest_row_t.encrypted), cmds/export.c
+ * export_entry_from_row and core/workspace.c workspace_analyze_file.
  *
  * So the link rule is the decode's alone, spelled in the arm where it already
  * branches on the type (core/profiles.c profile_decode_blob): there is no per-field

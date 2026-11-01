@@ -297,9 +297,9 @@ profile_t *profile_open(const char *name, const git_tree *tree);
  * which load every local profile; cmds/ignore.c ignore_test; the questions asked
  * of a head by name, what it holds and whether it needs a target — cmds/profile.c
  * profile_list and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c
- * read_targets; and the directory claims a completion offers at a profile's head
- * — export's (cmds/completion.c completion_directories) and remove's own
- * (cmds/remove.c remove_complete).
+ * read_targets, cmds/key.c key_status; and the directory claims a completion
+ * offers at a profile's head — export's (cmds/completion.c completion_directories)
+ * and remove's own (cmds/remove.c remove_complete).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param name The profile's name, which its branch is named by (must not be NULL;
@@ -480,7 +480,8 @@ error_t profile_contradicted(
 );
 
 /**
- * What a profile holds, counted: the claims its walk shows, by kind
+ * What a profile holds, counted: the claims its walk shows, by kind, and the
+ * files among them stamped encrypted
  *
  * Every blob a file, and every tracked directory claim the walk shows a directory.
  * An ancestor claim is the way to content, never content, and counting it would
@@ -501,6 +502,7 @@ error_t profile_contradicted(
 typedef struct {
     size_t file_count;        /* The blob claims the walk shows */
     size_t directory_count;   /* The tracked directory claims it shows */
+    size_t encrypted_count;   /* The blob claims among them stamped encrypted */
 } profile_counts_t;
 
 /**
@@ -521,9 +523,11 @@ typedef struct {
  * Readers: the screens that name what a profile holds — `dotta list -v`'s profile
  * rows and the file listing's no-files arm (cmds/list.c list_profiles, list_files),
  * `profile list`'s enabled and available rows (cmds/profile.c profile_list),
- * and the deletion's preview and confirmation (cmds/remove.c remove_profile). A
- * reader not on this list is a bug, and a screen that counts what a profile holds
- * beside this one is the second producer these counts exist to prevent.
+ * the deletion's preview and confirmation (cmds/remove.c remove_profile), and
+ * the encrypted files `key status` sums over the enabled profiles (cmds/key.c
+ * key_status). A reader not on this list is a bug, and a screen that counts what
+ * a profile holds beside this one is the second producer these counts exist to
+ * prevent.
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param out The counts (must not be NULL; written on success alone)

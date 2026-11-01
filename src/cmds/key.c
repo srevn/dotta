@@ -11,7 +11,8 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/output.h"
-#include "core/manifest.h"
+#include "core/profiles.h"
+#include "core/scope.h"
 #include "core/state.h"
 #include "crypto/kdf.h"
 #include "crypto/keymgr.h"
@@ -219,17 +220,22 @@ static void key_status(const dotta_ctx_t *ctx) {
         }
     }
 
-    /* The encrypted files over the enabled set: the view, whose rows carry the
-     * metadata-projected flag. A count that cannot be made is said above the
+    /* The encrypted files the enabled profiles hold, each profile's own claims
+     * counted (core/profiles.h profile_counts): a sealed claim another profile's
+     * stands over is the profile's still, as the line says. The set is read without
+     * a view (core/scope.h scope_resolve_enabled), a profile whose branch is
+     * gone holding nothing here. A count that cannot be made is said above the
      * summary, in one line (base/error.h error_line). */
-    manifest_t *manifest = NULL;
+    string_array_t profiles;
     size_t encrypted_count = 0;
-    error_t err = manifest_build(repo, state, ctx->arena, &manifest);
-    if (!err) {
-        manifest_rows_t rows = manifest_rows(manifest);
-        for (size_t i = 0; i < rows.count; i++) {
-            if (rows.entries[i]->encrypted) encrypted_count++;
-        }
+    error_t err = scope_resolve_enabled(repo, state, ctx->arena, &profiles);
+    for (size_t i = 0; !err && i < profiles.count; i++) {
+        profile_t *profile = NULL;
+        profile_counts_t counts;
+        err = profile_load(repo, profiles.entries[i], &profile);
+        if (!err) err = profile_counts(profile, &counts);
+        if (!err) encrypted_count += counts.encrypted_count;
+        profile_free(profile);
     }
     if (err) {
         output_gap(out, OUTPUT_NORMAL);

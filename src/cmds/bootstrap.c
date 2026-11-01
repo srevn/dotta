@@ -220,7 +220,9 @@ static error_t bootstrap_show(
  * List bootstrap scripts across profiles.
  *
  * For each profile of the selection, which is never empty (cmd_bootstrap): green
- * ✓ with path if the script exists, red ✗ otherwise.
+ * ✓ with path if the script exists, red ✗ otherwise. The listing ends on its
+ * total, as the listings of profiles do (cmds/list.c list_profiles): the profiles
+ * listed, and how many of them hold a script.
  */
 static void bootstrap_list(
     git_repository *repo, const string_array_t *profiles, output_t *out
@@ -230,9 +232,11 @@ static void bootstrap_list(
 
     output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
+    size_t script_count = 0;
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
         if (bootstrap_exists(repo, profile)) {
+            script_count++;
             output_print(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} %-15s %s/%s\n",
                 profile, profile, BOOTSTRAP_SCRIPT_NAME
@@ -244,6 +248,11 @@ static void bootstrap_list(
             );
         }
     }
+
+    output_summary(
+        out, OUTPUT_NORMAL, "Total: %zu profile%s, %zu with a bootstrap script",
+        profiles->count, profiles->count == 1 ? "" : "s", script_count
+    );
 }
 
 /**

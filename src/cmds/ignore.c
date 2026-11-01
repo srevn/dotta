@@ -13,6 +13,7 @@
 
 #include "base/arena.h"
 #include "base/args.h"
+#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
@@ -585,17 +586,21 @@ static path_kind_t ignore_kind(
  *
  * Every asker gets a subject, so every turn casts a verdict: a name's own tail,
  * or the tail of the name the asker gives the path — `""` at a root of its own,
- * which no rule reaches (base/gitignore.c), so a root tests NOT IGNORED for every
+ * which no rule reaches (base/gitignore.c), so a root tests not ignored for every
  * asker and its entries are what a pattern can name.
  *
- * The verdicts are the answer, and no line sums them into a forecast: the rules
- * decide discovery (core/ignore.h, what the rules reach), and never reach a path
- * its profile holds. So where the argument is a path its asker holds, a verdict
- * that excludes it is followed by a note saying so; a storage name builds no
- * view to know, and says nothing. An asker whose Git's rules cannot be read for
- * the path could not tell, and says why — never NOT IGNORED, which what could
- * not be read may belie — and the note follows that answer too, which the rules
- * do not decide for a held path either.
+ * The verdicts are the answer, said as the run's summary, an asker a line
+ * (base/output.h output_summary), and no line sums them: a path is added into
+ * one profile, whose verdict is the one that decides there. The rules decide
+ * discovery (core/ignore.h, what the rules reach), and never reach a path its
+ * profile holds. So where the argument is a path its asker holds, a verdict that
+ * excludes it says so in a clause; a storage name builds no view to know, and
+ * says nothing. An asker whose Git's rules cannot be read for the path could
+ * not tell, and says why — never not ignored, which what could not be read may
+ * belie — and the clause follows that answer too, which the rules do not decide
+ * for a held path either. Every asker is asked before any verdict is said, so
+ * -v's trace of each — the subject it matched, and what stood where it looked —
+ * is a block above the verdicts it explains.
  *
  * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
  * load per enabled profile — where it read the table alone. cmds/completion.c
@@ -698,8 +703,7 @@ static error_t ignore_test(
      * no profile — which names through the shared roots and meets the baseline,
      * the config's layer and Git's rules. `askers` starts at the option itself,
      * an array of one that is both the named-profile and the nothing-enabled
-     * case; the enabled set replaces it when it holds any, and so does what the
-     * preamble keys on. */
+     * case; the enabled set replaces it when it holds any. */
     const char *const *askers = &opts->profile;
     size_t asker_count = 1;
     string_array_t enabled = { 0 };
@@ -715,50 +719,49 @@ static error_t ignore_test(
         if (err) {
             /* None to ask: said as a failure the run goes past, in the words
              * that say whether nothing is enabled or no enabled profile has its
-             * branch — and dropped, so the loop meets no failure in hand. Then
-             * the layers the one asker that is no profile meets, in the words
-             * its verdict names them by: Git's where the builder opened them. */
+             * branch — and dropped, so the loop meets no failure in hand. The
+             * one asker that is no profile answers in their place. */
             output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
             err = NULL;
-            output_info(
-                out, OUTPUT_NORMAL, "%s", ignore_source(ignore_rules)
-                    ? "Testing against the baseline .dottaignore, config file patterns "
-                "and Git's ignore rules"
-                    : "Testing against the baseline .dottaignore and config file patterns"
-            );
         } else {
-            /* The set asked is the enabled profiles whose branch is here, and
-             * the count says so: an enabled profile Git holds no branch for is
-             * none of them */
+            /* The set asked is the enabled profiles whose branch is here: an
+             * enabled profile Git holds no branch for has no rules of its own
+             * to ask, and is none of them */
             askers = (const char *const *) enabled.entries;
             asker_count = enabled.count;
-            output_info(out, OUTPUT_NORMAL, "Testing path: %s", opts->test_path);
-            output_info(
-                out, OUTPUT_NORMAL, "Enabled profiles with a branch: %zu", asker_count
-            );
         }
     }
 
-    /* The turns are a block of their own, beneath either preamble or none */
-    output_gap(out, OUTPUT_NORMAL);
+    /* The trace at -v is a block of its own, beneath the warning or none */
+    output_gap(out, OUTPUT_VERBOSE);
 
     /* The kind the argument gives: a path's, one reading for every asker, so
      * one observation and no asker to name it — the loop reads it and asks nothing
      * of the path again; a name's, the hint, which each asker's look refines
-     * where its target puts the name. Taken after the preamble rather than where
-     * the key was read, so the note it may print stands under the same header
-     * the per-asker notes of a storage name stand under — one command saying
-     * one thing in one order. */
+     * where its target puts the name. Taken once the askers are known rather
+     * than where the key was read, so the note it may print stands in the trace
+     * beneath the warning, where the per-asker notes of a storage name stand —
+     * one command saying one thing in one order. */
     const path_kind_t argument_kind = arg.key == PATH_KEY_FILESYSTEM
         ? ignore_kind("", opts->test_path, arg.filesystem_path, hint, out) : hint;
+
+    /* Each asker's verdict, a line of the summary: every asker is asked first,
+     * its trace said at -v as it is asked, and the lines said once all have
+     * answered, beneath the trace they follow from — a refusal on the way ends
+     * the run with none said */
+    string_array_t verdicts;
+    string_array_init(&verdicts, ctx->arena, asker_count);
 
     for (size_t i = 0; i < asker_count; i++) {
         const char *asker = askers[i];
 
-        /* Whose answer this is, on every line of the turn. One value, in the
-         * command's arena, so each message below is spelled once and no site
-         * can forget the form the asker that is no profile needs. */
-        const char *who = asker ? arena_str_format(ctx->arena, "Profile '%s': ", asker) : "";
+        /* Whose answer this is, on every line of the turn: the profile, or for
+         * the asker that is none the baseline, the ruleset it reads (core/ignore.h
+         * ignore_ruleset). One value, in the command's arena, so each line below
+         * is spelled once and no site can forget the form the asker that is no
+         * profile needs. */
+        const char *who = asker
+            ? arena_str_format(ctx->arena, "Profile '%s': ", asker) : "Baseline: ";
 
         /* The asker's reading of the key the user named: each arm keeps the half
          * the argument gave and fills the half it did not. */
@@ -803,36 +806,39 @@ static error_t ignore_test(
         error_t failure = ignore_verdict(
             rules, ignore_source(ignore_rules), name, filesystem_path, kind, &verdict
         );
+        const char *phrase;
         if (failure) {
             /* Git's rules could not be read where the four exclude nothing: never
              * read as no exclusion, since what could not be read may be what
              * git excludes. The asker could not tell, and the failure's one line
              * says why (sys/source.h) — answered again for each asker it fails. */
-            output_print(out, OUTPUT_NORMAL, "{yellow}?{reset} %sCOULD NOT TELL\n", who);
-            output_info(out, OUTPUT_NORMAL, "  Reason: %s", error_line(failure));
+            phrase = arena_str_format(ctx->arena, "could not tell (%s)", error_line(failure));
         } else if (verdict.origin != IGNORE_ORIGIN_NONE) {
-            output_print(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
-            output_info(
-                out, OUTPUT_NORMAL, "  Reason: %s", ignore_verdict_describe(ctx->arena, &verdict)
+            /* The rule that excludes the name, in the words every screen names
+             * a rule by (core/ignore.h ignore_verdict_describe) */
+            phrase = arena_str_format(
+                ctx->arena, "ignored by %s", ignore_verdict_describe(ctx->arena, &verdict)
             );
         } else {
-            output_print(out, OUTPUT_NORMAL, "{green}✓{reset} %sNOT IGNORED\n", who);
+            string_array_pushf(&verdicts, "%snot ignored", who);
             continue;
         }
 
         /* A path this asker holds is no discovery: the rules never reach it,
-         * and only an -e leaves it out. Said beneath the verdicts that would
-         * read otherwise, where a view names the path — a claim, never a directory
+         * and only an -e leaves it out. Said on the verdicts that would read
+         * otherwise, where a view names the path — a claim, never a directory
          * the asker only passes through. */
         const manifest_row_t *held = view
             ? manifest_lookup_claim(view, asker, filesystem_path) : NULL;
         if (held && !manifest_is_derived(held)) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Profile '%s' holds it: these rules decide what is new, never what "
-                "a profile holds", asker
-            );
+            string_array_pushf(&verdicts, "%s%s, though %s holds it", who, phrase, asker);
+        } else {
+            string_array_pushf(&verdicts, "%s%s", who, phrase);
         }
+    }
+
+    for (size_t i = 0; i < verdicts.count; i++) {
+        output_summary(out, OUTPUT_NORMAL, "%s", verdicts.entries[i]);
     }
 
     return NULL;

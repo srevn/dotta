@@ -392,7 +392,8 @@ error_t ignore_verdict(
  * verdict holds it, absolute: the kernel's spelling for a tree's own lists, the
  * configuration's for core.excludesFile (sys/source.h), so no one home abbreviates
  * the three. Readers: cmds/add.c add_collect (the walk's VERBOSE line) and
- * add_refuse_excluded (the refusal), cmds/ignore.c ignore_test (the Reason).
+ * add_refuse_excluded (the refusal), cmds/ignore.c ignore_test (each asker's
+ * verdict line).
  *
  * @param arena   Arena the words live in (must not be NULL)
  * @param verdict The verdict (must not be NULL)

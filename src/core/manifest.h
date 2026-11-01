@@ -1046,8 +1046,8 @@ error_t manifest_holder(
  * place where update deletes the claim standing there, the highest other profile's
  * (cmds/update.c update_print_preview); whether the untracked scan's owner holds
  * a blob at a child no row of its own stands at (core/workspace.c workspace_scan);
- * and `ignore --test`'s note beneath a verdict that excludes a path its asker
- * holds, which the rules never reach (cmds/ignore.c ignore_test).
+ * and `ignore --test`'s clause on a verdict that excludes a path its asker holds,
+ * which the rules never reach (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

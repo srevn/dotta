@@ -663,7 +663,7 @@ void output_format_counts(
  * Readers: cmds/remove.c remove_paths (its dry run and its receipt) and
  * remove_ask_paths (its question), cmds/export.c cmd_export (its dry run and
  * its receipt), cmds/apply.c cmd_apply (what changed in Git), cmds/add.c cmd_add
- * (what the walk collected).
+ * (what the walk collected, and its receipt) and add_print_preview.
  *
  * @param files Number of files
  * @param directories Number of directories
@@ -685,12 +685,12 @@ void output_format_kinds(
  * it, so the match stops at a component boundary. Pure string work: `home` is
  * passed in because the base layer reads no identity, and every reader passes
  * the invoker's: the screens that print a bound target (profile list, status,
- * the interactive rows, disable's receipt, add's label line), and the sentences
- * that name a path beside its names — status's unused-path listing, where the
- * path is the shared term of three paths on one line and the absolute spelling
- * would be the longest of them, and add's and revert's refusals that say which
- * name a path has. A screen listing managed paths one to a line prints them
- * absolute and does not come here. PATH_MAX bytes hold any path the table
+ * the interactive rows, disable's receipt, add's receipt and its preview), and
+ * the sentences that name a path beside its names — status's unused-path listing,
+ * where the path is the shared term of three paths on one line and the absolute
+ * spelling would be the longest of them, and add's and revert's refusals that
+ * say which name a path has. A screen listing managed paths one to a line prints
+ * them absolute and does not come here. PATH_MAX bytes hold any path the table
  * validated.
  *
  * @param path Path to spell, absolute or as a user typed it — only one beneath

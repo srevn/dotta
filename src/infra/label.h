@@ -81,8 +81,7 @@ typedef enum {
  * arena, so a word read from here may be kept without a copy. Nothing persists
  * a label's ordinal — the sheet keys by name, the record by path, and the cipher
  * seals the name's own bytes — so the order here is free: a permutation moves
- * one screen, the receipt's label lines, which add prints in it (cmds/add.c
- * add_print_labels).
+ * one phrase, the labels add's receipt names in that order (cmds/add.c add_labels).
  */
 extern const char *const label_words[LABEL_COUNT];
 

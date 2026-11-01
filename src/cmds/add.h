@@ -65,9 +65,9 @@ typedef struct {
  * profile already has, whatever binding arrived since, and a fresh path beneath
  * a tracked directory takes that directory's name. A typed name is refused where
  * it would give the profile a second name for one path, which is the one place
- * a second name could be born. The receipt counts the paths captured under each
- * label: which label a name keeps is the profile's history, and no argument says
- * it.
+ * a second name could be born. The receipt says, on its line, the label each
+ * captured path's name landed under: which label a name keeps is the profile's
+ * history, and no argument says it.
  *
  * **What the ignore rules reach** is what this add discovers: a path the profile
  * does not claim. A claim — a file the profile holds, a directory it tracks —

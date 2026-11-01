@@ -1269,32 +1269,34 @@ static void add_print_enable(
 }
 
 /**
- * Say which labels the captured paths landed under
+ * The phrase that says which labels the captured paths landed under
  *
  * A capture's name is the one typed for it, or the claim kept at its path — this
  * command's own, the profile's, a directory claim above it — and its root's label
  * only where none is (cmds/add.h, the name a capture lands under). So a label
  * is the profile's history, not the command line's: `/` encloses HOME, so a path
  * beneath HOME can take two labels in any profile, and a third beneath a binding.
- * The counts above say which kinds were captured; this says where their names
- * went, and it is where a name that stayed put shows.
+ * The counts the phrase follows say which kinds were captured; it says where
+ * their names went, and it is where a name that stayed put shows.
  *
- * One line per label that took a path, in the labels' own order, counting paths:
- * a file and a directory are one name each, so the lines sum to the kinds the
- * counts above them name, in every arm. A label whose root the user chose names
- * where it stands, spelled as every screen that prints a bound target spells it
- * (base/output.h); the machine's own roots are where the word says. No tense: a
- * noun phrase, true of a capture and of one about to happen.
+ * The tail of the act's line, said in its tense by its caller: " as home/" where
+ * one label took every path, else each label that took one, in the labels' own
+ * order, after the paths it took — ", 2 as home/ and 1 as root/": a file and a
+ * directory are one name each, so the counts sum to the kinds the line names. A
+ * label whose root the user chose names where it stands, spelled as every screen
+ * that prints a bound target spells it (base/output.h); the machine's own roots
+ * are where the word says.
  *
  * The place is the table's, asked of the view the walk named through — the same
- * table, which lends it back (core/manifest.h manifest_mounts) — so the line
+ * table, which lends it back (core/manifest.h manifest_mounts) — so the phrase
  * and the names it counts cannot disagree about where a binding stands.
  *
- * @param walk The selection, the table it named through, and the output (must
- *             not be NULL)
+ * @param walk The selection, the table it named through, and the arena the phrase
+ *             is made in (must not be NULL; it lists at least one path)
+ * @return The phrase, its leading separator included (the command arena's)
  */
-static void add_print_labels(const add_walk_t *walk) {
-    output_t *out = walk->ctx->out;
+static const char *add_labels(const add_walk_t *walk) {
+    arena_t *arena = walk->ctx->arena;
     const mount_table_t *mounts = manifest_mounts(walk->view);
     const ptr_array_t *listed[] = { &walk->files, &walk->directories };
 
@@ -1308,8 +1310,23 @@ static void add_print_labels(const add_walk_t *walk) {
         }
     }
 
+    /* Each label that took a path says what it alone adds: the paths it took,
+     * where other labels took some too — after a comma, or after "and" for the
+     * one that leaves no path remaining — then its word, and where its root stands
+     * where the user chose the place. */
+    const size_t total = walk->files.count + walk->directories.count;
+    size_t remaining = total;
+    const char *phrase = "";
     for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
         if (count[label] == 0) continue;
+
+        remaining -= count[label];
+        if (count[label] < total) {
+            phrase = arena_str_format(
+                arena, "%s%s%zu", phrase, remaining > 0 ? ", " : " and ", count[label]
+            );
+        }
+        phrase = arena_str_format(arena, "%s as %s/", phrase, label_words[label]);
 
         /* A name was listed under a label only where the asker has that root,
          * so the table holds one — and whether the user chose the place is the
@@ -1318,18 +1335,11 @@ static void add_print_labels(const add_walk_t *walk) {
         if (root && root->profile) {
             char shown[PATH_MAX];
             output_format_path(root->filesystem_path, identity()->home, shown, sizeof(shown));
-            output_info(
-                out, OUTPUT_NORMAL, "  %zu path%s as %s/ under %s",
-                count[label], count[label] == 1 ? "" : "s",
-                label_words[label], shown
-            );
-        } else {
-            output_info(
-                out, OUTPUT_NORMAL, "  %zu path%s as %s/",
-                count[label], count[label] == 1 ? "" : "s", label_words[label]
-            );
+            phrase = arena_str_format(arena, "%s under %s", phrase, shown);
         }
     }
+
+    return phrase;
 }
 
 /**
@@ -1379,26 +1389,14 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
      * would capture and "Nothing changed" is the run's alone. A block of its
      * own, beneath the trace above it and the walk's warnings. */
     output_gap(out, OUTPUT_NORMAL);
-    if (walk->files.count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Would add %zu file%s to profile '%s'",
-            walk->files.count, walk->files.count == 1 ? "" : "s", walk->profile
-        );
-        if (walk->directories.count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Would track %zu director%s for change detection",
-                walk->directories.count, walk->directories.count == 1 ? "y" : "ies"
-            );
-        }
-    } else {
-        output_info(
-            out, OUTPUT_NORMAL, "Would track %zu director%s in profile '%s'",
-            walk->directories.count, walk->directories.count == 1 ? "y" : "ies",
-            walk->profile
-        );
-    }
-    add_print_labels(walk);
+    char counts[64];
+    output_format_kinds(
+        walk->files.count, walk->directories.count, counts, sizeof(counts)
+    );
+    output_info(
+        out, OUTPUT_NORMAL, "Would add %s to profile '%s'%s", counts, walk->profile,
+        add_labels(walk)
+    );
     if (!profile_exists) {
         output_info(
             out, OUTPUT_NORMAL, "Would create profile '%s' and enable it",
@@ -2604,13 +2602,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * nothing ended there — and both capture loops are total over their lists,
      * so there is always something to report here. */
 
-    /* What the capture took, both kinds. A commit that moved nothing — --force's,
-     * every capture what the profile already held — names what it found already
-     * standing, both kinds in one phrase: the directories were captured as surely
-     * as the files were. One that landed names its files on the ✓ line and its
-     * directories beneath them, or on a ✓ line of their own when they are all
-     * it took. Whichever arm, the receipt is the run's summary, a block of its
-     * own beneath the trace. */
+    /* What the capture took, both kinds: the directories were captured as surely
+     * as the files were. A commit that moved nothing — --force's, every capture
+     * what the profile already held — names what it found already standing, the
+     * pair in its parenthesis, under the names the profile already held. One
+     * that landed counts both kinds on its ✓ line and says the labels their names
+     * landed under (add_labels), under the binding this command's table holds:
+     * the flag's when the run brought one, else the row's the pre-flight copied.
+     * Whichever arm, the receipt is the run's summary, a block of its own beneath
+     * the trace. */
     if (git_oid_is_zero(&commit)) {
         char counts[64];
         output_format_counts(
@@ -2621,33 +2621,16 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             "Nothing changed in profile '%s' (%s already as captured)",
             opts->profile, counts
         );
-    } else if (walk.files.count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "Added %zu file%s to profile '%s'",
-            walk.files.count, walk.files.count == 1 ? "" : "s",
-            opts->profile
-        );
-        if (walk.directories.count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Tracking %zu director%s for change detection",
-                walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
-            );
-        }
     } else {
-        /* Directory-only add */
+        char counts[64];
+        output_format_kinds(
+            walk.files.count, walk.directories.count, counts, sizeof(counts)
+        );
         output_success(
-            out, OUTPUT_NORMAL, "Tracking %zu director%s in profile '%s'",
-            walk.directories.count, walk.directories.count == 1 ? "y" : "ies",
-            opts->profile
+            out, OUTPUT_NORMAL, "Added %s to profile '%s'%s", counts, opts->profile,
+            add_labels(&walk)
         );
     }
-
-    /* The labels the names landed under, beneath the counts they sum to and in
-     * every arm — a re-capture that moved no byte included, the label a path
-     * keeps being its claim's and not the command line's. Under the binding this
-     * command's table holds: the flag's when the run brought one, else the row's
-     * the pre-flight copied. */
-    add_print_labels(&walk);
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
      *

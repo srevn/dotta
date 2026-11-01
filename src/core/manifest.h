@@ -585,9 +585,9 @@ const git_oid *manifest_head(const manifest_t *manifest, const char *profile);
  * second table from the same rows, so the names it places and the rows it selects
  * read one value. Readers: the dispatcher (`run.mounts` for a command that declares
  * the view, include/runtime.h); a filesystem argument to `ignore --test`, and
- * add's label receipt, its let-go and its ancestry refusal (cmds/add.c
- * add_print_labels, add_write_record, add_refuse_ancestry), each of which builds
- * a view of its own and reads the table back from it rather than beside it. Show
+ * add's receipt's labels, its let-go and its ancestry refusal (cmds/add.c
+ * add_labels, add_write_record, add_refuse_ancestry), each of which builds a
+ * view of its own and reads the table back from it rather than beside it. Show
  * and list build one too and ask it nothing: their arm asks the view its set
  * and the row an argument names, by key alone (core/scope.h scope_resolve_claim).
  *

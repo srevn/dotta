@@ -766,8 +766,8 @@ static void remove_print_overlaps(
  * claim was its consent (remove_paths); a removal below the threshold
  */
 static output_answer_t remove_ask_paths(
-    const remove_claim_t *claims,
     size_t claim_count,
+    const char *counts,
     const cmd_remove_options_t *opts,
     const config_t *config,
     output_t *out
@@ -784,38 +784,20 @@ static output_answer_t remove_ask_paths(
     /* No confirmation needed for small operations below threshold */
     if (claim_count < threshold) return OUTPUT_ANSWER_YES;
 
-    size_t files = 0, dirs = 0;
-    for (size_t i = 0; i < claim_count; i++) {
-        if (claims[i].kind == PATH_KIND_DIRECTORY) dirs++;
-        else files++;
-    }
-    char counts[64];
-    output_format_kinds(files, dirs, counts, sizeof(counts));
-
-    /* The question, and beneath it the one promise remove makes the copies before
-     * the act: what every machine's next apply does to them where no other enabled
-     * profile claims the path — the overlap section above names those — each
-     * file's copy left on disk, its record retired. The files' alone: a directory
-     * goes by what is left in it, whatever took its claim, one dotta created
-     * pruned once empty (core/workspace.c workspace_analyze_orphans) */
-    return output_ask(
-        out, false, "Remove %s from profile '%s'?\n"
-        "(No file is deleted from disk, on any machine)", counts, opts->profile
-    );
+    /* The question, the claims counted as the preview and the receipt count them.
+     * What becomes of their copies is the model's, which remove's help says. */
+    return output_ask(out, false, "Remove %s from profile '%s'?", counts, opts->profile);
 }
 
 /**
- * Print what a deletion takes, and the one promise remove makes the copies
+ * Print what a deletion takes
  *
- * One fact in two tenses: a dry run's lines, or the warning a question is the
+ * One fact in two tenses: a dry run's line, or the warning a question is the
  * preamble of. `counts` is the profile-holdings phrase from the count family
- * (output_format_counts, or its "counts unavailable" stand-in), and the promise
- * is the one a removal of paths makes, the files' (remove_ask_paths), true here
- * on other grounds: this machine's next apply releases each file's copy, no history
- * answering for a branch that is gone, and no sync carries a branch's deletion,
- * so every other machine keeps managing its copies. Where no question is asked,
- * nothing previews the deletion: the receipt says what it took (remove_profile,
- * its one reader).
+ * (output_format_counts, or its "counts unavailable" stand-in). What becomes of
+ * the copies is the model's, which remove's help says (cmds/remove.h). Where no
+ * question is asked, nothing previews the deletion: the receipt says what it
+ * took (remove_profile, its one reader).
  */
 static void remove_print_deletion(
     output_t *out, const cmd_remove_options_t *opts, const char *counts
@@ -828,16 +810,10 @@ static void remove_print_deletion(
             out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
             opts->profile, counts
         );
-        output_print(
-            out, OUTPUT_NORMAL, "(No file would be deleted from disk, on any machine)\n"
-        );
     } else {
         output_warning(
             out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
             opts->profile, counts
-        );
-        output_info(
-            out, OUTPUT_NORMAL, "         No file is deleted from disk, on any machine"
         );
     }
 }
@@ -955,13 +931,24 @@ static error_t remove_paths(
         }
     }
 
-    /* Dry run: what would be removed, and the one promise the copies are made,
-     * as the question makes it (remove_ask_paths) */
+    /* The selection, counted once, both kinds: the phrase its three lines say —
+     * the dry run's title, the question and the receipt. Every claim it holds
+     * is removed, or the run fails at the first refusal, so what the receipt
+     * counts is the selection. */
+    size_t files = 0, dirs = 0;
+    for (size_t i = 0; i < claim_count; i++) {
+        if (claims[i].kind == PATH_KIND_DIRECTORY) dirs++;
+        else files++;
+    }
+    char counts[64];
+    output_format_kinds(files, dirs, counts, sizeof(counts));
+
+    /* Dry run: what would be removed, its count on the title its rows follow,
+     * as profile disable -n lists what it would disable */
     if (opts->dry_run) {
-        size_t dry_files = 0, dry_dirs = 0;
         output_gap(out, OUTPUT_NORMAL);
         output_print(
-            out, OUTPUT_NORMAL, "Would remove from profile '%s':\n",
+            out, OUTPUT_NORMAL, "Would remove %s from profile '%s':\n", counts,
             opts->profile
         );
         for (size_t i = 0; i < claim_count; i++) {
@@ -969,20 +956,7 @@ static error_t remove_paths(
                 out, OUTPUT_NORMAL, "  - %s%s\n",
                 claims[i].storage_path, path_kind_suffix(claims[i].kind)
             );
-            if (claims[i].kind == PATH_KIND_DIRECTORY) dry_dirs++;
-            else dry_files++;
         }
-        char counts[64];
-        output_format_kinds(dry_files, dry_dirs, counts, sizeof(counts));
-        output_gap(out, OUTPUT_NORMAL);
-        output_print(
-            out, OUTPUT_NORMAL,
-            "Total: %s would be removed from profile\n",
-            counts
-        );
-        output_print(
-            out, OUTPUT_NORMAL, "(No file would be deleted from disk, on any machine)\n"
-        );
     }
 
     /* The pre-remove hook, over the decided removal — a dry run's too, told so
@@ -1013,7 +987,7 @@ static error_t remove_paths(
      * unanswered — the input ended before a line — nobody declined, and the run
      * did not do what it was asked: its refusal, naming the flag that answers
      * in advance. */
-    switch (remove_ask_paths(claims, claim_count, opts, config, out)) {
+    switch (remove_ask_paths(claim_count, counts, opts, config, out)) {
         case OUTPUT_ANSWER_YES:
             break;
         case OUTPUT_ANSWER_NO:
@@ -1034,18 +1008,14 @@ static error_t remove_paths(
      * carried, and stands again once the blob is gone. Every claim is the base's
      * own, taken once, and every directory claim a tracked one (the resolver's
      * universe is the base's walk and the claims its tree contradicts, a derivation
-     * never among them), so neither of the removal's refusals can fire. */
-    size_t removed_files = 0, removed_dirs = 0;
-
-    /* Each removal traced at verbose, the trace a block of its own */
+     * never among them), so neither of the removal's refusals can fire. Each
+     * removal traced at verbose, the trace a block of its own. */
     output_gap(out, OUTPUT_VERBOSE);
     for (size_t i = 0; i < claim_count; i++) {
         const remove_claim_t *claim = &claims[i];
 
         err = profile_remove(draft, claim->kind, claim->storage_path);
         if (err) goto cleanup;
-        if (claim->kind == PATH_KIND_DIRECTORY) removed_dirs++;
-        else removed_files++;
 
         output_info(
             out, OUTPUT_VERBOSE, "Removed: %s%s",
@@ -1086,12 +1056,7 @@ static error_t remove_paths(
 
     /* Success: what the commit took, said once it lands and before the record
      * phase, which may wait on the store's lock (core/state.h state_begin) */
-    char counts[64];
-    output_format_kinds(removed_files, removed_dirs, counts, sizeof(counts));
-    output_success(
-        out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
-        counts, opts->profile
-    );
+    output_success(out, OUTPUT_NORMAL, "Removed %s from profile '%s'", counts, opts->profile);
 
     /* The record phase (remove_write_record): the reclaim of a copy already gone.
      * One phase, one sentence, whichever step refused, as add's, update's and

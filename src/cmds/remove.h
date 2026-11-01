@@ -69,7 +69,14 @@ typedef struct {
  * This command modifies the Git repository and nothing on disk: the deployed
  * copies of what it removes are the next apply's to settle, decided with the
  * landings they may stand in the way of; another machine meets the commit at
- * its next sync and settles its own copies at its next apply.
+ * its next sync and settles its own copies at its next apply. Where no other
+ * enabled profile claims the path, a file's copy is left on disk and its record
+ * retired, and a directory goes by what is left in it, one dotta created pruned
+ * once empty (core/workspace.c workspace_analyze_orphans). A deletion's copies
+ * are released here, no history answering for a branch that is gone, and every
+ * other machine keeps managing its own, no sync carrying a branch's deletion.
+ * So no file is deleted from disk, on any machine: the help's promise, which no
+ * preview or question repeats.
  *
  * Executes hooks; never touches deployed files. Writes the record only for what
  * its commit knows: the reclaim of a claim it took whose node is gone, and a

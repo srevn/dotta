@@ -455,7 +455,11 @@ static error_t revert_target_claim(
 }
 
 /**
- * Print the diff preview between two blobs
+ * Print the changes between two blobs: a row of the preview, then the patch
+ *
+ * The lines added and removed are a row of the revert's preview, which the caller
+ * opened and which names the file already; the patch is a block of its own beneath
+ * it.
  *
  * Uses content layer to transparently decrypt encrypted files before diffing,
  * so users see readable plaintext diffs instead of encrypted gibberish. The content
@@ -573,14 +577,7 @@ static error_t revert_print_diff(
     size_t deletions = 0;
     git_patch_line_stats(NULL, &additions, &deletions, patch);
 
-    /* Show header */
-    output_section(out, OUTPUT_NORMAL, "Changes preview");
-
-    /* Show stats */
-    output_print(
-        out, OUTPUT_NORMAL, "  File: {cyan}%s{reset}\n",
-        head_name
-    );
+    /* The stats, a row of the preview's block */
     output_print(
         out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
         additions, deletions
@@ -1063,30 +1060,6 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         );
     }
 
-    /* Mode and ownership have no byte source, so a commit that claims nothing
-     * about the file leaves the revert reconstructing its mode (step 14): the
-     * one way the restored claim names a mode the commit's does not. It is said
-     * here, with the rest of what the write will do, and only once the write is
-     * going to happen. */
-    if (restored.mode != target->mode) {
-        output_gap(out, OUTPUT_NORMAL);
-        /* What is missing is a *file* claim, which is not the same as a missing
-         * sheet: a DIRECTORY item can stand at this very key and claim nothing
-         * about this file, the tree being the content authority, and a FILE item
-         * that names nothing claims nothing either. Each reaches here, and the
-         * sentence names the one thing all of them mean. */
-        output_warning(
-            out, OUTPUT_NORMAL, "No file claim for '%s' at commit %s",
-            target->storage_path, oid_str
-        );
-        output_hintline(
-            out, OUTPUT_NORMAL,
-            "Reconstructed from the commit (mode=%04o, encrypted=%s); "
-            "ownership is not recoverable",
-            (unsigned int) restored.mode, restored.encrypted ? "true" : "false"
-        );
-    }
-
     /* The three ways the write differs from what the head holds: the file comes
      * back, everything but its bytes moves — the one thing no diff can show —
      * or its bytes do. The middle arm is *the blob is the same and the change
@@ -1118,7 +1091,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
              * Show warning and continue to confirmation — user decides. The warning
-             * stands in for the section, a block as the section is. */
+             * stands in for the changes, a block of its own. */
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Could not show diff preview: %s",
@@ -1126,6 +1099,31 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             );
             err = NULL;
         }
+    }
+
+    /* Mode and ownership have no byte source, so a commit that claims nothing
+     * about the file leaves the revert reconstructing its mode (step 14): the
+     * one way the restored claim names a mode the commit's does not. It is said
+     * beneath the changes, the preview's rows one block above them, with the
+     * rest of what the write will do, and only once the write is going to
+     * happen. */
+    if (restored.mode != target->mode) {
+        output_gap(out, OUTPUT_NORMAL);
+        /* What is missing is a *file* claim, which is not the same as a missing
+         * sheet: a DIRECTORY item can stand at this very key and claim nothing
+         * about this file, the tree being the content authority, and a FILE item
+         * that names nothing claims nothing either. Each reaches here, and the
+         * sentence names the one thing all of them mean. */
+        output_warning(
+            out, OUTPUT_NORMAL, "No file claim for '%s' at commit %s",
+            target->storage_path, oid_str
+        );
+        output_hintline(
+            out, OUTPUT_NORMAL,
+            "Reconstructed from the commit (mode=%04o, encrypted=%s); "
+            "ownership is not recoverable",
+            (unsigned int) restored.mode, restored.encrypted ? "true" : "false"
+        );
     }
 
     /* Step 19: the pre-revert hook, over the decided revert — a dry run's too,

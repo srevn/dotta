@@ -362,10 +362,9 @@ static void status_print_profiles(
 
     for (size_t i = 0; i < missing.count; i++) {
         if (scope_accepts_profile(scope, missing.entries[i])) {
-            /* Enable's two ways for the same fact, in its order (cmds/profile.c
-             * profile_enable): the profile let go, or its branch brought back
-             * from the remote, which sync says it cannot where the remote holds
-             * none */
+            /* The fact's two ways out, in apply's order (cmds/apply.c cmd_apply):
+             * the profile let go, or its branch brought back from the remote,
+             * which sync says it cannot where the remote holds none */
             output_hintline(
                 out, OUTPUT_NORMAL,
                 "  no branch     - run 'dotta profile disable <profile>' to drop it"

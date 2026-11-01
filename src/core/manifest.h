@@ -657,12 +657,12 @@ error_t manifest_mount_table(
  * cmd_sync); export reads the count alone, for the reason its refusal gives
  * (cmds/export.c export_collect_filesystem), and so does add's enable hint over
  * its own opened tree (cmds/add.c add_print_enable); and an enable that names
- * an enabled profile holding them says so, with the flag (cmds/profile.c
- * profile_enable). The repair is one command (`profile enable <p> --target /path`),
- * the untracking another (`remove`). The screen says **no target** or **needs a
- * target**, never "unbound": the header's word is what the build could not do,
- * the screen's is what the user must give. Strings are the build arena's, same
- * lifetime as the rows.
+ * an enabled profile holding them says so (cmds/profile.c profile_enable). The
+ * repair is one command (`profile enable <p> --target /path`), the untracking
+ * another (`remove`). The screen says **no target** or **needs a target**, never
+ * "unbound": the header's word is what the build could not do, the screen's is
+ * what the user must give. Strings are the build arena's, same lifetime as the
+ * rows.
  */
 typedef struct {
     const char *profile;
@@ -860,8 +860,8 @@ typedef struct {
  * back where the remote holds it, or the profile a disable lets go of.
  *
  * Readers: the health channel's listing (cmds/status.c status_print_profiles)
- * and apply's (cmds/apply.c cmd_apply); and an enable that names one says so,
- * with both ways out (cmds/profile.c profile_enable).
+ * and apply's (cmds/apply.c cmd_apply); and an enable that names one says so
+ * (cmds/profile.c profile_enable).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the profiles' names, valid for the arena's lifetime

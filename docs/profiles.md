@@ -77,7 +77,7 @@ dotta add web --target /mnt/jails/web /mnt/jails/web/etc/nginx.conf
 dotta profile enable web --target /srv/web
 ```
 
-A profile has at most one target per machine. `dotta profile list` shows it. Disabling the profile forgets its target and prints the command to restore it.
+A profile has at most one target per machine. `dotta profile list` shows it. Disabling the profile forgets its target, as moving it forgets the old one, and each command names the target it forgot.
 
 The target is saved, so later adds beneath it can use `custom/` without repeating the flag. Existing entries and directories you've added keep their [naming rules](concepts.md#where-a-file-goes).
 
@@ -103,7 +103,7 @@ It then behaves like any [added directory](concepts.md#directories): `apply` cre
 
 **To move the `custom/` files**, run `dotta profile enable <name> --target <new>`. The next `apply` deploys them at the new target and cleans up the old copies under the [usual cleanup rules](concepts.md#the-view-and-the-record).
 
-Profiles with `custom/` paths need a target to be enabled. `clone` and `profile enable --all` leave them disabled and show how to set one. If sync brings `custom/` paths into an enabled profile, `status` asks you to choose a target.
+Profiles with `custom/` paths need a target to be enabled. `clone` and `profile enable --all` leave them disabled and say so. If sync brings `custom/` paths into an enabled profile, `status` asks you to choose a target.
 
 Targets are not exclusive. Another profile can manage paths there through its own `home/` or `root/` names; normal layering applies wherever the destination pathnames match or nest.
 

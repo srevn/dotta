@@ -450,19 +450,22 @@ cleanup:
  * Three-phase flow over the view before — the dispatcher's, built over the enabled
  * set as it stands at dispatch (the spec declares it; a set that will not build
  * ends dispatch with the builder's message, and the enable never runs):
- *   1. Gather & validate — resolve --all/args to a request set, then filter out
- *      the already-enabled, the ones not here, and the ones that need a target
- *      and were named without one: such a profile is enabled only with one, so
- *      it is skipped and told the flag, whatever the request shape. Each skip
- *      is said once — a refused profile by its warning, the already-enabled by
- *      one count — and a run that enabled nothing is an error where one was
- *      refused. An enabled profile whose claims hold no target is told the flag
- *      too, and one whose branch is gone is told so with both ways out, whichever
- *      arm it takes; produces to_enable_validated. An already-enabled profile
- *      named with a --target that differs from its row's is not a skip: it
- *      re-enters the validated set as a retarget, and `retarget` remembers which
- *      one (at most one: a target binds the one profile the line names,
- *      profile_enable_post_parse).
+ *   1. Gather & validate — resolve --all/args to a request set (--all over a
+ *      store with no profile says so and is done, as disable's over an empty
+ *      set is), then filter out the already-enabled, the ones not here, and the
+ *      ones that need a target and were named without one: such a profile is
+ *      enabled only with one, so it is skipped, whatever the request shape. Each
+ *      skip is said once — a refused profile by its warning, in the words the
+ *      tree refuses it with elsewhere, the already-enabled by one count — and a
+ *      run that enabled nothing is an error where one was refused. An enabled
+ *      profile whose claims hold no target is said so too, and one whose branch
+ *      is gone, whichever arm it takes: states the run does not move, whose ways
+ *      out status names beside every such profile; produces to_enable_validated.
+ *      An already-enabled profile named with a --target that differs from its
+ *      row's is not a skip: it re-enters the validated set as a retarget, the
+ *      run's one profile (a target binds the one profile the line names,
+ *      profile_enable_post_parse), and `retarget` remembers it, `forgotten` the
+ *      binding it moves from.
  *   2. Write scope to state — state_enable_profile per target. The one call serves
  *      both kinds: a fresh enable inserts the row, a retarget runs the UPSERT
  *      arm state.h documents (the target moves, the position stays), its claims
@@ -471,8 +474,8 @@ cleanup:
  *      authoritative. Nothing else is written: the view is computed, never stored.
  *      `before` borrows nothing from the row cache the mutation replaces.
  *   3. The save, then per-profile feedback — state_save, and only once it lands
- *      the lines that say what it made true: one per validated target (the
- *      retarget's line says so).
+ *      the lines that say what it made true: one per validated target, or the
+ *      retarget's, which names the target it forgot.
  */
 static error_t profile_enable(
     const dotta_ctx_t *ctx,
@@ -490,9 +493,9 @@ static error_t profile_enable(
     error_t err = NULL;
 
     /* Phase 1 observations — tallied during the validation loop. retarget names
-     * the one already-enabled profile whose binding this run updates (borrowed
-     * from to_enable; at most one, the line naming one with a target —
-     * profile_enable_post_parse). */
+     * the already-enabled profile whose binding this run updates (borrowed from
+     * to_enable): the run's one profile, the line naming one with a target
+     * (profile_enable_post_parse). */
     const char *retarget = NULL;
     size_t already_enabled = 0;
     size_t refused = 0;    /* Not here, or needing a target the line did not give */
@@ -528,6 +531,13 @@ static error_t profile_enable(
         }
     }
 
+    /* --all over a store with no profile is idempotent, as disable's over an
+     * empty set is (profile_disable): nothing to enable, and the run says so */
+    if (opts->all_profiles && to_enable.count == 0) {
+        output_summary(out, OUTPUT_NORMAL, "No profiles to enable");
+        return NULL;
+    }
+
     /* Fatal up-front: the target itself. A target is a filesystem-shaped argument
      * — absolute, tilde, or relative to the working directory, the spelling
      * completion offers — spelled by the target's reading (infra/path.h
@@ -557,11 +567,12 @@ static error_t profile_enable(
 
         if (state_enabled(state, name)) {
             /* A row whose branch is gone, said whichever arm below it takes — a
-             * retarget moves its binding and brings no branch back: the fact in
-             * the set's words (core/scope.h scope_require_enabled), and both
-             * ways out in apply's order (cmds/apply.c cmd_apply), enable asking
-             * no remote which of them it is. The fact is the view before's, as
-             * the unbound one below is (core/manifest.h manifest_missing). */
+             * retarget moves its binding and brings no branch back — in the set's
+             * words (core/scope.h scope_require_enabled): a state this run does
+             * not move, whose two ways out status and apply say beside every
+             * such profile (cmds/status.c status_print_profiles, cmds/apply.c
+             * cmd_apply). The fact is the view before's, as the unbound one below
+             * is (core/manifest.h manifest_missing). */
             manifest_missing_t missing = manifest_missing(before);
             for (size_t j = 0; j < missing.count; j++) {
                 if (strcmp(missing.entries[j], name) != 0) continue;
@@ -571,19 +582,15 @@ static error_t profile_enable(
                     out, OUTPUT_NORMAL,
                     "Profile '%s' is enabled, and Git holds no branch for it", name
                 );
-                output_hint(
-                    out, OUTPUT_NORMAL, "Run 'dotta profile disable %s' to drop it, or "
-                    "'dotta sync %s' to bring its branch back where the remote holds it",
-                    name, name
-                );
                 break;
             }
 
             /* --target on an enabled profile is a retarget: the binding is the
              * verb's subject, and state_enable_profile's UPSERT arm updates it
-             * in place. Only another directory is work — the row's own, under
-             * its spelling or another (mount_same_target), is an idempotent re-run
-             * and stays the skip below, the row's spelling kept. */
+             * in place, forgetting the one the row held, which the screens name.
+             * Only another directory is work — the row's own, under its spelling
+             * or another (mount_same_target), is an idempotent re-run and stays
+             * the skip below, the row's spelling kept. */
             if (target) {
                 const char *current = state_target(state, name);
                 if (!current || !mount_same_target(current, target)) {
@@ -608,9 +615,11 @@ static error_t profile_enable(
             output_info(out, OUTPUT_VERBOSE, "  %s already enabled", name);
             already_enabled++;
 
-            /* A row with no binding whose claims need one: said as the
-             * needs-a-target skip below says it, with the flag. The fact is the
-             * view before's, as status's legend reads it (core/manifest.h
+            /* A row with no binding whose claims need one: the needs-a-target
+             * skip's fact below, the row enabled all the same — a state this
+             * run does not move, whose way out status's legend says beside every
+             * such profile (cmds/status.c status_print_profiles). The fact is
+             * the view before's, as that legend reads it (core/manifest.h
              * manifest_unbound): a claim placed nowhere for want of a target,
              * which a bound row has none of. */
             manifest_unbound_t unbound = manifest_unbound(before);
@@ -622,9 +631,6 @@ static error_t profile_enable(
                     out, OUTPUT_NORMAL,
                     "Profile '%s' holds custom/ paths and needs a target here", name
                 );
-                output_hint(
-                    out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", name
-                );
                 break;
             }
             continue;
@@ -632,19 +638,17 @@ static error_t profile_enable(
 
         /* Is the profile here? Git's answer or Git's error: an unreadable ref
          * is not an absence, and read as one it sent the user to fetch a profile
-         * that was here. */
+         * that was here. One that is not is refused in the words every verb refuses
+         * it with, the verb that brings one its clause (core/profiles.h
+         * profile_require). */
         bool exists = false;
         err = gitops_branch_exists(repo, name, &exists);
         if (err) return err;
         if (!exists) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
-                out, OUTPUT_NORMAL, "Profile '%s' doesn't exist locally", name
-            );
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta profile list' for the local "
-                "profiles, or 'dotta profile fetch %s' to bring it from the remote",
-                name
+                out, OUTPUT_NORMAL, "Profile '%s' doesn't exist locally; 'dotta "
+                "profile fetch %s' brings it from a remote that holds it", name, name
             );
             refused++;
             continue;
@@ -657,9 +661,11 @@ static error_t profile_enable(
          * no binding (core/profiles.h profile_needs_target), asked whatever the
          * flag says, so the profile is the earlier question: a tree Git cannot
          * read, or a sheet this build cannot, is the error here, before the row
-         * is written, as it would be the view build's. Skipped and named with
-         * the flag, whatever the request shape; a run that enabled nothing ends
-         * in the error below. */
+         * is written, as it would be the view build's. Skipped, whatever the
+         * request shape, in the words clone skips it with (cmds/clone.c cmd_clone):
+         * the target it needs names the flag that gives one, and "not enabled"
+         * tells it from an enabled row the same fact is said of above. A run
+         * that enabled nothing ends in the error below. */
         profile_t *profile = NULL;
         bool needs_target = false;
         err = profile_load(repo, name, &profile);
@@ -670,16 +676,26 @@ static error_t profile_enable(
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL,
-                "Profile '%s' holds custom/ paths and needs a target here", name
-            );
-            output_hint(
-                out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", name
+                "Profile '%s' holds custom/ paths and needs a target here; not enabled",
+                name
             );
             refused++;
             continue;
         }
 
         string_array_push(&to_enable_validated, name);
+    }
+
+    /* The binding the retarget forgets, spelled as the screens print it — an
+     * arena copy, because Phase 2's write replaces the row cache state_target
+     * lends from, as disable copies the ones its deletes forget (profile_disable).
+     * NULL where the row had none. */
+    const char *forgotten = NULL;
+    const char *bound = retarget ? state_target(state, retarget) : NULL;
+    if (bound) {
+        char shown[PATH_MAX];
+        output_format_path(bound, identity()->home, shown, sizeof(shown));
+        forgotten = arena_strdup(ctx->arena, shown);
     }
 
     /* Each skip said once: a refused profile by its warning above, an enabled
@@ -692,37 +708,35 @@ static error_t profile_enable(
     }
 
     /* Nothing to enable, live or dry: a refusal where a profile the line named
-     * was refused, each said above; a success where every one was enabled already,
-     * or --all met a repository with no profile to enable. Either exit leaves
-     * the state untouched: the transaction state_open began rolls back at
-     * state_free. */
+     * was refused, each said above; a success where every one was enabled already.
+     * Either exit leaves the state untouched: the transaction state_open began
+     * rolls back at state_free. */
     if (to_enable_validated.count == 0) {
         if (refused == 0) return NULL;
         return error_create(ERR_INVALID_ARG, "No profiles were enabled");
     }
 
     /* Dry-run: preview what a live run would do, skip every state mutation, and
-     * end on the act it did not do */
+     * end on the act it did not do — the retarget's move, the run's one profile,
+     * in the live line's words, or the profiles it would enable */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
-
-        size_t would_enable = to_enable_validated.count - (retarget ? 1 : 0);
-        if (would_enable > 0) {
+        if (retarget && forgotten) {
+            output_info(
+                out, OUTPUT_NORMAL, "Would update target for %s (was %s)",
+                retarget, forgotten
+            );
+        } else if (retarget) {
+            output_info(out, OUTPUT_NORMAL, "Would update target for %s", retarget);
+        } else {
             output_info(
                 out, OUTPUT_NORMAL, "Would enable %zu profile%s:",
-                would_enable, would_enable == 1 ? "" : "s"
+                to_enable_validated.count, to_enable_validated.count == 1 ? "" : "s"
             );
             for (size_t i = 0; i < to_enable_validated.count; i++) {
                 const char *name = to_enable_validated.entries[i];
-                if (retarget && strcmp(name, retarget) == 0) continue;
                 output_print(out, OUTPUT_NORMAL, "  - %s\n", name);
             }
-        }
-        if (retarget) {
-            output_info(
-                out, OUTPUT_NORMAL, "Would update deployment target for '%s'",
-                retarget
-            );
         }
         output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was enabled");
         return NULL;
@@ -737,18 +751,24 @@ static error_t profile_enable(
     }
 
     /* Phase 3: The save, then per-profile feedback — the retarget's line names
-     * its verb. Each line says what the save made true, so none is said before
-     * it: the COMMIT is a write the store can refuse on its own, where a full
-     * disk meets the transaction (core/state.h state_commit), and a line above
-     * it would stand over the refusal. */
+     * its verb, and the target it forgot as a clause of the act it went with:
+     * the value the write destroyed, which the dry run names alike and nothing
+     * remembers after. Each line says what the save made true, so none is said
+     * before it: the COMMIT is a write the store can refuse on its own, where a
+     * full disk meets the transaction (core/state.h state_commit), and a line
+     * above it would stand over the refusal. */
     err = state_save(state);
     if (err) return err;
 
-    for (size_t i = 0; i < to_enable_validated.count; i++) {
-        const char *name = to_enable_validated.entries[i];
-        if (retarget && strcmp(name, retarget) == 0) {
-            output_success(out, OUTPUT_NORMAL, "Updated target for %s", name);
-        } else {
+    if (retarget && forgotten) {
+        output_success(
+            out, OUTPUT_NORMAL, "Updated target for %s (was %s)", retarget, forgotten
+        );
+    } else if (retarget) {
+        output_success(out, OUTPUT_NORMAL, "Updated target for %s", retarget);
+    } else {
+        for (size_t i = 0; i < to_enable_validated.count; i++) {
+            const char *name = to_enable_validated.entries[i];
             output_success(out, OUTPUT_NORMAL, "Enabled %s", name);
         }
     }
@@ -774,10 +794,8 @@ static error_t profile_enable(
  *      — it is the way out of a set the loads cannot build, and what it leaves
  *      can hold another such profile still.
  *   3. The save, then per-profile feedback — state_save, and only once it lands
- *      the lines that say what it made true: iterate the validated targets to
- *      preserve the existing per-profile UX; a forgotten target is named with
- *      the way back, so `disable --all` then `enable --all` is a copy-paste per
- *      line.
+ *      the lines that say what it made true: one per validated target, a forgotten
+ *      target named on its profile's line, as the dry run names it.
  */
 static error_t profile_disable(
     const dotta_ctx_t *ctx,
@@ -900,19 +918,20 @@ static error_t profile_disable(
 
     /* Phase 3: The save, then per-profile feedback — each line said once the
      * save made it true, as enable's are. The target the row carried went with
-     * it; the line says so and names the command that puts it back. */
+     * it, and the line names it as a clause of the act it went with, the dry
+     * run's in the past: the value is what nothing remembers after, and the command
+     * that binds it again is enable's own --target. */
     err = state_save(state);
     if (err) return err;
 
     for (size_t i = 0; i < to_disable_validated.count; i++) {
         const char *name = to_disable_validated.entries[i];
-        output_success(out, OUTPUT_NORMAL, "Disabled %s", name);
         if (forgotten[i]) {
-            output_print(
-                out, OUTPUT_NORMAL,
-                "  Forgot target %s (dotta profile enable %s --target %s "
-                "restores it)\n", forgotten[i], name, forgotten[i]
+            output_success(
+                out, OUTPUT_NORMAL, "Disabled %s (forgot target %s)", name, forgotten[i]
             );
+        } else {
+            output_success(out, OUTPUT_NORMAL, "Disabled %s", name);
         }
     }
 
@@ -1316,9 +1335,8 @@ static const args_command_t spec_profile_disable = {
         "   or: %s profile disable [options] --all",
     .description   =
         "Disables one or more profiles; the next 'dotta apply' prunes the\n"
-        "unchanged copies they deployed. A disabled profile's target goes with\n"
-        "its row — nothing remembers it — and the receipt names the target it\n"
-        "forgets with the command that restores it.\n",
+        "unchanged copies they deployed. A disabled profile's target is\n"
+        "forgotten — nothing remembers it — and the disable names it.\n",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,

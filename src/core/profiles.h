@@ -181,8 +181,9 @@ void profile_order(string_array_t *names);
  * core/scope.c scope_build, on its filter's refusal path. A verb that acts on
  * both answers — add (open or create), enable's skip, remove's --force arm, the
  * enabled set resolved without a view (core/scope.c scope_resolve_enabled) —
- * asks gitops_branch_exists itself and reads the bool; the view's build reads
- * gitops_branch_commit, whose absence is its answer (core/manifest.c
+ * asks gitops_branch_exists itself and reads the bool, enable's skip saying the
+ * refusal above as its warning (cmds/profile.c profile_enable); the view's build
+ * reads gitops_branch_commit, whose absence is its answer (core/manifest.c
  * manifest_build).
  *
  * @param repo Repository (must not be NULL)

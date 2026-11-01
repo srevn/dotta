@@ -3167,7 +3167,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
     if (stale_files + stale_dirs > 0) {
         char stale[64];
-        output_format_counts(stale_files, stale_dirs, stale, sizeof(stale));
+        output_format_kinds(stale_files, stale_dirs, stale, sizeof(stale));
         output_info(out, OUTPUT_NORMAL, "Found %s changed in Git", stale);
     }
 

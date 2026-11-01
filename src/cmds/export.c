@@ -1320,7 +1320,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         }
     }
     char counts[64];
-    output_format_counts(file_count, dir_claims, counts, sizeof(counts));
+    output_format_kinds(file_count, dir_claims, counts, sizeof(counts));
 
     /* The copy's own first entry: the root for a tree, the leaf for a file. */
     const char *dest_display = to_stdout ? "stdout" : list.items[0].dest_path;

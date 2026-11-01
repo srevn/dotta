@@ -635,7 +635,8 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size);
  *
  * The phrase, not its frame: callers put it in parentheses after a name, in a
  * padded column, or on a line of its own, and none of them has to agree about
- * anything but the words. 64 bytes is enough for any pair of counts.
+ * anything but the words. A sentence says the pair its own way
+ * (output_format_kinds). 64 bytes is enough for any pair of counts.
  *
  * @param files Number of files
  * @param directories Number of directories
@@ -643,6 +644,33 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size);
  * @param buffer_size Size of output buffer (minimum 64 bytes)
  */
 void output_format_counts(
+    size_t files,
+    size_t directories,
+    char *buffer,
+    size_t buffer_size
+);
+
+/**
+ * Format a count of files and directories as a sentence says it
+ *
+ * "3 files and 2 directories" — naming only the kinds that are actually there,
+ * joined by "and", so the phrase reads as the object of the sentence around it:
+ * "Removed 3 files and 2 directories from profile 'p'". One phrase for each of
+ * the two places a count stands, never two spellings of one: in its own frame
+ * the pair is output_format_counts' list. A sentence counts what an act took or
+ * a run found, so no reader passes two zeros, which read "0 files".
+ *
+ * Readers: cmds/remove.c remove_paths (its dry run and its receipt) and
+ * remove_ask_paths (its question), cmds/export.c cmd_export (its dry run and
+ * its receipt), cmds/apply.c cmd_apply (what changed in Git), cmds/add.c cmd_add
+ * (what the walk collected).
+ *
+ * @param files Number of files
+ * @param directories Number of directories
+ * @param buffer Output buffer for the phrase
+ * @param buffer_size Size of output buffer (minimum 64 bytes)
+ */
+void output_format_kinds(
     size_t files,
     size_t directories,
     char *buffer,

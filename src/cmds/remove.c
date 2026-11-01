@@ -761,28 +761,6 @@ static void remove_print_overlaps(
 }
 
 /**
- * Format a claim count for display: "2 files", "1 directory", or "2 files and 1
- * directory". The directory half appears only when dirs is non-zero, so file-only
- * wordings stay exactly what they were. Three distant sites print the phrase
- * (the dry-run total, the confirmation prompt, the receipt) and tests pin the
- * wording — one spelling.
- */
-static void remove_format_counts(
-    char *buf, size_t size, size_t files, size_t dirs
-) {
-    if (dirs == 0) {
-        snprintf(buf, size, "%zu file%s", files, files == 1 ? "" : "s");
-    } else if (files == 0) {
-        snprintf(buf, size, "%zu director%s", dirs, dirs == 1 ? "y" : "ies");
-    } else {
-        snprintf(
-            buf, size, "%zu file%s and %zu director%s",
-            files, files == 1 ? "" : "s", dirs, dirs == 1 ? "y" : "ies"
-        );
-    }
-}
-
-/**
  * Ask whether to remove the claims the arguments took — or answer yes where no
  * question is owed: --force, which answers in advance; -i, whose answer for each
  * claim was its consent (remove_paths); a removal below the threshold
@@ -812,7 +790,7 @@ static output_answer_t remove_ask_paths(
         else files++;
     }
     char counts[64];
-    remove_format_counts(counts, sizeof(counts), files, dirs);
+    output_format_kinds(files, dirs, counts, sizeof(counts));
 
     /* The question, and beneath it the one promise remove makes the copies before
      * the act: what every machine's next apply does to them where no other enabled
@@ -995,7 +973,7 @@ static error_t remove_paths(
             else dry_files++;
         }
         char counts[64];
-        remove_format_counts(counts, sizeof(counts), dry_files, dry_dirs);
+        output_format_kinds(dry_files, dry_dirs, counts, sizeof(counts));
         output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL,
@@ -1109,7 +1087,7 @@ static error_t remove_paths(
     /* Success: what the commit took, said once it lands and before the record
      * phase, which may wait on the store's lock (core/state.h state_begin) */
     char counts[64];
-    remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
+    output_format_kinds(removed_files, removed_dirs, counts, sizeof(counts));
     output_success(
         out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
         counts, opts->profile

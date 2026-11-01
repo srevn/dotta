@@ -1226,6 +1226,31 @@ void output_format_counts(
         snprintf(buffer, buffer_size, "empty");
 }
 
+void output_format_kinds(
+    size_t files, size_t directories, char *buffer, size_t buffer_size
+) {
+    if (!buffer || buffer_size == 0) return;
+
+    if (files > 0 && directories > 0)
+        snprintf(
+            buffer, buffer_size, "%zu file%s and %zu director%s",
+            files, files == 1 ? "" : "s",
+            directories, directories == 1 ? "y" : "ies"
+        );
+    else if (files > 0)
+        snprintf(
+            buffer, buffer_size, "%zu file%s",
+            files, files == 1 ? "" : "s"
+        );
+    else if (directories > 0)
+        snprintf(
+            buffer, buffer_size, "%zu director%s",
+            directories, directories == 1 ? "y" : "ies"
+        );
+    else
+        snprintf(buffer, buffer_size, "0 files");
+}
+
 void output_format_path(
     const char *path, const char *home, char *buffer, size_t buffer_size
 ) {

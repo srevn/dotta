@@ -2277,13 +2277,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            size_t files_found = walk.files.count - files_before;
-            size_t dirs_found = walk.directories.count - dirs_before;
+            char counts[64];
+            output_format_kinds(
+                walk.files.count - files_before, walk.directories.count - dirs_before,
+                counts, sizeof(counts)
+            );
             output_info(
-                out, OUTPUT_VERBOSE,
-                "Collected %zu file%s and %zu director%s under %s",
-                files_found, files_found == 1 ? "" : "s",
-                dirs_found, dirs_found == 1 ? "y" : "ies", filesystem_path
+                out, OUTPUT_VERBOSE, "Collected %s under %s", counts, filesystem_path
             );
         }
     }

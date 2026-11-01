@@ -295,8 +295,8 @@ error_t mount_table_build(
  * (mount.c namespace_holds), which of two at one directory takes the naming tie
  * — a binding being the more specific statement (mount_root_above) — and add's
  * receipt, which says under which directory the custom/ names it captured landed
- * (cmds/add.c add_print_labels). Whether a place is the user's *to name* is not
- * a question the tree asks: the ruling is that no directory is different because
+ * (cmds/add.c add_labels). Whether a place is the user's *to name* is not a
+ * question the tree asks: the ruling is that no directory is different because
  * it is a root, so nothing weighs this field against a name.
  *
  * And not the label's own rule, of which this field is the consequence and never
@@ -376,8 +376,8 @@ const mount_root_t *mount_root_above(
  * gives the binding the tie. Never fails, allocates nothing.
  *
  * Readers: add's receipt, which names the place the custom/ names it captured
- * went under (cmds/add.c add_print_labels); the target mark, which asks the table
- * no state row can produce for each label a profile claims under (core/profiles.c
+ * went under (cmds/add.c add_labels); the target mark, which asks the table no
+ * state row can produce for each label a profile claims under (core/profiles.c
  * profile_needs_target); the climbs' look, which spells the name a place has
  * under each of the profile's roots strictly above it, to retire every derived
  * claim the disk contradicts there (core/profiles.c profile_look_rung); and add's

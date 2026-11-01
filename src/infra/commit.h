@@ -40,10 +40,10 @@
  * deletes — status's [deleted] legend line (cmds/status.c status_print_workspace),
  * update's Deleted paths header and help (cmds/update.c update_print_preview,
  * spec_update), apply's help, "files deleted from their profiles" (cmds/apply.c
- * spec_apply) — and every other action keeps, "No file is deleted from disk, on
- * any machine" on remove's question, dry run and help (cmds/remove.c
- * remove_ask_paths, remove_paths, spec_remove), which a profile's deletion says
- * too, no history answering for a branch that is gone (remove_print_deletion).
+ * spec_apply) — and every other action keeps, "no file is deleted from disk, on
+ * any machine" in remove's help (cmds/remove.c spec_remove), a profile's deletion
+ * among them, no history answering for a branch that is gone (cmds/remove.h
+ * cmd_remove).
  */
 typedef enum {
     COMMIT_ACTION_ADD,         /* cmds/add.c */

@@ -45,11 +45,11 @@
  *
  * The vocabulary's one currency: what a reader holds, passes, stores and loops
  * over. A label indexes — label_words at every word reader, a receipt's counts
- * at cmds/add.c add_print_labels — and costs nothing to keep. Its word is read
- * from label_words where a string is printed, written or matched, and read back
- * into a label where a tree or an argument is read (label_split, label_of). No
- * reader holds a label's word in a label's place: the word is `label_words[label]`
- * at the point of use.
+ * at cmds/add.c add_labels — and costs nothing to keep. Its word is read from
+ * label_words where a string is printed, written or matched, and read back into
+ * a label where a tree or an argument is read (label_split, label_of). No reader
+ * holds a label's word in a label's place: the word is `label_words[label]` at
+ * the point of use.
  *
  * A fourth label is an enumerator here, an entry in label_words, one more slot
  * in every array sized by LABEL_COUNT, a decision at every reader that derives
@@ -66,11 +66,11 @@ typedef enum {
 
 /**
  * The labels' arity, for a walk over them (the grammar's own, cmds/add.c
- * add_print_labels, core/profiles.c profile_needs_target and profile_look_rung)
- * and for an array with one slot per label (label_words itself, that receipt's
- * counts, and the labels profile_needs_target notes). A macro, not an enumerator,
- * so the type holds no sentinel: every label_t a reader holds subscripts
- * label_words in range.
+ * add_labels, core/profiles.c profile_needs_target and profile_look_rung) and
+ * for an array with one slot per label (label_words itself, that receipt's counts,
+ * and the labels profile_needs_target notes). A macro, not an enumerator, so
+ * the type holds no sentinel: every label_t a reader holds subscripts label_words
+ * in range.
  */
 #define LABEL_COUNT (LABEL_CUSTOM + 1)
 
@@ -193,8 +193,8 @@ bool label_prefixes(const char *s);
  * (core/metadata.c metadata_capture_ownership), and which rule placed the root
  * a relocated claim lands under (core/workspace.c workspace_analyze_orphans) —
  * three that only index by it: add's receipt counting names by their label
- * (cmds/add.c add_print_labels), a profile's need of a target noting the labels
- * it claims under (core/profiles.c profile_note_label), and add's ancestry refusal
+ * (cmds/add.c add_labels), a profile's need of a target noting the labels it
+ * claims under (core/profiles.c profile_note_label), and add's ancestry refusal
  * asking for the root a captured name's label resolves to (cmds/add.c
  * add_refuse_ancestry) — and two that compare it: a contribution's places, which
  * ask whether two claims share a label (core/manifest.c manifest_places), and

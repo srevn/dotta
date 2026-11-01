@@ -554,7 +554,7 @@ typedef struct {
 } remove_overlap_t;
 
 /**
- * The multi-profile section, as data: one entry per path this removal shares
+ * The multi-profile warning, as data: one entry per path this removal shares
  * with another profile
  */
 typedef struct {
@@ -688,27 +688,22 @@ static error_t remove_overlaps(
 }
 
 /**
- * Print the overlap section
+ * Print the overlap warning: one row per shared path
  *
- * One line per shared path: the path, then each other profile and — where its
- * name for the place differs from the removed claim's — the name it holds it
- * under, since under two bindings one path wears two names. The closing lines
- * say what is true of the shared paths: the removal takes them from this profile
- * alone, and where another enabled profile claims one, the path stays managed
- * under that claim — whether the removed claim stood there or another's stood
- * over it — said once, here, before the act, and after it by status, which reads
- * the copy's record as that profile's reassignment. What remove does to every
- * other copy is promised once before the act, by the question (remove_ask_paths)
- * or the dry run.
+ * The path, then each other profile and — where its name for the place differs
+ * from the removed claim's — the name it holds it under, since under two bindings
+ * one path wears two names; and where another enabled profile claims it, that
+ * the path stays tracked: the removal takes it from this profile alone, and the
+ * path stays managed under that claim — whether the removed claim stood there
+ * or another's stood over it — said on its row, before the act, and after it by
+ * status, which reads the copy's record as that profile's reassignment. What
+ * remove does to every other copy is the model's, which remove's help says.
  */
-static void remove_print_overlaps(
-    output_t *out,
-    const remove_overlaps_t *overlaps,
-    const char *current_profile
-) {
+static void remove_print_overlaps(output_t *out, const remove_overlaps_t *overlaps) {
     if (overlaps->count == 0) return;
 
-    output_section(out, OUTPUT_NORMAL, "Multi-profile path warning");
+    /* A block of its own, before the act */
+    output_gap(out, OUTPUT_NORMAL);
     output_warning(
         out, OUTPUT_NORMAL, "Found %zu path%s in multiple profiles:",
         overlaps->count, overlaps->count == 1 ? "" : "s"
@@ -730,33 +725,10 @@ static void remove_print_overlaps(
                 );
             }
         }
-        output_endline(out, OUTPUT_NORMAL);
-    }
-
-    /* Explain implications */
-    output_gap(out, OUTPUT_NORMAL);
-    output_info(
-        out, OUTPUT_NORMAL,
-        "These paths will be removed only from profile '%s'",
-        current_profile
-    );
-
-    /* Said once, at the first path another enabled profile claims: the path stays
-     * in the view, so its copy is that profile's to acknowledge or replace on
-     * apply, never pruned or released — the record rule in one clause, and the
-     * exception to the promise the question or the dry run makes */
-    for (size_t i = 0; i < overlaps->count; i++) {
-        if (overlaps->entries[i].provided) {
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "Another enabled profile also tracks some of them"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Those paths stay tracked, from that profile"
-            );
-            break;
+        if (overlap->provided) {
+            output_print(out, OUTPUT_NORMAL, " {dim}(stays tracked){reset}");
         }
+        output_endline(out, OUTPUT_NORMAL);
     }
 }
 
@@ -874,9 +846,9 @@ static error_t remove_paths(
     if (err) goto cleanup;
 
     /* What the removal shares with the other profiles (critical safety check).
-     * Advisory: the untrack proceeds without the section and says why, since a
+     * Advisory: the untrack proceeds without the warning and says why, since a
      * local profile nobody enabled must not stop the repair — and must not hide
-     * a claim in silence either, an absent section reading as "no overlap". */
+     * a claim in silence either, an absent warning reading as "no overlap". */
     err = remove_overlaps(ctx, claims, claim_count, opts->profile, &overlaps);
     if (err) {
         output_gap(out, OUTPUT_NORMAL);
@@ -887,11 +859,11 @@ static error_t remove_paths(
         err = NULL;
     }
 
-    /* The overlap section, BEFORE any operation */
-    remove_print_overlaps(out, &overlaps, opts->profile);
+    /* The overlap warning, BEFORE any operation */
+    remove_print_overlaps(out, &overlaps);
 
     /* Selection: -i narrows the run, each claim asked beside its name, beneath
-     * the overlap section and before anything fires — so the hooks and the plan
+     * the overlap warning and before anything fires — so the hooks and the plan
      * below see exactly what will happen, a declined claim out before the pre-hook
      * names the set. Each is a consent question, answered by a terminal or a
      * pipe, as a script answers it (base/output.h output_ask), and its answer

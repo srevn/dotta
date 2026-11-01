@@ -1216,11 +1216,21 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 23: the receipt, once the commit lands and before the record phase,
      * which may wait on the store's lock (core/state.h state_begin). A block of
-     * its own, beneath the preview's patch, the question or the trace. */
-    output_success(
-        out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", restored.storage_path,
-        profile
-    );
+     * its own, beneath the preview's patch, the question or the trace. A profile
+     * this machine has not enabled is said on its line: the commit restored content
+     * no apply here deploys, as add says of a capture into one (cmds/add.c
+     * cmd_add). */
+    if (!state_enabled(state, profile)) {
+        output_success(
+            out, OUTPUT_NORMAL, "Reverted %s in profile '%s' (not enabled here)",
+            restored.storage_path, profile
+        );
+    } else {
+        output_success(
+            out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", restored.storage_path,
+            profile
+        );
+    }
 
     /* Step 24: the record phase, at the place step 7 resolved — the restored
      * claim's (revert_write_record). Non-fatal: the commit stands, so the store's
@@ -1241,18 +1251,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
     }
 
-    /* Step 25: a disabled profile's revert reaches no view at all — a profile
-     * this machine has not enabled has nothing to apply the revert to — and says
-     * so once the record phase has ended, a block of its own */
-    if (!state_enabled(state, profile)) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
-            out, OUTPUT_NORMAL, "Note: Profile '%s' is not enabled on this machine",
-            profile
-        );
-    }
-
-    /* Step 26: the post-revert hook, last (utils/hooks.h hook_fire_post): the
+    /* Step 25: the post-revert hook, last (utils/hooks.h hook_fire_post): the
      * commit landed and the record phase's transaction ended, so the hook meets
      * the store this run leaves */
     hook_fire_post(config, out, &hook_inv);

@@ -1225,50 +1225,6 @@ static void add_print_capture(
 }
 
 /**
- * Name the command that gives a profile no row holds its place here
- *
- * The one remedy an add into such a profile leaves, whichever screen says it:
- * the receipt's, where the record phase found no row, and the preview's, where
- * the rows it read say the same — the last line of the block it lands in, the
- * receipt's summary or the preview's counts, beneath the record's warning where
- * one stands. Enable is the verb, and what it must bring is one of three things.
- * The target as the user typed it, when the run brought one — "here" is where
- * they typed it. Else a target, when the profile as this command opened it holds
- * a claim no binding places (core/manifest.h manifest_unbound): the reading
- * `profile enable` refuses on, so the hint never names a command that refuses —
- * the profile's custom/ paths were there before this add and are there after
- * it, whatever this add captured beside them. Else enable alone.
- *
- * @param out     Output context (must not be NULL)
- * @param profile The profile (must not be NULL)
- * @param target  The --target the run brought, as typed; NULL without one
- * @param view    The profile as this command opened it, under its table (must
- *                not be NULL)
- */
-static void add_print_enable(
-    output_t *out, const char *profile, const char *target, const manifest_t *view
-) {
-    if (target) {
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta profile enable %s --target %s' to deploy it here",
-            profile, target
-        );
-    } else if (manifest_unbound(view).count > 0) {
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta profile enable %s --target /path' to activate and deploy",
-            profile
-        );
-    } else {
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta profile enable %s' to activate and deploy", profile
-        );
-    }
-}
-
-/**
  * The phrase that says which labels the captured paths landed under
  *
  * A capture's name is the one typed for it, or the claim kept at its path — this
@@ -1346,8 +1302,9 @@ static const char *add_labels(const add_walk_t *walk) {
  * Say what the add would do: the run's lines in the future tense
  *
  * Every line is the decision's — the walk's lists, the names they were listed
- * under, each file's verdict — and the one remedy a preview can name closes them.
- * What only a capture or the commit can say is the run's alone (cmds/add.h).
+ * under, each file's verdict — or the rows': where the profile stands here, and
+ * the binding it would take. What only a capture or the commit can say is the
+ * run's alone (cmds/add.h).
  *
  * @param walk The selection: its lists, its profile and the view it named through,
  *             and the context's output and rows (must not be NULL)
@@ -1387,20 +1344,29 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
 
     /* The receipt's block in the future tense, arm for arm but one: whether the
      * commit moves anything is the bytes' to say, so a preview counts what it
-     * would capture and "Nothing changed" is the run's alone. Then the profile's
-     * line, as the receipt's follows its own: the branch the add would create,
-     * or the binding the flag would give an enabled row that has none, which
-     * the record phase writes from the rows the dispatcher loaded. A block of
-     * its own, beneath the trace above it and the walk's warnings. */
+     * would capture and "Nothing changed" is the run's alone. Its line names,
+     * as the receipt's does, a profile no row holds here, off the rows the
+     * dispatcher loaded. Then the profile's line, as the receipt's follows its
+     * own: the branch the add would create, or the binding the flag would give
+     * an enabled row that has none, which the record phase writes from those
+     * rows. A block of its own, beneath the trace above it and the walk's
+     * warnings. */
     output_gap(out, OUTPUT_NORMAL);
     char counts[64];
     output_format_kinds(
         walk->files.count, walk->directories.count, counts, sizeof(counts)
     );
-    output_info(
-        out, OUTPUT_NORMAL, "Would add %s to profile '%s'%s", counts, walk->profile,
-        add_labels(walk)
-    );
+    if (profile_exists && !state_enabled(state, walk->profile)) {
+        output_info(
+            out, OUTPUT_NORMAL, "Would add %s to profile '%s'%s (not enabled here)",
+            counts, walk->profile, add_labels(walk)
+        );
+    } else {
+        output_info(
+            out, OUTPUT_NORMAL, "Would add %s to profile '%s'%s", counts, walk->profile,
+            add_labels(walk)
+        );
+    }
     if (!profile_exists) {
         output_info(
             out, OUTPUT_NORMAL, "Would create profile '%s' and enable it",
@@ -1409,15 +1375,6 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
     } else if (target && state_enabled(state, walk->profile) &&
         !state_target(state, walk->profile)) {
         output_info(out, OUTPUT_NORMAL, "Would update target for %s", walk->profile);
-    }
-
-    /* The one remedy a preview can name: no row holds the profile and this add
-     * does not create it, so enable comes next — the tail's question, asked before
-     * any phase has run, off the rows the dispatcher loaded. What the rows would
-     * take otherwise is the post-commit view's to say, and a preview builds
-     * none. */
-    if (profile_exists && !state_enabled(state, walk->profile)) {
-        add_print_enable(out, walk->profile, target, walk->view);
     }
 }
 
@@ -2617,8 +2574,12 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * that landed counts both kinds on its ✓ line and says the labels their names
      * landed under (add_labels), under the binding this command's table holds:
      * the flag's when the run brought one, else the row's the pre-flight copied.
-     * Whichever arm, the receipt is the run's summary, a block of its own beneath
-     * the trace. */
+     * Into an existing profile no row holds here, the line says so: the commit
+     * put content this machine does not deploy, and the record phase writes nothing
+     * for it — a row it can bind, never one it adds, so the rows read before it
+     * are its own (add_write_record). A created profile's own line follows the
+     * phase. Whichever arm, the receipt is the run's summary, a block of its
+     * own beneath the trace. */
     if (git_oid_is_zero(&commit)) {
         char counts[64];
         output_format_counts(
@@ -2628,6 +2589,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             out, OUTPUT_NORMAL,
             "Nothing changed in profile '%s' (%s already as captured)",
             opts->profile, counts
+        );
+    } else if (profile_exists && !state_enabled(state, opts->profile)) {
+        char counts[64];
+        output_format_kinds(
+            walk.files.count, walk.directories.count, counts, sizeof(counts)
+        );
+        output_success(
+            out, OUTPUT_NORMAL, "Added %s to profile '%s'%s (not enabled here)", counts,
+            opts->profile, add_labels(&walk)
         );
     } else {
         char counts[64];
@@ -2694,7 +2664,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * at the call. A refused phase leaves every path's record what it was: the
      * first refused statement ended the pass and the rollback took the rest.
      * Each arm asks the block's boundary, so where neither runs — a profile no
-     * row holds, its phase landed — the remedy below is the ✓ lines' last. */
+     * row holds, its phase landed — the ✓ lines are the report's last. */
     if (record_err) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
@@ -2739,19 +2709,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* The remedy the run leaves, keyed on the one fact that decides it. No row
-     * holding this profile makes enable the first verb whichever fate brought
-     * the run here — the tree is shaped and enable is what gives it a place
-     * (add_print_enable, which the preview's screen reads too). A row that does
-     * hold it leaves only a failure to answer, and the retry is this add again
-     * with --force over a profile that now holds the bytes — re-capturing from
-     * disk every claim the arguments reach, those this run left among them: an
-     * apply re-earns the event for the files it adopts and never for a directory,
-     * and an unowned directory is released at scope exit where an owned one is
-     * pruned. */
-    if (!state_enabled(state, opts->profile)) {
-        add_print_enable(out, opts->profile, opts->target, view);
-    } else if (record_err) {
+    /* The remedy the run leaves, where a row holds this profile and its record
+     * phase failed: this add again with --force over a profile that now holds
+     * the bytes — re-capturing from disk every claim the arguments reach, those
+     * this run left among them: an apply re-earns the event for the files it
+     * adopts and never for a directory, and an unowned directory is released at
+     * scope exit where an owned one is pruned. A profile no row holds earns no
+     * record to retry, and its line above says so. */
+    if (record_err && state_enabled(state, opts->profile)) {
         output_hint(out, OUTPUT_NORMAL, "Re-run this add with --force to finish it");
     }
 

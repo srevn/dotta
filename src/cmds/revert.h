@@ -100,9 +100,10 @@ typedef struct {
  *    commit's own name for the file wherever it differs
  * 9. Fires the pre-revert hook, under --dry-run too, where a dry run ends
  * 10. Prompts for confirmation (unless --force)
- * 11. Creates one commit: the restored blob, its claim and its way, and says so
+ * 11. Creates one commit: the restored blob, its claim and its way, and says
+ *     so, naming a profile this machine has not enabled on its line
  * 12. Retires this profile's record at the restored place, where its node is gone
- * 13. Notes a profile not enabled here, and fires the post-revert hook last
+ * 13. Fires the post-revert hook last
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

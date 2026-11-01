@@ -577,9 +577,7 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out);
  * why), add's implicit enable authors no such row (a created profile's custom/
  * claim requires --target, which the row takes), sync and a re-bind can leave
  * an enabled row needing one — an enabled row with no binding is a lifecycle
- * stage the health channel names, not an inconsistency. add asks no producer:
- * it holds a view over its own opened tree under its own table and reads the
- * slice on that (cmds/add.c add_print_enable).
+ * stage the health channel names, not an inconsistency.
  *
  * Cost: one walk of the profile — whose sheet a question before it may have parsed
  * already, the handle keeping it — and a two-root table in a frame of the call's

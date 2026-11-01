@@ -66,8 +66,8 @@
  * `./repo`, `repo/` and the configured spelling of one directory are one string.
  * The caller says so on success, because nothing else will: every later command
  * resolves the configured location and stops there, so a `dotta status` run
- * straight afterwards answers "No dotta repository found... Run 'dotta init'"
- * about the repository just created.
+ * straight afterwards answers "No dotta repository found at" that location about
+ * the repository just created.
  *
  * @param config        Loaded configuration (must not be NULL)
  * @param arena         Arena a positional's settled spelling lives in (must not

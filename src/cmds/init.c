@@ -219,16 +219,12 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     /* A repository outside the configured location is one no later command will
      * find: every one of them resolves that location and stops there, so the
      * next `dotta status` would answer "No dotta repository found at" the
-     * configured location, the repository this run just created standing
-     * elsewhere. */
+     * configured location, the repository this run just created standing elsewhere.
+     * Where they look is said; how to point them here, the help's. */
     if (elsewhere) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'export DOTTA_REPO_DIR=%s', or set core.repo_dir in "
-            "the config file, to use the one just created", path
         );
     }
 

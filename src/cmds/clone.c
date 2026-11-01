@@ -613,17 +613,13 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* A repository outside the configured location is one no later command will
      * find: every one of them resolves that location and stops there, so the
-     * next `dotta status` would answer "No dotta repository found... Run 'dotta
-     * init'" about the repository this run just cloned. */
+     * next `dotta status` would answer "No dotta repository found at" the
+     * configured location, the repository this run just cloned standing elsewhere.
+     * Where they look is said; how to point them here, the help's. */
     if (elsewhere) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(
-            out, OUTPUT_NORMAL,
-            "dotta looks for its repository at %s", elsewhere
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'export DOTTA_REPO_DIR=%s', or set core.repo_dir in "
-            "the config file, to use the one just cloned", local_path
+            out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
         );
     }
 
@@ -743,6 +739,9 @@ const args_command_t spec_clone = {
     .summary     = "Clone an existing dotta repository",
     .usage       = "%s clone [options] <url> [path]",
     .description =
+        "The repository path defaults to $DOTTA_REPO_DIR, then the path\n"
+        "configured in config.toml, then the per-user default directory.\n"
+        "\n"
         "Profile Selection:\n"
         "  (default)       Auto-detect profiles for this system\n"
         "                  (global, <os>, hosts/<hostname> and variants).\n"

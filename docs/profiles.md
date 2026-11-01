@@ -16,8 +16,6 @@ Profiles are the central organizing unit in dotta. Each profile is built on a Gi
 dotta profile enable global darwin
 # ✓ Enabled global
 # ✓ Enabled darwin
-#
-# Hint: Run 'dotta apply' to bring the workspace in line with the enabled profiles
 
 # Disable a profile (next apply prunes its unchanged copies)
 dotta profile disable darwin
@@ -32,7 +30,7 @@ dotta profile list
 dotta profile list --all
 ```
 
-Enabling a profile puts its files in play: dotta now expects them on disk, and a higher profile still wins any path they share, or one beneath a file of its own (see [Layering and Precedence](#layering-and-precedence)). Disabling takes them back out: at the next `apply`, a path a lower profile also holds falls back to it, a file dotta deployed is pruned where unchanged, and one it only found there is left alone, under the [usual cleanup rules](concepts.md#the-view-and-the-record). Both end by naming `dotta apply` when it has work to do, and `dotta apply --dry-run` shows what that work is.
+Enabling a profile puts its files in play: dotta now expects them on disk, and a higher profile still wins any path they share, or one beneath a file of its own (see [Layering and Precedence](#layering-and-precedence)). Disabling takes them back out: at the next `apply`, a path a lower profile also holds falls back to it, a file dotta deployed is pruned where unchanged, and one it only found there is left alone, under the [usual cleanup rules](concepts.md#the-view-and-the-record). Neither touches a file until you run `dotta apply`; `dotta apply --dry-run` shows what it will do.
 
 `enable`, `disable`, `reorder` and `fetch` also work without the `profile` in front of them: `dotta enable global` is `dotta profile enable global`.
 

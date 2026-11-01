@@ -338,10 +338,10 @@ static error_t state_initialize(sqlite3 *db) {
          *     rule above then holds to one dotta never owned
          *   - a stamp is a moment or 0, never negative: the readers of one ask
          *     it both ways — the orphan's ownership gate deployed_at == 0
-         *     (core/workspace.c workspace_analyze_orphans), the voucher for a
-         *     file deployed_at > 0 (core/workspace.c workspace_pending) — which
+         *     (core/workspace.c workspace_analyze_orphans), the acknowledgement
+         *     deployed_at > 0 (core/workspace.h workspace_unacknowledged) — which
          *     agree on these values alone, where a negative stamp would be pruned
-         *     as dotta's by the one and vouch for nothing by the other
+         *     as dotta's by the one and never acknowledged by the other
          *   - a stored id is a real OID — the blob, disk's entry, the head: 20
          *     bytes, never zeroblob
          *   - the key is one a writer spells and C reads whole (key_spelling:

@@ -836,9 +836,9 @@ static inline compare_result_t workspace_compare_confirmed(
  * the record does not name, and where the row's own kind stands the load's flush
  * observes it in the record's place where this host can name its owner and group
  * (workspace_load), a clean file adopted either way (cmds/apply.c cmd_apply).
- * No look — withheld beneath a squatter, failed, or not in the caller's hands
- * (FS_OCCUPANT_UNKNOWN) — disproves nothing, and the reassignment stands: absence
- * is never inferred from a failure to look.
+ * No look — withheld beneath a squatter, or failed (FS_OCCUPANT_UNKNOWN) —
+ * disproves nothing, and the reassignment stands: absence is never inferred from
+ * a failure to look.
  *
  * Reads the LIVE record when handed the item's — after apply acknowledges
  * (workspace_anchor points the item at a record under the row's profile) the
@@ -873,14 +873,12 @@ static inline compare_result_t workspace_compare_confirmed(
  * item's; apply's two acknowledgement loops — the writers that move the record
  * onto the row's profile — with the item's, and its pending reassignments off
  * the verdicts and its record phase, with the verdict's (cmds/apply.c cmd_apply,
- * apply_write_record); and the record's owed work, with none, which asks it of
- * the record against a view with no workspace at all, workspace_stale answering
- * first across kinds (workspace_pending below). A record's WRITER asks the whole
- * binding — profile and storage path both — of the record dotta owns of the row's
- * own node, which is workspace_unacknowledged below; this is the half the screens
- * name and the receipts count. Not manifest_diff_stats_t's `reassigned`, which
- * counts one transition's own delta between two views; this is the record against
- * the view, standing from whenever it began.
+ * apply_write_record). A record's WRITER asks the whole binding — profile and
+ * storage path both — of the record dotta owns of the row's own node, which is
+ * workspace_unacknowledged below; this is the half the screens name and the
+ * receipts count. Not manifest_diff_stats_t's `reassigned`, which counts one
+ * transition's own delta between two views; this is the record against the view,
+ * standing from whenever it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,
@@ -1122,9 +1120,8 @@ static inline bool workspace_capturable(const workspace_item_t *item) {
  * frame's first question, whichever kind stands, and half the gate on its second),
  * classify_absent (an absence over what the view moved past deletes nothing it
  * holds) and workspace_item_line (the [stale] that rides [undeployed]), with
- * cmds/status.c status_print_workspace's legend line for that row;
- * workspace_pending below (the record still disagrees with the view). A reader
- * not on this list is a bug.
+ * cmds/status.c status_print_workspace's legend line for that row. A reader not
+ * on this list is a bug.
  */
 static inline bool workspace_stale(const manifest_row_t *row, const state_record_t *record) {
     return workspace_base(record) ? workspace_compare_confirmed(row, record) != CMP_EQUAL
@@ -1158,9 +1155,9 @@ static inline bool workspace_stale(const manifest_row_t *row, const state_record
  *
  * Readers: core/workspace.c workspace_analyze_claim, which both analyses of an
  * active item call (DIVERGENCE_CLAIM_MOVED where disk has not followed a moved
- * claim, the record's learning where it has), cmds/apply.c apply_write_record
- * (the claims a fix set that the record still lacks), workspace_pending below
- * (the record still disagrees with the view). A reader not on this list is a bug.
+ * claim, the record's learning where it has), and cmds/apply.c apply_write_record
+ * (the claims a fix set that the record still lacks). A reader not on this list
+ * is a bug.
  */
 static inline divergence_type_t workspace_claims_moved(
     const manifest_row_t *row, const state_record_t *record
@@ -1179,44 +1176,6 @@ static inline divergence_type_t workspace_claims_moved(
     }
     return moved;
 }
-
-/**
- * Pending: the record owes apply work — it disagrees with the view somewhere
- *
- * The record against a view, every record once and every claim once, with no
- * workspace and no disk: the answer does not move with --force, and a drift the
- * record does not know — a copy edited or removed behind it — is status's and
- * apply's to find. True where:
- *   - a record's path holds no row of the view: an orphan, which apply settles
- *     whatever its fate — a prune, a release, a reclaim, or the landing that
- *     clears or replaces its node — each said on its receipt, a release and a
- *     reclaim as much as a prune;
- *   - a record is stale against its row, its claim is not the row's, or it is a
- *     reassignment apply acknowledges: the three words above, asked with no look;
- *   - a claim the view stands — a file, a link, a tracked directory — has no
- *     record that vouches for it: an owned one for a file, since apply adopts a
- *     path it merely observed and says so; any for a directory, since apply never
- *     adopts one. A derived row vouches for nothing and needs no voucher: it is
- *     the way to the claims beneath it, which the next load observes where it
- *     stands and apply creates only for a claim it deploys.
- *
- * Readers: the apply hint of cmds/profile.c profile_enable and profile_disable,
- * of cmds/revert.c revert_print_pending, and of cmds/remove.c remove_print_pending,
- * each off the view after its change and worded true of every arm above — apply's
- * aim, no outcome. A reader not on this list is a bug. cmds/update.c cmd_update
- * says the same sentence beside a refused record phase, on its own ground and
- * asking nothing here: each capture or deletion the phase did not record is this
- * work by construction, so the words stay one.
- *
- * @param view The view the record is held against (must not be NULL)
- * @param records The record, as core/state.h state_records reads it (NULL when
- *                record_count is 0)
- * @param record_count Records in it
- * @return Whether the next apply has work the record and the view say
- */
-bool workspace_pending(
-    const manifest_t *view, const state_record_t *records, size_t record_count
-);
 
 /**
  * Bound carrier for a borrowed slice of workspace items

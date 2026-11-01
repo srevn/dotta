@@ -22,7 +22,6 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/workspace.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -455,7 +454,7 @@ cleanup:
 /**
  * Profile enable subcommand
  *
- * Four-phase flow over the view before — the dispatcher's, built over the enabled
+ * Three-phase flow over the view before — the dispatcher's, built over the enabled
  * set as it stands at dispatch (the spec declares it; a set that will not build
  * ends dispatch with the builder's message, and the enable never runs):
  *   1. Gather & validate — resolve --all/args to a request set, then filter out
@@ -473,17 +472,14 @@ cleanup:
  *      profile_enable_post_parse).
  *   2. Write scope to state — state_enable_profile per target. The one call serves
  *      both kinds: a fresh enable inserts the row, a retarget runs the UPSERT
- *      arm state.h documents (the target moves, the position stays).
- *      enabled_profiles membership and order are now authoritative. Nothing else
- *      is written: the view is computed, never stored. `before` borrows nothing
- *      from the row cache the mutation replaces.
- *   3. The view after and the record — manifest_build over the post-enable set,
- *      and the record held against it: whether the next apply has work there
- *      (core/workspace.h workspace_pending). A retarget's claims stand at the
- *      new target, and what its records hold at the old one is apply's to relocate.
- *   4. The save, then per-profile feedback — state_save, and only once it lands
+ *      arm state.h documents (the target moves, the position stays), its claims
+ *      then standing at the new target, and what its records hold at the old
+ *      one apply's to relocate. enabled_profiles membership and order are now
+ *      authoritative. Nothing else is written: the view is computed, never stored.
+ *      `before` borrows nothing from the row cache the mutation replaces.
+ *   3. The save, then per-profile feedback — state_save, and only once it lands
  *      the lines that say what it made true: one per validated target (the
- *      retarget's line says so), then the next step where apply has work.
+ *      retarget's line says so).
  */
 static error_t profile_enable(
     const dotta_ctx_t *ctx,
@@ -667,10 +663,10 @@ static error_t profile_enable(
          * profile's own answer, the labels its walk shows asked of a table with
          * no binding (core/profiles.h profile_needs_target), asked whatever the
          * flag says, so the profile is the earlier question: a tree Git cannot
-         * read, or a sheet this build cannot, is the error here and not one phase
-         * later, after the row was written. Skipped and named with the flag,
-         * whatever the request shape; a run that enabled nothing ends in the
-         * error below. */
+         * read, or a sheet this build cannot, is the error here, before the row
+         * is written, as it would be the view build's. Skipped and named with
+         * the flag, whatever the request shape; a run that enabled nothing ends
+         * in the error below. */
         profile_t *profile = NULL;
         bool needs_target = false;
         err = profile_load(repo, name, &profile);
@@ -713,8 +709,7 @@ static error_t profile_enable(
     }
 
     /* Dry-run: preview what a live run would do, skip every state mutation, and
-     * end on the act it did not do. It changes the enabled set nowhere, so it
-     * leaves apply nothing to do, and names no next step. */
+     * end on the act it did not do */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
@@ -748,19 +743,7 @@ static error_t profile_enable(
         if (err) return err;
     }
 
-    /* Phase 3: The view after, and the record held against it. The builder reads
-     * the rows as the loop above left them — any --target supplied for the new
-     * entries, and the retargeted row's new binding, included. */
-    manifest_t *after = NULL;
-    err = manifest_build(repo, state, ctx->arena, &after);
-    if (err) return err;
-
-    state_record_t *records = NULL;
-    size_t record_count = 0;
-    err = state_records(state, ctx->arena, &records, &record_count);
-    if (err) return err;
-
-    /* Phase 4: The save, then per-profile feedback — the retarget's line names
+    /* Phase 3: The save, then per-profile feedback — the retarget's line names
      * its verb. Each line says what the save made true, so none is said before
      * it: the COMMIT is a write the store can refuse on its own, where a full
      * disk meets the transaction (core/state.h state_commit), and a line above
@@ -777,27 +760,13 @@ static error_t profile_enable(
         }
     }
 
-    /* The next step, where the record owes apply work against the view the save
-     * leaves (core/workspace.h workspace_pending) — whatever began it, this enable
-     * or a change no apply has followed — and nowhere else: a profile enabled
-     * again before an apply let its copies go owes it nothing, and neither does
-     * one this machine places nothing of. Whatever the work is, too: the words
-     * name apply's aim and no outcome */
-    if (workspace_pending(after, records, record_count)) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
-        );
-    }
-
     return NULL;
 }
 
 /**
  * Profile disable subcommand
  *
- * Four-phase flow, the mirror of profile_enable's:
+ * Three-phase flow, the mirror of profile_enable's:
  *   1. Gather & validate — filter requested profiles to those actually enabled;
  *      emit not-enabled diagnostics up front. Read the bindings the deletes will
  *      forget: the one fact disable destroys that the user cannot recompute,
@@ -807,16 +776,15 @@ static error_t profile_enable(
  *      whole, target included. Nothing else is written: what the next apply does
  *      at each path the profile leaves is derivable — the view after holds none
  *      of its claims, and the orphan analysis decides each record left with no
- *      row (core/workspace.c workspace_analyze_orphans).
- *   3. The view after and the record — manifest_build over the post-disable set,
- *      and the record held against it: whether the next apply has work there
- *      (core/workspace.h workspace_pending). A set that will not build is warned
- *      about and the disable lands without the answer.
- *   4. The save, then per-profile feedback — state_save, and only once it lands
+ *      row (core/workspace.c workspace_analyze_orphans). Nor is any view built:
+ *      the write needs none, and must land whatever the enabled set looks like
+ *      — it is the way out of a set the loads cannot build, and what it leaves
+ *      can hold another such profile still.
+ *   3. The save, then per-profile feedback — state_save, and only once it lands
  *      the lines that say what it made true: iterate the validated targets to
  *      preserve the existing per-profile UX; a forgotten target is named with
  *      the way back, so `disable --all` then `enable --all` is a copy-paste per
- *      line. Then the next step where apply has work.
+ *      line.
  */
 static error_t profile_disable(
     const dotta_ctx_t *ctx,
@@ -825,7 +793,6 @@ static error_t profile_disable(
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
@@ -914,8 +881,7 @@ static error_t profile_disable(
     if (to_disable_validated.count == 0) return NULL;
 
     /* Dry-run: preview what a live run would do, skip every state mutation, and
-     * end on the act it did not do. It changes the enabled set nowhere, so it
-     * leaves apply nothing to do, and names no next step. */
+     * end on the act it did not do */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
         output_info(
@@ -939,27 +905,7 @@ static error_t profile_disable(
         if (err) return err;
     }
 
-    /* Phase 3: The view after, and the record held against it (see profile_enable).
-     *
-     * Unlike enable's, this build gates nothing: the disable is a membership
-     * write that needs no view, and it must land whatever the enabled set looks
-     * like — it is the way out of a set the loads cannot build (a profile whose
-     * metadata.json will not parse, a branch that will not load), and what it
-     * leaves can hold another such profile still. The message names the profile;
-     * warn with it and disable without the next step. */
-    manifest_t *after = NULL;
-    state_record_t *records = NULL;
-    size_t record_count = 0;
-    err = manifest_build(repo, state, ctx->arena, &after);
-    if (err) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
-    } else {
-        err = state_records(state, ctx->arena, &records, &record_count);
-        if (err) return err;
-    }
-
-    /* Phase 4: The save, then per-profile feedback — each line said once the
+    /* Phase 3: The save, then per-profile feedback — each line said once the
      * save made it true, as enable's are. The target the row carried went with
      * it; the line says so and names the command that puts it back. */
     err = state_save(state);
@@ -975,18 +921,6 @@ static error_t profile_disable(
                 "restores it)\n", forgotten[i], name, forgotten[i]
             );
         }
-    }
-
-    /* The next step, where the record owes apply work against the view the save
-     * leaves (core/workspace.h workspace_pending), as enable's and in its words
-     * — none where nothing this machine recorded leaves with the profile, nor
-     * where no view after was built to ask */
-    if (after && workspace_pending(after, records, record_count)) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
-        );
     }
 
     return NULL;

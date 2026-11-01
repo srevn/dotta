@@ -858,14 +858,11 @@ const char *state_target(
  *     cmds/revert.c revert_write_record (whose record the restored place holds,
  *     read before the lock and under it), and core/manifest.c manifest_diff
  *     (whether a departed claim leaves an orphan, handed the array by cmds/sync.c
- *     cmd_sync): by path, through state_find_record, which rests on strcmp order
+ *     sync_print_manifest): by path, through state_find_record, which rests on
+ *     strcmp order
  *   - cmds/remove.c remove_owes and remove_write_record (every record, for the
  *     ones the removal reaches at this machine's places, before the lock and
- *     under it) and core/workspace.c workspace_pending (every record against a
- *     view, with no workspace and no disk, handed the array by cmds/sync.c
- *     cmd_sync, cmds/profile.c profile_enable and profile_disable, cmds/revert.c
- *     revert_print_pending and cmds/remove.c remove_print_pending): walks, key
- *     order unread
+ *     under it): walks, key order unread
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *

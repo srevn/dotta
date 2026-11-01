@@ -1830,8 +1830,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * them, rolled back whole: the record is what it was. A refused phase
          * owed a write — a commit of the way alone owes none (update_write_record)
          * — and each capture or deletion it did not record leaves the record
-         * owing apply work against the view, by construction (core/workspace.h
-         * workspace_pending): a modified or re-stored file a stale record, which
+         * behind the commit: a modified or re-stored file a stale record, which
          * the next load confirms where disk agrees; a new one a row no owned
          * record vouches for, which apply adopts; a re-captured directory a claim
          * the record did not reconcile; a deletion an absent orphan, which the
@@ -1839,16 +1838,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * ownership its record already held — apply earns none for a directory
          * (cmds/add.c add_write_record) — which is the conservative side: an
          * unowned directory is released at scope exit, never pruned. The store's
-         * refusal is said in its own words, and the remedy in the sentence every
-         * reader of that work says, true of every arm above — after a mid-sequence
-         * stop only some profiles committed, and the run's line above names what
-         * did. */
+         * refusal is said in its own words and names no step, each arm above
+         * settling as it says — after a mid-sequence stop only some profiles
+         * committed, and the run's line above names what did. */
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
-        );
     }
 
     /* The post-update hook, last (utils/hooks.h hook_fire_post), over a run whose

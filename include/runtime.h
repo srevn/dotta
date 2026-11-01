@@ -293,11 +293,14 @@ typedef enum dotta_verbosity {
  *
  * Who declares it: the commands whose subject is the view — the workspace commands
  * (status, diff, apply, update — `workspace_load` borrows the view rather than
- * building one) — and `profile enable`: its run builds the view after over every
- * profile of the view before, so no enable completes on a set the build refuses,
- * and it reads the view before once — an enabled profile's claims placed nowhere
- * for want of a target (`manifest_unbound`), which an enable naming that profile
- * warns of. A build that fails ends dispatch with the builder's message — a tree
+ * building one) — and `profile enable`, which reads the view before once — an
+ * enabled profile Git holds no branch for (`manifest_missing`), and one whose
+ * claims are placed nowhere for want of a target (`manifest_unbound`), each of
+ * which an enable naming that profile warns of — and whose build gates the set
+ * it adds to: each profile it adds is read as strictly as the build reads one
+ * (`core/profiles.h` `profile_needs_target`), its binding by the target's reading
+ * (`infra/path.h` `path_input_target`), so no enable completes on a set the build
+ * refuses. A build that fails ends dispatch with the builder's message — a tree
  * that will not load, metadata that will not parse — on every path of the command,
  * including the ones that would not have read the view; such a set is broken as
  * a whole, and `profile disable` (or `remove`) is the way out. A custom/ claim
@@ -316,11 +319,10 @@ typedef enum dotta_verbosity {
  * run builds the view before its acts and the one after them for its Manifest
  * block, a failure of either warned and the block skipped, and a dry run builds
  * none) builds its own where it needs it, with the failure handling that path
- * wants. A command that moves Git or the enabled set (add, update, remove, sync,
- * profile enable / disable, clone, interactive) builds the post-mutation view
- * itself — the builder called again over the rows as they now stand: `run.manifest`
- * is the view at dispatch and is never rebuilt — see "Members not welcome" #1
- * on the run.
+ * wants. A command that moves Git or the enabled set and reads the view it leaves
+ * (add, update, remove, sync, clone, interactive) builds that view itself — the
+ * builder called again over the rows as they now stand: `run.manifest` is the
+ * view at dispatch and is never rebuilt — see "Members not welcome" #1 on the run.
  *
  * tolerant
  * --------
@@ -368,9 +370,9 @@ typedef struct dotta_needs {
  *   - `manifest` is the view over the enabled set as it stands at dispatch — a
  *     value of the command arena, rows and indexes alike, which nothing frees.
  *     Never reassigned: a command that moves Git (a commit) or the enabled set
- *     builds the post-mutation view itself, and `run.manifest` stays the view
- *     before — the one `profile enable` reads its missing branches and unbound
- *     claims off (`cmds/profile.c` `profile_enable`).
+ *     builds the view it leaves itself, where it reads one, and `run.manifest`
+ *     stays the view before — the one `profile enable` reads its missing branches
+ *     and unbound claims off (`cmds/profile.c` `profile_enable`).
  *
  * Owning-typed pointers where `close_run` frees (`content_cache_t *`, `keymgr
  * *`, `state_t *`, `git_repository *`); `const` where nothing does (`mounts`

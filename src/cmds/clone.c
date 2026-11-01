@@ -272,6 +272,11 @@ static error_t initialize_state(
  * pre-existing (empty) target directory is kept and only emptied; a directory
  * the clone created is removed outright. Best-effort — the fatal error being
  * unwound still stands, so a removal failure only warns.
+ *
+ * A removal that worked says nothing: the refusal it unwinds says the clone failed,
+ * and a failed clone left nothing, as git's says by its silence
+ * (lib/git/builtin/clone.c remove_junk). One that failed names what stands, which
+ * the next clone into it refuses by name.
  */
 static void rollback_clone_dir(
     const dotta_ctx_t *ctx, const char *path, bool path_preexisted
@@ -288,19 +293,15 @@ static void rollback_clone_dir(
         err = fs_remove_dir(path);
     }
 
-    /* Either outcome a block of its own, beneath what the clone said before it
+    /* What stands, a block of its own beneath what the clone said before it
      * failed */
-    output_gap(ctx->out, OUTPUT_NORMAL);
     if (err) {
+        output_gap(ctx->out, OUTPUT_NORMAL);
         output_warning(
             ctx->out, OUTPUT_NORMAL, "Failed to remove partial clone at %s: %s",
             path, error_line(err)
         );
-        output_hint(ctx->out, OUTPUT_NORMAL, "Remove it manually before retrying");
-        return;
     }
-
-    output_info(ctx->out, OUTPUT_NORMAL, "Rolled back partial clone at %s", path);
 }
 
 /**

@@ -601,14 +601,18 @@ static error_t profile_enable(
                 /* The row's own directory, spelled another way: the binding stands
                  * and keeps the spelling its binder typed, because that spelling
                  * is the key of every path beneath it (infra/mount.h). Said at
-                 * NORMAL: the user typed a flag and it was not written, and the
-                 * row's spelling — not theirs — is the one their next argument
-                 * is read under. */
+                 * NORMAL, in add's sentence for the same flag (cmds/add.c cmd_add),
+                 * the place spelled as every screen that prints a bound target
+                 * spells it (base/output.h output_format_path): the user typed
+                 * a flag and it was not written, and the row's spelling — not
+                 * theirs — is the one their next argument is read under. */
                 if (strcmp(current, target) != 0) {
+                    char shown[PATH_MAX];
+                    output_format_path(current, identity()->home, shown, sizeof(shown));
                     output_info(
                         out, OUTPUT_NORMAL,
-                        "  %s is already bound at %s — the same directory, "
-                        "spelled another way", name, current
+                        "%s is already bound at %s — the same directory, "
+                        "spelled another way", name, shown
                     );
                 }
             }

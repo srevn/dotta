@@ -1844,14 +1844,18 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
         /* The row's own directory, spelled another way: the binding stands and
          * keeps the spelling its binder typed, because that spelling is the key
-         * of every path beneath it (infra/mount.h). Said at NORMAL: the flag's
-         * value was not written, and the row's spelling is the one every argument
-         * below is read under. */
+         * of every path beneath it (infra/mount.h). Said at NORMAL, in enable's
+         * sentence for the same flag (cmds/profile.c profile_enable), the place
+         * spelled as every screen that prints a bound target spells it
+         * (base/output.h output_format_path): the flag's value was not written,
+         * and the row's spelling is the one every argument below is read under. */
         if (bound && strcmp(bound, target) != 0) {
+            char shown[PATH_MAX];
+            output_format_path(bound, identity()->home, shown, sizeof(shown));
             output_info(
                 out, OUTPUT_NORMAL,
-                "  %s is bound at %s — the same directory, spelled another way; "
-                "the arguments are read under that spelling", opts->profile, bound
+                "%s is already bound at %s — the same directory, spelled another way; "
+                "the arguments are read under that spelling", opts->profile, shown
             );
         }
         if (bound) target = bound;

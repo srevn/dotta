@@ -566,7 +566,7 @@ const args_command_t spec_bootstrap = {
         "  %s bootstrap darwin                   # Single profile\n"
         "  %s bootstrap darwin global            # Multiple profiles\n"
         "  %s bootstrap darwin --edit            # Edit darwin/.bootstrap\n"
-        "  %s bootstrap --list                   # List available scripts\n"
+        "  %s bootstrap --list                   # List the enabled profiles' scripts\n"
         "  %s bootstrap darwin --show            # Print the script\n"
         "  %s bootstrap -n                       # Preview without running\n"
         "  %s bootstrap --yes                    # No prompts\n",

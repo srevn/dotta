@@ -175,7 +175,7 @@ Profile `.dottaignore` files start empty and inherit all baseline patterns. Use 
 Per-profile setup scripts that automate system configuration:
 
 ```bash
-# Run bootstrap for auto-detected profiles
+# Run the enabled profiles' scripts
 dotta bootstrap
 
 # Run for specific profiles
@@ -184,8 +184,9 @@ dotta bootstrap darwin
 # Create/edit a bootstrap script
 dotta bootstrap darwin --edit
 
-# List all bootstrap scripts
+# List the enabled profiles' scripts, or every profile's
 dotta bootstrap --list
+dotta bootstrap --list --all
 
 # Preview without executing
 dotta bootstrap --dry-run

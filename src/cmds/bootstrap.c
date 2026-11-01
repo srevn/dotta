@@ -150,14 +150,12 @@ static error_t bootstrap_edit(
         );
     } else if (!git_oid_is_zero(&commit)) {
         output_success(
-            out, OUTPUT_NORMAL,
-            "Updated and committed bootstrap script for profile '%s'",
-            profile
+            out, OUTPUT_NORMAL, "Updated bootstrap script for profile '%s'", profile
         );
     } else {
         output_summary(
             out, OUTPUT_NORMAL,
-            "No changes made to bootstrap script"
+            "No changes made to the bootstrap script for profile '%s'", profile
         );
     }
 

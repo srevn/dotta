@@ -1356,6 +1356,7 @@ static const char *add_labels(const add_walk_t *walk) {
  */
 static void add_print_preview(const add_walk_t *walk, const char *target, bool profile_exists) {
     output_t *out = walk->ctx->out;
+    state_t *state = walk->ctx->run.state;
 
     /* The captures' own lines, in their order and in the future tense: every
      * directory, then every file, by the capture its listed occupant chooses
@@ -1386,8 +1387,11 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
 
     /* The receipt's block in the future tense, arm for arm but one: whether the
      * commit moves anything is the bytes' to say, so a preview counts what it
-     * would capture and "Nothing changed" is the run's alone. A block of its
-     * own, beneath the trace above it and the walk's warnings. */
+     * would capture and "Nothing changed" is the run's alone. Then the profile's
+     * line, as the receipt's follows its own: the branch the add would create,
+     * or the binding the flag would give an enabled row that has none, which
+     * the record phase writes from the rows the dispatcher loaded. A block of
+     * its own, beneath the trace above it and the walk's warnings. */
     output_gap(out, OUTPUT_NORMAL);
     char counts[64];
     output_format_kinds(
@@ -1402,6 +1406,9 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
             out, OUTPUT_NORMAL, "Would create profile '%s' and enable it",
             walk->profile
         );
+    } else if (target && state_enabled(state, walk->profile) &&
+        !state_target(state, walk->profile)) {
+        output_info(out, OUTPUT_NORMAL, "Would update target for %s", walk->profile);
     }
 
     /* The one remedy a preview can name: no row holds the profile and this add
@@ -1409,7 +1416,7 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
      * any phase has run, off the rows the dispatcher loaded. What the rows would
      * take otherwise is the post-commit view's to say, and a preview builds
      * none. */
-    if (profile_exists && !state_enabled(walk->ctx->run.state, walk->profile)) {
+    if (profile_exists && !state_enabled(state, walk->profile)) {
         add_print_enable(out, walk->profile, target, walk->view);
     }
 }
@@ -1845,9 +1852,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * --target below being held to it and taking its spelling. A copy and not
      * the borrow: the record phase's enable and its rollback each replace the
      * row cache state_target lends from (core/state.h, state_profiles), and the
-     * receipt names this binding after both. `target` is the flag's alone, NULL
-     * without it: re-rooting an argument is the flag's grammar (add_spell), never
-     * a row's. */
+     * receipt asks after both whether the row had a binding before this run,
+     * its binding line's question. `target` is the flag's alone, NULL without
+     * it: re-rooting an argument is the flag's grammar (add_spell), never a
+     * row's. */
     const char *bound = arena_strdup(ctx->arena, state_target(state, opts->profile));
 
     /* The target, when the run brought one: a filesystem-shaped argument —
@@ -2659,12 +2667,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     error_t record_err = add_write_record(&walk, target, !profile_exists, &receipt);
 
-    /* The record's line: the branch is Git's fact and stands whatever the record
+    /* The record's lines: the branch is Git's fact and stands whatever the record
      * did; the enabling is a row, which a failed phase can leave standing (a
      * branch recreated over a leftover row) and a successful one cannot invent.
      * So the second clause keys on membership — the handle's rows, as the phase
      * settled them (add_receipt_t) — not on the fate, and the line follows the
-     * phase. */
+     * phase. An existing profile's binding is a row's too: an enabled row the
+     * pre-flight found unbound, bound by the run's flag where the phase landed.
+     * That is enable's retarget, said in its words (cmds/profile.c profile_enable),
+     * and it places the profile's other custom/ claims as well as these. */
     if (!profile_exists) {
         output_success(
             out, OUTPUT_NORMAL,
@@ -2672,6 +2683,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                                                 : "Profile '%s' created",
             opts->profile
         );
+    } else if (!bound && state_target(state, opts->profile)) {
+        output_success(out, OUTPUT_NORMAL, "Updated target for %s", opts->profile);
     }
 
     /* The record phase's own screen, a block of its own below the ✓ lines the

@@ -45,28 +45,33 @@
  *   anything else            history dotta did not write; refused
  *
  * The repository this run just created is bare, undeclared and refless and passes
- * on the third row, so no flag is needed to keep a refusal from stranding it. A
- * bare repository a hand stripped of its HEAD arrives here whole again — the
+ * on the fourth row, so no flag is needed to keep a refusal from stranding it.
+ * A bare repository a hand stripped of its HEAD arrives here whole again — the
  * open failed on the missing file and the init wrote it back — and is then judged
- * by its refs like any other: a foreign one is refused with a HEAD it did not
- * have, which git needs to open it at all.
+ * by its declaration and its refs like any other: dotta's own is repaired, and
+ * a foreign one is refused with a HEAD it did not have, which git needs to open
+ * it at all.
+ *
+ * The declaration is handed back on success: a store already dotta's is
+ * re-initialized, which the run's line says (cmd_init).
  */
 static error_t ensure_repository_adoptable(
     const dotta_ctx_t *ctx,
     git_repository *repo,
-    const char *path
+    const char *path,
+    bool *declared
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(repo);
     CHECK_NULL(path);
+    CHECK_NULL(declared);
 
     /* The declaration first, read off the repository's own config file, which
      * it refuses where libgit2 could not open it: libgit2 drops that level as
      * absent and core.bare goes with it (repository.c load_config_data reads an
      * unset value as not bare), so a bare store whose config will not open would
      * answer "a working tree" below */
-    bool declared = false;
-    error_t err = repo_is_store(repo, &declared);
+    error_t err = repo_is_store(repo, declared);
     if (err) return err;
 
     /* The shape before the declaration is taken: a repository with a working
@@ -77,7 +82,7 @@ static error_t ensure_repository_adoptable(
             "store is bare", path
         );
     }
-    if (declared) return NULL;
+    if (*declared) return NULL;
 
     /* Any reference at all is history this run did not write, and the listing
      * that says there is none is complete or an error (sys/gitops.h): a `refs`
@@ -150,7 +155,8 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     /* Whose repository is this? Asked before the first step below writes, so a
      * refusal leaves it exactly as it was found. */
-    err = ensure_repository_adoptable(ctx, repo, path);
+    bool declared = false;
+    err = ensure_repository_adoptable(ctx, repo, path, &declared);
     if (err) goto cleanup;
 
     /*
@@ -186,10 +192,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     );
     if (err) goto cleanup;
     if (epoch_repaired) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Repaired an unreadable repository epoch"
-        );
+        output_success(out, OUTPUT_NORMAL, "Repaired an unreadable repository epoch");
     }
 
     /* An epoch that already stood is the repository's, whatever this run was
@@ -213,8 +216,14 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     err = ignore_seed_baseline(repo, COMMIT_ACTION_INIT);
     if (err) goto cleanup;
 
-    /* Success, the run's summary, a block of its own beneath the epoch's repair */
-    output_success(out, OUTPUT_NORMAL, "Initialized dotta repository in %s", path);
+    /* The run's line, the summary's last, beneath the epoch's repair where the
+     * run made one: a store already dotta's is re-initialized, as git says of
+     * an init over a repository that stands; one this run created or took is
+     * initialized */
+    output_success(
+        out, OUTPUT_NORMAL, "%s dotta repository in %s",
+        declared ? "Reinitialized" : "Initialized", path
+    );
 
     /* A repository outside the configured location is one no later command will
      * find: every one of them resolves that location and stops there, so the

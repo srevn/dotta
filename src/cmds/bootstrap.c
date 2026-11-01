@@ -220,8 +220,7 @@ static error_t bootstrap_show(
  * List bootstrap scripts across profiles.
  *
  * For each profile of the selection, which is never empty (cmd_bootstrap): green
- * ✓ with path if the script exists, red ✗ otherwise. Closes with a hint about
- * how to create one, where a profile has none.
+ * ✓ with path if the script exists, red ✗ otherwise.
  */
 static void bootstrap_list(
     git_repository *repo, const string_array_t *profiles, output_t *out
@@ -231,7 +230,6 @@ static void bootstrap_list(
 
     output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
-    size_t missing = 0;
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
         if (bootstrap_exists(repo, profile)) {
@@ -244,14 +242,7 @@ static void bootstrap_list(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %-15s (no bootstrap script)\n",
                 profile
             );
-            missing++;
         }
-    }
-
-    /* How to create one, where a profile has none */
-    if (missing > 0) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta bootstrap <profile> --edit' to create one");
     }
 }
 
@@ -289,9 +280,6 @@ static error_t bootstrap_run(
                 ? "No bootstrap scripts found in any profile"
                 : "No bootstrap scripts found in enabled profiles"
         );
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta bootstrap <profile> --edit' to create one");
-
         return NULL;
     }
 
@@ -378,8 +366,9 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
     /* The selection, its shape settled by the line (bootstrap_post_parse) and
      * read by name alone — a script is asked of a profile's name, never of its
      * tree. Each arm holds a profile or ends the run saying why, so every mode
-     * reads one at least: a listing's title stands over a row, and a run's hint
-     * names an --edit a profile here takes (bootstrap_list, bootstrap_run). */
+     * reads one at least: a listing's title stands over a row (bootstrap_list),
+     * and a run that finds no script searched a set that holds one
+     * (bootstrap_run). */
     string_array_t profiles;
     if (opts->profile_count > 0) {
         /* Explicit profiles: each must be here — a script asked for by a name
@@ -405,8 +394,7 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
         /* None here: no script to list or run, said as the enabled set's absence
          * is below — a failure the run goes past, exit 0 — in the words list
          * says of a store that holds no profile (cmds/list.c list_profiles),
-         * never under a title over no row, or beside a hint naming an --edit no
-         * profile takes */
+         * never under a title over no row */
         if (profiles.count == 0) {
             output_warning(out, OUTPUT_NORMAL, "No profiles found");
             return NULL;

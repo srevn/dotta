@@ -1479,13 +1479,32 @@ static error_t remove_profile(
         out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
     );
 
+    /* Where the remote could not be reached, the push to run by hand — the
+     * deletion's other half, the summary's last line — leased on T as the
+     * deletion's own would have been: git refuses a deletion whose lease is stale
+     * (lib/git/remote.c set_ref_status_for_push), so a remote moved since loses
+     * nothing to it. Through dotta git, which runs git on the store (cmds/git.h
+     * cmd_git), where a git typed in a shell acts on whatever repository the
+     * shell stands in. None where T is absent: this store never saw the branch
+     * there. Said before the record phase, so a refusal there never stands above
+     * it, read as that refusal's remedy. */
+    if (remote_name && !remote && !git_oid_is_zero(&tracking)) {
+        char hex[GIT_OID_SHA1_HEXSIZE + 1];
+        git_oid_tostr(hex, sizeof(hex), &tracking);
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta git push --force-with-lease=%s:%s %s :%s' to push the deletion",
+            ref, hex, remote_name, ref
+        );
+    }
+
     /* The record phase (remove_write_record): the enabled row and the record,
      * in one transaction, after the branch is gone — the view the phase builds
      * is the one the deletion leaves. Its claims are the tolerant read's, so a
      * sheet that would not load leaves its directory claims unreached, never
      * reclaimed, the next apply's as every let-go (stated beside the read's
      * warning). Non-fatal: the branch is gone and stands, so the store's refusal
-     * is warned in its own words, a block beneath the success line, and the command
+     * is warned in its own words, a block beneath the summary, and the command
      * goes on; of what the phase owed, every later load re-derives its share —
      * the next apply reclaims a gone copy's record as every absent orphan's,
      * and every load names an enabled profile with no branch, with its remedy. */
@@ -1493,24 +1512,6 @@ static error_t remove_profile(
     if (record_err) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
-    }
-
-    /* Where the remote could not be reached, the push to run by hand, leased on
-     * T as the deletion's own would have been: git refuses a deletion whose lease
-     * is stale (lib/git/remote.c set_ref_status_for_push), so a remote moved
-     * since loses nothing to it. Through dotta git, which runs git on the store
-     * (cmds/git.h cmd_git), where a git typed in a shell acts on whatever
-     * repository the shell stands in. None where T is absent: this store never
-     * saw the branch there. */
-    if (remote_name && !remote && !git_oid_is_zero(&tracking)) {
-        char hex[GIT_OID_SHA1_HEXSIZE + 1];
-        git_oid_tostr(hex, sizeof(hex), &tracking);
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta git push --force-with-lease=%s:%s %s :%s' to push the deletion",
-            ref, hex, remote_name, ref
-        );
     }
 
     /* The post-remove hook, last (utils/hooks.h hook_fire_post): the deletion's

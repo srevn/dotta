@@ -236,12 +236,6 @@ static void key_status(const dotta_ctx_t *ctx) {
             out, OUTPUT_NORMAL, "  Status: {red}disabled{reset}\n"
         );
 
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Set encryption.enabled = true in the config file to enable encryption"
-        );
-
         return;
     }
 

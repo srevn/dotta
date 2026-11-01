@@ -1229,14 +1229,15 @@ static void add_print_capture(
  *
  * The one remedy an add into such a profile leaves, whichever screen says it:
  * the receipt's, where the record phase found no row, and the preview's, where
- * the rows it read say the same. Enable is the verb, and what it must bring is
- * one of three things. The target as the user typed it, when the run brought
- * one — "here" is where they typed it. Else a target, when the profile as this
- * command opened it holds a claim no binding places (core/manifest.h
- * manifest_unbound): the reading `profile enable` refuses on, so the hint never
- * names a command that refuses — the profile's custom/ paths were there before
- * this add and are there after it, whatever this add captured beside them. Else
- * enable alone.
+ * the rows it read say the same — the last line of the block it lands in, the
+ * receipt's summary or the preview's counts, beneath the record's warning where
+ * one stands. Enable is the verb, and what it must bring is one of three things.
+ * The target as the user typed it, when the run brought one — "here" is where
+ * they typed it. Else a target, when the profile as this command opened it holds
+ * a claim no binding places (core/manifest.h manifest_unbound): the reading
+ * `profile enable` refuses on, so the hint never names a command that refuses —
+ * the profile's custom/ paths were there before this add and are there after
+ * it, whatever this add captured beside them. Else enable alone.
  *
  * @param out     Output context (must not be NULL)
  * @param profile The profile (must not be NULL)
@@ -1247,10 +1248,6 @@ static void add_print_capture(
 static void add_print_enable(
     output_t *out, const char *profile, const char *target, const manifest_t *view
 ) {
-    /* A block of its own on both screens, apart from what stood above it — the
-     * preview's counts, the record's warning — which is not its fact */
-    output_gap(out, OUTPUT_NORMAL);
-
     if (target) {
         output_hint(
             out, OUTPUT_NORMAL,
@@ -2694,17 +2691,20 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    output_gap(out, OUTPUT_NORMAL);
-
-    /* The record phase's own screen, below the ✓ lines the add earned: its failure,
-     * in the store's own words, or what became of the captures the view gives
-     * no row of their own. The fate is the error — the receipt carries no field
-     * for it — and it renders here with the notes, not at the call. A refused
-     * phase leaves every path's record what it was: the first refused statement
-     * ended the pass and the rollback took the rest. */
+    /* The record phase's own screen, a block of its own below the ✓ lines the
+     * add earned: its failure, in the store's own words, or what became of the
+     * captures the view gives no row of their own. The fate is the error — the
+     * receipt carries no field for it — and it renders here with the notes, not
+     * at the call. A refused phase leaves every path's record what it was: the
+     * first refused statement ended the pass and the rollback took the rest.
+     * Each arm asks the block's boundary, so where neither runs — a profile no
+     * row holds, its phase landed — the remedy below is the ✓ lines' last. */
     if (record_err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
     } else if (state_enabled(state, opts->profile)) {
+        output_gap(out, OUTPUT_NORMAL);
+
         /* Each cause named by the count that checked it (add_receipt_t): another
          * claim standing over a capture is an override — another profile's at
          * its path, claims beneath it, or a blob above it, the profile's own

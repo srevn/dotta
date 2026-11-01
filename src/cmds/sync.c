@@ -1200,19 +1200,19 @@ static void sync_print_summary(
 }
 
 /**
- * Print the remedies the rows call for, beneath the run's summary in both tenses:
- * one hint a family, said once however many rows call for it
+ * Print the remedies the rows call for, the last lines of the run's summary in
+ * both tenses
  *
- * Five families. A merge its conflicts refused — its conflicts listed, and no
- * draft (sync_decide) — whose hint names --conflicts' two words, a re-run keeping
- * whatever else the run's line said. Then each reading the run keeps and says
- * (sync_verdict), its ways out, the remote's name the run's: commits beyond a
- * line the remote deleted — deleted here too, published again, or kept under
- * another name, the one way left where the remote holds a profile beneath the
- * name and refuses its push; commits beyond a line it recreated — kept under
- * another name, the next sync taking the remote's; no branch here, the remote's
- * deleted — dropped, or the line this store last took published again; no branch
- * on either side — dropped.
+ * A merge its conflicts refused — its conflicts listed, and no draft (sync_decide)
+ * — calls for --conflicts' two words, said once however many rows it refused: a
+ * re-run keeps whatever else the run's line said. Then each reading the run keeps
+ * and says (sync_verdict), a remedy a row in the rows' order, its ways out naming
+ * the row's profile and the run's remote: commits beyond a line the remote deleted
+ * — deleted here too, published again, or kept under another name, the one way
+ * left where the remote holds a profile beneath the name and refuses its push;
+ * commits beyond a line it recreated — kept under another name, the next sync
+ * taking the remote's; no branch here, the remote's deleted — dropped, or the
+ * line this store last took published again; no branch on either side — dropped.
  */
 static void sync_print_remedies(
     output_t *out, const char *remote_name, const sync_rows_t *rows
@@ -1221,7 +1221,6 @@ static void sync_print_remedies(
         const sync_row_t *row = &rows->entries[i];
 
         if (row->conflicts.count > 0 && !row->draft) {
-            output_gap(out, OUTPUT_NORMAL);
             output_hint(
                 out, OUTPUT_NORMAL, "Re-run this sync with --conflicts ours or "
                 "--conflicts theirs to keep that side of every conflict"
@@ -1232,58 +1231,54 @@ static void sync_print_remedies(
 
     for (size_t i = 0; i < rows->count; i++) {
         const sync_row_t *row = &rows->entries[i];
+        if (row->error) continue;
 
-        if (!row->error && row->relation.state == REMOTE_STATE_DELETED_AHEAD) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta remove <profile> --delete-profile' to delete "
-                "a profile locally as the remote did, 'dotta git push %s <profile>' to "
-                "publish it again, or 'dotta git branch -m <profile> <new-name>' to keep "
-                "its commits under another name", remote_name
-            );
-            break;
-        }
-    }
+        switch (row->relation.state) {
+            case REMOTE_STATE_DELETED_AHEAD:
+                output_hint(
+                    out, OUTPUT_NORMAL, "Run 'dotta remove %s --delete-profile' to delete "
+                    "it locally as the remote did, 'dotta git push %s %s' to publish it "
+                    "again, or 'dotta git branch -m %s <new-name>' to keep its commits "
+                    "under another name", row->profile, remote_name, row->profile,
+                    row->profile
+                );
+                break;
 
-    for (size_t i = 0; i < rows->count; i++) {
-        const sync_row_t *row = &rows->entries[i];
+            case REMOTE_STATE_RECREATED_AHEAD:
+                output_hint(
+                    out, OUTPUT_NORMAL, "Run 'dotta git branch -m %s <new-name>' to keep "
+                    "its local commits under another name; the next sync then takes the "
+                    "remote's", row->profile
+                );
+                break;
 
-        if (!row->error && row->relation.state == REMOTE_STATE_RECREATED_AHEAD) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta git branch -m <profile> <new-name>' to keep "
-                "the local commits of a profile the remote recreated under another name; "
-                "the next sync then takes the remote's"
-            );
-            break;
-        }
-    }
+            case REMOTE_STATE_NO_LOCAL_DELETED:
+                output_hint(
+                    out, OUTPUT_NORMAL, "Run 'dotta profile disable %s' to drop it, or "
+                    "'dotta git push %s refs/remotes/%s/%s:refs/heads/%s' to publish it "
+                    "again as this machine last fetched it", row->profile, remote_name,
+                    remote_name, row->profile, row->profile
+                );
+                break;
 
-    for (size_t i = 0; i < rows->count; i++) {
-        const sync_row_t *row = &rows->entries[i];
+            case REMOTE_STATE_NO_LOCAL_NO_REMOTE:
+                output_hint(
+                    out, OUTPUT_NORMAL, "Run 'dotta profile disable %s' to drop it",
+                    row->profile
+                );
+                break;
 
-        if (!row->error && row->relation.state == REMOTE_STATE_NO_LOCAL_DELETED) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta profile disable <profile>' to drop a "
-                "profile the remote deleted, or 'dotta git push %s refs/remotes/%s/<profile>"
-                ":refs/heads/<profile>' to publish it again as this machine last fetched it",
-                remote_name, remote_name
-            );
-            break;
-        }
-    }
-
-    for (size_t i = 0; i < rows->count; i++) {
-        const sync_row_t *row = &rows->entries[i];
-
-        if (!row->error && row->relation.state == REMOTE_STATE_NO_LOCAL_NO_REMOTE) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta profile disable <profile>' to drop a "
-                "profile with no branch locally or on the remote"
-            );
-            break;
+            case REMOTE_STATE_UP_TO_DATE:
+            case REMOTE_STATE_AHEAD:
+            case REMOTE_STATE_BEHIND:
+            case REMOTE_STATE_DIVERGED:
+            case REMOTE_STATE_RECREATED:
+            case REMOTE_STATE_NO_REMOTE:
+            case REMOTE_STATE_DELETED:
+            case REMOTE_STATE_NO_LOCAL:
+            case REMOTE_STATE_NO_LOCAL_AHEAD:
+                /* The run acts on the row, or none is called for */
+                break;
         }
     }
 }
@@ -1815,14 +1810,14 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
     }
 
-    /* The run's summary, beneath the receipt and what it did to the view, then
-     * the remedies its rows call for */
+    /* The run's summary, beneath the receipt and what it did to the view, the
+     * remedies its rows call for its last lines */
     sync_print_summary(out, remote_name, &rows);
     sync_print_remedies(out, remote_name, &rows);
 
     /* Post-sync fires once the report is done — the receipt, the manifest block,
-     * the summary and its hints; a failed build was warned above and is not a
-     * reason to skip it. Nor is a profile that failed: the acts that did land
+     * the summary and its remedies; a failed build was warned above and is not
+     * a reason to skip it. Nor is a profile that failed: the acts that did land
      * are real, and the hook's subject is the world sync leaves behind, not what
      * sync returns. */
     hook_fire_post(config, out, &hook_inv);

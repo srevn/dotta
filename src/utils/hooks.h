@@ -147,9 +147,9 @@ error_t hook_fire_pre(
  * — then swallows the error. Its environment is hook_fire_pre's.
  *
  * Callers fire it last, over a run that has said what it did — the act's receipt,
- * the record's line or its refusal, the next step — so its block, or under -v
- * its live output, is the report's last, and nothing the run says waits on the
- * hook.
+ * the record's line or its refusal, the remedy it leaves — so its block, or under
+ * -v its live output, is the report's last, and nothing the run says waits on
+ * the hook.
  */
 void hook_fire_post(
     const config_t *config,

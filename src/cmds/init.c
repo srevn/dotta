@@ -232,11 +232,6 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         );
     }
 
-    /* The one step a new store needs: a capture, whose files are already in place,
-     * so no apply follows it on this machine */
-    output_gap(out, OUTPUT_NORMAL);
-    output_hint(out, OUTPUT_NORMAL, "Run 'dotta add global ~/.bashrc' to create a profile");
-
 cleanup:
     if (repo) git_repository_free(repo);
 

@@ -100,12 +100,13 @@ typedef enum {
  * than opening another: a run that sums up several acts says a line an act, and
  * they stand together. A boundary closes it once asked, whether or not the block
  * that asked it prints, so a summary line said after one opens a block of its
- * own. What the run says after its summary stands at the margin too: a caveat a
- * later phase raises, the remedy it calls for (output_hint), a post-hook's account
- * (utils/hooks.h hook_fire_post). So no report ends on a section's or a list's
- * rows, which read as a block still open above whatever follows the run. A run
- * asked for a payload ends where the payload does, its bytes its own
- * (output_write).
+ * own; a remedy said beneath it asks none, and is the block's last line
+ * (output_hint). What the run says after its summary stands at the margin too:
+ * a caveat a later phase raises, with the remedy it calls for beneath it, and a
+ * post-hook's account (utils/hooks.h hook_fire_post). So no report ends on a
+ * section's or a list's rows, which read as a block still open above whatever
+ * follows the run. A run asked for a payload ends where the payload does, its
+ * bytes its own (output_write).
  *
  * On a terminal, the line an act draws while it runs (output_progress) is no
  * line of the report: it pays no boundary, owes none, and moves the report nowhere,
@@ -411,18 +412,25 @@ void output_info(
 /**
  * Print hint message: the remedy, one line, dimmed whole
  *
- * The next step a run calls for, said in one sentence ("Run 'dotta …' to …") at
- * the margin: "Hint: " opens the line, as "Warning: " opens a warning's, and
- * DIM spans the prefix and the body. A format's own leading whitespace lands
+ * What only this run can tell the user to do: the flag that answers a refusal
+ * it made, or a command carrying a value it alone holds — a profile, a target
+ * typed, a ref and the id it stood at — said in one sentence ("Run 'dotta …' to
+ * …") at the margin. Never the model's next step, which the help teaches and
+ * status says per row. "Hint: " opens the line, as "Warning: " opens a warning's,
+ * and DIM spans the prefix and the body. A format's own leading whitespace lands
  * after the prefix, as it does after every prefix the layer writes.
+ *
+ * A hint is no block of its own and asks no boundary: it is the last line of
+ * the block it answers — beneath a warning, the remedy the warning calls for;
+ * beneath the summary, the one for what the summary says the run did or left.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
  * @param fmt Printf-style format string
  *
  * Example:
- *   output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files");
- *   → "Hint: Run 'dotta apply' to deploy files" (entire line dimmed)
+ *   output_hint(out, OUTPUT_NORMAL, "Re-run this add with --force to finish it");
+ *   → "Hint: Re-run this add with --force to finish it" (entire line dimmed)
  */
 void output_hint(
     output_t *ctx,
@@ -493,10 +501,11 @@ void output_endline(output_t *ctx, output_verbosity_t min_level);
  * Every block opens with its boundary and no block closes with one. output_section,
  * output_list_render, the summary's two words (output_summary, output_success)
  * and the two questions ask theirs inside, so a call site places one only above
- * a block the layer does not recognise as one — a warning, a note, a hint, a
- * row of its own. A function that prints such a block asks it first, as the layer's
- * own blocks do, so no caller asks it for one. Asked while the summary's block
- * stands, it closes the block: the line that pays it opens the next.
+ * a block the layer does not recognise as one — a warning, a note, a row of its
+ * own — and never above a hint, a line of the block it answers (output_hint). A
+ * function that prints such a block asks it first, as the layer's own blocks
+ * do, so no caller asks it for one. Asked while the summary's block stands, it
+ * closes the block: the line that pays it opens the next.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level

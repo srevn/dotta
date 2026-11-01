@@ -226,13 +226,6 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
         );
     }
 
-    /* The remedy beneath it, where no profile is enabled and one here could be:
-     * enable takes only a profile whose branch is here, the ones listed above */
-    if (enabled_profiles.count == 0 && available.count > 0) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
-    }
-
 cleanup:
     /* The remote, where --remote met it: its free commits the credential helper's
      * verdict (sys/remote.h remote_free) */

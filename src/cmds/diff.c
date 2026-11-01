@@ -826,8 +826,7 @@ static error_t diff_print_view(
  * compare, a directory row as a file row, and is not answered. One that reaches
  * nothing — which likely indicates a typo — is warned in the words of what the
  * view's paths are: the enabled view's are active paths, a commit's are the
- * commit's, and a miss in one says nothing of the other. The list hint follows
- * the warnings as their remedy.
+ * commit's, and a miss in one says nothing of the other.
  *
  * Per-entry attribution matters here: the combined program folds one pattern's
  * negation into another's verdict and would under-count coverage on overlap;
@@ -906,14 +905,6 @@ static bool diff_validate_filter(
                 what, entry.text
             );
         }
-    }
-
-    /* The warnings' one remedy, said once under them all */
-    if (covered < pathspec_count(path_filter)) {
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Use 'dotta list <profile>' to see managed files"
-        );
     }
 
     return covered > 0;

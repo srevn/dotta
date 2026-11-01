@@ -143,8 +143,11 @@ static error_t key_clear(const dotta_ctx_t *ctx) {
 /**
  * Execute key status action
  *
- * Displays encryption configuration and key cache status. Cannot fail: a view
- * that will not build is said, and the rest is shown without its count.
+ * Whether encryption is on, what the enabled profiles hold encrypted, and whether
+ * the key is cached: lines of the summary, as status says what it found
+ * (base/output.h output_summary), and the configuration they rest on a section
+ * above them at -v. Cannot fail: a count that cannot be made is said, and the
+ * rest is shown without it.
  */
 static void key_status(const dotta_ctx_t *ctx) {
     git_repository *repo = ctx->run.repo;
@@ -153,162 +156,118 @@ static void key_status(const dotta_ctx_t *ctx) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* Display encryption status */
-    output_section(out, OUTPUT_NORMAL, "Encryption Configuration");
-
-    if (config->encryption_enabled) {
-        output_print(
-            out, OUTPUT_NORMAL, "  Status: {green}enabled{reset}\n"
-        );
-
-        /* The Argon2id pair is the repository's epoch — minted at init, the same
-         * on every machine — named by the preset that matches it when one does.
-         * Encryption-enabled implies the dispatcher created the keymgr. */
-        CHECK_NULL(keymgr);
-        const kdf_epoch_t *epoch = keymgr_epoch(keymgr);
-        const char *preset = NULL;
-        for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
-            if (kdf_presets[i].memory_mib == epoch->memory_mib &&
-                kdf_presets[i].passes == epoch->passes) {
-                preset = kdf_presets[i].name;
-            }
-        }
-        output_print(
-            out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes%s%s%s\n",
-            (unsigned) epoch->memory_mib, (unsigned) epoch->passes,
-            preset ? " (" : "", preset ? preset : "", preset ? ")" : ""
-        );
-
-        /* Show session timeout */
-        output_print(
-            out, OUTPUT_NORMAL, "  Session timeout: "
-        );
-        if (config->session_timeout == 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "always prompt\n"
-            );
-        } else if (config->session_timeout > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "%u seconds",
-                config->session_timeout
-            );
-
-            unsigned int minutes = config->session_timeout / 60;
-            unsigned int hours = minutes / 60;
-
-            if (hours > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, " (%u hour%s)",
-                    hours, hours == 1 ? "" : "s"
-                );
-            } else if (minutes > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, " (%u minute%s)",
-                    minutes, minutes == 1 ? "" : "s"
-                );
-            }
-            output_endline(out, OUTPUT_NORMAL);
-        } else {
-            output_print(
-                out, OUTPUT_NORMAL, "no expiration\n"
-            );
-        }
-
-        /* The rules the policy reads, in the order configured, each as written:
-         * a trailing space the grammar trims is not the rule's, and is not
-         * shown. */
-        size_t count = gitignore_ruleset_size(config->auto_encrypt_ruleset);
-        if (count > 0) {
-            output_print(
-                out, OUTPUT_VERBOSE, "  Auto-encrypt patterns: %zu\n", count
-            );
-            for (size_t i = 0; i < count; i++) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "    - %s\n",
-                    gitignore_rule_pattern(
-                    gitignore_ruleset_rule(config->auto_encrypt_ruleset, i)
-                    )
-                );
-            }
-        }
-    } else {
-        output_print(
-            out, OUTPUT_NORMAL, "  Status: {red}disabled{reset}\n"
-        );
-
+    /* Off, the switch is the whole answer: the run holds no key manager to ask
+     * (include/runtime.h), and what is sealed is encryption's to count */
+    if (!config->encryption_enabled) {
+        output_summary(out, OUTPUT_NORMAL, "Encryption: disabled");
         return;
     }
 
-    /* Display key cache status */
-    output_section(out, OUTPUT_NORMAL, "Key Cache Status");
-
-    time_t expires_at = 0;
-    bool key_cached = keymgr_cached(keymgr, &expires_at);
+    /* The configuration, at -v. The Argon2id pair is the repository's epoch —
+     * minted at init, the same on every machine — named by the preset that matches
+     * it when one does. Encryption-enabled implies the dispatcher created the
+     * keymgr. */
+    CHECK_NULL(keymgr);
+    const kdf_epoch_t *epoch = keymgr_epoch(keymgr);
+    const char *preset = NULL;
+    for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
+        if (kdf_presets[i].memory_mib == epoch->memory_mib &&
+            kdf_presets[i].passes == epoch->passes) {
+            preset = kdf_presets[i].name;
+        }
+    }
+    output_section(out, OUTPUT_VERBOSE, "Encryption configuration");
     output_print(
-        out, OUTPUT_NORMAL, "  Key cached: "
+        out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes%s%s%s\n",
+        (unsigned) epoch->memory_mib, (unsigned) epoch->passes,
+        preset ? " (" : "", preset ? preset : "", preset ? ")" : ""
     );
 
-    if (key_cached) {
+    /* The session timeout, in key set's spelling of the number */
+    if (config->session_timeout == 0) {
+        output_print(out, OUTPUT_VERBOSE, "  Session timeout: always prompt\n");
+    } else if (config->session_timeout > 0) {
+        int minutes = config->session_timeout / 60;
+        int hours = minutes / 60;
         output_print(
-            out, OUTPUT_NORMAL, "{green}yes{reset}"
+            out, OUTPUT_VERBOSE, "  Session timeout: %d seconds", config->session_timeout
         );
-
-        /* The expiry is the session file's own, so the number counts down across
-         * processes instead of restarting at each. A loaded file is unexpired
-         * by the loader's contract; 0 is the file that never expires. */
-        if (expires_at == 0) {
+        if (hours > 0) {
             output_print(
-                out, OUTPUT_NORMAL, " (no expiration)"
+                out, OUTPUT_VERBOSE, " (%d hour%s)", hours, hours == 1 ? "" : "s"
             );
-        } else {
+        } else if (minutes > 0) {
             output_print(
-                out, OUTPUT_NORMAL, " (expires in %lld seconds",
-                (long long) (expires_at - time(NULL))
+                out, OUTPUT_VERBOSE, " (%d minute%s)", minutes, minutes == 1 ? "" : "s"
             );
-
-            struct tm *tm_info = localtime(&expires_at);
-            char time_buf[64];
-            strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
-            output_print(
-                out, OUTPUT_VERBOSE, " at %s",
-                time_buf
-            );
-
-            output_print(out, OUTPUT_NORMAL, ")");
         }
-
-        output_endline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_VERBOSE);
     } else {
-        output_print(out, OUTPUT_NORMAL, "{yellow}no{reset}\n");
-
-        output_print(
-            out, OUTPUT_VERBOSE,
-            "  (You will be prompted for passphrase on next use)\n"
-        );
+        output_print(out, OUTPUT_VERBOSE, "  Session timeout: no expiration\n");
     }
 
-    /* Count and display encrypted files: the view over the enabled set, whose
-     * rows carry the metadata-projected flag */
-    output_section(out, OUTPUT_NORMAL, "Encrypted Files");
+    /* The rules the policy reads, in the order configured, each as written: a
+     * trailing space the grammar trims is not the rule's, and is not shown. */
+    size_t count = gitignore_ruleset_size(config->auto_encrypt_ruleset);
+    if (count > 0) {
+        output_print(out, OUTPUT_VERBOSE, "  Auto-encrypt patterns: %zu\n", count);
+        for (size_t i = 0; i < count; i++) {
+            output_print(
+                out, OUTPUT_VERBOSE, "    - %s\n",
+                gitignore_rule_pattern(gitignore_ruleset_rule(config->auto_encrypt_ruleset, i))
+            );
+        }
+    }
 
+    /* The encrypted files over the enabled set: the view, whose rows carry the
+     * metadata-projected flag. A count that cannot be made is said above the
+     * summary, in one line (base/error.h error_line). */
     manifest_t *manifest = NULL;
+    size_t encrypted_count = 0;
     error_t err = manifest_build(repo, state, ctx->arena, &manifest);
-    if (err) {
-        /* Non-fatal: the section says it could not count, and why, in one line
-         * (base/error.h error_line) */
-        output_print(
-            out, OUTPUT_NORMAL, "  Unable to count encrypted files: %s\n", error_line(err)
-        );
-    } else {
-        size_t encrypted_count = 0;
+    if (!err) {
         manifest_rows_t rows = manifest_rows(manifest);
         for (size_t i = 0; i < rows.count; i++) {
             if (rows.entries[i]->encrypted) encrypted_count++;
         }
+    }
+    if (err) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(
+            out, OUTPUT_NORMAL, "Unable to count encrypted files: %s", error_line(err)
+        );
+        output_summary(out, OUTPUT_NORMAL, "Encryption: enabled");
+    } else {
+        output_summary(
+            out, OUTPUT_NORMAL, "Encryption: enabled, %zu encrypted file%s in the "
+            "enabled profiles", encrypted_count, encrypted_count == 1 ? "" : "s"
+        );
+    }
 
-        output_print(
-            out, OUTPUT_NORMAL, "  Encrypted files in current profiles: %zu\n",
-            encrypted_count
+    /* The key, cached or not. The expiry is the session file's own, so the number
+     * counts down across processes instead of restarting at each. A loaded file
+     * is unexpired by the loader's contract; 0 is the file that never expires.
+     * A timeout of 0 caches nothing, which is why nothing is. */
+    time_t expires_at = 0;
+    if (!keymgr_cached(keymgr, &expires_at)) {
+        output_summary(
+            out, OUTPUT_NORMAL, config->session_timeout == 0
+                ? "Key: not cached (session_timeout = 0)" : "Key: not cached"
+        );
+    } else if (expires_at == 0) {
+        output_summary(out, OUTPUT_NORMAL, "Key: cached, no expiration");
+    } else if (output_is_verbose(out)) {
+        struct tm *tm_info = localtime(&expires_at);
+        char time_buf[64];
+        strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
+        output_summary(
+            out, OUTPUT_VERBOSE, "Key: cached, expires in %lld seconds at %s",
+            (long long) (expires_at - time(NULL)), time_buf
+        );
+    } else {
+        output_summary(
+            out, OUTPUT_NORMAL, "Key: cached, expires in %lld seconds",
+            (long long) (expires_at - time(NULL))
         );
     }
 }
@@ -425,7 +384,7 @@ static const args_opt_t key_status_opts[] = {
     ARGS_FLAG_SET(
         "v verbose",
         cmd_key_options_t, verbosity, DOTTA_VERBOSITY_VERBOSE,
-        "Include the KDF parameters and the auto-encrypt patterns"
+        "View KDF parameters, the session timeout and the auto-encrypt patterns"
     ),
     ARGS_END,
 };
@@ -466,6 +425,7 @@ const args_command_t spec_key = {
         "  [encryption]\n"
         "  enabled          = true\n"
         "  session_timeout  = 3600      # 1 hour\n"
+        "\n"
         "The Argon2id strength is the repository's, minted once by\n"
         "'dotta init --strength <fast|balanced|paranoid>'.\n"
         "\n"

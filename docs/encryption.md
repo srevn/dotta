@@ -88,7 +88,7 @@ A single passphrase derives all encryption keys.
 ```bash
 dotta key set                 # Cache passphrase for the session
 dotta key status              # Show cache state, expiry, encrypted file count
-dotta key status -v           # Include epoch parameters and auto-encrypt patterns
+dotta key status -v           # Include epoch parameters, session timeout, auto-encrypt patterns
 dotta key clear               # Drop cached key (memory and session file)
 ```
 

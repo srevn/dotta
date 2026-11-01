@@ -410,9 +410,9 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
         output_print(out, OUTPUT_NORMAL, " {cyan}%s{reset}: %s\n", profile, phrase);
     }
 
-    /* The run's summary, beneath the table, in clone's words (cmds/clone.c
-     * land_profiles): every profile the fetch brought that the run could make
-     * local or read, or none */
+    /* The run's summary, beneath the table, the sentence clone's receipt says
+     * (cmds/clone.c cmd_clone): every profile the fetch brought that the run
+     * could make local or read, or none */
     size_t fetched = selection.count - failed;
     if (fetched > 0) {
         output_success(

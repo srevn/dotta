@@ -386,7 +386,9 @@ void output_summary(
  * output_summary's line, in its block and by its rules, marked as an act the
  * run carried out, as a receipt names it: Updated, Removed, Enabled. The mark
  * is the word's, as "Warning: " is output_warning's; a row's ✓ is its format's
- * glyph, as every row's ✗ and = are.
+ * glyph, as every row's ✗ and = are. An act is told once nothing the run does
+ * after it can undo it: a run that rolls back on a later failure says its receipt
+ * past the last step the rollback follows (cmds/clone.c cmd_clone).
  *
  * @param ctx Output context (NULL: nothing)
  * @param min_level Minimum verbosity level
@@ -554,8 +556,9 @@ void output_section(
  * that it ran.
  *
  * Readers: cmds/sync.c cmd_sync, cmds/profile.c profile_fetch, cmds/status.c
- * status_remote, each over its fetch; cmds/remove.c remove_profile, over its
- * deletion's push; sys/transfer.c transfer_fetch_progress_callback and
+ * status_remote, each over its fetch; cmds/clone.c cmd_clone, over its contact
+ * and its fetch; cmds/remove.c remove_profile, over its deletion's push;
+ * sys/transfer.c transfer_fetch_progress_callback and
  * transfer_push_progress_callback, the frames.
  *
  * @param ctx Output context (NULL: nothing)
@@ -582,11 +585,12 @@ void output_progress(
  * pads the row with spaces.
  *
  * Readers: cmds/sync.c cmd_sync, cmds/profile.c profile_fetch, cmds/status.c
- * status_remote, once the fetch their line names is done, and cmds/remove.c
- * remove_profile once its deletion's push is; sys/transfer.c transfer_op_end,
- * and transfer_credentials_callback before a helper's fill, which may ask at
- * the terminal past the layer; and the layer's own, before every line that lands
- * (output_land) and before the stream moves (output_set_stream).
+ * status_remote and cmds/clone.c cmd_clone, once the fetch their line names is
+ * done, and cmds/remove.c remove_profile once its deletion's push is;
+ * sys/transfer.c transfer_op_end, and transfer_credentials_callback before a
+ * helper's fill, which may ask at the terminal past the layer; and the layer's
+ * own, before every line that lands (output_land) and before the stream moves
+ * (output_set_stream).
  *
  * @param ctx Output context (NULL: nothing)
  */

@@ -41,12 +41,14 @@ typedef struct {
  * Clone dotta repository
  *
  * Creates the bare store, fetches the profiles it selects and the epoch once,
- * and makes the selected profiles local (clone.c).
+ * and makes the selected profiles local (clone.c). Its receipt is said once
+ * nothing can roll the store back: a refusal before then unwinds the store whole,
+ * and no line above it tells an act it undid.
  *
  * The bootstrap that may follow never enters the clone's exit code: the repository
  * landed either way, so a script that failed is reported where it ran and again
- * in the closing line, never in the exit code. `dotta bootstrap <profile>` re-runs
- * it once the reason is fixed, enabled or not.
+ * on the line that closes the scripts' phase, never in the exit code. `dotta
+ * bootstrap <profile>` re-runs it once the reason is fixed, enabled or not.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Clone options (must not be NULL)

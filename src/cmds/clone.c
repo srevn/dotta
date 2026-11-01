@@ -51,8 +51,9 @@
  * one the remote does not hold refusing the clone, as git's clone refuses a
  * --branch its remote lacks (lib/git/builtin/clone.c cmd_clone); every branch
  * the remote holds (--all); otherwise the ones this machine layers (core/profiles.h
- * profile_detect), each shown as detected. An empty selection says why here,
- * where it is made, so the land says only what landed (land_profiles).
+ * profile_detect). An empty selection says why here, where it is made — a remote
+ * holding no profile, or none this machine layers, the remote's then listed —
+ * so the receipt says only what landed (cmd_clone).
  *
  * @param opts Clone options (must not be NULL)
  * @param remote_name Remote name (typically "origin")
@@ -109,57 +110,54 @@ static error_t select_profiles(
         return NULL;
     }
 
+    /* A remote that holds no profile has none to select, whichever arm asked:
+     * said once, in profile fetch --all's words, and the clone lands its epoch
+     * alone */
+    if (remote_names->count == 0) {
+        string_array_init(selection, arena, 0);
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "Remote '%s' holds no profiles", remote_name);
+        return NULL;
+    }
+
     /* Hub mode: every branch the remote advertises, seeded in the convention's
      * order: the remote's listing has none of its own, and initialize_state enables
      * in the order the selection has. Named profiles (-p) keep the order typed;
-     * detection sorts its own answer. A remote that holds none is said here, in
-     * profile fetch --all's words, and the clone lands its epoch alone. */
+     * detection sorts its own answer. */
     if (opts->all_profiles) {
         string_array_clone(remote_names, arena, selection);
         profile_order(selection);
-        if (selection->count == 0) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_warning(
-                out, OUTPUT_NORMAL, "Remote '%s' holds no profiles", remote_name
-            );
-        }
         return NULL;
     }
 
     /* Default: the profiles this machine layers, matched by name among the branches
-     * the remote advertises, each shown as detected */
-    output_section(out, OUTPUT_NORMAL, "Auto-detecting profiles for this system");
+     * the remote advertises; the receipt names the ones it enables (cmd_clone) */
     *selection = profile_detect(arena, remote_names);
-    for (size_t i = 0; i < selection->count; i++) {
-        output_info(out, OUTPUT_NORMAL, "  • %s", selection->entries[i]);
-    }
     if (selection->count > 0) return NULL;
 
     /* None detected, so none is fetched: the remote's profiles listed, under
      * the title profile list gives the remote's not fetched here (cmds/profile.c
      * profile_list) */
+    output_gap(out, OUTPUT_NORMAL);
     output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
-    if (remote_names->count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
-        for (size_t i = 0; i < remote_names->count; i++) {
-            output_info(out, OUTPUT_NORMAL, "  • %s", remote_names->entries[i]);
-        }
+    output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
+    for (size_t i = 0; i < remote_names->count; i++) {
+        output_info(out, OUTPUT_NORMAL, "  • %s", remote_names->entries[i]);
     }
 
     return NULL;
 }
 
 /**
- * Make the selected profiles local, and say what landed
+ * Make the selected profiles local
  *
  * The one fetch has run (sys/remote.h remote_fetch): each selected profile, a
  * branch the remote advertised (select_profiles), has its head's objects here.
  * Each becomes a local branch at that head, as the open listed it; one that cannot
  * is warned about by name and skipped, so one profile costs itself and not the
  * clone. The warnings are one block, beneath whatever stood: its boundary is
- * asked here, and paid by the first of them or, where none prints, by the summary's
- * line — what landed, said alike whichever arm selected, and nothing where the
- * selection was empty, which said why where it was made.
+ * asked here and paid by the first of them. What landed is the receipt's to say,
+ * once nothing can roll the store back (cmd_clone).
  *
  * @param repo Repository (must not be NULL)
  * @param remote The session, its listing the remote's heads (must not be NULL)
@@ -211,41 +209,27 @@ static string_array_t land_profiles(
         string_array_push(&landed, profile);
     }
 
-    /* What landed, said once whichever arm selected: a selection none of which
-     * landed says so beneath its warnings, an empty one said why already */
-    if (landed.count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "Fetched %zu profile%s",
-            landed.count, landed.count == 1 ? "" : "s"
-        );
-    } else if (selection->count > 0) {
-        output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
-    }
-
     return landed;
 }
 
 /**
  * Initialize state with the profiles clone enables
  *
- * Creates the database whatever `profiles` holds, enables exactly the names given
- * — the caller decided which landed profiles this machine can place — and names
- * them when there are any.
+ * Creates the database whatever `profiles` holds and enables exactly the names
+ * given — the caller decided which landed profiles this machine can place, and
+ * names them in its receipt.
  *
  * @param repo Repository
- * @param arena Arena the view is built in and the names are joined in
+ * @param arena Arena the view is built in
  * @param profiles Profile names to set as enabled (must not be NULL; may be empty)
- * @param out Output context
  * @return Error or NULL on success
  */
 static error_t initialize_state(
-    git_repository *repo, arena_t *arena, const string_array_t *profiles,
-    output_t *out
+    git_repository *repo, arena_t *arena, const string_array_t *profiles
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(arena);
     CHECK_NULL(profiles);
-    CHECK_NULL(out);
 
     /* Create state database (with or without profiles) */
     state_t *state = NULL;
@@ -276,20 +260,7 @@ static error_t initialize_state(
     /* Commit transaction */
     if (!err) err = state_save(state);
     state_free(state);
-    if (err) return err;
-
-    /* The names enabled, when there are any: a run that enabled nothing said
-     * why per profile above, and has no list to print. The state is a phase of
-     * its own, its line the land's summary's next where nothing stands between
-     * them (land_profiles). */
-    if (profiles->count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "Initialized enabled profiles: %s",
-            string_array_join(arena, profiles, ", ")
-        );
-    }
-
-    return NULL;
+    return err;
 }
 
 /**
@@ -370,10 +341,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         if (err) goto cleanup;
     }
 
-    output_section(out, OUTPUT_NORMAL, "Cloning dotta repository");
-    output_info(out, OUTPUT_NORMAL, "  URL: %s", url);
-    output_info(out, OUTPUT_NORMAL, "  Path: %s", local_path);
-
     /* The place the clone lands must be absent or an empty directory. What stands
      * there is somebody's: a repository would be taken by the init below, and
      * files beside a store the rollback empties would go with it. A directory
@@ -412,9 +379,13 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
     git_remote_free(origin);
 
-    /* The remote, met once (sys/remote.h): its refusal names the act and the
-     * remote, under the section that printed the URL; the URL goes in no sentence,
-     * since one may carry a password. */
+    /* The remote, met once (sys/remote.h). Over the contact and the fetch a
+     * progress line, a terminal's alone, as sync's and profile fetch's
+     * (base/output.h output_progress): drawn before the open and taken down once
+     * the fetch is done, so a refusal or a warning between them stands on a row
+     * of its own. The open's refusal names the act and the remote, and no line
+     * names the URL, which may carry a password. */
+    output_progress(out, OUTPUT_NORMAL, "Fetching from 'origin'...");
     err = remote_open(
         repo, "origin", commit_action_word(COMMIT_ACTION_CLONE), out, &remote
     );
@@ -463,6 +434,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * all the same, unnamed (sys/remote.h). No local branch is made here: that
      * is the land's, below. */
     err = remote_fetch(remote, &selection, EPOCH_REF, NULL);
+    output_clear_line(out);
     if (err) goto cleanup;
 
     /* The epoch, installed once its commit is proved (infra/epoch.h epoch_adopt):
@@ -489,7 +461,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* Any other failure is the install's own, naming the act and the remote */
     if (err) goto cleanup;
 
-    /* The selection made local, and what landed said once */
+    /* The selection made local */
     const string_array_t landed = land_profiles(
         repo, remote, "origin", &selection, ctx->arena, out
     );
@@ -530,7 +502,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         string_array_push(&to_enable, name);
     }
 
-    err = initialize_state(repo, ctx->arena, &to_enable, out);
+    err = initialize_state(repo, ctx->arena, &to_enable);
     if (err) goto cleanup;
 
     /* Seed the baseline .dottaignore at its own ref with the default patterns.
@@ -545,94 +517,100 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     err = ignore_seed_baseline(repo, COMMIT_ACTION_CLONE);
     if (err) goto cleanup;
 
-    /* Bootstrap detection and execution.
-     *
-     * Single-pass filter: walk the landed profiles once, collect those with a
-     * .bootstrap script into `bootstrap_found`, then display, prompt, and
-     * (conditionally) fire; what the run did is its receipt. */
+    /* The clone's receipt, said once nothing can roll the store back: every failure
+     * above unwinds it whole (cleanup), so a line said sooner would tell an act
+     * the rollback undoes (base/output.h output_success). What landed, alike
+     * whichever arm selected — a selection none of which landed says so beneath
+     * its warnings, an empty one said why where it was made — in profile fetch's
+     * words; what it enabled, in enable's; the store, as init names it. */
+    if (landed.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Fetched %zu profile%s from '{cyan}%s{reset}'",
+            landed.count, landed.count == 1 ? "" : "s", "origin"
+        );
+    } else if (selection.count > 0) {
+        output_summary(out, OUTPUT_NORMAL, "No profiles were fetched");
+    }
+    if (to_enable.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Enabled %s",
+            string_array_join(ctx->arena, &to_enable, ", ")
+        );
+    }
+    output_success(out, OUTPUT_NORMAL, "Cloned dotta repository into %s", local_path);
+
+    /* The scripts, a phase of their own past the clone, closed by its outcome
+     * (base/output.h output_summary): the landed profiles' that hold one, collected
+     * once and listed under the title every listing of them takes
+     * (utils/bootstrap.h bootstrap_spec_t), then run where --bootstrap or the
+     * user says so. The clone stands either way, its exit code its own
+     * (cmds/clone.h). */
     string_array_t bootstrap_found;
     string_array_init(&bootstrap_found, ctx->arena, 0);
-    bool run_bootstrap = false;
-    bootstrap_receipt_t bootstrap = { 0 };
-
-    /* Check bootstrap scripts in all landed profiles */
-    if (opts->bootstrap_mode != CLONE_BOOTSTRAP_SKIP && landed.count > 0) {
-        /* Check if any landed profiles have bootstrap scripts */
+    if (opts->bootstrap_mode != CLONE_BOOTSTRAP_SKIP) {
         for (size_t i = 0; i < landed.count; i++) {
-            const char *profile = landed.entries[i];
-            if (!bootstrap_exists(repo, profile)) continue;
-            string_array_push(&bootstrap_found, profile);
-        }
-
-        if (bootstrap_found.count > 0) {
-            /* The scripts found, under the title every listing of them takes
-             * (utils/bootstrap.h bootstrap_spec_t) */
-            output_section(out, OUTPUT_NORMAL, "Found bootstrap scripts");
-            for (size_t i = 0; i < bootstrap_found.count; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} %s/%s\n",
-                    bootstrap_found.entries[i], BOOTSTRAP_SCRIPT_NAME
-                );
-            }
-
-            /* Determine if we should run bootstrap */
-            if (opts->bootstrap_mode == CLONE_BOOTSTRAP_FORCE) {
-                /* --bootstrap flag set, run automatically */
-                run_bootstrap = true;
-            } else if (opts->verbosity != DOTTA_VERBOSITY_QUIET) {
-                /* Prompt user. A clone told -q asks nothing and runs nothing:
-                 * read off the flag, never the run's level, since a question is
-                 * not output a level gates (base/output.h output_ask) and a
-                 * configured quiet never declined it. The scripts are an extra
-                 * the clone stands without, so no answer leaves them unrun as a
-                 * decline does, and says so. */
-                switch (output_ask(out, false, "Execute bootstrap scripts?")) {
-                    case OUTPUT_ANSWER_YES:
-                        run_bootstrap = true;
-                        break;
-                    case OUTPUT_ANSWER_NO:
-                        break;
-                    case OUTPUT_ANSWER_NONE:
-                        output_summary(
-                            out, OUTPUT_NORMAL,
-                            "Bootstrap scripts not run: no answer was read"
-                        );
-                        break;
-                }
+            if (bootstrap_exists(repo, landed.entries[i])) {
+                string_array_push(&bootstrap_found, landed.entries[i]);
             }
         }
     }
 
-    /* Execute bootstrap if requested: the scripts the section above listed —
-     * the consent is asked only where one was found, so run_bootstrap implies
-     * one */
-    if (run_bootstrap) {
-        bootstrap_spec_t spec = {
-            .config        = config,
-            .repo          = repo,
-            .repo_dir      = local_path,
-            .profiles      = &bootstrap_found,
-            .dry_run       = false,
-            .stop_on_error = true,
-        };
-        bootstrap = bootstrap_fire(out, &spec);
-    }
-
-    /* Success - print messages before cleanup */
-    output_success(out, OUTPUT_NORMAL, "Dotta repository cloned successfully");
-
-    /* Non-fatal — the clone itself succeeded, and the exit code is the clone's.
-     * What the clone may not claim is that the bootstrap finished: a script that
-     * failed stopped the run on its row, and the closing line names where, in
-     * the words cmd_bootstrap's refusal says it in. */
-    if (run_bootstrap) {
-        if (bootstrap.stopped) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Bootstrap stopped at profile '%s'",
-                bootstrap.stopped
+    if (bootstrap_found.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Found bootstrap scripts");
+        for (size_t i = 0; i < bootstrap_found.count; i++) {
+            output_print(
+                out, OUTPUT_NORMAL, "  {green}✓{reset} %s/%s\n",
+                bootstrap_found.entries[i], BOOTSTRAP_SCRIPT_NAME
             );
-        } else {
-            output_success(out, OUTPUT_NORMAL, "Bootstrap complete");
+        }
+
+        /* Asked unless --bootstrap answered it. A clone told -q asks nothing
+         * and runs nothing: read off the flag, never the run's level, since a
+         * question is not output a level gates (base/output.h output_ask) and a
+         * configured quiet never declined it. The scripts are an extra the clone
+         * stands without, so a decline and no answer each leave them unrun, and
+         * say so. */
+        bool run_bootstrap = opts->bootstrap_mode == CLONE_BOOTSTRAP_FORCE;
+        if (!run_bootstrap && opts->verbosity != DOTTA_VERBOSITY_QUIET) {
+            switch (output_ask(out, false, "Execute bootstrap scripts?")) {
+                case OUTPUT_ANSWER_YES:
+                    run_bootstrap = true;
+                    break;
+                case OUTPUT_ANSWER_NO:
+                    output_summary(out, OUTPUT_NORMAL, "Bootstrap scripts not run");
+                    break;
+                case OUTPUT_ANSWER_NONE:
+                    output_summary(
+                        out, OUTPUT_NORMAL,
+                        "Bootstrap scripts not run: no answer was read"
+                    );
+                    break;
+            }
+        }
+
+        /* What the clone may not claim is that the bootstrap finished: a script
+         * that failed stopped the run on its row, and the outcome names where,
+         * in the words cmd_bootstrap's refusal says it in, a block of its own
+         * beneath the rows as the complete's is */
+        if (run_bootstrap) {
+            bootstrap_spec_t spec = {
+                .config        = config,
+                .repo          = repo,
+                .repo_dir      = local_path,
+                .profiles      = &bootstrap_found,
+                .dry_run       = false,
+                .stop_on_error = true,
+            };
+            bootstrap_receipt_t bootstrap = bootstrap_fire(out, &spec);
+            if (bootstrap.stopped) {
+                output_gap(out, OUTPUT_NORMAL);
+                output_warning(
+                    out, OUTPUT_NORMAL, "Bootstrap stopped at profile '%s'",
+                    bootstrap.stopped
+                );
+            } else {
+                output_success(out, OUTPUT_NORMAL, "Bootstrap complete");
+            }
         }
     }
 

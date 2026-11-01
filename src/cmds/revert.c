@@ -994,14 +994,17 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * way, so the whole write is weighed and never the blob alone: the draft
      * holds each document against the one it opened (core/profiles.h
      * profile_changed). A directory claim at the name the head's blob contradicts
-     * rides the write whatever it is, and moves nothing. */
+     * rides the write whatever it is, and moves nothing. Said as every command
+     * says it has nothing to do, naming the file, its profile and the commit
+     * the argument resolved to. */
     bool changed = false;
     err = profile_changed(draft, &changed);
     if (err) goto cleanup;
     if (!changed) {
         output_summary(
-            out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",
-            restored.storage_path
+            out, OUTPUT_NORMAL,
+            "Nothing to revert: %s in profile '%s' is already as at commit %s",
+            restored.storage_path, profile, oid_str
         );
         goto cleanup;  /* Not an error, just nothing to do */
     }

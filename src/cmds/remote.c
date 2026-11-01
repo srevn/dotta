@@ -17,7 +17,12 @@
 #include "sys/remote.h"
 
 /**
- * List remotes
+ * List remotes: each one's name, and at -v its URLs, a row for where a fetch
+ * reaches it and one for where a push does, as git's remote -v lists them
+ *
+ * The push row is the push URL configured, else the fetch URL — remote_show's
+ * reading — and a URL the configuration holds none of, a remote written by hand,
+ * is none.
  */
 static error_t remote_list(
     git_repository *repo,
@@ -52,19 +57,15 @@ static error_t remote_list(
 
             const char *fetch_url = git_remote_url(remote);
             const char *push_url = git_remote_pushurl(remote);
-
-            /* Use fetch URL for push if push URL not set */
-            if (!push_url) {
-                push_url = fetch_url;
-            }
+            if (!push_url) push_url = fetch_url;
 
             output_print(
                 out, OUTPUT_NORMAL, "{cyan}%-15s{reset} %s (fetch)\n",
-                remote_name, fetch_url
+                remote_name, fetch_url ? fetch_url : "none"
             );
             output_print(
                 out, OUTPUT_NORMAL, "{cyan}%-15s{reset} %s (push)\n",
-                remote_name, push_url
+                remote_name, push_url ? push_url : "none"
             );
 
             git_remote_free(remote);
@@ -122,10 +123,7 @@ static error_t remote_add(
     git_remote_free(remote);
 
     /* Success message */
-    output_success(
-        out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' added successfully",
-        name
-    );
+    output_success(out, OUTPUT_NORMAL, "Added remote '{cyan}%s{reset}'", name);
 
     return NULL;
 }
@@ -232,7 +230,7 @@ static error_t remote_set_url(
     err = remote_configured_url(repo, name, &configured);
     if (err) goto done;
     if (configured.ptr && strcmp(configured.ptr, new_url) == 0) {
-        output_summary(out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' URL unchanged", name);
+        output_summary(out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' already has that URL", name);
         goto done;
     }
 
@@ -259,17 +257,17 @@ static error_t remote_set_url(
         goto done;
     }
 
-    /* Success message, and what the forget leaves the next sync */
-    output_success(
-        out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' URL updated",
-        name
-    );
+    /* The act, and what it forgot a clause of its line, as disable says the target
+     * it forgets (cmds/profile.c profile_disable); what the next sync does with
+     * each profile is the help's to say */
     if (forgotten > 0) {
-        output_print(
-            out, OUTPUT_NORMAL, "  Forgot where %zu profile%s stood on the old URL: "
-            "the next sync pushes each one the new URL lacks\n",
-            forgotten, forgotten == 1 ? "" : "s"
+        output_success(
+            out, OUTPUT_NORMAL,
+            "Updated URL for remote '{cyan}%s{reset}' (forgot where %zu profile%s stood "
+            "on the old URL)", name, forgotten, forgotten == 1 ? "" : "s"
         );
+    } else {
+        output_success(out, OUTPUT_NORMAL, "Updated URL for remote '{cyan}%s{reset}'", name);
     }
 
 done:
@@ -348,7 +346,19 @@ static error_t remote_rename(
 }
 
 /**
- * Show remote details
+ * Show a remote: where a fetch reaches it, and where a push does
+ *
+ * The two URLs are the answer, said as the run's summary (base/output.h
+ * output_summary) in git's labels. The push URL is the one configured for pushes,
+ * else the fetch URL, as a push connects (lib/libgit2/src/libgit2/remote.c
+ * git_remote__urlfordirection) — save on a path remote, whose push libgit2 writes
+ * through the fetch URL whatever this one says (sys/remote.h). A URL the
+ * configuration holds none of, a remote written by hand, is none, as remote_list
+ * says it.
+ *
+ * The remote's refspecs are git's to show (dotta git remote show): no fetch or
+ * push of dotta's reads them, each handing libgit2 refspecs of its own
+ * (sys/remote.h remote_fetch, remote_push).
  */
 static error_t remote_show(
     git_repository *repo,
@@ -367,50 +377,12 @@ static error_t remote_show(
         return error_git(rc, "Cannot read remote '%s'", name);
     }
 
-    /* Show remote information */
-    output_print(out, OUTPUT_NORMAL, "Remote: {cyan}%s{reset}\n", name);
-
     const char *fetch_url = git_remote_url(remote);
     const char *push_url = git_remote_pushurl(remote);
+    if (!push_url) push_url = fetch_url;
 
-    if (!push_url) {
-        push_url = fetch_url;
-    }
-
-    output_print(out, OUTPUT_NORMAL, "  Fetch URL: %s\n", fetch_url);
-    output_print(out, OUTPUT_NORMAL, "  Push URL:  %s\n", push_url);
-
-    /* Show fetch refspecs */
-    git_strarray refspecs = { 0 };
-    rc = git_remote_get_fetch_refspecs(&refspecs, remote);
-    if (rc == 0 && refspecs.count > 0) {
-        output_print(out, OUTPUT_NORMAL, "  Fetch refspecs:\n");
-        for (size_t i = 0; i < refspecs.count; i++) {
-            output_print(out, OUTPUT_NORMAL, "    %s\n", refspecs.strings[i]);
-        }
-    }
-    if (rc == 0) {
-        git_strarray_dispose(&refspecs);
-    }
-
-    /* Show push refspecs */
-    memset(&refspecs, 0, sizeof(refspecs));
-    rc = git_remote_get_push_refspecs(&refspecs, remote);
-
-    if (rc == 0 && refspecs.count > 0) {
-        output_print(
-            out, OUTPUT_NORMAL, "  Push refspecs:\n"
-        );
-        for (size_t i = 0; i < refspecs.count; i++) {
-            output_print(
-                out, OUTPUT_NORMAL, "    %s\n",
-                refspecs.strings[i]
-            );
-        }
-    }
-    if (rc == 0) {
-        git_strarray_dispose(&refspecs);
-    }
+    output_summary(out, OUTPUT_NORMAL, "Fetch URL: %s", fetch_url ? fetch_url : "none");
+    output_summary(out, OUTPUT_NORMAL, "Push URL: %s", push_url ? push_url : "none");
 
     git_remote_free(remote);
 

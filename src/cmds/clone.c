@@ -469,11 +469,12 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* The profiles to enable: every landed one whose claims this machine can
      * place. A profile that needs a target is enabled only with one, and clone
      * cannot take one (enable's --target names a single profile): it is left
-     * fetched and disabled, named here with the command that enables it. The
-     * answer is the profile's own — the labels its walk shows, asked of a table
-     * with no binding (core/profiles.h profile_needs_target) — and its failures
-     * are the clone's: a tree Git cannot read, or a sheet this build cannot,
-     * fails the clone whole and rolls the store back, as the build in
+     * fetched and disabled, said in the sentence profile enable refuses it with
+     * (cmds/profile.c profile_enable), the command that places it the help's.
+     * The answer is the profile's own — the labels its walk shows, asked of a
+     * table with no binding (core/profiles.h profile_needs_target) — and its
+     * failures are the clone's: a tree Git cannot read, or a sheet this build
+     * cannot, fails the clone whole and rolls the store back, as the build in
      * initialize_state did for a portable profile and now does for every one. */
     string_array_t to_enable;
     string_array_init(&to_enable, ctx->arena, 0);
@@ -491,11 +492,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 out, OUTPUT_NORMAL,
                 "Profile '%s' holds custom/ paths and needs a target here; "
                 "not enabled", name
-            );
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta profile enable %s --target /path' after setup",
-                name
             );
             continue;
         }
@@ -755,7 +751,8 @@ const args_command_t spec_clone = {
     .notes       =
         "Profile Behavior:\n"
         "  Only the selected profiles are fetched. Each is enabled, except\n"
-        "  one holding custom/ paths, which needs a target first.\n"
+        "  one holding custom/ paths, which needs a target first:\n"
+        "  '%s profile enable <name> --target <dir>'.\n"
         "\n"
         "  The remote's other profiles stay on the remote. List them with\n"
         "  '%s profile list --all', and bring one later with\n"

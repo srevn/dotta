@@ -1303,8 +1303,8 @@ error_t state_open(git_repository *repo, state_t **out) {
     if (err) return err;
 
     /* A promotion that fails disposes of the handle the one way a handle is
-     * disposed of — state_free finalizes, checkpoints, closes and frees whatever
-     * got built — and publishes nothing: close_run frees what *out names. */
+     * disposed of — state_free finalizes, closes and frees whatever got built —
+     * and publishes nothing: close_run frees what *out names. */
     err = state_begin(state);
     if (err) {
         state_free(state);
@@ -1510,15 +1510,11 @@ void state_free(state_t *state) {
     /* Finalize prepared statements */
     state_finalize(state);
 
-    /* Checkpoint WAL before close (non-blocking, best effort) */
-    if (state->db) {
-        /* PASSIVE checkpoint: merge WAL into main db */
-        sqlite3_wal_checkpoint_v2(
-            state->db, NULL, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL
-        );
-        sqlite3_close(state->db);
-        state->db = NULL;
-    }
+    /* The last connection's close checkpoints the log into the file and takes
+     * the -wal and -shm with it (lib/sqlite3/sqlite3.c sqlite3WalClose; persistent
+     * WAL is off, state_configure); a close beside another connection leaves
+     * the log to that one's */
+    sqlite3_close(state->db);
 
     free(state->db_path);
     state_deinit_profiles(&state->profiles);

@@ -453,8 +453,8 @@ typedef struct state state_t;
  *
  * A load writes nothing of dotta's — no row, no schema, no journal mode, and no
  * database where none was. What SQLite does on any read is its own: its shared
- * locks, its -wal and -shm files, and the PASSIVE checkpoint state_free asks
- * for at the close, which moves frames a writer committed into the file.
+ * locks, its -wal and -shm files, and the checkpoint the last connection's close
+ * makes, which moves frames a writer committed into the file.
  *
  * Reads the enabled_profiles rows into the handle's cache: the boundary where
  * that table becomes this handle's, so every later reader of it is a plain read

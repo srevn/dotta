@@ -1589,12 +1589,16 @@ error_t state_records(
         }
 
         /* A NULL id — no blob confirmed (a directory, or a file observed only
-         * or kept unconfirmed), no bytes kept unconfirmed — is the zero OID calloc
-         * left; a stored one is 20 bytes by CHECK. A NULL mode — a link's, by
-         * CHECK — reads 0, SQLite's integer for NULL, read only under the kind. */
-        if (blob) memcpy(record->blob_oid.id, blob, GIT_OID_RAWSZ);
-        if (disk) memcpy(record->disk_oid.id, disk, GIT_OID_RAWSZ);
-        if (head) memcpy(record->head.id, head, GIT_OID_RAWSZ);
+         * or kept unconfirmed), no bytes kept unconfirmed — is the zero struct
+         * calloc left, no id under every layout git_oid has. A stored one is 20
+         * bytes by CHECK, made an id by libgit2's own constructor: a copy into
+         * the struct's bytes is one only where git_oid is those bytes alone,
+         * never where it carries a type beside them, as 2.0's does. A NULL mode
+         * — a link's, by CHECK — reads 0, SQLite's integer for NULL, read only
+         * under the kind. */
+        if (blob) git_oid_fromraw(&record->blob_oid, blob);
+        if (disk) git_oid_fromraw(&record->disk_oid, disk);
+        if (head) git_oid_fromraw(&record->head, head);
         record->kind = state_kind_from_text(kind);
         record->mode = (mode_t) sqlite3_column_int(stmt, 4);
         record->stat = (state_stat_t){
@@ -1681,24 +1685,25 @@ error_t state_write(state_t *state, const state_record_t *record) {
     if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 7, record->group, -1, SQLITE_TRANSIENT);
 
     /* 8-13. the content: each id NULL where zero — a blob, a confirmation of
-     * none; disk's entry and its head, bytes kept of none — and the stat bound
-     * to the one set */
+     * none; disk's entry and its head, bytes kept of none — and otherwise the
+     * 20 bytes of the struct's id, the raw id under every layout git_oid has;
+     * the stat bound to the one set */
     if (rc == SQLITE_OK) {
         rc = sqlite3_bind_blob(
             stmt, 8, git_oid_is_zero(&record->blob_oid) ? NULL : record->blob_oid.id,
-            GIT_OID_RAWSZ, SQLITE_TRANSIENT
+            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
         );
     }
     if (rc == SQLITE_OK) {
         rc = sqlite3_bind_blob(
             stmt, 9, git_oid_is_zero(&record->disk_oid) ? NULL : record->disk_oid.id,
-            GIT_OID_RAWSZ, SQLITE_TRANSIENT
+            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
         );
     }
     if (rc == SQLITE_OK) {
         rc = sqlite3_bind_blob(
             stmt, 10, git_oid_is_zero(&record->head) ? NULL : record->head.id,
-            GIT_OID_RAWSZ, SQLITE_TRANSIENT
+            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
         );
     }
     if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 11, record->stat.mtime);

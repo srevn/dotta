@@ -837,11 +837,12 @@ const char *state_target(
  * Every record, in filesystem_path order
  *
  * The one read of the path_records table. Allocates the array and every string
- * field from the caller's arena; lifetime is tied to the arena. A NULL id column
- * — the blob, disk's entry, the head — hydrates to a zero OID, a link's NULL
- * mode to 0. Every column is read exactly or the read fails: a conversion SQLite
- * cannot allocate is ERR_MEMORY, never a NULL taken for a value the column holds
- * — an owner the path has, read as none.
+ * field from the caller's arena; lifetime is tied to the arena. A stored id
+ * hydrates to the id libgit2 builds of its bytes, equal to every other id of
+ * them; a NULL id column — the blob, disk's entry, the head — to a zero OID, a
+ * link's NULL mode to 0. Every column is read exactly or the read fails: a
+ * conversion SQLite cannot allocate is ERR_MEMORY, never a NULL taken for a value
+ * the column holds — an owner the path has, read as none.
  *
  * In strcmp order (the principle above). Readers, and what each takes from it:
  *   - core/workspace.c workspace_partition: pairs each record with the active

@@ -185,8 +185,12 @@ static error_t state_connect(const char *path, sqlite3 **out) {
 
     /* READWRITE and never CREATE: the file is there before the open (mkstemp
      * made the one, the admission found the other), and SQLite's CREATE follows
-     * a link to nowhere and creates its target. */
-    if (sqlite3_open_v2(path, out, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+     * a link to nowhere and creates its target. Without a mutex: one thread reaches
+     * a connection (src/ creates none, and every fork execs at once), so the
+     * serialized mode's lock around every step, bind and column read guards nothing
+     * — 7.6 ms against 4.35 for a read of 10,000 records, measured at 0.151.27. */
+    int rc = sqlite3_open_v2(path, out, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, NULL);
+    if (rc != SQLITE_OK) {
         /* CANTOPEN says only that the open failed; the OS's errno says why, where
          * the failure had one (sqlite3_system_errno is 0 otherwise). */
         int os_errno = sqlite3_system_errno(*out);

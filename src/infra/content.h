@@ -58,9 +58,9 @@
  * cache's key spell on the read side; a capture's `encrypted` false for a link
  * is that rule stated as a value.
  *
- * The plaintext a seal consumes never leaves this module: the encrypt runs inside
- * the capture and the plaintext is wiped there, whichever way the seal went.
- * What crosses is what the tree will hold.
+ * The plaintext a seal consumes never leaves this module: the seal runs inside
+ * it, one for the capture and the rebind alike, and the plaintext is wiped there,
+ * whichever way the seal went. What crosses is what the tree will hold.
  *
  * Architectural placement:
  * - Layer: Infrastructure (src/infra/)
@@ -145,8 +145,8 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * (which blobs a rotation must not orphan, where a false absence outlives the
  * run). Every reader is outside this module, and that is the shape rather than
  * an accident: content's own functions judge bytes they already hold
- * (content_classify_bytes on a view, classify_entry inside a read), so none of
- * them pays a load to ask. A reader not on this list is a bug.
+ * (content_classify_bytes on a view, content_classify_entry inside a read), so
+ * none of them pays a load to ask. A reader not on this list is a bug.
  *
  * The price, measured rather than read off the docs: the blob is loaded whole
  * to reach six bytes, libgit2 offering no partial read of a packed object — and
@@ -301,9 +301,9 @@ error_t content_get_from_blob_oid(
  * is a caller's bug and dies (base/error.h CHECK_ARG) rather than being copied
  * — an unbound blob's id travels unchanged, and the caller that reads the kind
  * for its own claim already knows which it holds. UNSUPPORTED_VERSION is refused
- * in get_plaintext_from_blob's own words: this build cannot open the bytes, so
- * it cannot seal them under another name, and entering them under one would leave
- * a claim no key will ever read.
+ * in content_plaintext's own words: this build cannot open the bytes, so it cannot
+ * seal them under another name, and entering them under one would leave a claim
+ * no key will ever read.
  *
  * A link is not content and never reaches here: its bytes are a target path,
  * and Git's filemode is the authority on that at every boundary
@@ -320,7 +320,9 @@ error_t content_get_from_blob_oid(
  * epoch this seals them back under. A blob from another epoch is refused, never
  * re-sealed into this one.
  *
- * The plaintext lives only inside this call and is wiped on every exit path.
+ * The plaintext lives only inside this call and is wiped on every exit path: it
+ * is opened into `out_bytes` and sealed there under `to`, so only the seal is
+ * ever left in it.
  *
  * @param repo Repository the blob is read from (must not be NULL)
  * @param blob The blob's id (must not be NULL)
@@ -381,9 +383,9 @@ error_t content_rebind(
  * would write is one nothing can ask for: the second question is put only when
  * the base differs from the row's blob, and an orphan's path has no row at all.
  * A base's plaintext therefore has the lifetime of one judgment and is wiped
- * and released at the end of it, the rule content_rebind keeps for the other
- * buffer this module owns. The price is one copy standing beside the disk copy
- * for the length of the comparison, where the id form held only the copy.
+ * and released at the end of it, the rule content_rebind keeps for the plaintext
+ * it seals. The price is one copy standing beside the disk copy for the length
+ * of the comparison, where the id form held only the copy.
  *
  * The seam reads; it does not look. What the read answers is judged by
  * infra/compare.h's pair, whose one look is the caller's own, so the stat is

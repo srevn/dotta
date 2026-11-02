@@ -102,7 +102,7 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size) {
  * a link — whose bytes are its target and never a seal, whatever they begin with
  * (the header). Every other mode is judged, so one dotta never writes fails closed.
  */
-static content_kind_t classify_entry(
+static content_kind_t content_classify_entry(
     const uint8_t *data, size_t size, git_filemode_t mode
 ) {
     return mode == GIT_FILEMODE_LINK
@@ -126,7 +126,7 @@ error_t content_classify(
     error_t err = gitops_blob_view_open(repo, blob_oid, &view);
     if (err) return err;
 
-    *out_kind = classify_entry((const uint8_t *) view.data, view.size, mode);
+    *out_kind = content_classify_entry((const uint8_t *) view.data, view.size, mode);
 
     /* Attribution rides the same parse: an ENCRYPTED verdict means the detect
      * window matched, and the fingerprint sits a few bytes further into the
@@ -171,17 +171,24 @@ size_t content_estimated_plaintext_size(size_t blob_size, bool encrypted) {
 static const char ENCRYPTION_DISABLED[] = "Encryption is disabled (encryption.enabled = false)";
 
 /**
- * Get plaintext from blob (internal workhorse)
+ * An entry's plaintext, from its blob's bytes: the read's workhorse
  *
- * Classifies the blob as its entry (classify_entry: the magic header, the single
- * source of truth for a content entry's encryption state; a link's bytes are
- * its target) and routes accordingly:
+ * Classifies the blob as its entry (content_classify_entry: the magic header,
+ * the single source of truth for a content entry's encryption state; a link's
+ * bytes are its target) and routes accordingly:
  *   - PLAINTEXT           → copy bytes
  *   - ENCRYPTED           → decrypt via keymgr
  *   - UNSUPPORTED_VERSION → ERR_CRYPTO naming the version pair
  *
  * Either way the plaintext is the C string both public reads promise: its bytes
  * and a terminator, an entry with none included.
+ *
+ * A refusal leaves `out_content` empty, whichever arm refused: the decrypt surfaces
+ * nothing it did not open (crypto/cipher.h cipher_decrypt), and the locked root
+ * and the version pair are refused before anything is written. So no caller wipes
+ * what a refusal leaves: content_get_from_blob_oid and content_rebind hand it
+ * back to theirs, and content_cache_get_from_blob_oid frees a refused entry
+ * plainly.
  *
  * Works on a zero-copy view, so callers must keep the backing blob alive for
  * the duration of the call.
@@ -205,7 +212,7 @@ static const char ENCRYPTION_DISABLED[] = "Encryption is disabled (encryption.en
  * @param out_content Output buffer (caller owns)
  * @return Error or NULL on success
  */
-static error_t get_plaintext_from_blob(
+static error_t content_plaintext(
     const uint8_t *blob_data, size_t blob_size, git_filemode_t mode,
     const char *storage_path, const char *profile, keymgr *keymgr,
     buffer_t *out_content
@@ -216,11 +223,11 @@ static error_t get_plaintext_from_blob(
 
     *out_content = (buffer_t){ 0 };
 
-    /* Bytes are authoritative, as the entry they stand in: classify_entry is
-     * total, so every blob lands in exactly one of three states regardless of
-     * any external claim — a link's target in PLAINTEXT, whatever it begins
+    /* Bytes are authoritative, as the entry they stand in: content_classify_entry
+     * is total, so every blob lands in exactly one of three states regardless
+     * of any external claim — a link's target in PLAINTEXT, whatever it begins
      * with. */
-    content_kind_t kind = classify_entry(blob_data, blob_size, mode);
+    content_kind_t kind = content_classify_entry(blob_data, blob_size, mode);
 
     switch (kind) {
         case CONTENT_PLAINTEXT: {
@@ -268,6 +275,53 @@ static error_t get_plaintext_from_blob(
     CHECK_ARG(false, "a content kind no enumerator names");
 }
 
+/**
+ * A plaintext sealed in place: the seal's workhorse
+ *
+ * `bytes` goes in as the plaintext and comes out as its seal under (profile,
+ * storage path), the plaintext wiped whichever way the seal went, so only the
+ * seal is ever left in it. A refusal is the seal's own, under "Cannot encrypt
+ * '<path>'", and leaves it empty. Not base/buffer.h's pure out-parameter: the
+ * bytes handed in are read, then replaced.
+ *
+ * The module's one seal, so the plaintext a seal consumes ends here and nowhere
+ * else: content_capture_file's, a file the policy seals, and content_rebind's,
+ * a sealed blob's content under a second name. The key manager is the caller's
+ * to hold: the capture asks content_require_encryption before it opens anything,
+ * and the rebind has read a blob only a held key opens.
+ *
+ * @param keymgr Key manager (must not be NULL)
+ * @param profile Profile name, for key derivation (must not be NULL)
+ * @param storage_path The name the seal binds (must not be NULL; the AAD)
+ * @param bytes The plaintext in, its seal out (must not be NULL; empty on a
+ *          refusal)
+ * @return Error or NULL on success
+ */
+static error_t content_encrypt(
+    keymgr *keymgr, const char *profile, const char *storage_path, buffer_t *bytes
+) {
+    buffer_t sealed = BUFFER_INIT;
+    error_t err = keymgr_encrypt(
+        keymgr, profile, storage_path, (const uint8_t *) bytes->data, bytes->size,
+        &sealed
+    );
+
+    /* The plaintext ends here whichever way the seal went: only the seal goes on */
+    if (bytes->data) {
+        secure_wipe(bytes->data, bytes->size);
+    }
+    buffer_deinit(bytes);
+
+    if (err) {
+        buffer_deinit(&sealed);  /* whatever the refusal left in it (base/buffer.h) */
+        return error_wrap(err, "Cannot encrypt '%s'", storage_path);
+    }
+
+    *bytes = sealed;
+
+    return NULL;
+}
+
 error_t content_get_from_blob_oid(
     git_repository *repo,
     const git_oid *blob_oid,
@@ -283,8 +337,8 @@ error_t content_get_from_blob_oid(
     CHECK_NULL(profile);
     CHECK_NULL(out_content);
 
-    /* get_plaintext_from_blob clears this too, but a blob that will not open
-     * never reaches it. */
+    /* content_plaintext clears this too, but a blob that will not open never
+     * reaches it. */
     *out_content = (buffer_t){ 0 };
 
     /* Open zero-copy view onto the blob */
@@ -295,7 +349,7 @@ error_t content_get_from_blob_oid(
     }
 
     /* Get plaintext content (view bytes valid until close) */
-    err = get_plaintext_from_blob(
+    err = content_plaintext(
         view.data, view.size, mode, storage_path, profile, keymgr, out_content
     );
 
@@ -336,34 +390,20 @@ error_t content_rebind(
         != CONTENT_PLAINTEXT, "content_rebind was handed unbound content"
     );
 
-    /* A content entry by the domain (the header): a link never reaches here. */
-    buffer_t plaintext = BUFFER_INIT;
-    err = get_plaintext_from_blob(
+    /* A content entry by the domain (the header): a link never reaches here. It
+     * is opened into the caller's buffer and sealed there under the new name,
+     * so only the seal is ever left in it: a refused read leaves it empty
+     * (content_plaintext), and so does a refused seal (content_encrypt). */
+    err = content_plaintext(
         view.data, view.size, GIT_FILEMODE_BLOB, from_storage_path, profile,
-        keymgr, &plaintext
+        keymgr, out_bytes
     );
     gitops_blob_view_close(&view);
     if (err) {
         return err;              /* the read ladder's own words, unwrapped */
     }
 
-    err = keymgr_encrypt(
-        keymgr, profile, to_storage_path, (const uint8_t *) plaintext.data,
-        plaintext.size, out_bytes
-    );
-
-    /* The plaintext ends here whichever way the seal went, as the file capture's
-     * does: only the ciphertext goes on, and it is the caller's. */
-    if (plaintext.data) {
-        secure_wipe(plaintext.data, plaintext.size);
-    }
-    buffer_deinit(&plaintext);
-
-    if (err) {
-        return error_wrap(err, "Cannot encrypt '%s'", to_storage_path);
-    }
-
-    return NULL;
+    return content_encrypt(keymgr, profile, to_storage_path, out_bytes);
 }
 
 content_cache_t *content_cache_create(
@@ -447,7 +487,7 @@ error_t content_cache_get_from_blob_oid(
     buffer_t *content = buffer_create(0);
 
     /* Get plaintext content (view bytes valid until close) */
-    err = get_plaintext_from_blob(
+    err = content_plaintext(
         view.data, view.size, mode, storage_path, profile, cache->keymgr, content
     );
 
@@ -504,10 +544,10 @@ error_t content_compare_blob_to_disk(
 
     /* The plaintext ends here whichever way the read and the verdict went — one
      * tail for every exit past the read, because a failure leaves the caller
-     * whatever the callee built, a half-decrypt among them, and this module's
-     * free is the wiping one (base/buffer.h's out-parameter rule; infra/compare
-     * keeps the same tail over the disk copy it reads). The verdict is a value,
-     * and the bytes were only ever the reference it was reached against. */
+     * whatever the callee built, and this module's free is the wiping one
+     * (base/buffer.h's out-parameter rule; infra/compare keeps the same tail
+     * over the disk copy it reads). The verdict is a value, and the bytes were
+     * only ever the reference it was reached against. */
     if (plaintext.data) {
         secure_wipe(plaintext.data, plaintext.size);
     }
@@ -626,29 +666,12 @@ error_t content_capture_file(
      * plaintext whose first bytes already are the magic is refused — entered,
      * it would be stamped plaintext by the caller and read as ciphertext by every
      * reader after, and no key would open it. With the refusal, `should_encrypt`
-     * is the byte truth. The plaintext a seal consumes ends in this frame; what
-     * leaves under no seal is the file's own bytes, which the caller releases
-     * through content_capture_free. */
+     * is the byte truth. The plaintext a seal consumes ends in the seal
+     * (content_encrypt); what leaves under no seal is the file's own bytes, which
+     * the caller releases through content_capture_free. */
     if (should_encrypt) {
-        buffer_t sealed = BUFFER_INIT;
-        err = keymgr_encrypt(
-            keymgr, profile, storage_path, (const uint8_t *) bytes.data,
-            bytes.size, &sealed
-        );
-
-        /* Unconditional, as content_rebind's is: the plaintext ends here whichever
-         * way the seal went, and only the ciphertext goes on. */
-        if (bytes.data) {
-            secure_wipe(bytes.data, bytes.size);
-        }
-        buffer_deinit(&bytes);
-
-        if (err) {
-            buffer_deinit(&sealed);
-            return error_wrap(err, "Cannot encrypt '%s'", storage_path);
-        }
-
-        bytes = sealed;
+        err = content_encrypt(keymgr, profile, storage_path, &bytes);
+        if (err) return err;
     } else if (content_classify_bytes((const uint8_t *) bytes.data, bytes.size)
         != CONTENT_PLAINTEXT) {
         if (bytes.data) {

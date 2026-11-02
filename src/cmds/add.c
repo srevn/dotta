@@ -1446,7 +1446,7 @@ static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
         .storage_path = storage_path,
         .profile = walk->profile,
         .kind = path->occupant,
-        .blob_oid = claim.blob_oid,
+        .base_oid = claim.blob_oid,
         .stat = state_stat_from_read(&capture.st),
         .mode = profile_claim_mode(&claim),
         .owner = claim.owner,

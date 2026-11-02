@@ -668,7 +668,7 @@ static error_t update_profile(
                         .storage_path    = item->storage_path,
                         .profile         = profile,
                         .kind            = item->occupant,
-                        .blob_oid        = claim.blob_oid,
+                        .base_oid        = claim.blob_oid,
                         .stat            = state_stat_from_read(&capture.st),
                         .mode            = profile_claim_mode(&claim),
                         .owner           = claim.owner,

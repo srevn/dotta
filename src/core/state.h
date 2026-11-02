@@ -11,19 +11,21 @@
  * Git at every load (core/manifest.h) and never stored.
  *
  * A record holds two kinds of column, and the rule above names the first. What
- * dotta did or saw at the path — the binding, the kind, the blob it confirmed,
- * the claim, the stamp — is its own and never derivable: a verdict reads each,
- * and a column of this kind removed is a verdict changed. What a load derived
+ * dotta did or saw at the path — the binding, the kind, the base it found disk
+ * at, the claim, the stamp — is its own and never derivable: a verdict reads
+ * each, and a column of this kind removed is a verdict changed. What a load derived
  * there, kept with the key that fixes it — the stat triple behind the content,
- * and for bytes no base proves the entry a read found disk to be with the head
- * whose history held none of it (state_stat_t, state_record_t's content group)
- * — is derivable again at a read's or a walk's price, and is read only where it
- * spares that read or that walk: a column of this kind removed is the price paid
- * at every load, and no verdict moved. Git's index keeps both kinds in one entry,
- * the blob beside the stat data that vouches for it (lib/git/read-cache.c
- * ie_match_stat), and keeps a negative the same way, which names a directory
- * holds untracked under its stat and its exclude files' ids (lib/git/dir.h
- * untracked_cache_dir).
+ * and for bytes no base proves disk's entry with the head its history was asked
+ * to (state_stat_t, state_record_t's content group) — is derivable again at a
+ * read's or a walk's price, and is read only where it spares that read or that
+ * walk: a column of this kind removed is that price paid at every load where
+ * the read can be made, and a verdict moved where it cannot — a sealed row with
+ * no key in reach, a node whose mode forbids the read, which a triple that stands
+ * answers off the record where the read would answer [locked] or [unreadable].
+ * Git's index keeps both kinds in one entry, the blob beside the stat data that
+ * vouches for it (lib/git/read-cache.c ie_match_stat), and keeps a negative the
+ * same way, which names a directory holds untracked under its stat and its exclude
+ * files' ids (lib/git/dir.h untracked_cache_dir).
  *
  * The enabled set is this machine's mount table, one line of fstab per row: the
  * name is what is mounted (the branch — the repository is the device, and knows
@@ -91,11 +93,11 @@
  * The stat — the record's fast path
  *
  * Field of a state_record_t: the (mtime, size, ino) triple captured at the moment
- * dotta confirmed disk content equals record.blob_oid, or found it the entry
+ * dotta confirmed disk content equals record.base_oid, or found it the entry
  * the record keeps unconfirmed (record.disk_oid). If a later live stat matches
  * all three fields, disk still holds those bytes without re-hashing — the same
  * approach Git uses with its index (state_stat_matches) — and where a regular
- * file's size is not the triple's, disk is not record.blob_oid, nothing read
+ * file's size is not the triple's, disk is not record.base_oid, nothing read
  * (state_stat_disproves).
  *
  * Sentinel: All-zero state means unset — forces the slow path (safe default).
@@ -107,8 +109,8 @@
  * the stat was taken cannot distinguish the bytes the caller verified from a
  * same-second, same-size, in-place rewrite — so the read-derived constructor
  * refuses to build one (mtime >= now ⇒ UNSET, Git's "racily clean" smudge,
- * write-side); the record then advances blob-only and the next load's slow path
- * confirms once, in a closed second. A capture of a file edited this second
+ * write-side); the record then advances its ids alone and the next load's slow
+ * path confirms once, in a closed second. A capture of a file edited this second
  * therefore defers its fast path one load. A triple born from the write itself
  * (state_stat_from_write) is exempt: authorship, not a read, vouches for it.
  * And as ce_match_stat reads the entry's mode beside its stat data, the kind is
@@ -198,11 +200,13 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  * The row dotta last reconciled this path against — what it deployed, or, when
  * deployed_at is 0, what it was looking at when it first observed the path —
  * and what it saw or confirmed there. One row per filesystem path, both kinds.
- * A row exists iff dotta has observed the node its kind names at the path while
- * it was active — seen standing there, or put there: there is no "never observed"
- * row — the row's existence is the observation (core/workspace.c classify_absent
- * reads it, of the profile the record names and the content it confirmed), and
- * no column restates it.
+ * A row exists iff dotta has observed the node its kind names at the path — seen
+ * standing there or put there while it was active, or captured there under a
+ * claim its profile holds that a standing blob walls, the capture's record written
+ * with no stamp, an orphan from its first write (cmds/add.c add_write_record):
+ * there is no "never observed" row — the row's existence is the observation
+ * (core/workspace.c classify_absent reads it, of the profile the record names
+ * and the content it confirmed), and no column restates it.
  *
  * Four groups of columns, one rule each. The store writes a record whole and
  * asks nothing of it (state_write), so each rule is kept where a record is built:
@@ -225,7 +229,7 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     content (workspace_unacknowledged) — and every other learning keeps the
  *     one it read. A storage name in the grammar and a profile never empty, each
  *     whole (schema-enforced).
- *   - the content (kind, blob_oid, disk_oid, head, stat): the node the record
+ *   - the content (kind, base_oid, disk_oid, head, stat): the node the record
  *     describes — a regular file, a link or a directory, in a look's own words
  *     (fs_occupant_t) — and what it holds, in one of two answers: the base dotta
  *     last verified it holds — a blob both sides held — with the stat of that
@@ -249,7 +253,7 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     onto it, and has nothing learned onto it otherwise (core/workspace.c
  *     workspace_flush) — a whole write, never a learning onto the gone node's
  *     record. No node is executable: the bit is the claim's mode, and Git's
- *     filemode the row's alone. Zero blob_oid is no content confirmation — a
+ *     filemode the row's alone. Zero base_oid is no content confirmation — a
  *     directory, whose whole confirmed-disk record is that it was observed (a
  *     directory has no content confirmation, schema-enforced), or a file this
  *     record holds no confirmation of: one whose bytes it keeps unconfirmed, or
@@ -276,10 +280,10 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     learning keeps it, 0 = dotta never put this here.
  *
  * Invariants:
- *   - blob_oid is non-zero iff this record holds a confirmation that disk content
+ *   - base_oid is non-zero iff this record holds a confirmation that disk content
  *     matched that blob. Zero is none: a directory, or a file the record never
  *     confirmed — a release forgets a confirmation with the record.
- *   - disk_oid and head are set together, only where blob_oid is zero, on a file
+ *   - disk_oid and head are set together, only where base_oid is zero, on a file
  *     or a link dotta never owned (schema-enforced): a finding about the record's
  *     own binding at that head, whose bytes the triple stands behind.
  *   - a stat matching a live look of the record's kind proves, on the fast path,
@@ -291,9 +295,9 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     alone: Git hashes a link's target exactly as it hashes a file's bytes, so
  *     one id stands behind both, and the kind is what tells them apart
  *     (core/workspace.h workspace_stale).
- *   - deployed_at > 0 on a file implies a non-zero blob_oid: the write that owned
- *     it confirmed it (schema-enforced). A row with a blob and deployed_at = 0
- *     is a confirmation, not a deployment.
+ *   - deployed_at > 0 on a file or a link implies a non-zero base_oid: the write
+ *     that owned it confirmed it (schema-enforced). A row with a blob and
+ *     deployed_at = 0 is a confirmation, not a deployment.
  *   - the blob a record carries was committed under its binding — the name, in
  *     the profile, that the record keeps — whatever that binding's row holds
  *     since. An encrypted blob is readable under no other binding (infra/content)
@@ -331,10 +335,10 @@ typedef struct state_record {
 
     /* The content */
     fs_occupant_t kind;       /* The node: REGULAR, SYMLINK or DIRECTORY */
-    git_oid blob_oid;         /* The base: a blob both sides held, which disk was found at (zero = none) */
+    git_oid base_oid;         /* The base: a blob both sides held, which disk was found at (zero = none) */
     git_oid disk_oid;         /* Where none stands: the entry a read found the node's bytes to be (zero = none kept) */
     git_oid head;             /* Beside it: the head of the binding's branch, holding none of them at the name up to it */
-    state_stat_t stat;        /* The triple behind blob_oid, or behind disk_oid (all-zero = unusable) */
+    state_stat_t stat;        /* The triple behind base_oid, or behind disk_oid (all-zero = unusable) */
 
     /* The claim */
     mode_t mode;              /* Meaningful iff kind != SYMLINK */
@@ -839,7 +843,7 @@ const char *state_target(
  * The one read of the path_records table. Allocates the array and every string
  * field from the caller's arena; lifetime is tied to the arena. A stored id
  * hydrates to the id libgit2 builds of its bytes, equal to every other id of
- * them; a NULL id column — the blob, disk's entry, the head — to a zero OID, a
+ * them; a NULL id column — the base, disk's entry, the head — to a zero OID, a
  * link's NULL mode to 0. Every column is read exactly or the read fails: a
  * conversion SQLite cannot allocate is ERR_MEMORY, never a NULL taken for a value
  * the column holds — an owner the path has, read as none.
@@ -921,11 +925,11 @@ const state_record_t *state_find_record(
  * phase).
  *
  * The store's own spelling of a record, the one a read gives back (state_records):
- * a zero blob, an absent owner or group bind NULL, and so does a link's mode,
- * which the kind makes a don't-care whatever the record says of it. A kind no
- * record describes — UNKNOWN, NONE, OTHER: a record built without its node —
- * has no spelling, and the store refuses it (the column's NOT NULL) rather than
- * write it as a file.
+ * a zero id, an absent owner or group bind NULL, and so does a link's mode, which
+ * the kind makes a don't-care whatever the record says of it. A kind no record
+ * describes — UNKNOWN, NONE, OTHER: a record built without its node — has no
+ * spelling, and the store refuses it (the column's NOT NULL) rather than write
+ * it as a file.
  *
  * ROUTING INVARIANT — this is load-bearing:
  *   - Where a workspace live for this transaction is read after the write, its

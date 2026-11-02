@@ -1009,7 +1009,7 @@ static error_t workspace_compare_base(
      * as sealed was refused. */
     return content_compare_blob_to_disk(
         ws->content_cache,
-        &base->blob_oid,
+        &base->base_oid,
         item->filesystem_path,
         base->kind == FS_OCCUPANT_SYMLINK ? GIT_FILEMODE_LINK : GIT_FILEMODE_BLOB,
         &item->st,
@@ -1255,9 +1255,9 @@ static void workspace_analyze_file(
 
         /* Where the pair is the row's content, it is the content the verdict
          * found disk to be, its blob and the stat standing behind it
-         * (workspace_item_t's blob_oid and stat) */
+         * (workspace_item_t's base_oid and stat) */
         if (cmp_result == CMP_EQUAL) {
-            item->blob_oid = base->blob_oid;
+            item->base_oid = base->base_oid;
             item->stat = base->stat;
 
             /* The row's binding, owed with that content to a record dotta never
@@ -1386,13 +1386,13 @@ static void workspace_analyze_file(
 
         /* Slow path found disk == the row's pair: the row's blob and the stat
          * that stands behind it are the content the verdict found, whatever the
-         * record (workspace_item_t's blob_oid and stat). The stat is distilled
+         * record (workspace_item_t's base_oid and stat). The stat is distilled
          * from the look here, where the comparison stood: whether its mtime second
          * had closed is asked of the clock now, never of a later writer's, which
          * would take for the record's stat a triple that a same-second rewrite
          * after the read could stand behind (core/state.h state_stat_from_read). */
         if (cmp_result == CMP_EQUAL) {
-            item->blob_oid = row->blob_oid;
+            item->base_oid = row->blob_oid;
             item->stat = state_stat_from_read(&item->st);
 
             /* The content half of the item's confirmation, for the flush to write
@@ -1585,7 +1585,7 @@ static void workspace_analyze_file(
  * so the copy measured here is always of its record's kind.
  *
  * Architecture:
- * - Uses the record alone (kind, blob_oid, stat, mode, owner, group)
+ * - Uses the record alone (kind, base_oid, stat, mode, owner, group)
  * - The content against the record's own pair, the question the file analysis's
  *   second question asks too (workspace_compare_base): the stat — a match means
  *   the exact node dotta wrote, no hashing — else the length off the look, which
@@ -1601,7 +1601,7 @@ static void workspace_analyze_file(
  * that reached this would rather crash than be read as a silent [unverified].
  *
  * @param ws Workspace (provides the run's content reader)
- * @param item The orphan's item: its record, with a non-zero blob_oid, and the
+ * @param item The orphan's item: its record, with a non-zero base_oid, and the
  *             look taken at the record's path, which found the record's own kind
  *             standing (must not be NULL). The path bits the compare finds are
  *             added to its divergence, which the ladder hands in with none —
@@ -1619,8 +1619,8 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
      * or hashing anything, then the length off the look, then one read of the
      * record's blob, the one dotta last confirmed disk against. The kind rung
      * between them passes, the look being of the record's kind (the precondition).
-     * The caller guarantees a non-zero blob, and the store holds none of another
-     * size (CHECK).
+     * The caller guarantees a base, and the store holds none of another size
+     * (CHECK).
      */
     compare_result_t cmp_result;
     error_t err = workspace_compare_base(ws, item, &cmp_result);
@@ -2271,7 +2271,7 @@ static void workspace_ask_bases(workspace_t *ws) {
                 case HISTORY_HOLDING_HELD:
                     /* A held blob is the base, STALE in CONTENT's place */
                     item->divergence = (item->divergence & ~DIVERGENCE_CONTENT) | DIVERGENCE_STALE;
-                    item->blob_oid = entries[k].blob_oid;
+                    item->base_oid = entries[k].blob_oid;
                     item->stat = stats[k];
                     break;
 
@@ -3476,10 +3476,10 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * is owed the row's binding (core/workspace.h workspace_unlearned): the look
      * found the directory's whole content, its kind, standing under this row —
      * the content a file's record learns the binding with — and a directory's
-     * zero blob and unset stat ride. Of either class, as the observation is:
-     * the binding names the row a load last learned the node's content under,
-     * never the profile's word about tracking it. Below every arm above, so where
-     * no directory stands nothing moves. */
+     * zero ids and unset stat ride. Of either class, as the observation is: the
+     * binding names the row a load last learned the node's content under, never
+     * the profile's word about tracking it. Below every arm above, so where no
+     * directory stands nothing moves. */
     if (workspace_unlearned(row, record)) {
         item->confirmation |= DIVERGENCE_CONTENT;
     }
@@ -3685,7 +3685,7 @@ static void workspace_list(workspace_t *ws) {
  * item holds it, written whole — a base, the blob with the stat the load distilled
  * where its comparison stood, or bytes no base proves, disk's entry and the head
  * its history was asked at with the stat of the read that found them
- * (workspace_item_t's blob_oid, disk_oid, head and stat) — under the row's binding,
+ * (workspace_item_t's base_oid, disk_oid, head and stat) — under the row's binding,
  * the one it was confirmed under, which the record takes with it. It is the one
  * learning that writes a binding, the binding naming the row a load last learned
  * the content under: what an encrypted blob opens under, and what an absence
@@ -3706,8 +3706,8 @@ static void workspace_list(workspace_t *ws) {
  * one the row's own branch held at its name — or bytes no base proves with their
  * head, every note over no base being completed by the bases' ask before the
  * flush reads it, or dropped (workspace_ask_bases). Save a directory's, whose
- * whole content is its kind: its learning writes the binding alone, beside a
- * zero blob and an unset stat (workspace_analyze_directory).
+ * whole content is its kind: its learning writes the binding alone, beside no
+ * id and an unset stat (workspace_analyze_directory).
  *
  * Three callers, which would otherwise drift apart: workspace_flush, over what
  * the analyses noted; workspace_learn, over the claims apply's fix set; and
@@ -3722,7 +3722,7 @@ static state_record_t workspace_learning(
     if (axes & DIVERGENCE_CONTENT) {
         onto.storage_path = row->storage_path;
         onto.profile = row->profile;
-        onto.blob_oid = item->blob_oid;
+        onto.base_oid = item->base_oid;
         onto.disk_oid = item->disk_oid;
         onto.head = item->head;
         onto.stat = item->stat;
@@ -4854,7 +4854,7 @@ error_t workspace_anchor(
     *record = workspace_learning(
         workspace_observation(item->row, item->row->mode, NULL, NULL), item, axes
     );
-    record->blob_oid = item->row->blob_oid;
+    record->base_oid = item->row->blob_oid;
     record->stat = stat;
     record->deployed_at = now;
 

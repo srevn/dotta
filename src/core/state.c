@@ -52,7 +52,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "32"
+#define STATE_SCHEMA_VERSION "33"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -368,43 +368,15 @@ static error_t state_initialize(sqlite3 *db) {
         ") STRICT;"
 
         /* The record: what dotta last reconciled each managed path against, and
-         * what it confirmed there. A row exists iff dotta has observed the path
-         * on disk while it was active, and its existence is the whole of that
-         * fact: no column restates it. One path, one node, one record — the PRIMARY
-         * KEY, and the node's kind a column of it. No foreign key in either
-         * direction: nothing is a parent, nothing cascades.
+         * what it confirmed there. A row exists iff dotta has observed the path's
+         * node (core/state.h state_record_t), and its existence is the whole of
+         * that fact: no column restates it. One path, one node, one record —
+         * the PRIMARY KEY, and the node's kind a column of it. No foreign key
+         * in either direction: nothing is a parent, nothing cascades. The columns
+         * are state_record_t's four groups, in its order: the key, the binding,
+         * the content, the claim, the lifecycle.
          *
          * Held by the schema:
-         *   - the node is a regular file, a link or a directory
-         *     (state_kind_to_text's three texts): the executable bit is no kind,
-         *     and no record describes an absence, a look not taken or a device
-         *   - a link claims no mode and every other node does: (kind = 'symlink')
-         *     = (mode IS NULL), an expression that is never NULL — a CHECK that
-         *     evaluates to NULL passes — and the one spelling of a link's
-         *     don't-care, so a claim read back is the claim a writer bound
-         *   - a mode is permission bits alone, 0000–0777 (511): the claim sheet's
-         *     bound (core/metadata.h), which every compare meets as st_mode &
-         *     0777, so a mode beyond it — a sticky or setuid bit, MODE_UNCLAIMED
-         *     leaking into a record — would read as moved for ever. A link's
-         *     NULL passes it
-         *   - a directory has no content confirmation (blob_oid IS NULL)
-         *   - ownership implies confirmation for a file (deployed_at > 0 ⇒ blob_oid
-         *     set); a row with a blob and deployed_at = 0 is a confirmation,
-         *     not a deployment
-         *   - bytes no base proves are kept as a pair, only where no blob is
-         *     confirmed, never on a directory or an owned record: disk's entry
-         *     and the head it was asked at are set together — (disk_oid IS NULL)
-         *     = (head IS NULL), never NULL, as the link's rule above is — and
-         *     only beside no blob_oid, on a file or a link, which the ownership
-         *     rule above then holds to one dotta never owned
-         *   - a stamp is a moment or 0, never negative: the readers of one ask
-         *     it both ways — the orphan's ownership gate deployed_at == 0
-         *     (core/workspace.c workspace_analyze_orphans), the acknowledgement
-         *     deployed_at > 0 (core/workspace.h workspace_unacknowledged) — which
-         *     agree on these values alone, where a negative stamp would be pruned
-         *     as dotta's by the one and never acknowledged by the other
-         *   - a stored id is a real OID — the blob, disk's entry, the head: 20
-         *     bytes, never zeroblob
          *   - the key is one a writer spells and C reads whole (key_spelling:
          *     FOLDED_SPELLING above — absolute and folded, the shape mount_resolve
          *     spells every key in, and free of NUL). C reads a string to its
@@ -416,11 +388,41 @@ static error_t state_initialize(sqlite3 *db) {
          *     — the precondition label_of and label_tail assert of every name
          *     they are handed), the profile never empty (profile_spelling, the
          *     enabled set's name's)
+         *   - the node is a regular file, a link or a directory
+         *     (state_kind_to_text's three texts): the executable bit is no kind,
+         *     and no record describes an absence, a look not taken or a device
+         *   - a directory has no content confirmation (base_oid IS NULL)
+         *   - bytes no base proves are kept as a pair, only where no blob is
+         *     confirmed, never on a directory or an owned record: disk's entry
+         *     and the head it was asked at are set together — (disk_oid IS NULL)
+         *     = (head IS NULL), never NULL, as the link's rule below is — and
+         *     only beside no base_oid, on a file or a link, which the ownership
+         *     rule below then holds to one dotta never owned
+         *   - a stored id is a real OID — the base, disk's entry, the head: 20
+         *     bytes, never zeroblob
+         *   - a link claims no mode and every other node does: (kind = 'symlink')
+         *     = (mode IS NULL), an expression that is never NULL — a CHECK that
+         *     evaluates to NULL passes — and the one spelling of a link's
+         *     don't-care, so a claim read back is the claim a writer bound
+         *   - a mode is permission bits alone, 0000–0777 (511): the claim sheet's
+         *     bound (core/metadata.h), which every compare meets as st_mode &
+         *     0777, so a mode beyond it — a sticky or setuid bit, MODE_UNCLAIMED
+         *     leaking into a record — would read as moved for ever. A link's
+         *     NULL passes it
          *   - an owner or a group is a name, whole and never empty, so the name
          *     C reads is the name the claim stored and one a resolver can ask
          *     for; NULL is no claim, its one spelling — the claim sheet's parser
          *     refuses the empty name too (core/metadata.c metadata_from_json),
          *     so no writer is handed one
+         *   - a stamp is a moment or 0, never negative: the readers of one ask
+         *     it both ways — the orphan's ownership gate deployed_at == 0
+         *     (core/workspace.c workspace_analyze_orphans), the acknowledgement
+         *     deployed_at > 0 (core/workspace.h workspace_unacknowledged) — which
+         *     agree on these values alone, where a negative stamp would be pruned
+         *     as dotta's by the one and never acknowledged by the other
+         *   - ownership implies confirmation for a file or a link (deployed_at
+         *     > 0 ⇒ base_oid set); a row with a blob and deployed_at = 0 is a
+         *     confirmation, not a deployment
          *   - the table is stored sorted by its key (WITHOUT ROWID): a read in
          *     key order walks the table, with no sort step and no index between */
         "CREATE TABLE path_records ("
@@ -430,13 +432,10 @@ static error_t state_initialize(sqlite3 *db) {
         "        " STORAGE_SPELLING("storage_path") ","
         "    profile TEXT NOT NULL CONSTRAINT profile_spelling CHECK "
         "        " PROFILE_SPELLING("profile") ","
-        "    kind TEXT NOT NULL CHECK(kind = 'file' OR kind = 'symlink' OR kind = 'directory'),"
-        "    mode INTEGER CHECK(mode BETWEEN 0 AND 511),"
-        "    owner TEXT CHECK(instr(owner, char(0)) = 0 AND owner <> ''),"
-        "    \"group\" TEXT CHECK(instr(\"group\", char(0)) = 0 AND \"group\" <> ''),"
         "    "
-        "    blob_oid BLOB CHECK(blob_oid IS NULL"
-        "        OR (length(blob_oid) = 20 AND blob_oid != zeroblob(20))),"
+        "    kind TEXT NOT NULL CHECK(kind = 'file' OR kind = 'symlink' OR kind = 'directory'),"
+        "    base_oid BLOB CHECK(base_oid IS NULL"
+        "        OR (length(base_oid) = 20 AND base_oid != zeroblob(20))),"
         "    disk_oid BLOB CHECK(disk_oid IS NULL"
         "        OR (length(disk_oid) = 20 AND disk_oid != zeroblob(20))),"
         "    head BLOB CHECK(head IS NULL"
@@ -445,13 +444,17 @@ static error_t state_initialize(sqlite3 *db) {
         "    stat_size  INTEGER NOT NULL DEFAULT 0,"
         "    stat_ino   INTEGER NOT NULL DEFAULT 0,"
         "    "
+        "    mode INTEGER CHECK(mode BETWEEN 0 AND 511),"
+        "    owner TEXT CHECK(instr(owner, char(0)) = 0 AND owner <> ''),"
+        "    \"group\" TEXT CHECK(instr(\"group\", char(0)) = 0 AND \"group\" <> ''),"
+        "    "
         "    deployed_at INTEGER NOT NULL DEFAULT 0 CHECK(deployed_at >= 0),"
         "    "
-        "    CHECK ((kind = 'symlink') = (mode IS NULL)),"
-        "    CHECK (kind != 'directory' OR blob_oid IS NULL),"
-        "    CHECK (deployed_at = 0 OR kind = 'directory' OR blob_oid IS NOT NULL),"
+        "    CHECK (kind != 'directory' OR base_oid IS NULL),"
         "    CHECK ((disk_oid IS NULL) = (head IS NULL)),"
-        "    CHECK (disk_oid IS NULL OR (blob_oid IS NULL AND kind != 'directory'))"
+        "    CHECK (disk_oid IS NULL OR (base_oid IS NULL AND kind != 'directory')),"
+        "    CHECK ((kind = 'symlink') = (mode IS NULL)),"
+        "    CHECK (deployed_at = 0 OR kind = 'directory' OR base_oid IS NOT NULL)"
         ") STRICT, WITHOUT ROWID;"
 
         "COMMIT;";
@@ -614,17 +617,17 @@ static const char *state_sql(statement_t statement) {
          * the path, so nothing of the record before the write survives it: a
          * column that must survive a write cannot live beside these.
          *
-         * Bind order (numbered placeholders):
-         *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 kind
-         *   ?5 mode — NULL for a link  ?6 owner  ?7 group — NULL where absent
-         *   ?8 blob_oid  ?9 disk_oid  ?10 head — NULL where zero
-         *   ?11 stat_mtime  ?12 stat_size  ?13 stat_ino
+         * Bind order (numbered placeholders), the table's:
+         *   ?1 filesystem_path  ?2 storage_path  ?3 profile
+         *   ?4 kind  ?5 base_oid  ?6 disk_oid  ?7 head — NULL where zero
+         *   ?8 stat_mtime  ?9 stat_size  ?10 stat_ino
+         *   ?11 mode — NULL for a link  ?12 owner  ?13 group — NULL where absent
          *   ?14 deployed_at */
         case STATEMENT_WRITE:
             return
                 "INSERT OR REPLACE INTO path_records "
-                "(filesystem_path, storage_path, profile, kind, mode, owner, \"group\", "
-                " blob_oid, disk_oid, head, stat_mtime, stat_size, stat_ino, deployed_at) "
+                "(filesystem_path, storage_path, profile, kind, base_oid, disk_oid, head, "
+                " stat_mtime, stat_size, stat_ino, mode, owner, \"group\", deployed_at) "
                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);";
 
         /* Retire: the record goes. Nothing cascades — there is no parent. */
@@ -1546,12 +1549,12 @@ error_t state_records(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    /* The one read (14 columns: the key, the binding, the kind, the claim, the
-     * content's three ids and its stat, the lifecycle), and the table's size in
-     * a 15th: the first row sizes the allocation */
+    /* The one read (14 columns, the table's: the key, the binding, the content
+     * — the node, the three ids and the stat — the claim, the lifecycle), and
+     * the table's size in a 15th: the first row sizes the allocation */
     const char *sql =
-        "SELECT filesystem_path, storage_path, profile, kind, mode, owner, \"group\", "
-        "blob_oid, disk_oid, head, stat_mtime, stat_size, stat_ino, deployed_at, "
+        "SELECT filesystem_path, storage_path, profile, kind, base_oid, disk_oid, head, "
+        "stat_mtime, stat_size, stat_ino, mode, owner, \"group\", deployed_at, "
         "(SELECT count(*) FROM path_records) "
         "FROM path_records ORDER BY filesystem_path;";
 
@@ -1575,13 +1578,12 @@ error_t state_records(
 
     size_t i = 0;
     while (rc == SQLITE_ROW && i < record_count) {
-        /* Column layout matches the SELECT above:
+        /* Column layout matches the SELECT above, and state_record_t's groups:
          *   0:     the key (filesystem_path)
          *   1-2:   the binding (storage_path, profile)
-         *   3:     the content's node (kind)
-         *   4-6:   the claim (mode, owner, group)
-         *   7-12:  the content's ids and stat (blob_oid, disk_oid, head,
-         *          stat_mtime, stat_size, stat_ino)
+         *   3-9:   the content (kind, base_oid, disk_oid, head, stat_mtime,
+         *          stat_size, stat_ino)
+         *   10-12: the claim (mode, owner, group)
          *   13:    the lifecycle (deployed_at) */
         state_record_t *record = &records[i];
 
@@ -1593,50 +1595,51 @@ error_t state_records(
          * — and so is no pointer for a stored id. Each string is copied into
          * the arena as it comes, a NULL as NULL, and one arm takes every conversion
          * that failed: SQLite's own exhaustion, a refusal in its own words. */
-        int owner_type = sqlite3_column_type(stmt, 5);
-        int group_type = sqlite3_column_type(stmt, 6);
-        int blob_type = sqlite3_column_type(stmt, 7);
-        int disk_type = sqlite3_column_type(stmt, 8);
-        int head_type = sqlite3_column_type(stmt, 9);
-        const char *kind = (const char *) sqlite3_column_text(stmt, 3);
-        const void *blob = blob_type != SQLITE_NULL ? sqlite3_column_blob(stmt, 7) : NULL;
-        const void *disk = disk_type != SQLITE_NULL ? sqlite3_column_blob(stmt, 8) : NULL;
-        const void *head = head_type != SQLITE_NULL ? sqlite3_column_blob(stmt, 9) : NULL;
+        int base_type = sqlite3_column_type(stmt, 4);
+        int disk_type = sqlite3_column_type(stmt, 5);
+        int head_type = sqlite3_column_type(stmt, 6);
+        int owner_type = sqlite3_column_type(stmt, 11);
+        int group_type = sqlite3_column_type(stmt, 12);
 
         record->filesystem_path = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 0));
         record->storage_path = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 1));
         record->profile = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 2));
-        record->owner = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 5));
-        record->group = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 6));
+        const char *kind = (const char *) sqlite3_column_text(stmt, 3);
+        const void *base = base_type != SQLITE_NULL ? sqlite3_column_blob(stmt, 4) : NULL;
+        const void *disk = disk_type != SQLITE_NULL ? sqlite3_column_blob(stmt, 5) : NULL;
+        const void *head = head_type != SQLITE_NULL ? sqlite3_column_blob(stmt, 6) : NULL;
+        record->owner = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 11));
+        record->group = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 12));
 
         if (!record->filesystem_path || !record->storage_path || !record->profile || !kind ||
-            (owner_type != SQLITE_NULL && !record->owner) ||
-            (group_type != SQLITE_NULL && !record->group) ||
-            (blob_type != SQLITE_NULL && !blob) ||
+            (base_type != SQLITE_NULL && !base) ||
             (disk_type != SQLITE_NULL && !disk) ||
-            (head_type != SQLITE_NULL && !head)) {
+            (head_type != SQLITE_NULL && !head) ||
+            (owner_type != SQLITE_NULL && !record->owner) ||
+            (group_type != SQLITE_NULL && !record->group)) {
             sqlite3_finalize(stmt);
             return error_create(ERR_MEMORY, "Cannot read the store's database: out of memory");
         }
 
-        /* A NULL id — no blob confirmed (a directory, or a file observed only
-         * or kept unconfirmed), no bytes kept unconfirmed — is the zero struct
-         * calloc left, no id under every layout git_oid has. A stored one is 20
-         * bytes by CHECK, made an id by libgit2's own constructor: a copy into
-         * the struct's bytes is one only where git_oid is those bytes alone,
-         * never where it carries a type beside them, as 2.0's does. A NULL mode
-         * — a link's, by CHECK — reads 0, SQLite's integer for NULL, read only
-         * under the kind. */
-        if (blob) git_oid_fromraw(&record->blob_oid, blob);
+        /* A NULL id — no base (a directory, a node only observed, bytes no base
+         * proves), no bytes kept unconfirmed, disk's entry and the head together
+         * (a base, a directory, a node only observed) — is the zero struct calloc
+         * left, no id under every layout git_oid has. A stored one is 20 bytes
+         * by CHECK, made an id by libgit2's own constructor: a copy into the
+         * struct's bytes is one only where git_oid is those bytes alone, never
+         * where it carries a type beside them, as 2.0's does. A NULL mode — a
+         * link's, by CHECK — reads 0, SQLite's integer for NULL, read only under
+         * the kind. */
+        record->kind = state_kind_from_text(kind);
+        if (base) git_oid_fromraw(&record->base_oid, base);
         if (disk) git_oid_fromraw(&record->disk_oid, disk);
         if (head) git_oid_fromraw(&record->head, head);
-        record->kind = state_kind_from_text(kind);
-        record->mode = (mode_t) sqlite3_column_int(stmt, 4);
         record->stat = (state_stat_t){
-            .mtime = sqlite3_column_int64(stmt, 10),
-            .size = sqlite3_column_int64(stmt, 11),
-            .ino = (uint64_t) sqlite3_column_int64(stmt, 12),
+            .mtime = sqlite3_column_int64(stmt, 7),
+            .size = sqlite3_column_int64(stmt, 8),
+            .ino = (uint64_t) sqlite3_column_int64(stmt, 9),
         };
+        record->mode = (mode_t) sqlite3_column_int(stmt, 10);
         record->deployed_at = (time_t) sqlite3_column_int64(stmt, 13);
 
         i++;
@@ -1695,51 +1698,50 @@ error_t state_write(state_t *state, const state_record_t *record) {
 
     sqlite3_stmt *stmt = state_statement(state, STATEMENT_WRITE);
 
-    /* 1-4. the key, the binding and the node: a kind with no text binds NULL,
-     * which the column refuses (state_kind_to_text) */
+    /* 1-3. the key and the binding */
     int rc = sqlite3_bind_text(stmt, 1, record->filesystem_path, -1, SQLITE_TRANSIENT);
     if (rc == SQLITE_OK) {
         rc = sqlite3_bind_text(stmt, 2, record->storage_path, -1, SQLITE_TRANSIENT);
     }
     if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 3, record->profile, -1, SQLITE_TRANSIENT);
+
+    /* 4-10. the content: the node, where a kind with no text binds NULL, which
+     * the column refuses (state_kind_to_text); each id NULL where zero — no base,
+     * no disk's entry, no head — and otherwise the 20 bytes of the struct's id,
+     * the raw id under every layout git_oid has; the stat bound to the one set */
     if (rc == SQLITE_OK) {
         rc = sqlite3_bind_text(stmt, 4, state_kind_to_text(record->kind), -1, SQLITE_STATIC);
     }
+    if (rc == SQLITE_OK) {
+        rc = sqlite3_bind_blob(
+            stmt, 5, git_oid_is_zero(&record->base_oid) ? NULL : record->base_oid.id,
+            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
+        );
+    }
+    if (rc == SQLITE_OK) {
+        rc = sqlite3_bind_blob(
+            stmt, 6, git_oid_is_zero(&record->disk_oid) ? NULL : record->disk_oid.id,
+            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
+        );
+    }
+    if (rc == SQLITE_OK) {
+        rc = sqlite3_bind_blob(
+            stmt, 7, git_oid_is_zero(&record->head) ? NULL : record->head.id,
+            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
+        );
+    }
+    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 8, record->stat.mtime);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 9, record->stat.size);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 10, (sqlite3_int64) record->stat.ino);
 
-    /* 5-7. the claim: a link's mode a don't-care, bound NULL by the kind; an
+    /* 11-13. the claim: a link's mode a don't-care, bound NULL by the kind; an
      * absent owner or group NULL */
     if (rc == SQLITE_OK) {
-        rc = record->kind == FS_OCCUPANT_SYMLINK ? sqlite3_bind_null(stmt, 5)
-                                                 : sqlite3_bind_int(stmt, 5, record->mode);
+        rc = record->kind == FS_OCCUPANT_SYMLINK ? sqlite3_bind_null(stmt, 11)
+                                                 : sqlite3_bind_int(stmt, 11, record->mode);
     }
-    if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 6, record->owner, -1, SQLITE_TRANSIENT);
-    if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 7, record->group, -1, SQLITE_TRANSIENT);
-
-    /* 8-13. the content: each id NULL where zero — a blob, a confirmation of
-     * none; disk's entry and its head, bytes kept of none — and otherwise the
-     * 20 bytes of the struct's id, the raw id under every layout git_oid has;
-     * the stat bound to the one set */
-    if (rc == SQLITE_OK) {
-        rc = sqlite3_bind_blob(
-            stmt, 8, git_oid_is_zero(&record->blob_oid) ? NULL : record->blob_oid.id,
-            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
-        );
-    }
-    if (rc == SQLITE_OK) {
-        rc = sqlite3_bind_blob(
-            stmt, 9, git_oid_is_zero(&record->disk_oid) ? NULL : record->disk_oid.id,
-            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
-        );
-    }
-    if (rc == SQLITE_OK) {
-        rc = sqlite3_bind_blob(
-            stmt, 10, git_oid_is_zero(&record->head) ? NULL : record->head.id,
-            GIT_OID_SHA1_SIZE, SQLITE_TRANSIENT
-        );
-    }
-    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 11, record->stat.mtime);
-    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 12, record->stat.size);
-    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 13, (sqlite3_int64) record->stat.ino);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 12, record->owner, -1, SQLITE_TRANSIENT);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 13, record->group, -1, SQLITE_TRANSIENT);
 
     /* 14. the stamp: the last ownership event's, 0 where dotta never put the
      * path there */

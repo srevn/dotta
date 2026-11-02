@@ -792,7 +792,7 @@ typedef struct {
  * and before the rename that publishes it, so it describes exactly what this
  * run wrote, never what a later look at the path would find. It is what lets
  * apply's record phase anchor a deployment with the write's own stat instead of
- * leaving the record blob-only.
+ * leaving the record a base with no stat behind it.
  *
  * UNSET where the act authored no stat — the executor's fact, not a consumer's
  * re-derivation: a symlink is created by path (symlink(2) opens no descriptor

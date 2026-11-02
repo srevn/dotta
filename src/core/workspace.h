@@ -598,7 +598,7 @@ typedef enum {
  * New files label reads. An unscanned place's is its look's: a directory where
  * the walk could not look beneath one, a file otherwise.
  *
- * `blob_oid`, `disk_oid`, `head` and `stat` are the content the verdict found
+ * `base_oid`, `disk_oid`, `head` and `stat` are the content the verdict found
  * disk to be, in the record's own columns for it (core/state.h state_record_t):
  * a base — the blob, and what stands behind disk being that blob — or bytes no
  * base proves, with the head their history was asked at and the triple behind
@@ -623,7 +623,7 @@ typedef enum {
  * record lacks, by axis, for the load's flush to write (workspace_load) and nothing
  * else to read — save the bases' ask, which completes the content's notes over
  * no base: the content (DIVERGENCE_CONTENT) where the look found disk to be the
- * row's pair and the record can take it, written with `blob_oid` and `stat` —
+ * row's pair and the record can take it, written with `base_oid` and `stat` —
  * no record, or one of another kind, whose place the row's first observation
  * takes where this host can name the look's owner and group (workspace.c
  * workspace_flush, which drops it otherwise), or one of the row's kind but the
@@ -692,7 +692,7 @@ typedef struct {
     workspace_fault_t fault;             /* Whose remedy the failed look is; NONE where none failed */
     workspace_relocation_t relocation;   /* The rule of a relocated claim's namespace, or NONE */
     const profile_departure_t *departure; /* An owned file orphan's history's answer, or NULL */
-    git_oid blob_oid;                    /* The base the verdict found disk at: the row's, or a blob its branch held */
+    git_oid base_oid;                    /* The base the verdict found disk at: the row's, or a blob its branch held */
     git_oid disk_oid;                    /* Or the entry disk's bytes are, where no base stands … */
     git_oid head;                        /* … and the view's head its history held none of them up to */
     state_stat_t stat;                   /* The triple behind whichever is set; UNSET elsewhere */
@@ -782,7 +782,7 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * another's, whatever their (zero) blobs say.
  *
  * Asked of a base alone (workspace_base below): a record that confirmed no bytes
- * holds no pair — its zero blob is no one's bytes — and its kind is asked of
+ * holds no pair — its zero base is no one's bytes — and its kind is asked of
  * the record directly (workspace_stale below).
  *
  * Readers: core/workspace.c workspace_analyze_file's base fast path, which reaches
@@ -803,7 +803,7 @@ static inline compare_result_t workspace_compare_confirmed(
         return CMP_TYPE_DIFF;
     }
 
-    return git_oid_equal(&record->blob_oid, &row->blob_oid) ? CMP_EQUAL : CMP_DIFFERENT;
+    return git_oid_equal(&record->base_oid, &row->blob_oid) ? CMP_EQUAL : CMP_DIFFERENT;
 }
 
 /**
@@ -1002,7 +1002,7 @@ static inline bool workspace_unlearned(
  * measure is needed for). A reader not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
-    return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
+    return record && !git_oid_is_zero(&record->base_oid) ? record : NULL;
 }
 
 /**

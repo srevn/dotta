@@ -1245,9 +1245,9 @@ static void workspace_analyze_file(
      * own pair under its own stat, which the record already holds. A note would
      * buy nothing and cost two things: the flush's transaction on every clean
      * load, and — where the deploy wrote the stat this very second — the stat
-     * itself, which a read in an open second demotes to none (core/state.h
-     * state_stat_from_read). The one thing such a record can lack is the row's
-     * binding, noted below, once. */
+     * itself, which a read in an open second demotes to its length alone
+     * (core/state.h state_stat_from_read). The one thing such a record can lack
+     * is the row's binding, noted below, once. */
     if (base && state_stat_matches(base, &item->st)) {
         /* the look stands behind the stat ⟹ disk == the base's pair */
         disk_at_base = true;

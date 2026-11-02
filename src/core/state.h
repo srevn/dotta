@@ -100,22 +100,32 @@
  * file's size is not the triple's, disk is not record.base_oid, nothing read
  * (state_stat_disproves).
  *
- * Sentinel: All-zero state means unset — forces the slow path (safe default).
- * mtime == 0 acts as validity gate: a file with genuine mtime=0 (epoch) simply
- * never benefits from the fast path — correct, just not optimized.
+ * Sentinel: All-zero state means unset — no look stands behind it, so it vouches
+ * for nothing and holds no length, which forces the slow path (safe default).
+ * mtime == 0 acts as the match's gate: a file with genuine mtime=0 (epoch) simply
+ * never benefits from the fast path — correct, just not optimized — and neither
+ * does a look whose second had not closed (the Lineage note below). The size is
+ * no part of that gate: beside a zero mtime it is still the length the look took,
+ * which disproves (state_stat_disproves).
  *
  * Lineage: this is Git's cache_entry stat data serving ce_match_stat, with the
  * same cure for the same race. A triple whose mtime second had not closed when
  * the stat was taken cannot distinguish the bytes the caller verified from a
- * same-second, same-size, in-place rewrite — so the read-derived constructor
- * refuses to build one (mtime >= now ⇒ UNSET, Git's "racily clean" smudge,
- * write-side); the record then advances its ids alone and the next load's slow
- * path confirms once, in a closed second. A capture of a file edited this second
- * therefore defers its fast path one load. A triple born from the write itself
- * (state_stat_from_write) is exempt: authorship, not a read, vouches for it.
- * And as ce_match_stat reads the entry's mode beside its stat data, the kind is
- * read beside the triple, never stored in it: the record carries it already,
- * the node every triple it holds was taken of (state_stat_matches).
+ * same-second, same-size, in-place rewrite. Git asks that race of a look that
+ * matched, against its index file's own mtime (lib/git/read-cache.c ie_match_stat,
+ * is_racy_timestamp); a record keeps no such clock, so the read-derived constructor
+ * asks it as the triple is taken and builds none that vouches (mtime >= now ⇒
+ * mtime 0: the smudge, write-side). The length it keeps, since that rewrite cannot
+ * move it: Git keeps an entry's size whatever its second (fill_stat_cache_info)
+ * and reads a size the look does not share as a modification, the file never
+ * read (ie_modified). The record then advances its ids and that length, and the
+ * next load's slow path confirms once, in a closed second. A capture of a file
+ * edited this second therefore defers its fast path one load, never its length's
+ * answer. A triple born from the write itself (state_stat_from_write) is exempt:
+ * authorship, not a read, vouches for it. And as ce_match_stat reads the entry's
+ * mode beside its stat data, the kind is read beside the triple, never stored
+ * in it: the record carries it already, the node every triple it holds was taken
+ * of (state_stat_matches).
  *
  * Narrower than Git's, and what that leaves, accepted: Git's stat data carries
  * ctime, and these three fields do not. So a stat misses two same-size edits —
@@ -131,7 +141,7 @@
  * them, and they narrow deploy's second only to the filesystem clock's tick.
  */
 typedef struct {
-    int64_t mtime;    /* st_mtime seconds at last known-good state (0 = unset) */
+    int64_t mtime;    /* st_mtime seconds at last known-good state (0 = vouches for nothing) */
     int64_t size;     /* st_size at last known-good state */
     uint64_t ino;     /* st_ino at last known-good state */
 } state_stat_t;
@@ -150,16 +160,32 @@ typedef struct {
  * time would bind whatever stands at the path then to a verdict from earlier.
  *
  * A stat whose mtime second has not closed (mtime >= now: written this very second,
- * or carrying a future mtime) demotes to UNSET — a read can only infer the bytes
- * behind a stat, and none is built where a same-second, same-size, in-place rewrite
- * could stand behind it (the Lineage note above). Residue, accepted: a rewrite
- * landing between the caller's look and this call, with the call crossing the
- * second boundary in that sub-millisecond gap — the same order of window Git
- * accepts between hashing a file and writing its index entry.
+ * or carrying a future mtime) keeps its length alone — a read can only infer
+ * the bytes behind a stat, and no triple that vouches is built where a same-second,
+ * same-size, in-place rewrite could stand behind it, while a rewrite of another
+ * length moves the size whatever its second (the Lineage note above).
+ *
+ * Residue, accepted: each look is taken before the read it stands behind — the
+ * slow path's lstat before its compare's read, a capture's fstat before its read
+ * to EOF (infra/content.c content_read_file), the bases' ask's look at the join
+ * before its capture's read, seal and hash (core/workspace.c workspace_ask_bases)
+ * — and a rewrite landing in that span leaves a triple of the node before it,
+ * in two faces. The vouching's: a same-size rewrite after the read, inside the
+ * look's second, with this call past that second, keeps a triple that vouches
+ * for bytes no read took — over a sub-millisecond gap at the slow path, over
+ * the seal and the hash at a capture and at the ask: the window Git accepts between
+ * hashing a file and writing its index entry (lib/git/read-cache.c
+ * refresh_cache_ent). The length's: a rewrite of another length before the read
+ * — a file still being written while a capture reads it, a copy rewritten to
+ * the bytes the read then found — keeps a length that disproves the very bytes
+ * the read took, read as an edit wherever that length is asked
+ * (state_stat_disproves) until apply --force <path> settles it, or an update
+ * whose commit lands records the path anew, as it records every path it captured.
+ * Git's index carries the same, until its next add rewrites the entry.
  */
 static inline state_stat_t state_stat_from_read(const struct stat *st) {
     if ((int64_t) st->st_mtime >= (int64_t) time(NULL)) {
-        return STATE_STAT_UNSET;
+        return (state_stat_t){ .size = (int64_t) st->st_size };
     }
     return (state_stat_t){
         .mtime = (int64_t) st->st_mtime,
@@ -360,9 +386,9 @@ typedef struct state_record {
  * bytes kept unconfirmed — and only the writes that verify advance it (a learning
  * of the content, an ownership event), so a look that matches it is the same
  * node unwritten since — disk still holds what the content names, with nothing
- * loaded and nothing hashed. An UNSET triple (mtime 0 — never confirmed, or the
- * read-derived constructor's smudge) matches no look, which is the slow path by
- * default.
+ * loaded and nothing hashed. A triple that vouches for nothing (mtime 0 — never
+ * confirmed, the read-derived constructor's smudge, or a node whose mtime is
+ * the epoch) matches no look, which is the slow path by default.
  *
  * The kind is the stat's own: the record's, the node the triple was taken of. A
  * node's kind is fixed for the life of its inode, and the inode is the filesystem's
@@ -393,25 +419,31 @@ static inline bool state_stat_matches(const state_record_t *record, const struct
 /**
  * Does a live look's length disprove the record's blob? — the stat's other answer
  *
- * True iff the record's triple is set, the record and the look are each a regular
- * file, and the look's size is not the triple's. A set triple was taken of a
- * node that held the record's blob — dotta's own write, or a read that found it
- * (the two constructors above) — so its size is the blob's length, and a regular
- * file of another length holds other bytes: a verdict with nothing loaded, nothing
- * hashed and no key asked. Git reads its index the same way (lib/git/read-cache.c
+ * True iff the record's triple holds a length — its mtime set, or its size beside
+ * a zero one, as a look whose second had not closed keeps it — the record and
+ * the look are each a regular file, and the look's size is not the triple's. A
+ * triple that holds a length was taken of a node that held the record's blob —
+ * dotta's own write, or a read that found it (the two constructors above), whatever
+ * its second — so its size is the blob's length on disk, and a regular file of
+ * another length holds other bytes: a verdict with nothing loaded, nothing hashed
+ * and no key asked. Git reads its index the same way (lib/git/read-cache.c
  * ie_modified: a recorded size the look does not share is a modification, the
- * file never read).
+ * file never read, whatever its second).
  *
  * One direction only: an equal size proves nothing, which is the match's question
- * above, and an UNSET triple holds no length. A link is never asked: its st_size
- * is the filesystem's to mean (infra/compare.c compare_reference_to_disk), where
- * a regular file's is its bytes.
+ * above, and an all-zero triple holds no length — none was taken, or an empty
+ * file's was in its open second, whose disproof is left to a read of nothing,
+ * as Git trusts no recorded size of 0 (ie_modified). A link is never asked: its
+ * st_size is the filesystem's to mean (infra/compare.c compare_reference_to_disk),
+ * where a regular file's is its bytes. And the size is the look's, taken before
+ * the read that found the blob: a rewrite of another length between the two leaves
+ * a length that disproves the bytes disk holds (state_stat_from_read's residue).
  *
  * Readers: core/workspace.c workspace_compare_base, after its kind rung and before
  * its read. A reader not on this list is a bug.
  */
 static inline bool state_stat_disproves(const state_record_t *record, const struct stat *st) {
-    return record->stat.mtime != 0
+    return (record->stat.mtime != 0 || record->stat.size != 0)
            && record->kind == FS_OCCUPANT_REGULAR && S_ISREG(st->st_mode)
            && record->stat.size != (int64_t) st->st_size;
 }

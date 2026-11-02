@@ -3016,9 +3016,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * (workspace_item_t's stat): the base's where the fast path matched
              * it, the look's triple where the slow path read — whatever the record
              * this write replaces, one the load could confirm nothing onto
-             * included: one dotta owns, bound to another row. UNSET where the
-             * read met a second still open, and the next load's slow path confirms.
-             * The whole claim, which the clean look found disk standing on. */
+             * included: one dotta owns, bound to another row. Its length alone
+             * where the read met a second still open, and the next load's slow
+             * path confirms. The whole claim, which the clean look found disk
+             * standing on. */
             err = workspace_anchor(
                 ws, item, item->stat, DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP, now
             );

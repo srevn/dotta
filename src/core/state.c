@@ -163,6 +163,63 @@ static error_t get_db_path(git_repository *repo, char **out) {
 }
 
 /**
+ * Open a connection to the database file at a path, the one way the store's
+ * connections are made
+ *
+ * Two are made: state_create's, to the private file it writes the schema into,
+ * and state_admit's, to the store standing at the path. What either needs from
+ * its first statement on is set here, before that statement, so both have it.
+ *
+ * The open hands back a handle even where it fails, or none where SQLite could
+ * not make one, and either is the caller's to close (sqlite3_close takes NULL
+ * as a no-op). A refusal is in SQLite's own words, with the OS's reason beside
+ * them where the failure had one.
+ *
+ * @param path The database file, standing (must not be NULL; never created here)
+ * @param out The connection (must not be NULL; set either way)
+ * @return Error or NULL on success
+ */
+static error_t state_connect(const char *path, sqlite3 **out) {
+    CHECK_NULL(path);
+    CHECK_NULL(out);
+
+    /* READWRITE and never CREATE: the file is there before the open (mkstemp
+     * made the one, the admission found the other), and SQLite's CREATE follows
+     * a link to nowhere and creates its target. */
+    if (sqlite3_open_v2(path, out, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+        /* CANTOPEN says only that the open failed; the OS's errno says why, where
+         * the failure had one (sqlite3_system_errno is 0 otherwise). */
+        int os_errno = sqlite3_system_errno(*out);
+        if (os_errno) {
+            return error_create(
+                ERR_STATE_INVALID, "%s: %s", sqlite3_errmsg(*out), strerror(os_errno)
+            );
+        }
+        return error_create(ERR_STATE_INVALID, "%s", sqlite3_errmsg(*out));
+    }
+
+    /* The lock wait, before the first statement: each one reads the file, and a
+     * read can meet a lock like any other. Up to 3s, for a lock another process
+     * holds for an instant. */
+    sqlite3_busy_timeout(*out, 3000);
+
+    /* A double-quoted token is an identifier, never a string. SQLite's legacy
+     * default reads one that names no column as a string literal, so a misspelled
+     * "group" compiles to a CHECK every row passes, or a compare no row meets,
+     * in silence; with both options off the compile refuses it. Each is asked
+     * at the compile (lib/sqlite3/sqlite3.c areDoubleQuotedStringsEnabled): the
+     * DDL one where a schema is written, the DML one at every statement — a schema
+     * read back is parsed permissively whatever the setting. Set before any
+     * statement exists, so nothing compiled under the default runs. Both are
+     * known to every SQLite the build admits (the Makefile's SQLITE3_MIN; they
+     * date from 3.29), so neither call can refuse. */
+    sqlite3_db_config(*out, SQLITE_DBCONFIG_DQS_DDL, 0, NULL);
+    sqlite3_db_config(*out, SQLITE_DBCONFIG_DQS_DML, 0, NULL);
+
+    return NULL;
+}
+
+/**
  * A record's node as the text the kind column holds
  *
  * The one boundary where a kind becomes a column, as state_kind_from_text is
@@ -465,12 +522,14 @@ static error_t state_verify(sqlite3 *db) {
  *   as pages are read
  * - persistent WAL off: the -wal and -shm files go with the last connection
  *
- * Not the lock wait: that is the admission's, set before its first statement.
- * Not the journal mode: that is the file's own, written into it where the file
- * is created (state_create), and a connection that never sends the pragma reads
- * the mode the file carries. Not the temp store: no statement the store runs
- * builds a temporary structure — every read walks a key and every write searches
- * one — so there is nothing for it to place.
+ * Not the lock wait, nor how a double-quoted token reads: every connection holds
+ * both from its open (state_connect), since the header's read runs before this
+ * and the creation's schema never runs here. Not the journal mode: that is the
+ * file's own, written into it where the file is created (state_create), and a
+ * connection that never sends the pragma reads the mode the file carries. Not
+ * the temp store: no statement the store runs builds a temporary structure —
+ * every read walks a key and every write searches one — so there is nothing for
+ * it to place.
  *
  * foreign_keys is deliberately absent: the schema declares no FK constraints
  * (path_records.profile outlives enabled_profiles rows by design), so nothing
@@ -1031,10 +1090,10 @@ static error_t state_data_version(state_t *state, int64_t *out) {
  * them and no special case: dotta never leaves one (state_create publishes whole),
  * and reading one as a store never written would read a truncated store as empty.
  *
- * READWRITE and never CREATE: the connection is the one state_begin takes its
- * lock on, and SQLite's CREATE follows a link to nowhere and creates its target.
- * Nothing here writes to the file. On a refusal the handle holds no connection
- * and no prepared statement, as it did before the call.
+ * The connection is state_connect's, the one state_begin takes its lock on: a
+ * link to nowhere at the path is refused there, never followed to a file it would
+ * create. Nothing here writes to the file. On a refusal the handle holds no
+ * connection and no prepared statement, as it did before the call.
  *
  * @param state Handle whose db_path names the file (must not be NULL)
  * @return Error or NULL on success
@@ -1043,29 +1102,8 @@ static error_t state_admit(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db_path);
 
-    error_t err = NULL;
-    int rc = sqlite3_open_v2(state->db_path, &state->db, SQLITE_OPEN_READWRITE, NULL);
-    if (rc != SQLITE_OK) {
-        /* CANTOPEN says only that the open failed; the OS's errno says why, where
-         * the failure had one (sqlite3_system_errno is 0 otherwise). */
-        int os_errno = sqlite3_system_errno(state->db);
-        if (os_errno) {
-            err = error_create(
-                ERR_STATE_INVALID, "%s: %s", sqlite3_errmsg(state->db),
-                strerror(os_errno)
-            );
-        } else {
-            err = error_create(
-                ERR_STATE_INVALID, "%s", sqlite3_errmsg(state->db)
-            );
-        }
-        goto fail;
-    }
-
-    /* The lock wait, before the first statement: each one reads the file, and a
-     * read can meet a lock like any other. Up to 3s, for a lock another process
-     * holds for an instant. */
-    sqlite3_busy_timeout(state->db, 3000);
+    error_t err = state_connect(state->db_path, &state->db);
+    if (err) goto fail;
 
     /* The header first — a database at all, marked dotta's, at this schema — so
      * a file the admission will not keep is refused by that question, before
@@ -1148,18 +1186,11 @@ static error_t state_create(const char *db_path) {
     }
     close(fd);
 
-    error_t err = NULL;
     sqlite3 *db = NULL;
     sqlite3_stmt *stmt = NULL;
 
-    int rc = sqlite3_open_v2(temp, &db, SQLITE_OPEN_READWRITE, NULL);
-    if (rc != SQLITE_OK) {
-        err = error_create(
-            ERR_STATE_INVALID, "Failed to open the new database: %s",
-            sqlite3_errmsg(db)
-        );
-        goto done;
-    }
+    error_t err = state_connect(temp, &db);
+    if (err) goto done;
 
     err = state_initialize(db);
     if (err) goto done;
@@ -1167,7 +1198,7 @@ static error_t state_create(const char *db_path) {
     /* The file's mode is the pragma's answer, not its return code: SQLite answers
      * with the old mode where it cannot change it, and a store outside WAL would
      * hold its readers behind its writers. */
-    rc = sqlite3_prepare_v2(db, "PRAGMA journal_mode=WAL;", -1, &stmt, NULL);
+    int rc = sqlite3_prepare_v2(db, "PRAGMA journal_mode=WAL;", -1, &stmt, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
         err = error_create(

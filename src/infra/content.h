@@ -621,10 +621,11 @@ typedef struct content_capture {
  * `encrypted` says — ENCRYPTED iff true. An encrypt writes the magic, and a
  * plaintext that would read as ciphertext is refused, so a claim stamped from
  * the answer and every reader of the bytes, which classifies them, agree for
- * any blob this capture made. The one collision the model has — a plaintext file
- * whose first six bytes happen to be `"DOTTA" || CIPHER_VERSION` — is therefore
- * refused here with its way out (--encrypt, or change the bytes), never answered
- * under a verdict every reader would contradict.
+ * any blob this capture made. The one collision the model has — a plaintext of
+ * six bytes or more opening with the magic's five, `"DOTTA"`, whatever byte
+ * follows, which every reader takes for a seal this build opens or for one it
+ * cannot — is therefore refused here with its way out (--encrypt, or change the
+ * bytes), never answered under a verdict every reader would contradict.
  *
  * The plaintext lives only inside this call: under a seal it is wiped before
  * the ciphertext is answered, whichever way the encrypt went. With no seal the

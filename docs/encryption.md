@@ -56,7 +56,7 @@ dotta add global ~/.ssh/id_ed25519
 dotta add global ~/.aws/config --no-encrypt
 ```
 
-Plaintext files whose first bytes happen to match dotta's cipher magic (`DOTTA\x09`) cannot be stored as plaintext; dotta refuses them at the store boundary to prevent ambiguity between encrypted and unencrypted blobs.
+A file that begins with `DOTTA` followed by any byte — dotta's cipher magic — can't be stored as plaintext, since every reader would take it for encrypted content: `add` and `update` refuse it. Add it with `--encrypt`, or change its first bytes.
 
 ## Auto-Encrypt Patterns
 

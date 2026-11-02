@@ -309,7 +309,7 @@ When `add` or `update` stores a file again, it keeps the file encrypted if the p
 
 ### Store refusal and write-time invariant
 
-Plaintext files whose first 6 bytes match `"DOTTA\x09"` cannot be stored as plaintext. `content_capture_file` refuses them with `ERR_VALIDATION`:
+Plaintext files of six bytes or more that open with the magic's five, `"DOTTA"`, cannot be stored as plaintext, whatever byte follows: a version byte this build reads makes them `CONTENT_ENCRYPTED`, any other `CONTENT_UNSUPPORTED_VERSION`, and either way every reader would take them for ciphertext. `content_capture_file` refuses them with `ERR_VALIDATION`:
 ```
 Cannot capture '%s' as plaintext: its first bytes are dotta's cipher magic, so every reader would take it for ciphertext; add it with --encrypt, or change them
 ```
@@ -382,7 +382,8 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
                > auto-encrypt patterns > default plaintext.
 
 3. Read plaintext from filesystem.
-   - Reject plaintexts starting with "DOTTA\x09" (magic collision).
+   - Whatever its first bytes: sealed, a plaintext opening with "DOTTA" is
+     content like any other (the store refusal above is a plaintext store's).
 
 4. Encrypt (crypto/keymgr → crypto/cipher):
    - keymgr resolves master_key under the repository's epoch.

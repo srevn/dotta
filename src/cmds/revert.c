@@ -949,7 +949,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         );
         if (rc < 0) {
             err = error_git(
-                rc, "Cannot identify the resealed '%s'", restored.storage_path
+                rc, "Cannot hash the resealed '%s'", restored.storage_path
             );
             goto cleanup;
         }

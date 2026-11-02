@@ -2207,11 +2207,11 @@ static void workspace_ask_bases(workspace_t *ws) {
      * at the read whose bytes are kept (core/state.h state_stat_from_read). A
      * copy rewritten to the row's bytes between the compare's read and this one
      * reads STALE for this load, its base the row's blob, and clean at the next
-     * (stated). A copy the capture refuses is no entry at the name — a plaintext
-     * row's opening with the cipher's magic, a sealed row's past the cipher's
-     * bound — so it has no answer to keep: its note goes, the error dropped,
-     * one a path at most (base/error.h "Lifetime"). The captured are compacted
-     * in place, each beside its entry, by profile still. */
+     * (stated). A copy the capture refuses — a sealed row's past the cipher's
+     * bound, or one gone or replaced since the compare read it — has no answer
+     * to keep: its note goes, the error dropped, one a path at most (base/error.h
+     * "Lifetime"). The captured are compacted in place, each beside its entry,
+     * by profile still. */
     history_entry_t *entries = arena_calloc(frame, noted_count, sizeof(*entries));
     state_stat_t *stats = arena_calloc(frame, noted_count, sizeof(*stats));
     size_t entry_count = 0;

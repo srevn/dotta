@@ -51,12 +51,15 @@
  *
  * Three functions make an entry: content_capture_file and content_capture_link,
  * a path on disk as the entry it becomes; content_rebind, a sealed blob's content
- * under a second name — and content_capture_oid answers the id the first two's
- * entry would have at a name, making none. A link's capture holds no crypto at
- * all and is here for content's own rule — a link's bytes are its target and
- * never a seal, whatever they begin with — the same rule the classifier and the
- * cache's key spell on the read side; a capture's `encrypted` false for a link
- * is that rule stated as a value.
+ * under a second name — and content_capture_oid answers the id a copy's bytes
+ * have as the entry at a name, making none. That is the first two's entry, save
+ * for a plaintext whose first bytes read as a seal: the file capture refuses it
+ * for the stamp a commit writes beside it, and the id takes it as it stands, so
+ * an id refuses no bytes. A link's capture holds no crypto at all and is here
+ * for content's own rule — a link's bytes are its target and never a seal, whatever
+ * they begin with — the same rule the classifier and the cache's key spell on
+ * the read side; a capture's `encrypted` false for a link is that rule stated
+ * as a value.
  *
  * The plaintext a seal consumes never leaves this module: the seal runs inside
  * it, one for the capture and the rebind alike, and the plaintext is wiped there,
@@ -588,11 +591,15 @@ typedef struct content_capture {
  *
  * The capture add and update share: one look, read the file, seal it if asked —
  * and the bytes, the mode and the look answered to the caller, which puts the
- * entry at a name of its own.
+ * entry at a name of its own. content_capture_oid takes it for a sealed entry
+ * alone, the name's seal as the policy, so the seal an id is taken under is the
+ * one add and update make — the key asked before anything opens, the plaintext
+ * ended in the seal — and is never spelled a second time.
  *
  * Process:
  * 1. Open the file, fstat the descriptor, read it to EOF — the captured stat
- *    and the captured bytes are one inode by construction
+ *    and the captured bytes are one inode by construction. content_capture_oid
+ *    takes the same read for a plaintext entry, its bytes as they stand
  * 2. If should_encrypt=true: a. Get profile key from keymgr b. Encrypt content
  *    c. Answer the ciphertext
  * 3. If should_encrypt=false: refuse a plaintext whose first bytes are the cipher
@@ -705,19 +712,27 @@ error_t content_capture_link(
 /**
  * The id a disk copy would have as the entry it becomes at a name — nothing written
  *
- * The capture's entry (content_capture_file, content_capture_link, by `mode`):
- * a link's target as read, never sealed; a regular file's bytes through one
- * descriptor, sealed under (profile, storage path) where `encrypted` says the
- * name's entry is, with the key the cache's reads borrow (content_cache_create)
- * — deterministically (crypto/cipher.h), so under the run's key a copy holds a
- * sealed entry's plaintext iff its seal is that entry. Then the id Git gives
- * those bytes as a blob (git_odb_hash): the entry a capture of this copy in that
- * encoding puts at that name. Nothing enters the store, and the bytes end here,
- * wiped (content_capture_free). The cache's memo is untouched: the cache lends
- * its key, as it does content_compare_blob_to_disk.
+ * The entry, by `mode` and `encrypted`: a link's target as read, never sealed
+ * (content_capture_link); a regular file sealed under (profile, storage path)
+ * where `encrypted` says the name's entry is, by the capture add and update make
+ * (content_capture_file), with the key the cache's reads borrow
+ * (content_cache_create) — deterministically (crypto/cipher.h), so under the
+ * run's key a copy holds a sealed entry's plaintext iff its seal is that entry;
+ * and a plaintext file's bytes as they stand, read through one descriptor as
+ * the capture reads them. Then the id Git gives those bytes as a blob
+ * (git_odb_hash). Nothing enters the store, and the bytes end here, wiped
+ * (content_capture_free). The cache's memo is untouched: the cache lends its
+ * key, as it does content_compare_blob_to_disk.
  *
- * The look is the caller's, as the pair's is (infra/compare.h): the capture's
- * own refuses what is not the kind `mode` names, and is handed back nowhere.
+ * So the id is the entry a capture of this copy puts at that name, save for a
+ * plaintext whose first bytes read as a seal: the file capture refuses it for
+ * the stamp a commit writes beside it (content_capture_file's write-time
+ * invariant), and an id stamps nothing, so it answers those bytes as they stand.
+ * An id refuses no bytes.
+ *
+ * The look is the caller's, as the pair's is (infra/compare.h): the capture or
+ * the read refuses what is not the kind `mode` names, and its own look is handed
+ * back nowhere.
  *
  * Reader: core/workspace.c workspace_ask_bases, each copy a load found bytes no
  * base proves at.
@@ -732,9 +747,17 @@ error_t content_capture_link(
  * @param out The id (must not be NULL; set on success)
  * @return Error or NULL on success
  *
- * Errors: the capture's refusal, unwrapped — content_capture_file's, a seal's
- * with no key in reach among them, or content_capture_link's, by `mode` — or
- * ERR_GIT, bytes that would not hash.
+ * Errors, none for what the bytes hold:
+ * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: the look or the read, by its errno
+ *   (base/error.h error_errno_code); a copy gone since the caller's look, before
+ *   it was read, is ERR_NOT_FOUND
+ * - ERR_INVALID_ARG: not the kind `mode` names
+ * - ERR_CONFLICT: a link that changed while it was read
+ * - the seal's refusals, under "Cannot encrypt '<path>'": ERR_LOCKED with no
+ *   key in reach, ERR_INVALID_ARG for a name or a file past the cipher's bounds,
+ *   and a derivation or a witness walk that failed on its own, by its own code
+ *   (crypto/keymgr.h "The codes")
+ * - ERR_GIT: bytes that would not hash
  */
 error_t content_capture_oid(
     content_cache_t *cache,

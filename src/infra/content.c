@@ -579,6 +579,85 @@ error_t content_require_encryption(const keymgr *keymgr, const char *storage_pat
     );
 }
 
+/**
+ * A regular file's bytes, and the look they were read at, through one descriptor
+ *
+ * The read a file's two captures share: content_capture_file's, and
+ * content_capture_oid's for a plaintext entry. The look is the fstat of the
+ * descriptor the bytes come off, so the two are one inode by construction, and
+ * the file is opened never following a link. Not fs_read_file, which follows a
+ * link and keeps no look.
+ *
+ * @param filesystem_path The file (must not be NULL; a link is refused, never
+ *          followed)
+ * @param out The bytes (must not be NULL; cleared first, filled on success)
+ * @param st The look (must not be NULL; set on success, and unread after a refusal)
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: the open, the look or the read, by
+ *   its errno (base/error.h error_errno_code) — a file gone since the caller's
+ *   own look is ERR_NOT_FOUND
+ * - ERR_INVALID_ARG: not a regular file, by its noun
+ */
+static error_t content_read_file(
+    const char *filesystem_path, buffer_t *out, struct stat *st
+) {
+    /* fs_read_fd clears this too, but a refused open never reaches it. */
+    *out = (buffer_t){ 0 };
+
+    /* One look — open the descriptor whose bytes are answered
+     *
+     * The answered stat is the fstat of that fd, so the stat and the bytes are
+     * one inode by construction; the old shape (lstat, then a path re-open inside
+     * the read) let a swap between the two looks bind one file's triple to another
+     * file's blob. O_NOFOLLOW refuses a symlink (a link is content_capture_link's),
+     * O_NONBLOCK keeps a FIFO with no writer from wedging the open (harmless
+     * for a regular file), O_CLOEXEC is hygiene. */
+    int fd = fs_open(
+        filesystem_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0
+    );
+    if (fd < 0) {
+        /* A symlink refuses at the open (ELOOP), a socket refuses open outright
+         * — neither leaves an fd to fstat. One diagnostic lstat lets the refusal
+         * below name the type as before; it binds nothing. */
+        int open_errno = errno;
+        if (fs_lstat(filesystem_path, st) != 0 || S_ISREG(st->st_mode)) {
+            return error_errno(open_errno, "Failed to open '%s'", filesystem_path);
+        }
+    } else if (fstat(fd, st) < 0) {
+        int stat_errno = errno;
+        close(fd);
+        return error_errno(stat_errno, "Failed to stat '%s'", filesystem_path);
+    }
+
+    if (!S_ISREG(st->st_mode)) {
+        if (fd >= 0) close(fd);
+
+        /* The captures' own requirement, not a product rule: a symlink is
+         * content_capture_link's (the header), and the walk lists one as a leaf;
+         * what cannot be captured at all is a special file. */
+        return error_create(
+            ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a regular file",
+            filesystem_path, fs_stat_noun(st)
+        );
+    }
+
+    /* The read, to EOF
+     *
+     * The 100 MiB content cap lives in crypto/cipher.c as the single enforcement
+     * point; the encrypt path rejects oversize input after this read. For the
+     * plaintext path we rely on fs_read_fd's own bounds and libgit2's blob handling
+     * rather than duplicating the policy here. */
+    error_t err = fs_read_fd(fd, out);
+    close(fd);
+    if (err) {
+        return error_wrap(err, "Failed to read file '%s'", filesystem_path);
+    }
+
+    return NULL;
+}
+
 error_t content_capture_file(
     const char *filesystem_path,
     const char *storage_path,
@@ -601,63 +680,19 @@ error_t content_capture_file(
     error_t err = should_encrypt ? content_require_encryption(keymgr, storage_path) : NULL;
     if (err) return err;
 
-    /* Step 1: One look — open the descriptor whose bytes are answered
-     *
-     * The answered stat is the fstat of that fd, so the stat and the bytes are
-     * one inode by construction; the old shape (lstat, then a path re-open inside
-     * the read) let a swap between the two looks bind one file's triple to another
-     * file's blob. O_NOFOLLOW refuses a symlink (a link is content_capture_link's),
-     * O_NONBLOCK keeps a FIFO with no writer from wedging the open (harmless
-     * for a regular file), O_CLOEXEC is hygiene. */
-    int fd = fs_open(
-        filesystem_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0
-    );
+    /* Step 1: The file's bytes, and the look they were read at — one inode by
+     * construction (content_read_file) */
+    buffer_t bytes = BUFFER_INIT;
     struct stat st;
-    if (fd < 0) {
-        /* A symlink refuses at the open (ELOOP), a socket refuses open outright
-         * — neither leaves an fd to fstat. One diagnostic lstat lets the refusal
-         * below name the type as before; it binds nothing. */
-        int open_errno = errno;
-        if (fs_lstat(filesystem_path, &st) != 0 || S_ISREG(st.st_mode)) {
-            return error_errno(open_errno, "Failed to open '%s'", filesystem_path);
-        }
-    } else if (fstat(fd, &st) < 0) {
-        int stat_errno = errno;
-        close(fd);
-        return error_errno(stat_errno, "Failed to stat '%s'", filesystem_path);
-    }
-
-    if (!S_ISREG(st.st_mode)) {
-        if (fd >= 0) close(fd);
-
-        /* This capture's own requirement, not a product rule: a symlink is
-         * content_capture_link's (the header), and the walk lists one as a leaf;
-         * what cannot be captured at all is a special file. */
-        return error_create(
-            ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a regular file",
-            filesystem_path, fs_stat_noun(&st)
-        );
-    }
+    err = content_read_file(filesystem_path, &bytes, &st);
+    if (err) return err;
 
     /* The entry's mode is Git's reading of the look: executable iff the owner's
      * execute bit is set (libgit2's git_index__create_mode), regular otherwise. */
     git_filemode_t mode = (st.st_mode & S_IXUSR) ? GIT_FILEMODE_BLOB_EXECUTABLE
                                                  : GIT_FILEMODE_BLOB;
 
-    /* Step 2: Read the descriptor to EOF
-     *
-     * The 100 MiB content cap lives in crypto/cipher.c as the single enforcement
-     * point; the encrypt path rejects oversize input after this read. For the
-     * plaintext path we rely on fs_read_fd's own bounds and libgit2's blob handling
-     * rather than duplicating the policy here. */
-    buffer_t bytes = BUFFER_INIT;
-    err = fs_read_fd(fd, &bytes);
-    close(fd);
-    if (err) {
-        return error_wrap(err, "Failed to read file '%s'", filesystem_path);
-    }
-
-    /* Step 3: The entry's bytes — the ciphertext when encryption was asked, else
+    /* Step 2: The entry's bytes — the ciphertext when encryption was asked, else
      * the file's own, unless they would read as ciphertext.
      *
      * Every reader classifies the stored bytes by their magic (content_classify:
@@ -755,26 +790,35 @@ error_t content_capture_oid(
     CHECK_NULL(profile);
     CHECK_NULL(out);
 
-    /* The entry the copy becomes, as add and update capture it: a link's target,
-     * or a file's bytes sealed as the name's entry is, under the cache's key */
-    content_capture_t capture;
+    /* The entry the copy is at the name: a link's target as read; a file sealed
+     * where the name's entry is, as add and update capture it, under the cache's
+     * key; and a plaintext file's bytes as they stand, whatever they begin with.
+     * The capture refuses a plaintext that reads as a seal for the stamp a commit
+     * writes beside it, and an id stamps nothing. */
+    content_capture_t capture = { 0 };
     error_t err = NULL;
     if (mode == GIT_FILEMODE_LINK) {
         err = content_capture_link(filesystem_path, &capture);
-    } else {
+    } else if (encrypted) {
         err = content_capture_file(
             filesystem_path, storage_path, profile, cache->keymgr, encrypted, &capture
         );
+    } else {
+        /* The two members the read answers: the mode and the verdict are a commit's
+         * words for its capture, and the hash reads neither. A refused read leaves
+         * the bytes empty, as a refused capture leaves the struct cleared, so a
+         * refusal returns with nothing to free. */
+        err = content_read_file(filesystem_path, &capture.bytes, &capture.st);
     }
     if (err) return err;
 
-    /* Its id, hashed and written nowhere. An empty copy's bytes carry no pointer,
-     * which hashes as the empty blob: no data at no length is a blob's
+    /* Its id, hashed and written nowhere. An empty copy hashes as the empty blob,
+     * its bytes' pointer NULL or not: libgit2 refuses no data only at a length
      * (lib/libgit2/src/libgit2/odb.c git_odb__hashobj) */
     int rc = git_odb_hash(out, capture.bytes.data, capture.bytes.size, GIT_OBJECT_BLOB);
     content_capture_free(&capture);
     if (rc < 0) {
-        return error_git(rc, "Cannot identify '%s'", filesystem_path);
+        return error_git(rc, "Cannot hash '%s'", filesystem_path);
     }
 
     return NULL;

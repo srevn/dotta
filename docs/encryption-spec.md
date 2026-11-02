@@ -315,7 +315,7 @@ Cannot capture '%s' as plaintext: its first bytes are dotta's cipher magic, so e
 ```
 This write-boundary invariant guarantees that any blob written as plaintext will never be misclassified as ciphertext upon subsequent reads.
 
-The deployment anchor (`anchor.blob_oid` in the state DB) does **not** carry an encryption flag. Anchor staleness checks route through `content_compare_blob_to_disk`, which classifies the anchor blob's bytes directly.
+The record's base (`path_records.base_oid` in the state DB) carries no encryption flag: a load compares a copy against its base through `content_compare_blob_to_disk`, which classifies the base blob's bytes directly.
 
 ### Session cache (`SESSION_CACHE_VERSION = 0x04`)
 
@@ -586,7 +586,7 @@ On file corruption or expiry, the file is unlinked.
 ### Content cache
 
 `infra/content.c` caches decrypted plaintexts for the lifetime of one command:
-- Keyed by the binding refspec: `profile:storage_path@blob_oid_hex`.
+- Keyed by the binding refspec and the entry's filemode: `profile:storage_path@blob_oid_hex:mode`, the mode at a filemode's six octal digits.
 - Prevents redundant decryptions of the same file while preserving path-binding guarantees.
 - Plaintext buffers are zeroed with `crypto_wipe` before deallocation.
 

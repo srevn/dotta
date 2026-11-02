@@ -1295,13 +1295,15 @@ static void workspace_analyze_file(
          * stat stands does (stated). */
         cmp_result = CMP_DIFFERENT;
     } else {
-        /* SLOW PATH: Full content comparison, ours vs theirs
+        /* SLOW PATH: ours vs theirs, rung by rung in the ladder's order — the
+         * kind, then the length, each off the look with nothing read, then the
+         * bytes (infra/compare.c compare_reference_to_disk asks them so)
          *
-         * Strategy selection based on encryption status:
+         * The bytes' strategy, by encryption status:
          * - Non-encrypted: Hash filesystem file and compare OID directly
          * - Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare
          *
-         * Both paths receive the load's look to avoid redundant lstat syscalls.
+         * Both reads receive the load's look to avoid redundant lstat syscalls.
          *
          * Asymmetry with the second question below, and it is the stamp's:
          * row->encrypted is *this* blob's own, made byte-true at the write boundary
@@ -1347,6 +1349,23 @@ static void workspace_analyze_file(
              * type rung). */
             disk_at_base = record && record->kind == FS_OCCUPANT_DIRECTORY &&
                 item->occupant == record->kind;
+        } else if (base && !git_moved && state_stat_disproves(base, &item->st)) {
+            /* The ladder's second rung, the length, asked of the look too where
+             * Git has not moved past the base, the base then being the row's
+             * own pair: its triple holds the length of the bytes it stands behind
+             * (core/state.h state_stat_disproves), so a regular file of another
+             * length holds other ones — nothing read and no key asked, as Git
+             * reads its index (lib/git/read-cache.c ie_modified). The ladder
+             * asks a buffer's size itself, but an id knows none and a sealed
+             * row's buffer is a decrypt: asked there, one edit would read [locked]
+             * without the key and [modified] with it. So a copy made unreadable,
+             * or a sealed row with no key in reach, whose length moved reads
+             * [modified], never opened, and update's capture then meets the refusal
+             * over the node the load found and stops at the profile (stated).
+             * Where Git moved past the base, its length is no length of the row's
+             * — a copy set by hand to Git's new bytes is clean — so the bytes
+             * are read, and the second question below asks the base's. */
+            cmp_result = CMP_DIFFERENT;
         } else if (!row->encrypted) {
             err = compare_oid_to_disk(
                 &row->blob_oid, filesystem_path, expected_filemode, &item->st,
@@ -2207,11 +2226,14 @@ static void workspace_ask_bases(workspace_t *ws) {
      * at the read whose bytes are kept (core/state.h state_stat_from_read). A
      * copy rewritten to the row's bytes between the compare's read and this one
      * reads STALE for this load, its base the row's blob, and clean at the next
-     * (stated). A copy the capture refuses — a sealed row's past the cipher's
-     * bound, or one gone or replaced since the compare read it — has no answer
-     * to keep: its note goes, the error dropped, one a path at most (base/error.h
-     * "Lifetime"). The captured are compacted in place, each beside its entry,
-     * by profile still. */
+     * where the rewrite kept the copy's length; where it moved it, the look's
+     * length disproves the bytes this read took, and the copy reads [modified]
+     * until apply --force <path> (the constructor's residue, stated). A copy
+     * the capture refuses — a sealed row's past the cipher's bound, or one gone
+     * or replaced since the compare read it — has no answer to keep: its note
+     * goes, the error dropped, one a path at most (base/error.h "Lifetime").
+     * The captured are compacted in place, each beside its entry, by profile
+     * still. */
     history_entry_t *entries = arena_calloc(frame, noted_count, sizeof(*entries));
     state_stat_t *stats = arena_calloc(frame, noted_count, sizeof(*stats));
     size_t entry_count = 0;
@@ -3696,7 +3718,11 @@ static void workspace_list(workspace_t *ws) {
  * claim, written under the binding the record holds: a base a confirmation left
  * under another binding opens under that one alone. Every other column is the
  * one it is written onto — the node and the stamp of the record handed in, and
- * its binding wherever the content is not learned. The node needs no word of
+ * its binding wherever the content is not learned. So a learning of the claim
+ * alone writes the content back as the record holds it — over no base, the entry
+ * and the head an earlier load kept, where this one's ask kept none (an unread
+ * history, a refused capture) — which a load believes only where disk returns
+ * to its triple, as it would the record unwritten. The node needs no word of
  * the row's: every learning is written onto a record of the row's kind, since a
  * record of another kind gives way to the row's first observation before anything
  * is learned onto it, or, where the observation cannot be spelled or does not

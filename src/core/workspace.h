@@ -991,15 +991,16 @@ static inline bool workspace_unlearned(
  * confirmed, are the reader's to ask (core/workspace.c workspace_compare_base).
  *
  * Readers: core/workspace.c workspace_analyze_file (the bytes' base: the fast
- * path's stat and the second question), workspace_analyze_directory (whether
- * dotta's own squatter is the copy it confirmed), workspace_measure (a file
- * compared only against one) and classify_absent (whether the bytes an absence
- * removed were ones dotta confirmed); workspace_stale below (whether the bytes
- * are asked at all); workspace_untouched below (whether a measured copy is the
- * one dotta confirmed); workspace_item_route (whether a base proves an edit's
- * mover: the UNCONFIRMED arm); cmds/add.c add_refuse_ancestry (whether only --force
- * replaces dotta's own link above a capture, the half of workspace_untouched no
- * measure is needed for). A reader not on this list is a bug.
+ * path's stat, the length where Git has not moved past it, and the second
+ * question), workspace_analyze_directory (whether dotta's own squatter is the
+ * copy it confirmed), workspace_measure (a file compared only against one) and
+ * classify_absent (whether the bytes an absence removed were ones dotta confirmed);
+ * workspace_stale below (whether the bytes are asked at all); workspace_untouched
+ * below (whether a measured copy is the one dotta confirmed); workspace_item_route
+ * (whether a base proves an edit's mover: the UNCONFIRMED arm); cmds/add.c
+ * add_refuse_ancestry (whether only --force replaces dotta's own link above a
+ * capture, the half of workspace_untouched no measure is needed for). A reader
+ * not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->base_oid) ? record : NULL;
@@ -1117,11 +1118,12 @@ static inline bool workspace_capturable(const workspace_item_t *item) {
  * for it, beside workspace_reassigned over the same two subjects and a look.
  *
  * Readers: core/workspace.c workspace_analyze_file (git_moved — the three-way
- * frame's first question, whichever kind stands, and half the gate on its second),
- * classify_absent (an absence over what the view moved past deletes nothing it
- * holds) and workspace_item_line (the [stale] that rides [undeployed]), with
- * cmds/status.c status_print_workspace's legend line for that row. A reader not
- * on this list is a bug.
+ * frame's first question, whichever kind stands, and half the gate on its second
+ * and on the length, each asked on its own side of it), classify_absent (an absence
+ * over what the view moved past deletes nothing it holds) and workspace_item_line
+ * (the [stale] that rides [undeployed]), with cmds/status.c
+ * status_print_workspace's legend line for that row. A reader not on this list
+ * is a bug.
  */
 static inline bool workspace_stale(const manifest_row_t *row, const state_record_t *record) {
     return workspace_base(record) ? workspace_compare_confirmed(row, record) != CMP_EQUAL

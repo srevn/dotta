@@ -377,10 +377,11 @@ static void diff_print_item(
          * by its blob_oid (borrowed reference - don't free), read as the entry
          * the row's type says it is, then the copy against it. Either read can
          * fail where the load's did not — a blob the load never opened, its
-         * record's stat vouching for disk, or the copy read again — and the failure
-         * is this row's, as a look the load could not take is its row's: its
-         * root, where the hunk would be, as apply's receipt names the same read's.
-         * One error per such row stays for the run (base/error.h). */
+         * record's stat vouching for disk or its length disproving it, or the
+         * copy read again — and the failure is this row's, as a look the load
+         * could not take is its row's: its root, where the hunk would be, as
+         * apply's receipt names the same read's. One error per such row stays
+         * for the run (base/error.h). */
         const buffer_t *content = NULL;
         error_t err = content_cache_get_from_blob_oid(
             cache, &row->blob_oid, mode, row->storage_path, row->profile, &content

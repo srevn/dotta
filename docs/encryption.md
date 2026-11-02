@@ -104,7 +104,7 @@ Dotta treats the master key not as an unchecked derivation cache, but as **the r
 ### Command Reach (`CACHED` vs `OBTAIN`)
 
 Commands declare how far they may reach for a passphrase:
-- **Reporting commands** (`dotta status`, `dotta key status`, `dotta key clear`) operate in `CACHED` mode. They read only what earlier commands left in the cache. They **never prompt**, never read environment variables, and never create a session file. If the cache is cold, encrypted files are reported as `[locked]`.
+- **Reporting commands** (`dotta status`, `dotta key status`, `dotta key clear`) operate in `CACHED` mode. They read only what earlier commands left in the cache. They **never prompt**, never read environment variables, and never create a session file. If the cache is cold, an encrypted file they cannot compare without the key is reported as `[locked]`.
 - **Content operations** (`dotta apply`, `dotta add`, `dotta update`, `dotta diff`, `dotta show`, `dotta export`, `dotta revert`, `dotta key set`) operate in `OBTAIN` mode. If the cache is cold, they will check `DOTTA_ENCRYPTION_PASSPHRASE` or prompt interactively.
 
 ### Session Caching

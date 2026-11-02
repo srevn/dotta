@@ -20,12 +20,13 @@
  * read's or a walk's price, and is read only where it spares that read or that
  * walk: a column of this kind removed is that price paid at every load where
  * the read can be made, and a verdict moved where it cannot — a sealed row with
- * no key in reach, a node whose mode forbids the read, which a triple that stands
- * answers off the record where the read would answer [locked] or [unreadable].
- * Git's index keeps both kinds in one entry, the blob beside the stat data that
- * vouches for it (lib/git/read-cache.c ie_match_stat), and keeps a negative the
- * same way, which names a directory holds untracked under its stat and its exclude
- * files' ids (lib/git/dir.h untracked_cache_dir).
+ * no key in reach, a node whose mode forbids the read, which a triple that stands,
+ * or whose length a look leaves, answers off the record where the read would
+ * answer [locked] or [unreadable]. Git's index keeps both kinds in one entry,
+ * the blob beside the stat data that vouches for it (lib/git/read-cache.c
+ * ie_match_stat), and keeps a negative the same way, which names a directory
+ * holds untracked under its stat and its exclude files' ids (lib/git/dir.h
+ * untracked_cache_dir).
  *
  * The enabled set is this machine's mount table, one line of fstab per row: the
  * name is what is mounted (the branch — the repository is the device, and knows
@@ -440,7 +441,8 @@ static inline bool state_stat_matches(const state_record_t *record, const struct
  * a length that disproves the bytes disk holds (state_stat_from_read's residue).
  *
  * Readers: core/workspace.c workspace_compare_base, after its kind rung and before
- * its read. A reader not on this list is a bug.
+ * its read; and workspace_analyze_file, after its kind rung and before its reads,
+ * of a base Git has not moved past. A reader not on this list is a bug.
  */
 static inline bool state_stat_disproves(const state_record_t *record, const struct stat *st) {
     return (record->stat.mtime != 0 || record->stat.size != 0)

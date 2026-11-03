@@ -339,6 +339,11 @@ error_t fs_write_fd(int fd, const char *path, const void *data, size_t size) {
             if (errno == EINTR) continue;
             return error_errno(errno, "Cannot write '%s'", path);
         }
+        if (n == 0) {
+            /* No byte taken and none refused: no room left, as Git reads it
+             * (lib/git/wrapper.c write_in_full) — asked again, it never ends */
+            return error_errno(ENOSPC, "Cannot write '%s'", path);
+        }
         written += (size_t) n;
     }
 

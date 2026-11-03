@@ -188,10 +188,12 @@ error_t fs_read_fd(int fd, buffer_t *out);
  * Write every byte to a file descriptor
  *
  * The primitive beside fs_read_fd: a short write resumes where it stopped and
- * EINTR is retried, until `size` bytes are written or the kernel refuses one.
- * Writes at the descriptor's current offset; never closes it. An fd has no name,
- * so the refusal is said of `path`, the name the caller opened — "Cannot write
- * '<path>'" in the errno's words — and no caller wraps it to say which file.
+ * EINTR is retried, until `size` bytes are written or the kernel refuses one. A
+ * write that takes no byte and refuses none is no room left, ENOSPC, as Git reads
+ * it (lib/git/wrapper.c write_in_full). Writes at the descriptor's current offset;
+ * never closes it. An fd has no name, so the refusal is said of `path`, the name
+ * the caller opened — "Cannot write '<path>'" in the errno's words — and no caller
+ * wraps it to say which file.
  *
  * @param fd Writable file descriptor
  * @param path The name the descriptor was opened at (must not be NULL)

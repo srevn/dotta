@@ -2221,19 +2221,21 @@ static void workspace_ask_bases(workspace_t *ws) {
     qsort(noted, noted_count, sizeof(*noted), workspace_profile_order);
 
     /* Each as the entry it would be at its row's name, sealed as the row's is
-     * (content_capture_oid), its triple made beside this read and never after
-     * the walks: whether the look's mtime second had closed is asked of the clock
-     * at the read whose bytes are kept (core/state.h state_stat_from_read). A
-     * copy rewritten to the row's bytes between the compare's read and this one
-     * reads STALE for this load, its base the row's blob, and clean at the next
-     * where the rewrite kept the copy's length; where it moved it, the look's
-     * length disproves the bytes this read took, and the copy reads [modified]
-     * until apply --force <path> (the constructor's residue, stated). A copy
-     * the capture refuses — a sealed row's past the cipher's bound, or one gone
-     * or replaced since the compare read it — has no answer to keep: its note
-     * goes, the error dropped, one a path at most (base/error.h "Lifetime").
-     * The captured are compacted in place, each beside its entry, by profile
-     * still. */
+     * (content_capture_oid), its triple distilled from the look the capture read
+     * its bytes at, which it hands back, and never after the walks: whether that
+     * look's mtime second had closed is asked of the clock at the read whose
+     * bytes are kept (core/state.h state_stat_from_read). So a copy rewritten
+     * between the compare's read and this one is answered as this read found
+     * it: one rewritten to the row's bytes reads STALE for this load, its base
+     * the row's blob under this read's own look, and clean at the next. The claim
+     * stays the join's look's, which an observation reads (workspace_flush): a
+     * node renamed over in between keeps the old node's claim beside the new
+     * one's content until the next load reads the claim off its own look (stated).
+     * A copy the capture refuses — a sealed row's past the cipher's bound, or
+     * one gone or replaced since the compare read it — has no answer to keep:
+     * its note goes, the error dropped, one a path at most (base/error.h
+     * "Lifetime"). The captured are compacted in place, each beside its entry,
+     * by profile still. */
     history_entry_t *entries = arena_calloc(frame, noted_count, sizeof(*entries));
     state_stat_t *stats = arena_calloc(frame, noted_count, sizeof(*stats));
     size_t entry_count = 0;
@@ -2247,15 +2249,16 @@ static void workspace_ask_bases(workspace_t *ws) {
             .path = row->storage_path,
             .mode = gitops_type_filemode(row->type),
         };
+        struct stat st;
         error_t err = content_capture_oid(
             ws->content_cache, item->filesystem_path, entry->mode, entry->path,
-            row->profile, row->encrypted, &entry->blob_oid
+            row->profile, row->encrypted, &entry->blob_oid, &st
         );
         if (err) {
             item->confirmation &= ~DIVERGENCE_CONTENT;
             continue;
         }
-        stats[entry_count] = state_stat_from_read(&item->st);
+        stats[entry_count] = state_stat_from_read(&st);
 
         /* Where the record's answer was for this very entry — the row's binding,
          * these bytes — the history up to its head held none of it, so only what

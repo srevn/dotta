@@ -52,14 +52,14 @@
  * Three functions make an entry: content_capture_file and content_capture_link,
  * a path on disk as the entry it becomes; content_rebind, a sealed blob's content
  * under a second name — and content_capture_oid answers the id a copy's bytes
- * have as the entry at a name, making none. That is the first two's entry, save
- * for a plaintext whose first bytes read as a seal: the file capture refuses it
- * for the stamp a commit writes beside it, and the id takes it as it stands, so
- * an id refuses no bytes. A link's capture holds no crypto at all and is here
- * for content's own rule — a link's bytes are its target and never a seal, whatever
- * they begin with — the same rule the classifier and the cache's key spell on
- * the read side; a capture's `encrypted` false for a link is that rule stated
- * as a value.
+ * have as the entry at a name, making none, with the look they were read at.
+ * That is the first two's entry, save for a plaintext whose first bytes read as
+ * a seal: the file capture refuses it for the stamp a commit writes beside it,
+ * and the id takes it as it stands, so an id refuses no bytes. A link's capture
+ * holds no crypto at all and is here for content's own rule — a link's bytes
+ * are its target and never a seal, whatever they begin with — the same rule the
+ * classifier and the cache's key spell on the read side; a capture's `encrypted`
+ * false for a link is that rule stated as a value.
  *
  * The plaintext a seal consumes never leaves this module: the seal runs inside
  * it, one for the capture and the rebind alike, and the plaintext is wiped there,
@@ -731,12 +731,14 @@ error_t content_capture_link(
  * invariant), and an id stamps nothing, so it answers those bytes as they stand.
  * An id refuses no bytes.
  *
- * The look is the caller's, as the pair's is (infra/compare.h): the capture or
- * the read refuses what is not the kind `mode` names, and its own look is handed
- * back nowhere.
+ * The kind is the caller's to name (`mode`), and the capture or the read refuses
+ * another. The look is the capture's own, and is handed back: the look the bytes
+ * were read at, a file's fstat or a link's lstat before its target
+ * (content_capture_t). So a triple the caller keeps beside the id is one node's
+ * with these bytes, as add's and update's are with theirs.
  *
  * Reader: core/workspace.c workspace_ask_bases, each copy a load found bytes no
- * base proves at.
+ * base proves at, the id kept under the triple distilled from its look.
  *
  * @param cache The run's content cache, for its key (must not be NULL)
  * @param filesystem_path The copy (must not be NULL; a link is never followed)
@@ -746,6 +748,7 @@ error_t content_capture_link(
  * @param encrypted Whether the name's entry is sealed, as its claim's stamp says
  *                  (core/metadata.h metadata_item_t); ignored for a link
  * @param out The id (must not be NULL; set on success)
+ * @param st The look its bytes were read at (must not be NULL; set on success)
  * @return Error or NULL on success
  *
  * Errors, none for what the bytes hold:
@@ -767,7 +770,8 @@ error_t content_capture_oid(
     const char *storage_path,
     const char *profile,
     bool encrypted,
-    git_oid *out
+    git_oid *out,
+    struct stat *st
 );
 
 /**

@@ -154,11 +154,12 @@ typedef struct {
  *
  * The read-derived constructor: a triple is born only from a struct stat the
  * caller already holds at the moment of its look — a post-commit capture's fstat,
- * the lstat of a slow path that found disk the row's content, or the look beside
- * a load's capture of bytes no base proves (core/workspace.c workspace_ask_bases)
- * — so the triple and the bytes the caller verified describe the same moment.
- * There is deliberately no from-path variant: a fresh look taken at record-write
- * time would bind whatever stands at the path then to a verdict from earlier.
+ * the lstat of a slow path that found disk the row's content, or the fstat of a
+ * load's capture of bytes no base proves (core/workspace.c workspace_ask_bases;
+ * infra/content.h content_capture_oid hands it back) — so the triple and the
+ * bytes the caller verified describe the same moment. There is deliberately no
+ * from-path variant: a fresh look taken at record-write time would bind whatever
+ * stands at the path then to a verdict from earlier.
  *
  * A stat whose mtime second has not closed (mtime >= now: written this very second,
  * or carrying a future mtime) keeps its length alone — a read can only infer
@@ -167,19 +168,18 @@ typedef struct {
  * length moves the size whatever its second (the Lineage note above).
  *
  * Residue, accepted: each look is taken before the read it stands behind — the
- * slow path's lstat before its compare's read, a capture's fstat before its read
- * to EOF (infra/content.c content_read_file), the bases' ask's look at the join
- * before its capture's read, seal and hash (core/workspace.c workspace_ask_bases)
- * — and a rewrite landing in that span leaves a triple of the node before it,
- * in two faces. The vouching's: a same-size rewrite after the read, inside the
- * look's second, with this call past that second, keeps a triple that vouches
- * for bytes no read took — over a sub-millisecond gap at the slow path, over
- * the seal and the hash at a capture and at the ask: the window Git accepts between
- * hashing a file and writing its index entry (lib/git/read-cache.c
- * refresh_cache_ent). The length's: a rewrite of another length before the read
- * — a file still being written while a capture reads it, a copy rewritten to
- * the bytes the read then found — keeps a length that disproves the very bytes
- * the read took, read as an edit wherever that length is asked
+ * slow path's lstat before its compare's read, and a capture's fstat before its
+ * read to EOF, add's, update's and the bases' ask's (infra/content.c
+ * content_read_file) — and a rewrite landing in that span leaves a triple of
+ * the node before it, in two faces. The vouching's: a same-size rewrite after
+ * the read, inside the look's second, with this call past that second, keeps a
+ * triple that vouches for bytes no read took — over a sub-millisecond gap at
+ * the slow path, over the seal and the hash at a capture, the ask's among them:
+ * the window Git accepts between hashing a file and writing its index entry
+ * (lib/git/read-cache.c refresh_cache_ent). The length's: a rewrite of another
+ * length before the read — a file still being written while a capture reads it,
+ * a copy rewritten to the bytes the read then found — keeps a length that disproves
+ * the very bytes the read took, read as an edit wherever that length is asked
  * (state_stat_disproves) until apply --force <path> settles it, or an update
  * whose commit lands records the path anew, as it records every path it captured.
  * Git's index carries the same, until its next add rewrites the entry.

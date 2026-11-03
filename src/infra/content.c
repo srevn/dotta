@@ -782,13 +782,15 @@ error_t content_capture_oid(
     const char *storage_path,
     const char *profile,
     bool encrypted,
-    git_oid *out
+    git_oid *out,
+    struct stat *st
 ) {
     CHECK_NULL(cache);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
     CHECK_NULL(out);
+    CHECK_NULL(st);
 
     /* The entry the copy is at the name: a link's target as read; a file sealed
      * where the name's entry is, as add and update capture it, under the cache's
@@ -820,6 +822,10 @@ error_t content_capture_oid(
     if (rc < 0) {
         return error_git(rc, "Cannot hash '%s'", filesystem_path);
     }
+
+    /* The look the bytes were read at, a value the free leaves readable
+     * (content_capture_t), handed back beside the id it stands behind */
+    *st = capture.st;
 
     return NULL;
 }

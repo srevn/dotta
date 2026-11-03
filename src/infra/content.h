@@ -548,9 +548,10 @@ error_t content_require_encryption(
  * What a path on disk becomes: an entry's content, and the look it was taken at
  *
  * Everything a tree entry holds but its name, beside the stat its bytes were
- * read with. One act, because the bytes and the look are one inode: a file's
- * stat is the fstat of the descriptor its bytes came off, a link's the lstat
- * taken before its target was read and held to one link by a second.
+ * read with. One act, because the bytes and the look are one inode, and for a
+ * file one length: a file's stat is the fstat of the descriptor its bytes came
+ * off, read for exactly the length it recorded, a link's the lstat taken before
+ * its target was read and held to one link by a second.
  *
  * `mode` and `encrypted` are read off the other two — the entry's mode from the
  * look, the verdict from the bytes this module made. They are members because
@@ -597,8 +598,10 @@ typedef struct content_capture {
  * ended in the seal — and is never spelled a second time.
  *
  * Process:
- * 1. Open the file, fstat the descriptor, read it to EOF — the captured stat
- *    and the captured bytes are one inode by construction. content_capture_oid
+ * 1. Open the file, fstat the descriptor, read exactly the length that look
+ *    recorded — the captured stat and bytes one inode and one length by
+ *    construction (sys/filesystem.h fs_read_fd): a file still being written is
+ *    taken as it stood at the look, one that shrank is refused. content_capture_oid
  *    takes the same read for a plaintext entry, its bytes as they stand
  * 2. If should_encrypt=true: a. Get profile key from keymgr b. Encrypt content
  *    c. Answer the ciphertext
@@ -658,6 +661,7 @@ typedef struct content_capture {
  *   cipher's bounds (ERR_INVALID_ARG), and a derivation or a witness walk that
  *   failed on its own, by its own code (crypto/keymgr.h "The codes")
  * - ERR_INVALID_ARG: The path is not a regular file
+ * - ERR_CONFLICT: The file changed while it was read, ending short of its look
  */
 error_t content_capture_file(
     const char *filesystem_path,
@@ -734,8 +738,9 @@ error_t content_capture_link(
  * The kind is the caller's to name (`mode`), and the capture or the read refuses
  * another. The look is the capture's own, and is handed back: the look the bytes
  * were read at, a file's fstat or a link's lstat before its target
- * (content_capture_t). So a triple the caller keeps beside the id is one node's
- * with these bytes, as add's and update's are with theirs.
+ * (content_capture_t), a file's for exactly the length it recorded. So a triple
+ * the caller keeps beside the id is one node's with these bytes, at their length,
+ * as add's and update's are with theirs.
  *
  * Reader: core/workspace.c workspace_ask_bases, each copy a load found bytes no
  * base proves at, the id kept under the triple distilled from its look.
@@ -756,7 +761,7 @@ error_t content_capture_link(
  *   (base/error.h error_errno_code); a copy gone since the caller's look, before
  *   it was read, is ERR_NOT_FOUND
  * - ERR_INVALID_ARG: not the kind `mode` names
- * - ERR_CONFLICT: a link that changed while it was read
+ * - ERR_CONFLICT: a file or a link that changed while it was read
  * - the seal's refusals, under "Cannot encrypt '<path>'": ERR_LOCKED with no
  *   key in reach, ERR_INVALID_ARG for a name or a file past the cipher's bounds,
  *   and a derivation or a witness walk that failed on its own, by its own code

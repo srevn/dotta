@@ -584,9 +584,9 @@ error_t content_require_encryption(const keymgr *keymgr, const char *storage_pat
  *
  * The read a file's two captures share: content_capture_file's, and
  * content_capture_oid's for a plaintext entry. The look is the fstat of the
- * descriptor the bytes come off, so the two are one inode by construction, and
- * the file is opened never following a link. Not fs_read_file, which follows a
- * link and keeps no look.
+ * descriptor the bytes come off, and the read takes exactly the length it recorded,
+ * so the two are one inode and one length by construction, and the file is opened
+ * never following a link. Not fs_read_file, which follows a link and keeps no look.
  *
  * @param filesystem_path The file (must not be NULL; a link is refused, never
  *          followed)
@@ -599,6 +599,7 @@ error_t content_require_encryption(const keymgr *keymgr, const char *storage_pat
  *   its errno (base/error.h error_errno_code) — a file gone since the caller's
  *   own look is ERR_NOT_FOUND
  * - ERR_INVALID_ARG: not a regular file, by its noun
+ * - ERR_CONFLICT: the file changed while it was read, ending short of its look
  */
 static error_t content_read_file(
     const char *filesystem_path, buffer_t *out, struct stat *st
@@ -643,13 +644,20 @@ static error_t content_read_file(
         );
     }
 
-    /* The read, to EOF
+    /* The read, of the look's extent
+     *
+     * Exactly the bytes the look says the file holds (sys/filesystem.h fs_read_fd),
+     * so the stat answered and the bytes answered are one inode and one length:
+     * the size beside the blob a commit makes is that blob's, as Git's index
+     * reads a file. A file still being written is taken as it stood at the look,
+     * the rest the next load's to read as an edit; one that shrank since is
+     * refused, changed while it was read.
      *
      * The 100 MiB content cap lives in crypto/cipher.c as the single enforcement
      * point; the encrypt path rejects oversize input after this read. For the
      * plaintext path we rely on fs_read_fd's own bounds and libgit2's blob handling
      * rather than duplicating the policy here. */
-    error_t err = fs_read_fd(fd, out);
+    error_t err = fs_read_fd(fd, st, out);
     close(fd);
     if (err) {
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);

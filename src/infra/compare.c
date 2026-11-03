@@ -49,10 +49,12 @@ static error_t judge(
     compare_result_t *result
 ) {
     if (ref->content) {
-        /* Re-check size: file may have changed between stat and read. Two empty
-         * byte sequences are equal, and nothing is asked of a pointer to say
-         * so: memcmp is undefined over a null pointer even across zero bytes,
-         * and an empty buffer may carry none (base/buffer.h's zero state).
+        /* The sizes first. The copy holds exactly its look's length (read_copy),
+         * which the pair asked against the buffer already, so there the two agree;
+         * the renderer, whose look no size was asked of, meets another here.
+         * Two empty byte sequences are equal, and nothing is asked of a pointer
+         * to say so: memcmp is undefined over a null pointer even across zero
+         * bytes, and an empty buffer may carry none (base/buffer.h's zero state).
          * Content's read makes an empty entry a C string (infra/content.c
          * content_plaintext), but the reference is whatever buffer the caller
          * hands in. */
@@ -122,17 +124,25 @@ static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
  * The disk copy's bytes, as Git would hash them
  *
  * A link's target or a regular file's content — the bytes a blob at this path
- * holds — read after the caller's look found the expected kind standing. A regular
- * file is read through one descriptor: O_NOFOLLOW refuses a symlink swapped in
- * since the look (ELOOP); O_NONBLOCK keeps a swapped-in FIFO from wedging the
- * open (fs_read_fd then refuses it as not a regular file); read(2) cannot fault
- * on a concurrent truncation the way a stat-sized mmap could — it returns short,
- * and short-or-different is CMP_DIFFERENT in the judgment. libgit2's
- * git_odb_hashfile would open the path itself — a look sys/filesystem does not
- * make (filesystem.h's funnel), and with it the errno the absence rule needs.
- * The whole copy is in memory for the length of the judgment, bounded by
- * fs_read_fd's cap; above it the read fails and the caller reads a failed look,
- * never a verdict.
+ * holds — read after the look found the expected kind standing: the pair's caller's
+ * look, or the renderer's own. A regular file is read through one descriptor,
+ * exactly the length the look recorded, as Git's refresh reads one
+ * (lib/git/read-cache.c ce_compare_data, index_fd handed the lstat it took): so
+ * an id judged equal is equal at the look's length, and the triple a caller
+ * distills from that look stands behind the blob's own length.
+ *
+ * O_NOFOLLOW refuses a symlink swapped in since the look (ELOOP); O_NONBLOCK
+ * keeps a swapped-in FIFO from wedging the open. Any other node swapped in since
+ * is read no further than the look's extent and judged so, for that look: a file
+ * renamed over whose first bytes, to the old look's length, are the reference's
+ * reads equal, and the next look finds the new inode the triple does not name
+ * (stated, as Git's refresh reads it). A file that shrank since the look is
+ * refused: the bytes the look covers are not there to judge, and the caller reads
+ * a failed look, never a verdict. libgit2's git_odb_hashfile would open the path
+ * itself — a look sys/filesystem does not make (filesystem.h's funnel), and with
+ * it the errno the absence rule needs. The whole copy is in memory for the length
+ * of the judgment, bounded by the look's extent, which the read refuses past
+ * the cap.
  *
  * Absence is the caller's to read: ENOENT/ENOTDIR at the open, or from the link's
  * read, come back as ERR_NOT_FOUND — the path left between the look and this
@@ -141,9 +151,11 @@ static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
  * of the pair's two forms is spelled once.
  */
 static error_t read_copy(
-    const char *disk_path, git_filemode_t expected_mode, buffer_t *out
+    const char *disk_path, git_filemode_t expected_mode, const struct stat *st,
+    buffer_t *out
 ) {
-    /* A link's target is its bytes, read into the buffer as a file's are */
+    /* A link's target is its bytes, read into the buffer as a file's are: its
+     * st_size is the filesystem's to mean, so the look bounds no target */
     if (expected_mode == GIT_FILEMODE_LINK) return fs_read_symlink(disk_path, out);
 
     /* fs_read_fd clears this too, but a failed open never reaches it. */
@@ -154,7 +166,7 @@ static error_t read_copy(
         return error_errno(errno, "Failed to open '%s'", disk_path);
     }
 
-    error_t err = fs_read_fd(fd, out);
+    error_t err = fs_read_fd(fd, st, out);
     close(fd);
 
     return err ? error_wrap(err, "Failed to read '%s'", disk_path) : NULL;
@@ -170,14 +182,16 @@ static error_t read_copy(
  * look and the caller's to carry. So a status line printed off the pair's verdict
  * and a text rendered off the renderer's cannot call one path two things.
  *
- * `copy` is filled whole and is the caller's on every exit: wiped and freed by
- * whichever of the two took it, whatever the verdict (compare.h).
+ * The look is whichever the ladder took — the pair's caller's, or the renderer's
+ * own — and bounds the read (read_copy). `copy` is filled whole and is the caller's
+ * on every exit: wiped and freed by whichever of the two took it, whatever the
+ * verdict (compare.h).
  */
 static error_t judge_copy(
     const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
-    buffer_t *copy, compare_result_t *result
+    const struct stat *st, buffer_t *copy, compare_result_t *result
 ) {
-    error_t err = read_copy(disk_path, expected_mode, copy);
+    error_t err = read_copy(disk_path, expected_mode, st, copy);
 
     if (!err) {
         return judge(ref, copy, disk_path, result);
@@ -239,7 +253,7 @@ static error_t compare_reference_to_disk(
     }
 
     buffer_t copy = BUFFER_INIT;
-    error_t err = judge_copy(ref, disk_path, expected_mode, &copy, result);
+    error_t err = judge_copy(ref, disk_path, expected_mode, st, &copy, result);
 
     /* For an encrypted row the disk copy is the plaintext — the twin of the buffer
      * the content cache wipes before it frees. Wiped like it, whatever the read
@@ -446,7 +460,7 @@ error_t compare_generate_diff(
         out->status = CMP_TYPE_DIFF;
     } else {
         reference_t ref = { .content = content };
-        err = judge_copy(&ref, disk_path, mode, &copy, &out->status);
+        err = judge_copy(&ref, disk_path, mode, &st, &copy, &out->status);
         if (err) goto cleanup;
     }
 

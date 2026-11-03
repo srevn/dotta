@@ -20,14 +20,12 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/secure.h"
 #include "base/string.h"
 #include "sys/entropy.h"
 #include "sys/identity.h"
 
-/* Buffer size for file I/O */
-#define IO_BUFFER_SIZE 8192
-
-/* Maximum file size for fs_read_file (256 MB) */
+/* The most a read takes (256 MB): asked of a look's extent before a byte is read */
 #define FS_MAX_READ_SIZE ((size_t) 256 * 1024 * 1024)
 
 /* A write's temporary, beside its path: the path's directory, then this — mkstemp's
@@ -263,63 +261,61 @@ bool fs_is_os_metadata_file(const char *filename) {
 /**
  * File operations
  */
-error_t fs_read_fd(int fd, buffer_t *out) {
+error_t fs_read_fd(int fd, const struct stat *st, buffer_t *out) {
+    CHECK_NULL(st);
     CHECK_NULL(out);
 
     *out = (buffer_t){ 0 };
 
-    /* Get file size */
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        return error_errno(errno, "Failed to stat");
-    }
-
-    /* "The entire file" is defined only for a regular file: a FIFO or device
-     * has no extent — st_size tells the size guard below nothing and the loop
-     * would drain without bound. */
-    if (!S_ISREG(st.st_mode)) {
+    /* The extent a look gives is a regular file's alone: a FIFO's or a device's
+     * st_size says nothing of what a read of it would yield */
+    if (!S_ISREG(st->st_mode)) {
         return error_create(ERR_FS, "Not a regular file");
     }
 
-    /* Guard against unreasonably large files. st_size is signed (off_t); reject
-     * negatives (pathological) before the unsigned comparison so we never widen
-     * a negative into a huge size_t. */
-    if (st.st_size < 0 || (size_t) st.st_size > FS_MAX_READ_SIZE) {
+    /* The cap, asked of the extent before a byte is read, so no file reads past
+     * it whatever it does after the look. st_size is signed (off_t): a negative
+     * one is refused before the unsigned comparison could widen it */
+    if (st->st_size < 0 || (size_t) st->st_size > FS_MAX_READ_SIZE) {
         return error_create(
             ERR_FS, "File too large (%lld bytes, max %zu)",
-            (long long) st.st_size, (size_t) FS_MAX_READ_SIZE
+            (long long) st->st_size, (size_t) FS_MAX_READ_SIZE
         );
     }
 
-    /* Pre-size to the extent fstat reported, exactly: the chunked appends below
-     * then land on the last byte of the reservation and never reallocate. A file
-     * that grew between the stat and the read overruns it and falls back to the
-     * append path's geometric growth, which is the case the reserve cannot answer.
-     * st_size of 0 is a regular file that will not say how long it is; one chunk
-     * is the guess, and the appends take it from there. */
-    buffer_reserve(out, st.st_size > 0 ? (size_t) st.st_size : IO_BUFFER_SIZE);
+    /* The extent's room, made once, and the bytes read straight into it: nothing
+     * between the kernel and the buffer, nothing grown, and never a byte past
+     * the look — a file that grew since is read as it stood. A look of 0 bytes
+     * reads nothing, its room the terminator alone (base/buffer.h buffer_resize),
+     * as Git hashes such a file empty (lib/git/object-file.c index_core) */
+    buffer_resize(out, (size_t) st->st_size);
 
-    /* Read in chunks from the descriptor's current offset */
-    char chunk[IO_BUFFER_SIZE];
-    ssize_t bytes_read;
-
-    for (;;) {
-        bytes_read = read(fd, chunk, sizeof(chunk));
-
-        if (bytes_read < 0) {
-            if (errno == EINTR) {
-                continue;  /* Interrupted by signal, retry */
-            }
+    /* Until the extent is filled, as fs_write_fd writes: a short read resumes
+     * past what it read, and a read a signal interrupted before it read anything
+     * is asked again. Either refusal takes the room back, wiped first — a sealed
+     * row's plaintext is among what passes here — so the buffer comes back cleared,
+     * as every refusal above leaves it */
+    size_t filled = 0;
+    while (filled < out->size) {
+        ssize_t n = read(fd, out->data + filled, out->size - filled);
+        if (n < 0) {
+            if (errno == EINTR) continue;
             int saved_errno = errno;
+            secure_wipe(out->data, out->size);
             buffer_deinit(out);
             return error_errno(saved_errno, "Read error");
         }
-
-        if (bytes_read == 0) {
-            break;  /* EOF */
+        if (n == 0) {
+            /* An end before the extent: the file shrank since the look, the bytes
+             * it covered no longer there to read (index_core's short read) */
+            secure_wipe(out->data, out->size);
+            buffer_deinit(out);
+            return error_create(
+                ERR_CONFLICT, "Changed while it was read (%zu of %zu bytes)",
+                filled, (size_t) st->st_size
+            );
         }
-
-        buffer_append(out, chunk, (size_t) bytes_read);
+        filled += (size_t) n;
     }
 
     return NULL;
@@ -354,7 +350,7 @@ error_t fs_read_file(const char *path, buffer_t *out) {
     CHECK_NULL(path);
     CHECK_NULL(out);
 
-    /* fs_read_fd clears this too, but an open that fails never reaches it. */
+    /* fs_read_fd clears this too, but a failed open or look never reaches it. */
     *out = (buffer_t){ 0 };
 
     /* O_NONBLOCK keeps a FIFO with no writer from wedging the open, harmless
@@ -366,7 +362,11 @@ error_t fs_read_file(const char *path, buffer_t *out) {
         return error_errno(errno, "Failed to open '%s'", path);
     }
 
-    error_t err = fs_read_fd(fd, out);
+    /* The look the read is bounded by: this descriptor's own, one inode with
+     * its bytes */
+    struct stat st;
+    error_t err = fstat(fd, &st) == 0 ? fs_read_fd(fd, &st, out)
+                                      : error_errno(errno, "Failed to stat");
     close(fd);
     if (err) {
         return error_wrap(err, "Failed to read '%s'", path);

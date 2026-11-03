@@ -86,8 +86,9 @@ typedef enum {
  * 1. The kind the expected mode names is the kind the look found
  * 2. A regular file's size, which a buffer knows: another is a verdict with no
  *    open needed. A link's st_size is the filesystem's to mean, and is not asked
- * 3. The bytes — a link's target, or a regular file's read through one descriptor
- *    — compared byte for byte
+ * 3. The bytes — a link's target, or a regular file's through one descriptor,
+ *    the length the look covers read exactly: never past it, and refused where
+ *    the file holds fewer (sys/filesystem.h fs_read_fd) — compared byte for byte
  *
  * The look is the caller's: the stat it took before it called, required, taken
  * nowhere here and handed back nowhere. Steps 1 and 2 are asked off it, so the
@@ -98,8 +99,10 @@ typedef enum {
  * ERR_NOT_FOUND from the link's read — so the path left between the caller's
  * look and it, and the caller learns its look is one moment stale. Absence at
  * the look's own moment is the caller's own to name, in whatever vocabulary that
- * caller keeps for it; it never reaches here. compare_oid_to_disk answers it in
- * the same words: it is the one thing the pair's two forms must not answer apart.
+ * caller keeps for it; it never reaches here. A file shorter than the look is a
+ * failed look (ERR_CONFLICT), never a verdict. compare_oid_to_disk answers both
+ * in the same words: they are the one thing the pair's two forms must not answer
+ * apart.
  *
  * Pure with respect to git and encryption: zero blob loading, zero decryption.
  * The bytes are the caller's, an encrypted row's plaintext among them, which
@@ -126,9 +129,10 @@ error_t compare_buffer_to_disk(
  * The caller's look at the disk copy, judged against the blob's id: the ladder
  * and the look compare_buffer_to_disk states, less its size — an id knows none.
  * The kind the expected mode names is asked off the look; then the bytes — a
- * link's target, or a regular file's read through one descriptor — are hashed
- * as Git hashes a blob, SHA-1("blob <size>\0" + bytes), Git's model of a link
- * being a blob that holds its target, and the ids compared. Pure with respect
+ * link's target, or a regular file's through one descriptor, the length the look
+ * covers read exactly — are hashed as Git hashes a blob, SHA-1("blob <size>\0"
+ * + bytes), Git's model of a link being a blob that holds its target, and the
+ * ids compared, so a match is one at the look's length too. Pure with respect
  * to git and encryption: zero blob loading, zero decryption.
  *
  * Plaintext blobs only: an encrypted blob's id is the hash of ciphertext, while
@@ -145,9 +149,10 @@ error_t compare_buffer_to_disk(
  * ERR_NOT_FOUND from the link's read — so the path left between the caller's
  * look and it, and the caller learns its look is one moment stale. Absence at
  * the look's own moment is the caller's own to name, in whatever vocabulary that
- * caller keeps for it; it never reaches here. compare_buffer_to_disk answers it
- * in the same words: it is the one thing the pair's two forms must not answer
- * apart.
+ * caller keeps for it; it never reaches here. A file shorter than the look is a
+ * failed look (ERR_CONFLICT), never a verdict. compare_buffer_to_disk answers
+ * both in the same words: they are the one thing the pair's two forms must not
+ * answer apart.
  *
  * @param blob_oid Expected blob OID from manifest (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)
@@ -198,10 +203,10 @@ typedef struct {
  * Render the disk copy's difference from the reference — the renderer's own look
  *
  * One lstat names what stands at the path; where it is the kind the mode expects,
- * one read takes the bytes that are judged and, where they differ, rendered. So
- * a file is read once, and no stat is carried out of a comparison to make it
- * happen: the pair (compare_buffer_to_disk, compare_oid_to_disk) returns a verdict
- * and nothing else, and a caller that wants a look takes one.
+ * one read takes the bytes it covers, which are judged and, where they differ,
+ * rendered. So a file is read once, and no stat is carried out of a comparison
+ * to make it happen: the pair (compare_buffer_to_disk, compare_oid_to_disk) returns
+ * a verdict and nothing else, and a caller that wants a look takes one.
  *
  * `out->status` is that look's verdict, reached through the same judge and the
  * same kind test the pair uses, so a status line printed from one and a text

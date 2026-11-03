@@ -1303,7 +1303,9 @@ static void workspace_analyze_file(
          * - Non-encrypted: Hash filesystem file and compare OID directly
          * - Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare
          *
-         * Both reads receive the load's look to avoid redundant lstat syscalls.
+         * Both reads receive the load's look, which bounds them too: each takes
+         * exactly its length (infra/compare.h), so the stat distilled from it
+         * at CMP_EQUAL stands behind the row's blob's own length.
          *
          * Asymmetry with the second question below, and it is the stamp's:
          * row->encrypted is *this* blob's own, made byte-true at the write boundary
@@ -1390,15 +1392,16 @@ static void workspace_analyze_file(
         if (err) {
             /* A failed look, not a verdict — the orphan analysis's cause list
              * (missing key, wrong passphrase, cipher-version skew, I/O error,
-             * missing blob) and the same word. The path is there (the lstat said
-             * so); only the look at its content failed, and a failed look is
-             * never fatal to the load. Written onto the item here, the unstattable
-             * arm's shape: the fault beside the blob bit, the stat valid so the
-             * mode checks below could run, but every consumer reads the fault
-             * first and accumulated path bits would change nothing; the orphan
-             * analysis answers a failed look this way, and one policy beats two.
-             * The two gates below read EQUAL and DIFFERENT, so returning here
-             * skips only what they would have skipped themselves. */
+             * missing blob, a copy that shrank between the look and the read)
+             * and the same word. The path is there (the lstat said so); only
+             * the look at its content failed, and a failed look is never fatal
+             * to the load. Written onto the item here, the unstattable arm's
+             * shape: the fault beside the blob bit, the stat valid so the mode
+             * checks below could run, but every consumer reads the fault first
+             * and accumulated path bits would change nothing; the orphan analysis
+             * answers a failed look this way, and one policy beats two. The two
+             * gates below read EQUAL and DIFFERENT, so returning here skips only
+             * what they would have skipped themselves. */
             item->fault = workspace_error_fault(err);
             return;
         }
@@ -2232,8 +2235,8 @@ static void workspace_ask_bases(workspace_t *ws) {
      * node renamed over in between keeps the old node's claim beside the new
      * one's content until the next load reads the claim off its own look (stated).
      * A copy the capture refuses — a sealed row's past the cipher's bound, or
-     * one gone or replaced since the compare read it — has no answer to keep:
-     * its note goes, the error dropped, one a path at most (base/error.h
+     * one gone, replaced or shrunk since the compare read it — has no answer to
+     * keep: its note goes, the error dropped, one a path at most (base/error.h
      * "Lifetime"). The captured are compacted in place, each beside its entry,
      * by profile still. */
     history_entry_t *entries = arena_calloc(frame, noted_count, sizeof(*entries));

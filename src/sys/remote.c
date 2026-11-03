@@ -74,7 +74,10 @@ static void remote_kept_read(const char *path, buffer_t *out) {
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return;
 
-    if (fs_read_fd(fd, out)) buffer_clear(out);
+    /* The descriptor's own look, and the read of what it says, which leaves nothing
+     * where it refuses (sys/filesystem.h fs_read_fd) */
+    struct stat st;
+    if (fstat(fd, &st) == 0) (void) fs_read_fd(fd, &st, out);
     close(fd);
 }
 

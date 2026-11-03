@@ -254,9 +254,11 @@ typedef enum {
  *                                  the workspace's release, and never this table's
  *                                  (core/workspace.c workspace_analyze_orphans)
  *
- * A non-encrypted file is verified by hashing the disk copy, read through
- * sys/filesystem and bounded by fs_read_fd's cap (256 MB): only a file above
- * the cap, or one the look itself cannot make, reaches UNVERIFIED from the compare.
+ * A non-encrypted file is verified against the record's blob, the disk copy read
+ * through sys/filesystem exactly the length its look recorded and never past
+ * the cap (256 MB): only a file above the cap, one that shrank between the look
+ * and the read, or one the look itself cannot make, reaches UNVERIFIED from the
+ * compare.
  *
  * Called twice per skipped file — by the verdict phase to bucket it and by the
  * preview to name its reason — which is one producer called twice, not two

@@ -179,10 +179,13 @@ static error_t source_line(
         return error_create(ERR_GIT, "Failed to open '%s': %s", path, strerror(errno));
     }
 
-    /* fs_read_fd's word names no file, a descriptor having none: the failure is
-     * minted again with the file's, one line, and the repository's. */
+    /* The descriptor's own look, and the read of what it says (fs_read_fd), whose
+     * words name no file, a descriptor having none: the failure is minted again
+     * with the file's, one line, and the repository's. */
+    struct stat st;
     buffer_t text = BUFFER_INIT;
-    error_t err = fs_read_fd(fd, &text);
+    error_t err = fstat(fd, &st) == 0 ? fs_read_fd(fd, &st, &text)
+                                      : error_errno(errno, "Failed to stat");
     close(fd);
     if (err) {
         return error_create(ERR_GIT, "Failed to read '%s': %s", path, error_message(err));
@@ -289,18 +292,18 @@ static void source_read(
         return;
     }
 
-    /* The whole file, a regular one: a directory or a FIFO in its place is refused
-     * here (fs_read_fd), not read as nothing — in words that name no file, a
-     * descriptor having none, so the failure is minted again with the file's,
-     * one line. */
+    /* The whole file, a regular one, by the descriptor's own look: a directory
+     * or a FIFO in its place is refused here (fs_read_fd), not read as nothing
+     * — in words that name no file, a descriptor having none, so the failure is
+     * minted again with the file's, one line. */
+    struct stat st;
     buffer_t text = BUFFER_INIT;
-    error_t err = fs_read_fd(fd, &text);
+    error_t err = fstat(fd, &st) == 0 ? fs_read_fd(fd, &st, &text)
+                                      : error_errno(errno, "Failed to stat");
     close(fd);
     if (err) {
         out->failure = error_create(
-            error_code(err), "Failed to read '%s': %s", path, error_message(
-            err
-            )
+            error_code(err), "Failed to read '%s': %s", path, error_message(err)
         );
         return;
     }

@@ -151,12 +151,14 @@ char *fs_realpath(const char *path, char *resolved);
 /**
  * Read entire file into buffer
  *
- * Opens the path and delegates to fs_read_fd: follows symlinks (the fd's fstat
- * sees the resolved target), refuses non-regular files and files past 256 MB
- * through the primitive's own gates. The open waits on nothing, so a FIFO is
- * refused at once, never read while its writer comes. A file that is not there
- * is the open's ERR_NOT_FOUND (ENOENT, or ENOTDIR above it), and utils/config.c
- * read_file reads it as no configuration file — a FIFO is no absence.
+ * Opens the path, takes the descriptor's look (fstat) and reads what it says
+ * (fs_read_fd): follows symlinks (the fstat sees the resolved target), and refuses
+ * non-regular files, files past 256 MB and a file that shrank between its look
+ * and its read, through the read's own gates. The open waits on nothing, so a
+ * FIFO is refused at once, never read while its writer comes. A file that is
+ * not there is the open's ERR_NOT_FOUND (ENOENT, or ENOTDIR above it), and
+ * utils/config.c read_file reads it as no configuration file — a FIFO is no
+ * absence.
  *
  * @param path File path (must not be NULL)
  * @param out Output buffer (must not be NULL)
@@ -165,24 +167,39 @@ char *fs_realpath(const char *path, char *resolved);
 error_t fs_read_file(const char *path, buffer_t *out);
 
 /**
- * Read a file descriptor to EOF into buffer
+ * Read the bytes a look says a descriptor's regular file holds
  *
- * The primitive beneath fs_read_file, for callers that must bind the bytes they
- * read to the descriptor they hold: an fd's fstat and its content are one inode
- * by construction, where a path-based re-open is a second look that can land on
- * a different file.
+ * Exactly the look's st_size of them, from the descriptor's offset — each caller's
+ * fresh open, at 0 — into a buffer made that size once: the file as the look
+ * saw it. One that grew since is read as it stood; one that shrank is refused,
+ * the bytes the look covers no longer there to read. That is Git's index read
+ * (lib/git/object-file.c index_core), so a triple distilled from the look stands
+ * behind exactly its blob's length (core/state.h state_stat_from_read).
  *
- * Refuses descriptors that are not regular files — "the entire file" is defined
- * only for a file with an extent; a FIFO or device would drain without bound —
- * and files past 256 MB (FS_MAX_READ_SIZE). Reads from the descriptor's current
- * offset to EOF; never closes it. Errors carry no path (an fd has none): callers
- * wrap with the name they opened.
+ * The look is the caller's: the descriptor's own fstat, one inode with the bytes
+ * by construction (fs_read_file, infra/content.c content_read_file, sys/source.c,
+ * sys/remote.c), or a look at the path taken before the open (infra/compare.c
+ * read_copy), where a node swapped in since is read no further than the look's
+ * extent. Its kind must be a regular file's — the extent a look gives is a regular
+ * file's alone — and its size within 256 MB (FS_MAX_READ_SIZE): each is refused
+ * before a byte is read.
  *
- * @param fd Readable file descriptor
- * @param out Output buffer (must not be NULL)
+ * A refusal leaves `out` cleared, whatever was read wiped first: a sealed row's
+ * plaintext is among what passes here. Never closes the descriptor. Errors carry
+ * no path (an fd has none): callers wrap them with the name they opened.
+ *
+ * @param fd Readable file descriptor, at offset 0
+ * @param st The look whose extent is read (must not be NULL)
+ * @param out Output buffer (must not be NULL; cleared first, filled on success)
  * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_FS: not a regular file, a file past the cap ("File too large"), or the
+ *   kernel's refusal of the read, by its errno (base/error.h error_errno_code)
+ * - ERR_CONFLICT: the file ended before the look's extent — it changed while it
+ *   was read
  */
-error_t fs_read_fd(int fd, buffer_t *out);
+error_t fs_read_fd(int fd, const struct stat *st, buffer_t *out);
 
 /**
  * Write every byte to a file descriptor

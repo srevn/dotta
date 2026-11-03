@@ -583,8 +583,10 @@ static error_t update_profile(
          * captured off this look. What changes after it, the commit cannot see
          * (stated): one edit's window, where the load's look alone would leave
          * the run's. A file's refusal meets the same question once it is in (the
-         * file arm below), so a change since the preview is a skip whatever the
-         * edit. */
+         * file arm below), so a change the look can see is a skip whatever the
+         * edit; one only a read meets — a file that shrank, or a link renamed
+         * over, while the capture read it — leaves the node the load found
+         * standing, and is the run's (stated: a re-run takes it). */
         struct stat st;
         if ((item->state == WORKSPACE_STATE_DELETED || item->item_kind == PATH_KIND_DIRECTORY) &&
             fs_lstat_occupant(item->filesystem_path, &st) != item->occupant) {
@@ -621,11 +623,13 @@ static error_t update_profile(
                  * and each refusal names the path itself — the capture's the
                  * file, the commit's the name it lands at. Either stops the run
                  * at this profile (update_execute) but over a path changed since
-                 * the preview, an owner or a group this host cannot name among
-                 * them (core/profiles.h profile_capture_file), which the directory
-                 * arm below skips: the preview listed the file among what the
-                 * run commits, no item carrying what its owner's lookup answers
-                 * (stated) */
+                 * the preview. Among them, stated: an owner or a group this host
+                 * cannot name (core/profiles.h profile_capture_file), which the
+                 * directory arm below skips — the preview listed the file among
+                 * what the run commits, no item carrying what its owner's lookup
+                 * answers; and a file or a link the capture met changing while
+                 * it read it, the node the load found still standing, which a
+                 * re-run takes */
                 content_capture_t capture = { 0 };
                 profile_claim_t claim;
                 error_t err = update_capture(ctx, profile_draft_base(draft), item, &capture);

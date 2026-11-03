@@ -137,8 +137,8 @@ static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
  * Absence is the caller's to read: ENOENT/ENOTDIR at the open, or from the link's
  * read, come back as ERR_NOT_FOUND — the path left between the look and this
  * read. One reader, judge_copy, which maps that one code to CMP_MISSING and every
- * other failure to a failed look, so the absence rule compare.h states once is
- * spelled once.
+ * other failure to a failed look, so the absence rule compare.h states on each
+ * of the pair's two forms is spelled once.
  */
 static error_t read_copy(
     const char *disk_path, git_filemode_t expected_mode, buffer_t *out

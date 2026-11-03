@@ -79,48 +79,31 @@ typedef enum {
 } compare_result_t;
 
 /**
- * Does the disk copy match the reference? — the pair
+ * Does the disk copy hold these bytes? — the pair's buffer form
  *
- * The caller's look at the disk copy, judged against a reference in one of two
- * encodings: the plaintext bytes (compare_buffer_to_disk) or the blob's id
- * (compare_oid_to_disk). The ladder is the same for both — the type against the
- * expected mode, then a link's target or a file's bytes through one descriptor
- * — and the encoding matters at two points only: a buffer knows its size, so a
- * size that differs is a verdict with no open needed; and the judgment is memcmp
- * for a buffer, hash-and-compare for an id (SHA-1("blob <size>\0" + bytes), Git's
- * own — a symlink is a blob holding its target). Pure with respect to git and
- * encryption otherwise: zero blob loading, zero decryption.
- *
- * The ladder, in order:
+ * The caller's look at the disk copy, judged against the plaintext bytes it should
+ * hold. The ladder, in order:
  * 1. The kind the expected mode names is the kind the look found
- * 2. For a buffer, the size — a difference here is a verdict with no open
- * 3. The bytes, read and judged (byte-for-byte, or by id)
+ * 2. A regular file's size, which a buffer knows: another is a verdict with no
+ *    open needed. A link's st_size is the filesystem's to mean, and is not asked
+ * 3. The bytes — a link's target, or a regular file's read through one descriptor
+ *    — compared byte for byte
  *
  * The look is the caller's: the stat it took before it called, required, taken
  * nowhere here and handed back nowhere. Steps 1 and 2 are asked off it, so the
  * pair spends no syscall of its own before step 3, and a caller that wants a
- * look takes one — compare_generate_diff below is the module's only looker.
+ * look takes one — compare_generate_diff is the module's only looker.
  *
  * CMP_MISSING means the *read* met the absence — ENOENT/ENOTDIR at the open, or
  * ERR_NOT_FOUND from the link's read — so the path left between the caller's
  * look and it, and the caller learns its look is one moment stale. Absence at
  * the look's own moment is the caller's own to name, in whatever vocabulary that
- * caller keeps for it; it never reaches here.
+ * caller keeps for it; it never reaches here. compare_oid_to_disk answers it in
+ * the same words: it is the one thing the pair's two forms must not answer apart.
  *
- * The id form is for plaintext blobs only: an encrypted blob's id is the hash
- * of ciphertext, while the filesystem holds plaintext, so the comparison would
- * never match. One rule, and one reader keeping it: the caller must hold a stamp
- * that is *this* blob's own, made byte-true at the write boundary (the Phase 2
- * invariant in `infra/content.h content_capture_file`) — a stale or wrong-blob
- * flag silently misroutes. That reader is `core/workspace.c
- * workspace_analyze_file`'s first question, which reads `row->encrypted` for
- * the row's own blob. A comparison against a blob no stamp speaks for takes the
- * buffer form, its kind and its bytes coming off one read (`infra/content.h
- * content_compare_blob_to_disk`).
- */
-
-/**
- * The buffer form of the pair above
+ * Pure with respect to git and encryption: zero blob loading, zero decryption.
+ * The bytes are the caller's, an encrypted row's plaintext among them, which
+ * the content layer decrypted (infra/content.h).
  *
  * @param content Buffer containing expected content (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)
@@ -138,7 +121,33 @@ error_t compare_buffer_to_disk(
 );
 
 /**
- * The id form of the pair above — plaintext blobs only
+ * Does the disk copy hold this blob? — the pair's id form, plaintext blobs only
+ *
+ * The caller's look at the disk copy, judged against the blob's id: the ladder
+ * and the look compare_buffer_to_disk states, less its size — an id knows none.
+ * The kind the expected mode names is asked off the look; then the bytes — a
+ * link's target, or a regular file's read through one descriptor — are hashed
+ * as Git hashes a blob, SHA-1("blob <size>\0" + bytes), Git's model of a link
+ * being a blob that holds its target, and the ids compared. Pure with respect
+ * to git and encryption: zero blob loading, zero decryption.
+ *
+ * Plaintext blobs only: an encrypted blob's id is the hash of ciphertext, while
+ * the filesystem holds plaintext, so the comparison would never match. One rule,
+ * and one reader keeping it: the caller must hold a stamp that is *this* blob's
+ * own, made byte-true at the write boundary (the write-time invariant in
+ * `infra/content.h content_capture_file`) — a stale or wrong-blob flag silently
+ * misroutes. That reader is `core/workspace.c workspace_analyze_file`'s first
+ * question, which reads `row->encrypted` for the row's own blob. A comparison
+ * against a blob no stamp speaks for takes the buffer form, its kind and its
+ * bytes coming off one read (`infra/content.h content_compare_blob_to_disk`).
+ *
+ * CMP_MISSING means the *read* met the absence — ENOENT/ENOTDIR at the open, or
+ * ERR_NOT_FOUND from the link's read — so the path left between the caller's
+ * look and it, and the caller learns its look is one moment stale. Absence at
+ * the look's own moment is the caller's own to name, in whatever vocabulary that
+ * caller keeps for it; it never reaches here. compare_buffer_to_disk answers it
+ * in the same words: it is the one thing the pair's two forms must not answer
+ * apart.
  *
  * @param blob_oid Expected blob OID from manifest (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)
@@ -176,9 +185,9 @@ typedef enum {
  * once its arguments are accepted, or filled whole by a caller that holds a verdict
  * of its own and the text for it (cmds/diff.c diff_print_item, a kind off the
  * load's look) — and one thing in it is owned: `diff_text`, which
- * compare_diff_deinit frees and resets. NULL there is a copy that matches; every
- * other verdict has a text, which a caller holding its own words for that verdict
- * may ignore.
+ * compare_diff_deinit frees, resetting the whole struct with it, the verdict
+ * too. NULL there is a copy that matches; every other verdict has a text, which
+ * a caller holding its own words for that verdict may ignore.
  */
 typedef struct {
     compare_result_t status; /* what the look found */
@@ -191,8 +200,8 @@ typedef struct {
  * One lstat names what stands at the path; where it is the kind the mode expects,
  * one read takes the bytes that are judged and, where they differ, rendered. So
  * a file is read once, and no stat is carried out of a comparison to make it
- * happen: the pair above returns a verdict and nothing else, and a caller that
- * wants a look takes one.
+ * happen: the pair (compare_buffer_to_disk, compare_oid_to_disk) returns a verdict
+ * and nothing else, and a caller that wants a look takes one.
  *
  * `out->status` is that look's verdict, reached through the same judge and the
  * same kind test the pair uses, so a status line printed from one and a text

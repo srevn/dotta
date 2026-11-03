@@ -156,12 +156,13 @@ typedef struct {
  * caller already holds at the moment of its look — a post-commit capture's fstat,
  * the lstat of a slow path that found disk the row's content, or the fstat of a
  * load's capture of bytes no base proves (core/workspace.c workspace_ask_bases;
- * infra/content.h content_capture_oid hands it back) — and the read beneath each
- * took exactly that look's length (sys/filesystem.h fs_read_fd), so the triple's
- * size is the length of the bytes the caller verified, and the two describe the
- * same moment. There is deliberately no from-path variant: a fresh look taken
- * at record-write time would bind whatever stands at the path then to a verdict
- * from earlier.
+ * infra/content.h content_capture_oid hands it back) — and a regular file's read
+ * beneath each took exactly that look's length (sys/filesystem.h fs_read_fd),
+ * so the triple's size is the length of the bytes the caller verified, and the
+ * two describe the same moment. A link's target is read whole, its size the
+ * filesystem's to mean and never asked as a length (state_stat_disproves). There
+ * is deliberately no from-path variant: a fresh look taken at record-write time
+ * would bind whatever stands at the path then to a verdict from earlier.
  *
  * A stat whose mtime second has not closed (mtime >= now: written this very second,
  * or carrying a future mtime) keeps its length alone — a read can only infer
@@ -436,10 +437,10 @@ static inline bool state_stat_matches(const state_record_t *record, const struct
  * file's was in its open second, whose disproof is left to a read of nothing,
  * as Git trusts no recorded size of 0 (ie_modified). A link is never asked: its
  * st_size is the filesystem's to mean (infra/compare.c compare_reference_to_disk),
- * where a regular file's is its bytes. And the size is that blob's length: every
- * read a triple stands behind takes exactly its look's length (sys/filesystem.h
- * fs_read_fd), so no rewrite between the look and the read leaves a length the
- * blob does not have.
+ * where a regular file's is its bytes. And a regular file's size is that blob's
+ * length: every read of one a triple stands behind takes exactly its look's length
+ * (sys/filesystem.h fs_read_fd), so no rewrite between the look and the read
+ * leaves a length the blob does not have.
  *
  * Readers: core/workspace.c workspace_compare_base, after its kind rung and before
  * its read; and workspace_analyze_file, after its kind rung and before its reads,

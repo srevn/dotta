@@ -132,8 +132,8 @@ error_t compare_buffer_to_disk(
  * link's target, or a regular file's through one descriptor, the length the look
  * covers read exactly — are hashed as Git hashes a blob, SHA-1("blob <size>\0"
  * + bytes), Git's model of a link being a blob that holds its target, and the
- * ids compared, so a match is one at the look's length too. Pure with respect
- * to git and encryption: zero blob loading, zero decryption.
+ * ids compared, so a file's match is one at the look's length too. Pure with
+ * respect to git and encryption: zero blob loading, zero decryption.
  *
  * Plaintext blobs only: an encrypted blob's id is the hash of ciphertext, while
  * the filesystem holds plaintext, so the comparison would never match. One rule,

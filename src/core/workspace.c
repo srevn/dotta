@@ -1303,9 +1303,10 @@ static void workspace_analyze_file(
          * - Non-encrypted: Hash filesystem file and compare OID directly
          * - Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare
          *
-         * Both reads receive the load's look, which bounds them too: each takes
-         * exactly its length (infra/compare.h), so the stat distilled from it
-         * at CMP_EQUAL stands behind the row's blob's own length.
+         * Both reads receive the load's look, which bounds a regular file's too:
+         * each takes exactly its length (infra/compare.h), so the stat distilled
+         * from it at CMP_EQUAL stands behind the row's blob's own length. A link's
+         * target is read whole, its size never asked as a length.
          *
          * Asymmetry with the second question below, and it is the stamp's:
          * row->encrypted is *this* blob's own, made byte-true at the write boundary

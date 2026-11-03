@@ -739,8 +739,8 @@ error_t content_capture_link(
  * another. The look is the capture's own, and is handed back: the look the bytes
  * were read at, a file's fstat or a link's lstat before its target
  * (content_capture_t), a file's for exactly the length it recorded. So a triple
- * the caller keeps beside the id is one node's with these bytes, at their length,
- * as add's and update's are with theirs.
+ * the caller keeps beside the id is one node's with these bytes, a file's at
+ * their length, as add's and update's are with theirs.
  *
  * Reader: core/workspace.c workspace_ask_bases, each copy a load found bytes no
  * base proves at, the id kept under the triple distilled from its look.

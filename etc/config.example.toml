@@ -43,6 +43,7 @@ strict_ownership = false
 # Default: true
 auto_detect_new_files = true
 
+
 # ============================================================================
 # [hooks] - Hook Scripts
 # ============================================================================
@@ -191,6 +192,7 @@ verbosity = "normal"
 #   - "never"  - Never use colors (useful for logs)
 # Default: auto
 color = "auto"
+
 
 # ============================================================================
 # [commit] - Commit Message Templates

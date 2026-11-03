@@ -6,9 +6,12 @@
  * and a directory's floor, and what a look finds standing at a path — not its
  * two keys, which are strings and declare nothing (infra/path.h). include/config.h
  * is the second prelude — the config layout, read by core without including utils/.
- * base/args.h and base/hashmap.h re-declare the handles they need instead of
- * including this, staying standalone engines with no domain dependency; every
- * other base header includes it.
+ * base/args.h re-declares the handles it needs instead of including this, staying
+ * a standalone engine; every other base header includes it, or no header of dotta's
+ * at all (base/encoding.h, secure.h, timeutil.h, wildmatch.h). No base header
+ * or source names a path's kind or type, either mode or an occupant: base compiles
+ * against those words and reads none, so its charter — zero domain knowledge —
+ * holds of its code.
  *
  * Admission is by meaning, not by owner. A value a reader can interpret holding
  * nothing else stands here; a verdict one module computes stands with that module:

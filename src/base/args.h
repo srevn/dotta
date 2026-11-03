@@ -97,9 +97,11 @@
  *                          distinct fields. Example: `dotta apply
  *                          [profile|path]...` — both kinds can appear in any order.
  *
- * If two or more fit, prefer the tree: it gives per-sub `--help` for free, the
- * sub names and their summaries in the completion rules, and no hand-rolled
- * dispatch switch.
+ * If two or more fit, prefer the tree: it gives per-sub `--help` for free, and
+ * the sub names and their summaries in the completion rules. Each sub may dispatch
+ * a handler of its own; a command that keeps one entry for its tree, as each of
+ * dotta's does (`key`, `remote`, `profile`), routes there by the discriminator
+ * each sub's `init_defaults` sets ("Subcommand trees" above).
  */
 
 #ifndef DOTTA_ARGS_H
@@ -202,8 +204,11 @@ typedef args_class_t (*args_classify)(const char *token);
  * Seed non-zero defaults on the options struct before parsing begins.
  *
  * Called exactly once after the struct is zero-initialized and before any tokens
- * are processed. Use for flags whose default is `true` or for tri-state enums
- * with a non-zero neutral value.
+ * are processed. Its use is a tree's discriminator: each sub writes which sub
+ * the parse reached, for the command's one entry to switch on ("Subcommand trees").
+ * A default the zeroed struct cannot express is never seeded: a tri-state's unset
+ * is post_parse's to resolve ("Tri-state flags"), and a flag on by default is
+ * its `no-` twin, false at zero (`--no-fetch`, `--no-push`).
  */
 typedef void (*args_defaults)(void *opts);
 

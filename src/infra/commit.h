@@ -33,7 +33,11 @@
  * read it, the copies' fate from a profile's history (core/profiles.c
  * profile_departures) and the heading a message stands its removals under, Deleted
  * or Removed (commit_message's {paths}). An action with another effect is another
- * word: a remove that deleted files would write its own, never "remove".
+ * word: a remove that deleted files would write its own, never "remove". A hand's
+ * commit names none, and keeps — save git's amend in a worktree of the store,
+ * which carries every extra header but a signature onto the commit it writes
+ * (lib/git/builtin/commit.c cmd_commit, read_commit_extra_headers): its removals
+ * read as the action the amended commit named (stated).
  *
  * The words on screen are the files', since a directory goes by what is left in
  * it whatever took its claim (core/workspace.c workspace_analyze_orphans): update
@@ -68,6 +72,10 @@ typedef enum {
  * there in its own words (cmds/status.c status_remote, cmds/profile.c
  * profile_fetch). A value no enumerator names is only a cast's, and dies
  * (base/error.h CHECK_ARG).
+ *
+ * The word outlives the binary that wrote it: the departure compares each removal's
+ * word with update's as spelled here (core/profiles.c profile_departures), so a
+ * re-spelled word reads every removal an earlier spelling committed as a keep.
  *
  * Readers: core/profiles.c profile_commit — every claim writer's commit, and a
  * profile's merge — and profile_departures, update's word against each removal's;

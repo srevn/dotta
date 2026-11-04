@@ -36,7 +36,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 **Use For:** Backing up configs, validating environment, checking disk space
 
 **Example Use Cases:**
-- Create timestamped backups of current configs
+- Create timestamped backups of the files the run will replace
 - Verify required environment variables are set
 - Check system resources (disk space, memory)
 
@@ -45,7 +45,11 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "apply"
 - `DOTTA_PROFILE` - Space-separated list of profiles being applied
-- `DOTTA_PATH_COUNT` - Always "0" for apply
+- `DOTTA_PATH_COUNT` - Number of paths: every path the run changes on disk — a
+  file or link it writes or removes, a directory it creates, changes or
+  removes — each once, another profile's too where a `-p` run reaches it; 0
+  where the run changes nothing on disk
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -69,7 +73,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "apply"
 - `DOTTA_PROFILE` - Space-separated list of profiles being applied
-- `DOTTA_PATH_COUNT` - Always "0" for apply
+- `DOTTA_PATH_COUNT` - Number of paths: the ones `pre-apply` was handed; after a
+  run that failed part-way, some it did not change
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path (0-indexed)
 - `DOTTA_DRY_RUN` - Always "0" — post-apply does not fire on dry-run
 
 **Exit Behavior:**
@@ -379,9 +385,9 @@ terminal or read an answer from it (`/dev/tty`). A signal sent to dotta alone
 
 A hook is handed its paths in its environment, one variable a path, as git
 hands a hook its push options. A list the system will not carry in an
-environment — a removal of a large tracked tree, or of a whole profile —
-refuses the hook, and with it the command: `chmod -x` the hook to run the
-command without it.
+environment — a removal of a large tracked tree or of a whole profile, an
+apply that lands or prunes one — refuses the hook, and a `pre-` hook the
+command with it: `chmod -x` the hook to run the command without it.
 
 ## Writing Hooks
 
@@ -545,15 +551,22 @@ export DOTTA_DRY_RUN=0
 #!/usr/bin/env bash
 set -euo pipefail
 
-backup_dir="$HOME/.dotta-backups/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$backup_dir"
+if [[ "$DOTTA_DRY_RUN" == "1" ]]; then
+    exit 0
+fi
 
-# Back up every home/ file the profiles being applied claim, as it stands now:
-# Git lists each profile's names, which dotta passes through
-for profile in $DOTTA_PROFILE; do
-    dotta git ls-tree -r --name-only "$profile" -- home/
-done | sed 's|^home/||' | sort -u > "$backup_dir.list"
-rsync -a --files-from="$backup_dir.list" ~ "$backup_dir/" || true
+backup_dir="$HOME/.dotta-backups/$(date +%Y%m%d-%H%M%S)"
+
+# Back up each file and link the run will overwrite or remove, as it stands
+# now: a directory on the list changes alone, the files in it listed on their own
+for ((i=0; i<DOTTA_PATH_COUNT; i++)); do
+    var_name="DOTTA_PATH_$i"
+    path="${!var_name}"
+    if [[ -L "$path" || -f "$path" ]]; then
+        mkdir -p "$backup_dir${path%/*}"
+        cp -a "$path" "$backup_dir$path" 2>/dev/null || true
+    fi
+done
 ```
 
 ### Workflow 2: Push on Add

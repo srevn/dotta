@@ -2111,6 +2111,71 @@ static void apply_print_cleanup_refused(
 }
 
 /**
+ * What apply hands its hooks: every path the decided run changes on disk, once
+ *
+ * Every row the run lands — a directory it creates, converges or puts where a
+ * squatter stood, a file or a link it writes — and the claimed directories it
+ * creates on their way; every orphan it removes — dotta's node above rows, replaced
+ * by their directory, its copies beneath a blob row, cleared, and the prunes.
+ * Built before the pre-hook and handed unchanged to the post-hook, as remove's
+ * is (cmds/remove.c remove_hook_paths), so a run that fails part-way hands paths
+ * it did not change.
+ *
+ * A copy a clearance's walk met twice, its directory changing under it, is handed
+ * twice (core/deploy.h deploy_preflight_t). And on no list is what the run changes
+ * and no verdict names: a parent no row claims, created on the way (core/deploy.c
+ * create_ancestor), the OS metadata a removed directory held (sys/filesystem.h
+ * fs_remove_empty_dir), and a claimed directory the run opened for a write beneath
+ * it and the release could not narrow back (core/deploy.h deploy_receipt_t's held).
+ *
+ * @param arena The list's arena (must not be NULL)
+ * @param deploy_verdicts The run's deploy preflight (must not be NULL)
+ * @param cleanup_verdicts The run's cleanup preflight (must not be NULL)
+ * @return The paths, copies in `arena`
+ */
+static string_array_t apply_hook_paths(
+    arena_t *arena,
+    const deploy_preflight_t *deploy_verdicts,
+    const cleanup_preflight_t *cleanup_verdicts
+) {
+    /* Each path once with no seen-set, by construction: the view holds one row
+     * a path, the ancestors among them the directory rows the run does not
+     * converge, and an orphan stands where no row does, one record a path and
+     * one state an item — replaced, cleared or pruned; the list keeps copies,
+     * the shape the hook contract's char *const * takes as it stands */
+    string_array_t paths;
+    string_array_init(&paths, arena, 0);
+
+    /* The rows the run lands, and the claimed directories it creates on their way */
+    const deploy_verdicts_t *rows[] = {
+        &deploy_verdicts->directories,
+        &deploy_verdicts->files,
+        &deploy_verdicts->ancestors,
+    };
+    for (size_t b = 0; b < sizeof(rows) / sizeof(rows[0]); b++) {
+        for (size_t i = 0; i < rows[b]->count; i++) {
+            string_array_push(&paths, rows[b]->entries[i].item->filesystem_path);
+        }
+    }
+
+    /* The orphans it removes: dotta's nodes and copies in the landings' way,
+     * then the prunes */
+    const workspace_items_t *orphans[] = {
+        &deploy_verdicts->replaces,
+        &deploy_verdicts->clears,
+        &cleanup_verdicts->prunable_files,
+        &cleanup_verdicts->prunable_dirs,
+    };
+    for (size_t b = 0; b < sizeof(orphans) / sizeof(orphans[0]); b++) {
+        for (size_t i = 0; i < orphans[b]->count; i++) {
+            string_array_push(&paths, orphans[b]->entries[i]->filesystem_path);
+        }
+    }
+
+    return paths;
+}
+
+/**
  * Write the record of what the run did, whole or not at all
  *
  * The run's second transaction (taken back past cmd_apply's early exit) holds
@@ -3346,12 +3411,18 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * to add here. What the run planned and could not deliver reaches the exit
      * code at the run's tail. */
 
-    /* Build hook invocation with the scope's profiles */
+    /* The pre-apply hook, over the decided run — a dry run's too, told so
+     * (DOTTA_DRY_RUN=1) — handed the scope's profiles and every path the run
+     * changes on disk, each once (apply_hook_paths); the post-apply hook is handed
+     * the same list, last */
+    const string_array_t hook_paths = apply_hook_paths(
+        ctx->arena, deploy_verdicts, cleanup_verdicts
+    );
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_APPLY,
-        .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
-        .paths      = NULL,
-        .path_count = 0,
+        .profile    = string_array_join(ctx->arena, scope_profiles(scope), " "),
+        .paths      = hook_paths.entries,
+        .path_count = hook_paths.count,
         .dry_run    = opts->dry_run,
     };
 
@@ -3552,7 +3623,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Execute post-apply hook. The record phase settled the run's transaction
+    /* The post-apply hook, last (utils/hooks.h hook_fire_post), handed the list
+     * the pre-apply hook was — the decided run's, so a run that failed part-way
+     * names paths it did not change. The record phase settled the run's transaction
      * before this — committed or rolled back — and a preview began none, so the
      * hook meets the database this run leaves. */
     hook_fire_post(config, out, &hook_inv);

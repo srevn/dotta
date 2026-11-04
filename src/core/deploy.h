@@ -649,7 +649,10 @@ typedef struct {
  * deepest first, so a directory goes once everything in it has. The act whose
  * way meets each finds it by position (core/deploy.c replace_node above its path,
  * clear_copies beneath it), and the preview and the prompt count each kind off
- * its own list.
+ * its own list. The copies are what each clearance's readdir met, so a directory
+ * changing under its walk can put one there twice: twice on every count and list
+ * read off them, and removed once — the second removal finds it gone, which is
+ * success (core/deploy.c clear_occupant).
  *
  * A consumer reads every array by its count, so none needs a NULL guard: an empty
  * one may hold no spine at all. A value of the arena it was decided in, as every

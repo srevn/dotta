@@ -12,23 +12,40 @@
 #   DOTTA_CONFIG_FILE - Path to the configuration file the run read
 #   DOTTA_COMMAND     - Command being executed ("apply")
 #   DOTTA_PROFILE     - Space-separated list of profiles being applied
-#   DOTTA_PATH_COUNT  - Always "0" for apply
+#   DOTTA_PATH_COUNT  - Number of paths: every path the run changes on disk,
+#                       each once; 0 where it changes nothing
+#   DOTTA_PATH_0      - First path (0-indexed)
+#   DOTTA_PATH_1      - Second path
+#   DOTTA_PATH_N      - Nth path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
 #
 
 set -euo pipefail
 
-# Example: Create backup of current configs
-backup_dir="$HOME/.dotta-backups/$(date +%Y%m%d-%H%M%S)"
-echo "Creating backup in: $backup_dir"
-mkdir -p "$backup_dir"
+if [[ "${DOTTA_DRY_RUN:-0}" == "1" ]]; then
+    echo "Pre-apply: dry-run, skipping backup."
+    exit 0
+fi
 
-# Backup common config files
-for file in ~/.bashrc ~/.zshrc ~/.vimrc ~/.gitconfig; do
-    if [[ -f "$file" ]]; then
-        cp "$file" "$backup_dir/" 2>/dev/null || true
+# Example: Back up each file and link the run will overwrite or remove, as it
+# stands now, under its own path — one you cannot read (a run under sudo) is
+# left out. A directory on the list changes alone — created, its permissions
+# set, or removed once empty — and every file in it the run touches is on the
+# list too.
+backup_dir="$HOME/.dotta-backups/apply-$(date +%Y%m%d-%H%M%S)"
+
+for ((i=0; i<DOTTA_PATH_COUNT; i++)); do
+    var_name="DOTTA_PATH_$i"
+    path="${!var_name}"
+    if [[ -L "$path" || -f "$path" ]]; then
+        mkdir -p "$backup_dir${path%/*}"
+        cp -a "$path" "$backup_dir$path" 2>/dev/null || true
     fi
 done
+
+if [[ -d "$backup_dir" ]]; then
+    echo "Pre-apply: backed up what the run replaces to $backup_dir"
+fi
 
 # Example: Check disk space
 available=$(df -h "$HOME" | awk 'NR==2 {print $4}')

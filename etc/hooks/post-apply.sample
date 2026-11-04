@@ -2,15 +2,19 @@
 #
 # post-apply hook - Runs after applying profiles
 #
-# This script runs after dotta has successfully applied profiles.
-# Use it to reload services, restart applications, etc.
+# This script runs after dotta has applied profiles, a run that failed part-way
+# included. Use it to reload services, restart applications, etc.
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_CONFIG_FILE - Path to the configuration file the run read
 #   DOTTA_COMMAND     - Command being executed ("apply")
 #   DOTTA_PROFILE     - Space-separated list of profiles applied
-#   DOTTA_PATH_COUNT  - Always "0" for apply
+#   DOTTA_PATH_COUNT  - Number of paths: the ones pre-apply was handed — after a
+#                       run that failed part-way, some it did not change
+#   DOTTA_PATH_0      - First path (0-indexed)
+#   DOTTA_PATH_1      - Second path
+#   DOTTA_PATH_N      - Nth path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - Always "0" — post-apply does not fire on dry-run
 #
 
@@ -22,19 +26,33 @@ set -euo pipefail
 # No terminal, no notice — and no failure.
 to_terminal() { { printf '%s\n' "$*" > /dev/tty; } 2>/dev/null || true; }
 
+# Whether the run changed a path: one of the paths it was handed
+changed() {
+    local i var_name
+    for ((i=0; i<DOTTA_PATH_COUNT; i++)); do
+        var_name="DOTTA_PATH_$i"
+        if [[ "${!var_name}" == "$1" ]]; then return 0; fi
+    done
+    return 1
+}
+
 echo "Post-apply: Reloading configurations..."
 
-# Example: Shell configuration. A hook cannot reload the shell that ran dotta,
-# so it tells the user how: for their login shell ($SHELL), never the bash this
-# script runs in.
+# Example: Shell configuration, where the run changed it. A hook cannot reload
+# the shell that ran dotta, so it tells the user how: for their login shell
+# ($SHELL), never the bash this script runs in.
 login_shell="${SHELL:-}"
 case "${login_shell##*/}" in
-    bash) to_terminal "Post-apply: run 'source ~/.bashrc' to pick up shell changes" ;;
-    zsh)  to_terminal "Post-apply: run 'source ~/.zshrc' to pick up shell changes" ;;
+    bash) rc=.bashrc ;;
+    zsh)  rc=.zshrc ;;
+    *)    rc= ;;
 esac
+if [[ -n "$rc" ]] && changed "$HOME/$rc"; then
+    to_terminal "Post-apply: run 'source ~/$rc' to pick up shell changes"
+fi
 
-# Example: Reload tmux configuration
-if command -v tmux &>/dev/null && [[ -n "${TMUX:-}" ]]; then
+# Example: Reload tmux configuration, where the run changed it
+if command -v tmux &>/dev/null && [[ -n "${TMUX:-}" ]] && changed "$HOME/.tmux.conf"; then
     echo "Reloading tmux configuration..."
     tmux source-file ~/.tmux.conf 2>/dev/null || true
 fi

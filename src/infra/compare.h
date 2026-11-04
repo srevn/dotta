@@ -1,7 +1,7 @@
 /**
  * compare.h - File comparison engine
  *
- * Compares expected content with filesystem state, and renders the difference:
+ * Compares expected content with filesystem state, and prints the difference:
  *
  * 1. Buffer-based (compare_buffer_to_disk): Compares plaintext buffers provided
  *    by the content layer (src/infra/content.h). Used for encrypted files where
@@ -12,28 +12,28 @@
  *    to an expected git blob OID. Used for non-encrypted files where OID comparison
  *    avoids expensive blob loading from pack files.
  *
- * 3. Rendering (compare_generate_diff): the module's one look, taken for itself
- *    rather than for a caller, and the bytes it read rendered as a unified diff.
- *    It reaches its verdict through the same kind test and the same judgment as
- *    the two above, and hands nothing else back — the pair returns a verdict,
- *    and a caller that wants a look takes one.
+ * 3. The patch (compare_generate_diff): the buffer form's ladder less its size,
+ *    and where the bytes differ, libgit2's patch of them printed through the
+ *    caller's line callback. It reaches its verdict through the same kind test
+ *    and the same judgment as the two above, and hands back that verdict alone.
  *
- * The first two judge the look their caller took, and all three return
- * compare_result_t for uniform caller integration. None of them accesses the
- * git repository or object database — all operations are pure computation against
- * the filesystem.
+ * All three judge the look their caller took and return compare_result_t for
+ * uniform caller integration. None of them accesses the git repository or object
+ * database — all operations are pure computation against the filesystem.
  *
  * Design principles:
  * - A blob's two spellings and a link are the whole domain: a mode outside them
  *   is the caller's bug, which dies in both ladders before the disk is touched
- * - A look is the caller's to take: the pair is handed one and takes none
- * - The disk copy is wiped before it is freed, by whichever of the two callers
- *   took it: for an encrypted row it is the plaintext, the twin of the buffer
- *   the content cache wipes on its side. The rule covers the copies read here
- *   and not a rendering made from them: git_diff_buffers takes both sides into
- *   structures of its own and frees them plainly, where nothing above libgit2
- *   can reach, so file_diff_t.diff_text is freed plainly too — a wipe there would
- *   make the rule read total while half of the plaintext stayed loose
+ * - A look is the caller's to take: the module is handed one and takes none
+ * - The disk copy is wiped before it is freed, by whichever ladder read it: for
+ *   an encrypted row it is the plaintext, the twin of the buffer the content
+ *   cache wipes on its side. A patch made from it borrows it, each line pointing
+ *   into the two sides (lib/libgit2/src/libgit2/diff_file.c
+ *   git_diff_file_content__init_from_src), and is freed before the wipe, so no
+ *   text of either side outlives the print. The rule covers the copies read here
+ *   and not what libgit2 makes of them: each hunk's header, which quotes the
+ *   line enclosing the hunk, is libgit2's own and freed plainly, where nothing
+ *   above libgit2 can reach
  */
 
 #ifndef DOTTA_COMPARE_H
@@ -93,7 +93,7 @@ typedef enum {
  * The look is the caller's: the stat it took before it called, required, taken
  * nowhere here and handed back nowhere. Steps 1 and 2 are asked off it, so the
  * pair spends no syscall of its own before step 3, and a caller that wants a
- * look takes one — compare_generate_diff is the module's only looker.
+ * look takes one.
  *
  * CMP_MISSING means the *read* met the absence — ENOENT/ENOTDIR at the open, or
  * ERR_NOT_FOUND from the link's read — so the path left between the caller's
@@ -172,7 +172,7 @@ error_t compare_oid_to_disk(
 /**
  * Diff direction for compare_generate_diff()
  *
- * Controls which side is treated as "old" and "new" in the unified diff:
+ * Controls which side is treated as "old" and "new" in the patch:
  *   CMP_DIR_UPSTREAM:   old=filesystem, new=repo — '-' is current disk content,
  *                       '+' is repo content apply would write.
  *   CMP_DIR_DOWNSTREAM: old=repo, new=filesystem — '-' is repo content, '+' is
@@ -184,48 +184,36 @@ typedef enum {
 } compare_direction_t;
 
 /**
- * A rendering: the verdict a look reached, and the text for it
+ * Print the disk copy's difference from the reference, off the caller's look
  *
- * The struct is the caller's — a stack local, cleared by compare_generate_diff
- * once its arguments are accepted, or filled whole by a caller that holds a verdict
- * of its own and the text for it (cmds/diff.c diff_print_item, a kind off the
- * load's look) — and one thing in it is owned: `diff_text`, which
- * compare_diff_deinit frees, resetting the whole struct with it, the verdict
- * too. NULL there is a copy that matches; every other verdict has a text, which
- * a caller holding its own words for that verdict may ignore.
- */
-typedef struct {
-    compare_result_t status; /* what the look found */
-    char *diff_text;         /* the text for it, NULL for a match */
-} file_diff_t;
-
-/**
- * Render the disk copy's difference from the reference — the renderer's own look
+ * The buffer form's ladder (compare_buffer_to_disk) over the look the caller
+ * took — the mode, the kind off the look, then one read of the bytes it covers,
+ * judged — less the size, since a patch needs the bytes a size would answer
+ * without. Where they differ, libgit2's patch of the two buffers, both named
+ * `path_label`, at libgit2's defaults — three lines of context, no hunk joined
+ * — is handed to `print` line by line as libgit2 hands it: the file header once,
+ * before the first hunk or the one binary line, then each hunk's header and lines
+ * (lib/libgit2/src/libgit2/diff_print.c git_patch_print). A patch made from buffers
+ * carries no mode, so it names both sides 100644, and its index line names each
+ * by its plaintext's blob id (stated). Every other verdict prints nothing: another
+ * kind is the caller's to draw, off the look it holds, and CMP_MISSING is the
+ * read's, as the pair's — absence at the look's own moment is the caller's to name.
  *
- * One lstat names what stands at the path; where it is the kind the mode expects,
- * one read takes the bytes it covers, which are judged and, where they differ,
- * rendered. So a file is read once, and no stat is carried out of a comparison
- * to make it happen: the pair (compare_buffer_to_disk, compare_oid_to_disk) returns
- * a verdict and nothing else, and a caller that wants a look takes one.
+ * The read is bounded by the look: a copy rewritten after it is judged and printed
+ * at the look's length, as the pair judges one, and the next run reads it whole
+ * (stated). `print`'s non-zero ends the print and comes back as libgit2's generic
+ * error (lib/libgit2/src/util/errors.h git_error_set_after_callback_function):
+ * a caller that needs why keeps it in its payload.
  *
- * `out->status` is that look's verdict, reached through the same judge and the
- * same kind test the pair uses, so a status line printed from one and a text
- * rendered by the other cannot call one path two things. A caller with no verdict
- * of its own reads it here rather than comparing first; a caller that already
- * holds one gets a look one moment fresher, and where the disk moved since, a
- * text that says so.
- *
- * Works with decrypted content from the content layer. Uses libgit2's
- * git_diff_buffers for pure in-memory diff generation.
- *
- * @param content Content buffer (e.g., decrypted content, must not be NULL)
+ * @param content The reference's plaintext, e.g. decrypted (must not be NULL)
  * @param disk_path Disk file path (must not be NULL)
- * @param path_label Label for diff output (must not be NULL)
- * @param mode Expected git filemode (for type/mode checking)
- * @param direction Diff direction
- * @param out Rendering (must not be NULL; cleared once the arguments are accepted,
- *            and left owning nothing on failure, so freeing it is correct either
- *            way)
+ * @param path_label The name both sides of the patch carry (must not be NULL)
+ * @param mode Expected git filemode
+ * @param st The look the caller took at disk_path (must not be NULL)
+ * @param direction Which side the patch shows first
+ * @param print Handed each line of the patch (must not be NULL)
+ * @param payload Handed to `print` beside each line
+ * @param result Comparison result (must not be NULL)
  * @return Error or NULL on success
  */
 error_t compare_generate_diff(
@@ -233,19 +221,12 @@ error_t compare_generate_diff(
     const char *disk_path,
     const char *path_label,
     git_filemode_t mode,
+    const struct stat *st,
     compare_direction_t direction,
-    file_diff_t *out
+    git_diff_line_cb print,
+    void *payload,
+    compare_result_t *result
 );
-
-/**
- * Free a rendering's text and reset it
- *
- * buffer_deinit's shape: the contents go, the struct stays the caller's and is
- * left as if it had never been filled. Safe on a cleared struct, and safe twice.
- *
- * @param diff Rendering (can be NULL)
- */
-void compare_diff_deinit(file_diff_t *diff);
 
 /**
  * The text of a type mismatch: the kind a mode names, and the kind a look found
@@ -255,10 +236,10 @@ void compare_diff_deinit(file_diff_t *diff);
  * so the line a CMP_TYPE_DIFF verdict prints is one sentence wherever that verdict
  * was reached.
  *
- * Readers: compare_generate_diff (its own look's CMP_TYPE_DIFF), cmds/diff.c
- * diff_print_item (the load's look, where a row's kind is not what stands and
- * no blob is read — a directory row's among them). A reader not on this list is
- * a bug.
+ * Readers: cmds/diff.c diff_print_mismatch, the body diff draws where another
+ * kind stands — off the workspace load's look, where no blob is read (a directory
+ * row's among them), the render's, or the commit arm's own. A reader not on this
+ * list is a bug.
  *
  * @param mode The mode the reference expects: a blob's two spellings, a link,
  *             or a tree — a directory row's, which no comparison takes but this

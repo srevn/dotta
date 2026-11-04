@@ -571,9 +571,8 @@ error_t content_require_encryption(
  * look (core/metadata.h metadata_capture_file: st, encrypted), both by a profile's
  * draft (core/profiles.h profile_capture_file), and the record is bound to it
  * (core/state.h state_stat_from_read: st). A free written to its siblings' shape
- * — `*capture = (content_capture_t){ 0 }`, as compare_diff_deinit and
- * gitops_blob_view_close are written — would leave both commands anchoring a
- * zero stat: a wrong record, with no crash.
+ * — `*capture = (content_capture_t){ 0 }`, as gitops_blob_view_close is written
+ * — would leave both commands anchoring a zero stat: a wrong record, with no crash.
  *
  * Tagged, so a header that takes it by pointer names it without this one
  * (core/profiles.h).

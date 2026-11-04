@@ -1129,13 +1129,13 @@ bool fs_denied(const char *path, int amode);
  * content_capture_link (the capture's refusal), cmds/add.c add_collect and cmd_add
  * (the walk's skip and the argument's), utils/hooks.c hook_find (a hook's name
  * the exec would refuse) — or one that is not the kind a claim expects
- * (infra/compare.c compare_generate_diff, the type-mismatch line a diff renders).
- * The input is that look's own stat: an lstat's, a stat's that followed a link
- * as an exec does (hook_find), or the fstat of the descriptor a capture already
- * holds. There is no noun for NONE or UNKNOWN, which are answers about the call
- * and not about an occupant, and none for a look never taken — what this returns
- * is printed, so a noun made for a NULL would reach the user as a kind nothing
- * stands as.
+ * (infra/compare.c compare_type_mismatch, the line a diff prints where another
+ * kind stands). The input is that look's own stat: an lstat's, a stat's that
+ * followed a link as an exec does (hook_find), or the fstat of the descriptor a
+ * capture already holds. There is no noun for NONE or UNKNOWN, which are answers
+ * about the call and not about an occupant, and none for a look never taken —
+ * what this returns is printed, so a noun made for a NULL would reach the user
+ * as a kind nothing stands as.
  *
  * Why the stat and not fs_occupant_t: the enum deliberately folds FIFO, socket
  * and both devices into FS_OCCUPANT_OTHER, and the noun is exactly the reading

@@ -109,11 +109,10 @@ static void validate_mode(git_filemode_t expected_mode) {
  * A link for GIT_FILEMODE_LINK; a regular file — not a directory, device, FIFO,
  * socket, or a link — for either blob mode, which is the whole of the domain
  * validate_mode admits. Two readers that must not disagree about one path: the
- * pair, whose answer is the CMP_TYPE_DIFF verdict, and the renderer, whose answer
- * is the line a caller prints beside that verdict. The division is the kind's
- * (core/workspace.h workspace_type_occupant, over a path_type_t in the look's
- * words), asked here over a stat and a git filemode — the vocabulary each layer
- * speaks.
+ * pair and the renderer, each answering CMP_TYPE_DIFF off its caller's look where
+ * it says no. The division is the kind's (core/workspace.h workspace_type_occupant,
+ * over a path_type_t in the look's words), asked here over a stat and a git
+ * filemode — the vocabulary each layer speaks.
  */
 static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
     return expected_mode == GIT_FILEMODE_LINK ? S_ISLNK(st->st_mode)
@@ -124,9 +123,9 @@ static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
  * The disk copy's bytes, as Git would hash them
  *
  * A link's target or a regular file's content — the bytes a blob at this path
- * holds — read after the look found the expected kind standing: the pair's caller's
- * look, or the renderer's own. A regular file is read through one descriptor,
- * exactly the length the look recorded, as Git's refresh reads one
+ * holds — read after the look found the expected kind standing: the caller's
+ * look, whichever ladder it was handed to. A regular file is read through one
+ * descriptor, exactly the length the look recorded, as Git's refresh reads one
  * (lib/git/read-cache.c ce_compare_data, index_fd handed the lstat it took): so
  * an id judged equal is equal at the look's length, and the triple a caller
  * distills from that look stands behind the blob's own length.
@@ -180,12 +179,11 @@ static error_t read_copy(
  * differently: a read that met ENOENT/ENOTDIR is the verdict CMP_MISSING — the
  * path left between the look and the read — where any other failure is a failed
  * look and the caller's to carry. So a status line printed off the pair's verdict
- * and a text rendered off the renderer's cannot call one path two things.
+ * and a patch printed off the renderer's cannot call one path two things.
  *
- * The look is whichever the ladder took — the pair's caller's, or the renderer's
- * own — and bounds the read (read_copy). `copy` is filled whole and is the caller's
- * on every exit: wiped and freed by whichever of the two took it, whatever the
- * verdict (compare.h).
+ * The look is the ladder's caller's, and bounds the read (read_copy). `copy` is
+ * filled whole and is the caller's on every exit: wiped and freed by whichever
+ * of the two ladders took it, whatever the verdict (compare.h).
  */
 static error_t judge_copy(
     const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
@@ -216,7 +214,7 @@ static error_t judge_copy(
  * — so a copy of the wrong kind or the wrong size is a verdict with no open at
  * all. Past those the step is judge_copy's, the same one the renderer takes, so
  * the bytes a status line is printed from are read and judged exactly as the
- * bytes a text is rendered from.
+ * bytes a patch is printed from.
  *
  * No look is taken here. Absence at the look's own moment is the caller's to
  * name and it never gets this far — the one absence this function reports is
@@ -268,11 +266,8 @@ static error_t compare_reference_to_disk(
 }
 
 error_t compare_buffer_to_disk(
-    const buffer_t *content,
-    const char *disk_path,
-    git_filemode_t expected_mode,
-    const struct stat *st,
-    compare_result_t *result
+    const buffer_t *content, const char *disk_path, git_filemode_t expected_mode,
+    const struct stat *st, compare_result_t *result
 ) {
     CHECK_NULL(content);
     CHECK_NULL(disk_path);
@@ -284,11 +279,8 @@ error_t compare_buffer_to_disk(
 }
 
 error_t compare_oid_to_disk(
-    const git_oid *blob_oid,
-    const char *disk_path,
-    git_filemode_t expected_mode,
-    const struct stat *st,
-    compare_result_t *result
+    const git_oid *blob_oid, const char *disk_path, git_filemode_t expected_mode,
+    const struct stat *st, compare_result_t *result
 ) {
     CHECK_NULL(blob_oid);
     CHECK_NULL(disk_path);
@@ -300,226 +292,84 @@ error_t compare_oid_to_disk(
 }
 
 /**
- * Diff line callback - accumulates diff output into a buffer_t payload
+ * Print the patch from one side to the other through the caller's callback
  *
- * The payload is the one buffer generate_text_diff hands git_diff_buffers, passed
- * back through untouched, so nothing here re-asks what that one call site
- * established.
+ * libgit2's patch of two buffers under one name, at its defaults — three lines
+ * of context, no hunk joined (lib/libgit2/src/libgit2/diff_xdiff.c git_xdiff_init,
+ * handed no options) — printed whole and freed before this returns: the patch
+ * borrows both buffers for its lines, so the copy it was made from is wiped after
+ * it is gone (compare_generate_diff). An empty side is content, handed as "": a
+ * NULL side is an absence to libgit2, which would print the patch of an addition
+ * or a deletion, and a buffer's zero state carries no data (base/buffer.h) —
+ * judge answers the same state for itself.
  */
-static int diff_line_callback(
-    const git_diff_delta *delta,
-    const git_diff_hunk *hunk,
-    const git_diff_line *line,
-    void *payload
+static error_t compare_print_patch(
+    const buffer_t *old_side, const buffer_t *new_side, const char *path_label,
+    git_diff_line_cb print, void *payload
 ) {
-    buffer_t *output = (buffer_t *) payload;
-
-    /* Suppress unused parameter warnings */
-    (void) delta;
-    (void) hunk;
-
-    /* Skip EOFNL lines — the manual marker below handles "no newline at end
-     * of file" for all line types.  Letting EOFNL lines through would
-     * duplicate the marker because libgit2 emits them with the same text.
-     *
-     * Note: GIT_DIFF_LINE_BINARY never reaches this callback because
-     * git_diff_buffers only routes binary content to binary_cb (which we
-     * pass as NULL).  Binary detection is handled in compare_generate_diff. */
-    if (line->origin == GIT_DIFF_LINE_ADD_EOFNL ||
-        line->origin == GIT_DIFF_LINE_DEL_EOFNL ||
-        line->origin == GIT_DIFF_LINE_CONTEXT_EOFNL) {
-        return 0;
-    }
-
-    /* Add origin character for context/addition/deletion */
-    if (line->origin == GIT_DIFF_LINE_CONTEXT ||
-        line->origin == GIT_DIFF_LINE_ADDITION ||
-        line->origin == GIT_DIFF_LINE_DELETION) {
-        buffer_append(output, &line->origin, 1);
-    }
-
-    /* Add line content */
-    buffer_append(output, line->content, line->content_len);
-
-    /* Handle files without trailing newline like git diff does */
-    if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
-        buffer_append_string(output, "\n\\ No newline at end of file\n");
-    }
-
-    return 0;
-}
-
-/**
- * Generate symlink diff from buffer
- *
- * Helper for compare_generate_diff(). Generates a human-readable diff for symlink
- * target changes, from the two targets in hand — old side first, the order the
- * caller read off the direction.
- *
- * @return The text (caller frees)
- */
-static char *generate_symlink_diff(
-    const buffer_t *old_side,
-    const buffer_t *new_side
-) {
-    buffer_t buf = BUFFER_INIT;
-
-    buffer_append_string(&buf, "Symlink target changed:\n");
-    buffer_append_string(&buf, "- ");
-    buffer_append(&buf, old_side->data, old_side->size);
-    buffer_append_string(&buf, "\n+ ");
-    buffer_append(&buf, new_side->data, new_side->size);
-    buffer_append_string(&buf, "\n");
-
-    /* Transfer ownership: the buffer's bytes are the text */
-    return buffer_detach(&buf);
-}
-
-/**
- * Generate text diff from buffer
- *
- * Helper for compare_generate_diff(). Uses in-memory buffers with libgit2's
- * buffer-based diff API — the two sides in hand, old first, the order the caller
- * read off the direction.
- */
-static error_t generate_text_diff(
-    const buffer_t *old_side,
-    const buffer_t *new_side,
-    const char *path_label,
-    char **diff_text
-) {
-    /* Output buffer passed directly as callback payload */
-    buffer_t diff_output = BUFFER_INIT;
-
-    /* Configure diff options */
-    git_diff_options diff_opts;
-    git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
-    diff_opts.context_lines = 3;
-    diff_opts.interhunk_lines = 0;
-    diff_opts.flags = GIT_DIFF_NORMAL;
-
-    /* Buffer to buffer, the two sides in the order they were handed in */
-    int rc = git_diff_buffers(
-        old_side->data, old_side->size, path_label,
-        new_side->data, new_side->size, path_label,
-        &diff_opts,
-        NULL,  /* file callback */
-        NULL,  /* binary callback */
-        NULL,  /* hunk callback */
-        diff_line_callback,
-        &diff_output
+    git_patch *patch = NULL;
+    int rc = git_patch_from_buffers(
+        &patch, old_side->data ? old_side->data : "", old_side->size, path_label,
+        new_side->data ? new_side->data : "", new_side->size, path_label, NULL
     );
-
     if (rc < 0) {
-        buffer_deinit(&diff_output);
         return error_git(rc, "Cannot compare the two versions of '%s'", path_label);
     }
 
-    /* Extract result - transfer ownership and free buffer structure */
-    if (diff_output.size > 0) {
-        *diff_text = buffer_detach(&diff_output);
-    } else {
-        *diff_text = NULL;
-        buffer_deinit(&diff_output);
-    }
-
-    return NULL;
-}
-
-/**
- * Render the disk copy's difference from the reference — the renderer's own look
- */
-error_t compare_generate_diff(
-    const buffer_t *content, const char *disk_path, const char *path_label,
-    git_filemode_t mode, compare_direction_t direction, file_diff_t *out
-) {
-    CHECK_NULL(content);
-    CHECK_NULL(disk_path);
-    CHECK_NULL(path_label);
-    CHECK_NULL(out);
-
-    *out = (file_diff_t){ 0 };
-
-    validate_mode(mode);
-
-    /* The look, then the verdict off it and the read of what it found. */
-    struct stat st;
-    buffer_t copy = BUFFER_INIT;
-    error_t err = NULL;
-
-    if (fs_lstat(disk_path, &st) != 0) {
-        if (errno != ENOENT && errno != ENOTDIR) {
-            err = error_errno(errno, "Failed to stat '%s'", disk_path);
-            goto cleanup;
-        }
-
-        /* Nothing stands here — the look met the absence (ENOTDIR: a component
-         * above is no longer a directory — same absence). */
-        out->status = CMP_MISSING;
-    } else if (!mode_stands(&st, mode)) {
-        out->status = CMP_TYPE_DIFF;
-    } else {
-        reference_t ref = { .content = content };
-        err = judge_copy(&ref, disk_path, mode, &st, &copy, &out->status);
-        if (err) goto cleanup;
-    }
-
-    /* The text, by the verdict: a line where there is nothing to render, the
-     * diff where there is, nothing at all for a copy that matches. A caller holding
-     * its own words for a verdict drops the line (cmds/diff.c diff_print_view,
-     * for CMP_MISSING and CMP_TYPE_DIFF). */
-    switch (out->status) {
-        case CMP_EQUAL:
-            break;
-
-        case CMP_MISSING:
-            out->diff_text = heap_strdup("File not deployed on disk");
-            break;
-
-        case CMP_TYPE_DIFF:
-            /* Both kinds named, the disk's off this function's own look */
-            out->diff_text = compare_type_mismatch(mode, &st);
-            break;
-
-        case CMP_DIFFERENT: {
-            /* Which side the hunk shows first, read off the direction once for
-             * the module: upstream renders disk → repo, what apply would write;
-             * downstream repo → disk, what update would commit. */
-            const buffer_t *old_side = direction == CMP_DIR_UPSTREAM ? &copy : content;
-            const buffer_t *new_side = direction == CMP_DIR_UPSTREAM ? content : &copy;
-
-            if (mode == GIT_FILEMODE_LINK) {
-                out->diff_text = generate_symlink_diff(old_side, new_side);
-            } else {
-                err = generate_text_diff(old_side, new_side, path_label, &out->diff_text);
-                if (err) goto cleanup;
-            }
-
-            /* Binary files: libgit2 skips the line callback entirely when it
-             * detects binary content, so generate_text_diff returns NULL. Provide
-             * an explicit message rather than silent empty output. */
-            if (!out->diff_text) out->diff_text = heap_strdup("Binary files differ");
-            break;
-        }
-    }
-
-cleanup:
-    /* The disk copy, wiped before it is freed — compare_reference_to_disk's rule:
-     * for an encrypted row it is the plaintext. */
-    secure_wipe(copy.data, copy.size);
-    buffer_deinit(&copy);
+    rc = git_patch_print(patch, print, payload);
+    error_t err = rc < 0 ? error_git(rc, "Cannot print the patch of '%s'", path_label) : NULL;
+    git_patch_free(patch);
 
     return err;
 }
 
 /**
- * Free a rendering's text and reset it
+ * Print the disk copy's difference from the reference, off the caller's look
  */
-void compare_diff_deinit(file_diff_t *diff) {
-    if (!diff) return;
+error_t compare_generate_diff(
+    const buffer_t *content, const char *disk_path, const char *path_label,
+    git_filemode_t mode, const struct stat *st, compare_direction_t direction,
+    git_diff_line_cb print, void *payload, compare_result_t *result
+) {
+    CHECK_NULL(content);
+    CHECK_NULL(disk_path);
+    CHECK_NULL(path_label);
+    CHECK_NULL(st);
+    CHECK_NULL(print);
+    CHECK_NULL(result);
 
-    free(diff->diff_text);
-    *diff = (file_diff_t){ 0 };
+    validate_mode(mode);
+
+    /* Does disk hold the kind the mode names? Off the caller's look, no syscall,
+     * and nothing printed: the caller holds the look that found another kind */
+    if (!mode_stands(st, mode)) {
+        *result = CMP_TYPE_DIFF;
+        return NULL;
+    }
+
+    /* No size is asked, as compare_reference_to_disk asks one: a patch needs
+     * the bytes a size would answer without */
+    reference_t ref = { .content = content };
+    buffer_t copy = BUFFER_INIT;
+    error_t err = judge_copy(&ref, disk_path, mode, st, &copy, result);
+
+    if (!err && *result == CMP_DIFFERENT) {
+        /* Which side the hunk shows first, read off the direction once for the
+         * module: upstream prints disk → repo, what apply would write; downstream
+         * repo → disk, what update would commit. */
+        const buffer_t *old_side = direction == CMP_DIR_UPSTREAM ? &copy : content;
+        const buffer_t *new_side = direction == CMP_DIR_UPSTREAM ? content : &copy;
+
+        err = compare_print_patch(old_side, new_side, path_label, print, payload);
+    }
+
+    /* The disk copy, wiped before it is freed, as compare_reference_to_disk wipes
+     * its own: for an encrypted row it is the plaintext, and the patch that
+     * borrowed it is gone */
+    secure_wipe(copy.data, copy.size);
+    buffer_deinit(&copy);
+
+    return err;
 }
 
 /**

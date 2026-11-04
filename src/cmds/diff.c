@@ -5,6 +5,7 @@
 #include "cmds/diff.h"
 
 #include <config.h>
+#include <errno.h>
 #include <git2.h>
 #include <stdio.h>
 #include <string.h>
@@ -298,12 +299,140 @@ static const char *diff_status_line(
 }
 
 /**
- * Print a listed row's entry: its names, its line, and the body it draws
+ * Print a listed row's header: its profile, its name with its kind's slash, and
+ * its status line
+ *
+ * dotta's lines where libgit2's file header would stand, a block of the report's
+ * own, asking the boundary above it. Both arms open a listed row with it: the
+ * workspace arm above its body (diff_print_item), the commit arm at its patch's
+ * file header (diff_print_header_cb) or beside its other verdicts
+ * (diff_print_view).
+ *
+ * @param out Output context (must not be NULL)
+ * @param row The row listed (must not be NULL)
+ * @param line Its status line (must not be NULL)
+ */
+static void diff_print_header(output_t *out, const manifest_row_t *row, const char *line) {
+    output_gap(out, OUTPUT_NORMAL);
+
+    output_print(
+        out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
+        row->profile
+    );
+    output_print(
+        out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s%s\n",
+        row->storage_path, path_kind_suffix(path_type_kind(row->type))
+    );
+
+    /* The status line, uncoloured: an item's colour is its line's, worn on the
+     * lists beside the tags it is ranked from (core/workspace.h
+     * workspace_item_line) */
+    output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  %s\n", line);
+}
+
+/**
+ * Print the body a row draws where another kind than its own stands: the separator,
+ * then both kinds
+ *
+ * The one found is named off the look that found it — the workspace load's, which
+ * no blob read follows, the render's, where a kind raced in since the load
+ * (diff_print_item), or the commit arm's own (diff_print_view) — in the sentence
+ * every such verdict prints (infra/compare.h compare_type_mismatch).
+ *
+ * @param out Output context (must not be NULL)
+ * @param mode The mode the row expects: a blob's, a link's, or a directory row's
+ *             tree
+ * @param st The look that found another kind (must not be NULL)
+ */
+static void diff_print_mismatch(output_t *out, git_filemode_t mode, const struct stat *st) {
+    char *mismatch = compare_type_mismatch(mode, st);
+
+    output_print(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
+    output_print(out, OUTPUT_NORMAL, "%s\n", mismatch);
+
+    free(mismatch);
+}
+
+/**
+ * Print one line of a patch as libgit2 hands it, coloured by its origin
+ *
+ * Nothing is added: a change line that ends without a newline is followed by
+ * libgit2's end-of-file line, which opens with the newline that line lacks
+ * (lib/libgit2/src/libgit2/diff_xdiff.c git_xdiff_cb), so the lines printed as
+ * handed are git's patch, and `git apply` over it gives the side it names. The
+ * twin of cmds/show.c show_print_line_cb.
+ */
+static int diff_print_line_cb(
+    const git_diff_delta *delta,
+    const git_diff_hunk *hunk,
+    const git_diff_line *line,
+    void *payload
+) {
+    output_t *out = (output_t *) payload;
+    (void) delta;
+    (void) hunk;
+
+    output_color_t line_color = OUTPUT_COLOR_RESET;
+
+    switch (line->origin) {
+        case GIT_DIFF_LINE_ADDITION:
+            line_color = OUTPUT_COLOR_GREEN;
+            break;
+        case GIT_DIFF_LINE_DELETION:
+            line_color = OUTPUT_COLOR_RED;
+            break;
+        case GIT_DIFF_LINE_FILE_HDR:
+        case GIT_DIFF_LINE_HUNK_HDR:
+            line_color = OUTPUT_COLOR_CYAN;
+            break;
+        default:
+            break;
+    }
+
+    /* A patch line is a payload, its bytes the file's own and libgit2's quoted
+     * headers, written as they are: a change line's origin first, each in the
+     * line's colour */
+    if (line->origin == GIT_DIFF_LINE_ADDITION ||
+        line->origin == GIT_DIFF_LINE_DELETION ||
+        line->origin == GIT_DIFF_LINE_CONTEXT) {
+        output_write(out, OUTPUT_NORMAL, line_color, &line->origin, 1);
+    }
+    output_write(out, OUTPUT_NORMAL, line_color, line->content, line->content_len);
+
+    return 0;
+}
+
+/**
+ * Print a line of the workspace arm's patch, beneath the header said above it
+ *
+ * libgit2's file header gives way to the separator: the row's header, said above
+ * it from the load, is dotta's, and stands where libgit2's would. Every other
+ * line is the twin's (diff_print_line_cb). libgit2 sends the file header once a
+ * patch, before its first hunk or binary line, and never for equal sides
+ * (lib/libgit2/src/libgit2/diff_print.c flush_file_header), so the separator
+ * stands above a body that follows it.
+ */
+static int diff_print_patch_cb(
+    const git_diff_delta *delta,
+    const git_diff_hunk *hunk,
+    const git_diff_line *line,
+    void *payload
+) {
+    if (line->origin == GIT_DIFF_LINE_FILE_HDR) {
+        output_print(payload, OUTPUT_NORMAL, "{dim}---{reset}\n");
+        return 0;
+    }
+
+    return diff_print_line_cb(delta, hunk, line, payload);
+}
+
+/**
+ * Print a listed row's entry: its header, and the body it draws
  *
  * Says what the workspace analysis settled; nothing is re-analyzed. The item's
  * row is the path's view row — blob, storage path, profile — which every item
- * diff lists carries (diff_status_line). A read the render makes and fails is
- * the row's: its cause is said in the row's block, and the diff goes on.
+ * diff lists carries (diff_status_line). A look or a read the render makes and
+ * fails is the row's: its cause is said in the row's block, and the diff goes on.
  *
  * @param item A listed item (must not be NULL)
  * @param line Its status line for the direction listing it (must not be NULL)
@@ -325,20 +454,7 @@ static void diff_print_item(
 
     const manifest_row_t *row = item->row;
 
-    /* The header, off the row: its profile, and its name with its kind's slash */
-    output_print(
-        out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-        row->profile
-    );
-    output_print(
-        out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s%s\n",
-        row->storage_path, path_kind_suffix(item->item_kind)
-    );
-
-    /* The direction's own sentence. An item's colour is its line's, worn on the
-     * lists beside the tags it is ranked from (core/workspace.h
-     * workspace_item_line) */
-    output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  %s\n", line);
+    diff_print_header(out, row, line);
 
     /* Only a difference of bytes or of kind has something to render: the copy's
      * own edit, the blob or the kind Git moved past, which disk still holds, or
@@ -355,7 +471,6 @@ static void diff_print_item(
     }
 
     git_filemode_t mode = gitops_type_filemode(row->type);
-    file_diff_t diff = { 0 };
 
     if (item->occupant != workspace_type_occupant(row->type)) {
         /* Another kind than the row's stands — the user's (TYPE), the node dotta
@@ -365,51 +480,76 @@ static void diff_print_item(
          * tree's. The kind is the whole of the difference, said off the load's
          * own look with no blob read: a sealed one, its key cold, would fail a
          * read of bytes that are no part of it. */
-        diff = (file_diff_t){
-            .status = CMP_TYPE_DIFF,
-            .diff_text = compare_type_mismatch(mode, &item->st),
-        };
+        diff_print_mismatch(out, mode, &item->st);
+        return;
+    }
+
+    /* The row's own kind stood at the load's look, its bytes moved: a file row's
+     * alone, a directory row's look at a directory carrying none of the three
+     * bits (core/workspace.c workspace_analyze_directory sets TYPE and STALE
+     * only over another occupant, CONTENT never). The render's own look, at its
+     * moment — the load's is as old as the load and every row printed since,
+     * and the read a look bounds stands only behind one taken beside it
+     * (infra/compare.c read_copy) — then the row's blob from the cache by its
+     * blob_oid (borrowed), read as the entry the row's type says it is, and the
+     * copy judged against it off that look. The look or either read can fail
+     * where the load's did not — a blob the load never opened, its record's stat
+     * vouching for disk or its length disproving it, or the copy read again —
+     * and the failure is this row's, as a look the load could not take is its
+     * row's: its root, where the hunk would be, as apply's receipt names the
+     * same read's. One error per such row stays for the run (base/error.h). */
+    struct stat st;
+    compare_result_t result;
+    error_t err = NULL;
+
+    const fs_occupant_t occupant = fs_lstat_occupant(item->filesystem_path, &st);
+    if (occupant == FS_OCCUPANT_UNKNOWN) {
+        err = error_errno(errno, "Failed to stat '%s'", item->filesystem_path);
+    } else if (occupant == FS_OCCUPANT_NONE) {
+        /* Gone since the load: the look says what compare's read would */
+        result = CMP_MISSING;
     } else {
-        /* The row's own kind stands, its bytes moved: a file row's alone, a
-         * directory row's look at a directory carrying none of the three bits
-         * (core/workspace.c workspace_analyze_directory sets TYPE and STALE only
-         * over another occupant, CONTENT never). The row's blob from the cache
-         * by its blob_oid (borrowed reference - don't free), read as the entry
-         * the row's type says it is, then the copy against it. Either read can
-         * fail where the load's did not — a blob the load never opened, its
-         * record's stat vouching for disk or its length disproving it, or the
-         * copy read again — and the failure is this row's, as a look the load
-         * could not take is its row's: its root, where the hunk would be, as
-         * apply's receipt names the same read's. One error per such row stays
-         * for the run (base/error.h). */
         const buffer_t *content = NULL;
-        error_t err = content_cache_get_from_blob_oid(
+        err = content_cache_get_from_blob_oid(
             cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
         );
         if (!err) {
             err = compare_generate_diff(
-                content, item->filesystem_path, row->storage_path, mode,
-                direction == DIFF_UPSTREAM ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM, &diff
+                content, item->filesystem_path, row->storage_path, mode, &st,
+                direction == DIFF_UPSTREAM ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM,
+                diff_print_patch_cb, out, &result
             );
-        }
-        if (err) {
-            output_print(
-                out, OUTPUT_NORMAL, "{dim}# Error:{reset}   %s\n",
-                error_message(error_root(err))
-            );
-            return;
         }
     }
 
-    /* The separator belongs to a text, not to a verdict: where the renderer's
-     * own look found the copy matching after all — the one thing that can change
-     * between the load and here — the status line above stands alone. */
-    if (diff.diff_text) {
-        output_print(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
-        output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
+    if (err) {
+        output_print(
+            out, OUTPUT_NORMAL, "{dim}# Error:{reset}   %s\n",
+            error_message(error_root(err))
+        );
+        return;
     }
 
-    compare_diff_deinit(&diff);
+    switch (result) {
+        case CMP_EQUAL:
+        /* The copy holds the row's bytes after all — a blob Git moved to another
+         * id over the same plaintext, a seal made or opened in place, or a copy
+         * that moved since the load — and the line stands alone */
+        case CMP_DIFFERENT:
+            /* Printed beneath the separator, where libgit2's file header stood */
+            break;
+
+        case CMP_MISSING:
+            output_print(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
+            output_print(out, OUTPUT_NORMAL, "File not deployed on disk\n");
+            break;
+
+        case CMP_TYPE_DIFF:
+            /* Another kind raced in since the load, named off the look that found
+             * it */
+            diff_print_mismatch(out, mode, &st);
+            break;
+    }
 }
 
 /**
@@ -447,8 +587,8 @@ static void diff_print_direction(
     size_t listed = 0;
 
     /* The comparison opens a block of its own: a name-only listing is one, paid
-     * by its first name, and each entry of the full form one more, asking its
-     * own below */
+     * by its first name, and each entry of the full form one more, its header
+     * asking its own (diff_print_header) */
     output_gap(out, OUTPUT_NORMAL);
 
     for (size_t i = 0; i < diverged.count; i++) {
@@ -476,7 +616,6 @@ static void diff_print_direction(
                 item->filesystem_path, path_kind_suffix(item->item_kind)
             );
         } else {
-            output_gap(out, OUTPUT_NORMAL);
             diff_print_item(item, line, cache, direction, out);
         }
 
@@ -594,52 +733,39 @@ static error_t diff_print_stats(output_t *out, git_diff *diff) {
 }
 
 /**
- * Print one line of a patch as libgit2 hands it, coloured by its origin
- *
- * Nothing is added: a change line that ends without a newline is followed by
- * libgit2's end-of-file line, which opens with the newline that line lacks
- * (lib/libgit2/src/libgit2/diff_xdiff.c git_xdiff_cb), so the lines printed as
- * handed are git's patch, and `git apply` over it gives the side it names. The
- * twin of cmds/show.c show_print_line_cb.
+ * The header a row of the commit arm says at its patch's: diff_print_header's
+ * three, held until libgit2 prints the patch's file header (diff_print_header_cb)
  */
-static int diff_print_line_cb(
+typedef struct {
+    output_t *out;
+    const manifest_row_t *row;      /* the row whose patch prints */
+    const char *line;               /* its status line */
+} diff_header_t;
+
+/**
+ * Print a line of the commit arm's patch, its row's header said at libgit2's
+ *
+ * A commit's row is listed by what its comparison found, and a difference of
+ * bytes is found only as its patch prints: libgit2's file header is the first
+ * line of every patch with a body and of no other (lib/libgit2/src/libgit2/
+ * diff_print.c flush_file_header), so the row's header is said there, the one
+ * place a difference is known before its first line. Then every line goes as
+ * the workspace arm's does (diff_print_patch_cb): the separator where libgit2's
+ * file header stood, the rest as libgit2 hands it.
+ */
+static int diff_print_header_cb(
     const git_diff_delta *delta,
     const git_diff_hunk *hunk,
     const git_diff_line *line,
     void *payload
 ) {
-    output_t *out = (output_t *) payload;
-    (void) delta;
-    (void) hunk;
+    const diff_header_t *header = payload;
 
-    output_color_t line_color = OUTPUT_COLOR_RESET;
-
-    switch (line->origin) {
-        case GIT_DIFF_LINE_ADDITION:
-            line_color = OUTPUT_COLOR_GREEN;
-            break;
-        case GIT_DIFF_LINE_DELETION:
-            line_color = OUTPUT_COLOR_RED;
-            break;
-        case GIT_DIFF_LINE_FILE_HDR:
-        case GIT_DIFF_LINE_HUNK_HDR:
-            line_color = OUTPUT_COLOR_CYAN;
-            break;
-        default:
-            break;
+    if (line->origin == GIT_DIFF_LINE_FILE_HDR) {
+        diff_print_header(header->out, header->row, header->line);
     }
 
-    /* A patch line is a payload, its bytes the file's own and libgit2's quoted
-     * headers, written as they are: a change line's origin first, each in the
-     * line's colour */
-    if (line->origin == GIT_DIFF_LINE_ADDITION ||
-        line->origin == GIT_DIFF_LINE_DELETION ||
-        line->origin == GIT_DIFF_LINE_CONTEXT) {
-        output_write(out, OUTPUT_NORMAL, line_color, &line->origin, 1);
-    }
-    output_write(out, OUTPUT_NORMAL, line_color, line->content, line->content_len);
-
-    return 0;
+    return diff_print_patch_cb(delta, hunk, line, header->out);
 }
 
 /**
@@ -658,6 +784,11 @@ static int diff_print_line_cb(
  * that names no row says so itself, as the workspace arm's listing does: in scope
  * under a filter, which passed over every row outside it, else of the whole;
  * under --name-only nothing, its names being the whole answer.
+ *
+ * A row is looked at once, before its blob is read: an absence is said off the
+ * look, and the look is what the comparison judges, its patch printed beneath
+ * the row's header, which a difference of bytes says at the patch's own file
+ * header (diff_print_header_cb).
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)
@@ -682,26 +813,26 @@ static error_t diff_print_view(
     size_t listed = 0;
 
     /* The comparison opens a block of its own: a name-only listing is one, paid
-     * by its first name, and each entry of the full form one more, asking its
-     * own below */
+     * by its first name, and each entry of the full form one more, its header
+     * asking its own (diff_print_header) */
     output_gap(out, OUTPUT_NORMAL);
 
     manifest_rows_t rows = manifest_rows(view);
     for (size_t i = 0; i < rows.count; i++) {
-        const manifest_row_t *entry = rows.entries[i];
-        const char *filesystem_path = entry->filesystem_path;
-        const char *storage_path = entry->storage_path;
-        const char *profile = entry->profile;
+        const manifest_row_t *row = rows.entries[i];
 
         /* A directory row: no content to diff */
-        if (entry->type == PATH_TYPE_DIRECTORY) continue;
+        if (row->type == PATH_TYPE_DIRECTORY) continue;
 
         /* Check the path filter */
-        if (!pathspec_matches(path_filter, filesystem_path, storage_path, PATH_KIND_FILE)) {
+        if (!pathspec_matches(
+            path_filter, row->filesystem_path, row->storage_path, PATH_KIND_FILE
+            )) {
             continue;
         }
 
-        git_filemode_t mode = gitops_type_filemode(entry->type);
+        git_filemode_t mode = gitops_type_filemode(row->type);
+        struct stat st;
 
         /* Name-only output */
         if (opts->name_only) {
@@ -710,100 +841,85 @@ static error_t diff_print_view(
              * symlink is present — only its target is absent), and a path nothing
              * stands at is named before a blob is loaded, there being nothing
              * to compare against. So this form asks its question through the
-             * window the full form already has — the renderer's own look, then
-             * its read — where it used to look twice and could see two different
-             * worlds. */
-            struct stat st;
-            if (fs_lstat(filesystem_path, &st) != 0) {
-                output_print(out, OUTPUT_NORMAL, "%s\n", filesystem_path);
+             * window the full form has — one look, then the read off it — where
+             * it used to look twice and could see two different worlds. */
+            if (fs_lstat(row->filesystem_path, &st) != 0) {
+                output_print(out, OUTPUT_NORMAL, "%s\n", row->filesystem_path);
                 listed++;
                 continue;
             }
 
             /* Get content from historical commit (cached) */
-            const buffer_t *hist_content = NULL;
+            const buffer_t *content = NULL;
             error_t err = content_cache_get_from_blob_oid(
-                cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
+                cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
             );
             if (err) return err;
 
             /* Compare with filesystem */
             compare_result_t result;
-            err = compare_buffer_to_disk(
-                hist_content, filesystem_path, mode, &st, &result
-            );
+            err = compare_buffer_to_disk(content, row->filesystem_path, mode, &st, &result);
             if (err) return err;
 
             if (result != CMP_EQUAL) {
-                output_print(out, OUTPUT_NORMAL, "%s\n", filesystem_path);
+                output_print(out, OUTPUT_NORMAL, "%s\n", row->filesystem_path);
                 listed++;
             }
             continue;
         }
 
-        /* Full diff output: the renderer takes the one look, and the verdict is
-         * read off its result — so the bytes judged are the bytes rendered, where
-         * this loop used to compare the row itself and then hand the renderer
-         * the same question four lines later. */
-        const buffer_t *hist_content = NULL;
-        error_t err = content_cache_get_from_blob_oid(
-            cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
-        );
-        if (err) return err;
+        /* Full diff output: the row's look, ahead of its blob — an absence is
+         * said off it with nothing read, as the name-only form names one — then
+         * the blob, and the comparison off that look, which prints the patch
+         * where the bytes differ: the bytes judged are the bytes printed */
+        compare_result_t result;
+        const fs_occupant_t occupant = fs_lstat_occupant(row->filesystem_path, &st);
+        if (occupant == FS_OCCUPANT_UNKNOWN) {
+            return error_errno(errno, "Failed to stat '%s'", row->filesystem_path);
+        }
 
-        file_diff_t diff = { 0 };
-        err = compare_generate_diff(
-            hist_content, filesystem_path, storage_path, mode, CMP_DIR_DOWNSTREAM, &diff
-        );
-        if (err) return err;
+        if (occupant == FS_OCCUPANT_NONE) {
+            result = CMP_MISSING;
+        } else {
+            const buffer_t *content = NULL;
+            error_t err = content_cache_get_from_blob_oid(
+                cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
+            );
+            if (err) return err;
 
-        /* The status message, in the commit's words rather than the renderer's
-         * — and the verdict this form has no line for is a copy that is the
-         * commit's, which prints nothing at all. The renderer's own text for an
-         * absence is generated and dropped here: the status line says it in this
-         * loop's words. */
-        const char *status_msg = NULL;
+            /* The header a difference of bytes says, at its patch's */
+            diff_header_t header = {
+                .out = out, .row = row, .line = "modified locally since commit"
+            };
+            err = compare_generate_diff(
+                content, row->filesystem_path, row->storage_path, mode, &st,
+                CMP_DIR_DOWNSTREAM, diff_print_header_cb, &header, &result
+            );
+            if (err) return err;
+        }
 
-        switch (diff.status) {
+        /* The verdict, in the commit's words: a copy that is the commit's prints
+         * nothing at all, and a difference of bytes said its header at its
+         * patch's */
+        switch (result) {
             case CMP_EQUAL:
-                break;
-            case CMP_MISSING:
-                status_msg = "deleted locally (file missing)";
-                break;
-            case CMP_TYPE_DIFF:
-                status_msg = "type changed locally";
-                break;
+                continue;
+
             case CMP_DIFFERENT:
-                status_msg = "modified locally since commit";
+                break;
+
+            case CMP_MISSING:
+                diff_print_header(out, row, "deleted locally (file missing)");
+                break;
+
+            case CMP_TYPE_DIFF:
+                /* Both kinds, off the look that found another */
+                diff_print_header(out, row, "type changed locally");
+                diff_print_mismatch(out, mode, &st);
                 break;
         }
 
-        if (status_msg) {
-            output_gap(out, OUTPUT_NORMAL);
-
-            /* Show file header */
-            output_print(
-                out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-                profile
-            );
-            output_print(
-                out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-                storage_path
-            );
-
-            output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  %s\n", status_msg);
-
-            /* A difference of bytes or of kind has a text — the hunk, or both
-             * kinds off the renderer's look, as the workspace arm draws them */
-            if (diff.status == CMP_DIFFERENT || diff.status == CMP_TYPE_DIFF) {
-                output_print(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
-                output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
-            }
-
-            listed++;
-        }
-
-        compare_diff_deinit(&diff);
+        listed++;
     }
 
     if (listed == 0 && !opts->name_only) {

@@ -2,7 +2,8 @@
  * cipher.c - SIV encryption/decryption implementation
  *
  * Pipeline (4 steps; decrypt mirrors steps 2–4):
- *   1. Build the 14-byte authenticated header (magic, version, epoch fingerprint).
+ *   1. Build the 15-byte authenticated header (magic, version, NUL, epoch
+ *      fingerprint).
  *   2. SIV = MAC(mac_key, CIPHER_SIV, header, path, plaintext) — all variable
  *      inputs LE64-prefixed by `crypto_mac_absorb`, foreclosing
  *      concatenation-collision attacks.
@@ -38,20 +39,25 @@
  * platform PATH_MAX (1024 on macOS, 4096 on Linux). */
 #define CIPHER_STORAGE_PATH_MAX 4096
 
-/* Header byte offsets within the 14-byte authenticated header. Bound into the
+/* Header byte offsets within the 15-byte authenticated header. Bound into the
  * SIV verbatim; changing any offset is a format-version bump (see CIPHER_VERSION
  * in cipher.h). */
 #define CIPHER_OFFSET_MAGIC    0      /* "DOTTA" — 5 bytes */
 #define CIPHER_OFFSET_VERSION  5      /* CIPHER_VERSION byte */
-#define CIPHER_OFFSET_EPOCH_FP 6      /* 8-byte epoch fingerprint */
+#define CIPHER_OFFSET_NUL      6      /* 0x00, so Git reads every seal as binary */
+#define CIPHER_OFFSET_EPOCH_FP 7      /* 8-byte epoch fingerprint */
 
 _Static_assert(
     CIPHER_OFFSET_VERSION == CIPHER_MAGIC_SIZE,
     "version byte must come immediately after magic"
 );
 _Static_assert(
-    CIPHER_OFFSET_EPOCH_FP == CIPHER_OFFSET_VERSION + 1,
-    "epoch fingerprint must come immediately after the version"
+    CIPHER_OFFSET_NUL == CIPHER_OFFSET_VERSION + 1,
+    "NUL byte must come immediately after the version"
+);
+_Static_assert(
+    CIPHER_OFFSET_EPOCH_FP == CIPHER_OFFSET_NUL + 1,
+    "epoch fingerprint must come immediately after the NUL"
 );
 _Static_assert(
     CIPHER_OFFSET_EPOCH_FP + KDF_EPOCH_FP_SIZE == CIPHER_HEADER_SIZE,
@@ -82,13 +88,14 @@ static error_t validate_path(const char *storage_path, size_t *out_len) {
 }
 
 /**
- * Validate the 14-byte cipher-blob header.
+ * Validate the 15-byte cipher-blob header.
  *
  * Length → magic → version. The epoch fingerprint needs no validation — any 8
  * bytes are a well-formed fingerprint; whether it names *this* repository's epoch
- * is the caller's question (`keymgr_decrypt`). Used by `cipher_read_header` and
- * `cipher_decrypt`; centralising "what does a well-formed header look like" keeps
- * the version-bump policy tractable.
+ * is the caller's question (`keymgr_decrypt`). Nor does the NUL: it is bound
+ * into the SIV as the fingerprint is, so a seal whose NUL was bent fails its
+ * MAC. Used by `cipher_read_header` and `cipher_decrypt`; centralising "what
+ * does a well-formed header look like" keeps the version-bump policy tractable.
  *
  * @param data     Blob bytes (must point to at least data_len bytes)
  * @param data_len Blob length
@@ -208,11 +215,12 @@ error_t cipher_encrypt(
     /* Within the cap, the sum cannot wrap (asserted beside the cap, cipher.h) */
     const size_t total_len = CIPHER_OVERHEAD + plaintext_len;
 
-    /* Build the header on the stack so its type stays strictly `uint8_t[14]`
-     * for the SIV-input contract; the same bytes feed both `memcpy` into output
-     * and `compute_siv`'s first absorb. */
+    /* Build the header on the stack so its type stays strictly
+     * `uint8_t[CIPHER_HEADER_SIZE]` for the SIV-input contract; the same bytes
+     * feed both `memcpy` into output and `compute_siv`'s first absorb. */
     memcpy(&header[CIPHER_OFFSET_MAGIC], CIPHER_MAGIC, CIPHER_MAGIC_SIZE);
     header[CIPHER_OFFSET_VERSION] = CIPHER_VERSION;
+    header[CIPHER_OFFSET_NUL] = 0x00;
     memcpy(&header[CIPHER_OFFSET_EPOCH_FP], epoch_fp, KDF_EPOCH_FP_SIZE);
 
     /* Claim the final size outright; the SIV and the ciphertext are written into
@@ -221,7 +229,7 @@ error_t cipher_encrypt(
      * header by memcpy, the SIV by compute_siv, the body by the keystream XOR. */
     buffer_resize(&output, total_len);
 
-    /* Layout: [header(14) | siv(32) | ciphertext(N)] */
+    /* Layout: [header(15) | siv(32) | ciphertext(N)] */
     memcpy(output.data, header, CIPHER_HEADER_SIZE);
     uint8_t *siv_slot = (uint8_t *) output.data + CIPHER_HEADER_SIZE;
     uint8_t *ct_slot = siv_slot + CIPHER_SIV_SIZE;

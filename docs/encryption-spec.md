@@ -6,7 +6,7 @@ Dotta encrypts sensitive dotfiles transparently so they can be stored in a Git r
 
 **Design goals:**
 
-- **Deterministic AEAD** — identical `(passphrase, profile, path, plaintext)` produces byte-identical ciphertext (v9). Git deduplicates, history is meaningful.
+- **Deterministic AEAD** — identical `(passphrase, profile, path, plaintext)` produces byte-identical ciphertext (v10). Git deduplicates, history is meaningful.
 - **Path-bound authentication** — ciphertext is cryptographically tied to its storage path; a file moved to a different path cannot be decrypted.
 - **Nonce-misuse resistant** — Synthetic-IV (SIV) construction; no random nonces to manage.
 - **Single passphrase UX** — one passphrase covers every profile. Per-profile subkeys are derived deterministically.
@@ -19,10 +19,10 @@ Dotta encrypts sensitive dotfiles transparently so they can be stored in a Git r
 ### Mitigated
 
 - **Passive repository compromise.** An attacker who exfiltrates the Git repository (clone, disk image, backup) cannot recover plaintext without the passphrase. Brute-force resistance is bounded by Argon2id memory hardness × passphrase entropy against the repository's unique 256-bit salt.
-- **Active tampering of encrypted blobs.** Modifying any byte of the magic, version, epoch fingerprint, SIV, or ciphertext fails SIV verification. The candidate plaintext is wiped before return; the error is a uniform "authentication failed" diagnostic.
+- **Active tampering of encrypted blobs.** Modifying any byte of the magic, version, NUL, epoch fingerprint, SIV, or ciphertext fails SIV verification. The candidate plaintext is wiped before return; the error is a uniform "authentication failed" diagnostic.
 - **Path confusion.** A blob encrypted for `home/.ssh/id_rsa` cannot decrypt as `home/.bashrc`. The storage path is absorbed into the SIV scope byte-for-byte.
 - **Cross-profile contamination.** Per-profile subkeys are derived deterministically from `(master_key, profile_name)` under domain-separated tags; compromise of one profile's `(mac_key, prf_key)` pair leaks nothing about another's without the master key.
-- **Epoch and version confusion.** The 14-byte header (`"DOTTA" || 0x09 || epoch_fp[8]`) is the first input absorbed into the SIV. A blob forged with a different version or relabelled to another epoch fails MAC verification. Foreign-epoch blobs are rejected up front by `keymgr_decrypt` before prompting.
+- **Epoch and version confusion.** The 15-byte header (`"DOTTA" || 0x0a || 0x00 || epoch_fp[8]`) is the first input absorbed into the SIV. A blob forged with a different version or relabelled to another epoch fails MAC verification. Foreign-epoch blobs are rejected up front by `keymgr_decrypt` before prompting.
 - **Argon2-params tampering.** Parameters are stored in the signed repository epoch ref (`refs/dotta/epoch`), validated at load/fetch, and bound into the epoch fingerprint. Cipher blobs do not carry parameters, preventing remote-controlled DoS or parameter degradation.
 - **Memory scraping and core dumps.** Sensitive buffers (passphrases, Argon2 work areas, keymgr slots) live in locked memory (`secure_alloc`) excluded from core dumps via `MADV_DONTDUMP`. Process core dumps are disabled globally (`RLIMIT_CORE = 0`).
 
@@ -32,7 +32,7 @@ Dotta encrypts sensitive dotfiles transparently so they can be stored in a Git r
 - **Weak passphrases.** Argon2id raises the per-guess wall but does not save short or dictionary-based passphrases.
 - **Keyloggers, shoulder-surfing, evil-maid attacks** during passphrase entry.
 - **Forensic disk imaging on a live host.** The session cache resists casual inspection and directory listing, not a forensic adversary on the host that wrote it.
-- **Plaintext-length leakage.** Stream cipher; ciphertext length = plaintext length + 46-byte overhead. Padding to a fixed boundary would defeat Git deduplication and is not adopted.
+- **Plaintext-length leakage.** Stream cipher; ciphertext length = plaintext length + 47-byte overhead. Padding to a fixed boundary would defeat Git deduplication and is not adopted.
 - **Storage path leakage.** Paths are recorded in plaintext in `.dotta/metadata.json` and as Git tree entries. Encryption hides content, not repository structure.
 - **Plaintext-equality leakage across commits.** Encryption is deterministic; identical inputs produce identical ciphertext. An attacker observing multiple commits learns *whether* an encrypted file at a given path changed, not *what* changed.
 
@@ -41,7 +41,7 @@ Dotta encrypts sensitive dotfiles transparently so they can be stored in a Git r
 | What leaks                            | Brute-force cost                                    | Notes                                                                                    |
 |---------------------------------------|-----------------------------------------------------|------------------------------------------------------------------------------------------|
 | Repo only                             | Passphrase entropy × Argon2id memory cost           | 256-bit per-repo salt in `refs/dotta/epoch` forecloses cross-installation precomputation; memory hardness is the wall against this specific repository. |
-| Plaintext sizes (any leaked repo)     | N/A — leaked unconditionally                        | Stream cipher (46-byte fixed overhead); out of scope by design.                          |
+| Plaintext sizes (any leaked repo)     | N/A — leaked unconditionally                        | Stream cipher (47-byte fixed overhead); out of scope by design.                          |
 | `~/.cache/dotta/session-*` + repo     | Master key recoverable without passphrase           | Session cache is obfuscation under public epoch bytes. Protection is POSIX permissions (0600) and UID checks. |
 
 For "stolen laptop" / machine transfer exposures the response is `dotta key clear` before lending or retiring the machine, plus exclusion of `~/.cache/dotta` from any backup that already contains the repository.
@@ -196,7 +196,7 @@ Two ways the walk could report an absence it had not proved are closed. A revwal
 
 The acquisition is transactional: obtain, prove, install. The remote's advertisement names a commit; the command's one fetch, which names the epoch's ref, downloads its objects on the connection that listed it and stores no ref for them; `epoch_adopt` validates both blobs at that commit, and only then points `refs/dotta/epoch` at it — from the census's read: the local ref is replaced only where it still names the id the verdict judged, or stands nowhere where none stood, so a ref another writer moved, deleted or made since is refused and left as that writer left it. A malformed epoch returns `ERR_CRYPTO` with the local ref untouched — there is nothing to roll back, because a corrupt remote epoch never stood there to be mistaken for canonical later.
 
-## SIV construction (cipher format v9)
+## SIV construction (cipher format v10)
 
 Implemented in `src/crypto/cipher.c`. SIV deterministic AEAD in the spirit of RFC 5297, built from BLAKE2b (MAC) and XChaCha20 (keystream).
 
@@ -204,17 +204,18 @@ Implemented in `src/crypto/cipher.c`. SIV deterministic AEAD in the spirit of RF
 
 Inputs: `(plaintext, mac_key, prf_key, storage_path, epoch_fp)`.
 
-1. **Build the 14-byte authenticated header:**
+1. **Build the 15-byte authenticated header:**
    ```
    bytes [0..5)   = "DOTTA"
-   byte   [5]     = CIPHER_VERSION (0x09)
-   bytes [6..14)  = epoch_fp (BLAKE2b-8 over epoch's 35 bytes)
+   byte   [5]     = CIPHER_VERSION (0x0a)
+   byte   [6]     = 0x00
+   bytes [7..15)  = epoch_fp (BLAKE2b-8 over epoch's 35 bytes)
    ```
 
 2. **Compute the synthetic IV** (32 bytes) over `(header, path, plaintext)`:
    ```
    crypto_mac_init(ctx, mac_key, CRYPTO_DOMAIN_CIPHER_SIV);
-   crypto_mac_absorb(ctx, header, 14);                     /* LE64-prefixed */
+   crypto_mac_absorb(ctx, header, 15);                     /* LE64-prefixed */
    crypto_mac_absorb(ctx, storage_path, path_len);         /* LE64-prefixed */
    crypto_mac_absorb(ctx, plaintext, plaintext_len);       /* LE64-prefixed */
    crypto_mac_final(ctx, siv);
@@ -233,11 +234,11 @@ Inputs: `(plaintext, mac_key, prf_key, storage_path, epoch_fp)`.
    ```
    Monocypher reads exactly 24 bytes from the nonce pointer; the trailing 8 bytes of the 32-byte SIV serve as additional MAC tag width.
 
-5. **Assemble** `[ header(14) | SIV(32) | ciphertext(N) ]`.
+5. **Assemble** `[ header(15) | SIV(32) | ciphertext(N) ]`.
 
 ### Decryption
 
-1. **Header parse** via `cipher_read_header`: validates length (≥ 14), magic `"DOTTA"`, and version `0x09`; extracts `epoch_fp`.
+1. **Header parse** via `cipher_read_header`: validates length (≥ 15), magic `"DOTTA"`, and version `0x0a`; extracts `epoch_fp`.
 2. **Epoch check**: `keymgr_decrypt` verifies `epoch_fp` matches the repository's epoch fingerprint. A mismatch returns `ERR_CRYPTO("Encrypted under a different repository epoch...")` immediately, without prompting for a passphrase.
 3. **Derive `seed`** from `(prf_key, stored_siv)` under `CIPHER_KEY`.
 4. **Decrypt**: `candidate = ciphertext_body XOR XChaCha20(seed, siv[0..24], 0)`.
@@ -268,23 +269,24 @@ SIV provides the same security as a nonce-based AEAD when nonces are unique and 
 
 ## File formats
 
-### Encrypted blob (`CIPHER_VERSION = 0x09`)
+### Encrypted blob (`CIPHER_VERSION = 0x0a`)
 
 ```
 ┌─────────┬────────────────────────────────────────┬─────────┬──────────────────┐
 │ offset  │ field                                  │ size    │ encoding         │
 ├─────────┼────────────────────────────────────────┼─────────┼──────────────────┤
 │      0  │ magic                                  │   5 B   │ ASCII "DOTTA"    │
-│      5  │ version                                │   1 B   │ 0x09             │
-│      6  │ epoch_fingerprint                      │   8 B   │ BLAKE2b-8        │
-│     14  │ SIV / MAC tag                          │  32 B   │ BLAKE2b keyed    │
-│     46  │ ciphertext                             │   N B   │ XChaCha20 ⊕ pt   │
+│      5  │ version                                │   1 B   │ 0x0a             │
+│      6  │ NUL                                    │   1 B   │ 0x00             │
+│      7  │ epoch_fingerprint                      │   8 B   │ BLAKE2b-8        │
+│     15  │ SIV / MAC tag                          │  32 B   │ BLAKE2b keyed    │
+│     47  │ ciphertext                             │   N B   │ XChaCha20 ⊕ pt   │
 └─────────┴────────────────────────────────────────┴─────────┴──────────────────┘
 
-Total: 46 + N bytes overhead.
+Total: 47 + N bytes overhead.
 ```
 
-The 14-byte header is the first input absorbed into the SIV scope. Any tampering with magic, version, or epoch fingerprint fails MAC verification.
+The 15-byte header is the first input absorbed into the SIV scope. Any tampering with magic, version, NUL, or epoch fingerprint fails MAC verification. The NUL is for Git, which reads a blob holding one in its first 8,000 bytes as binary: past the version a seal's bytes are uniform and would hold one only by chance, so the fixed NUL makes every seal binary — a patch says only that a sealed file changed, and no merge composes two seals.
 
 ### Encryption detection
 
@@ -292,7 +294,7 @@ The 14-byte header is the first input absorbed into the SIV scope. Any tampering
 
 | First 5 bytes | Version byte         | Verdict                       |
 |---------------|----------------------|-------------------------------|
-| `"DOTTA"`     | `0x09`               | `CONTENT_ENCRYPTED`           |
+| `"DOTTA"`     | `0x0a`               | `CONTENT_ENCRYPTED`           |
 | `"DOTTA"`     | other                | `CONTENT_UNSUPPORTED_VERSION` |
 | anything else | n/a                  | `CONTENT_PLAINTEXT`           |
 | `< 6 bytes`   | n/a                  | `CONTENT_PLAINTEXT`           |
@@ -390,7 +392,7 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
    - If cold, keymgr verifies the fresh master against a witness in the repository
      (or confirms twice if repository has no ciphertext).
    - kdf_siv_subkeys: master_key + profile → mac_key, prf_key.
-   - cipher_encrypt: builds 14-byte header (including epoch_fp), computes SIV,
+   - cipher_encrypt: builds 15-byte header (including epoch_fp), computes SIV,
      derives keystream seed, XChaCha20 → ciphertext.
    - mac_key and prf_key are wiped from the stack immediately.
 
@@ -653,10 +655,10 @@ Validation is performed at the boundary where parameters enter the system:
 | Epoch salt size | 32 bytes (256 bits) | Matches codebase key buffer width (`KDF_KEY_SIZE`) |
 | Epoch params size | 3 bytes | LE16 memory_mib ‖ passes |
 | Epoch fingerprint | 8 bytes (64 bits) | BLAKE2b-8 over 35 bytes of salt ‖ params |
-| Cipher version | `0x09` | Authenticated in header |
-| Cipher header size | 14 bytes | `"DOTTA"` (5) + version (1) + epoch_fp (8) |
+| Cipher version | `0x0a` | Authenticated in header |
+| Cipher header size | 15 bytes | `"DOTTA"` (5) + version (1) + NUL (1) + epoch_fp (8) |
 | Cipher MAC tag size | 32 bytes | BLAKE2b keyed output; 256-bit collision boundary |
-| Cipher overhead | 46 bytes | 14-byte header + 32-byte SIV tag |
+| Cipher overhead | 47 bytes | 15-byte header + 32-byte SIV tag |
 | Session file version | `0x04` | Dedicated per-epoch cache file |
 | Session file size | 113 bytes | Includes created_at, expires_at, nonce, obfuscated key, MAC |
 
@@ -674,7 +676,7 @@ Validation is performed at the boundary where parameters enter the system:
 - **Determinism**: Identical `(passphrase, profile, path, plaintext)` produces byte-identical ciphertext under a given repository epoch.
 - **Unlock proof**: Keys enter cache structures only after verifying against repository ciphertext or being confirmed twice.
 - **Isolated subkeys**: The cipher module never handles the master key; operations use ephemeral `(mac_key, prf_key)` pairs derived per call and wiped immediately.
-- **Header binding**: The 14-byte header is bound into the SIV scope; tampering with version, magic, or epoch fingerprint fails authentication.
+- **Header binding**: The 15-byte header is bound into the SIV scope; tampering with version, magic, NUL, or epoch fingerprint fails authentication.
 - **Epoch ownership**: The repository owns its salt and work factor; blobs do not carry parameters and cannot dictate derivation cost.
 - **Constant-time verification**: All authentication tags are verified via `crypto_verify32`.
 

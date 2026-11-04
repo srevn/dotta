@@ -6,7 +6,7 @@
  * deduplication.
  *
  * SIV pipeline:
- *   1. siv  = MAC(mac_key, CIPHER_SIV, header(14), storage_path, plaintext)
+ *   1. siv  = MAC(mac_key, CIPHER_SIV, header(15), storage_path, plaintext)
  *   2. seed = MAC(prf_key, CIPHER_KEY, siv)
  *   3. ciphertext = XChaCha20(key=seed, nonce=siv[0..24], ctr=0, plaintext)
  *
@@ -20,15 +20,23 @@
  *     │ offset │ field                              │ size   │
  *     ├────────┼────────────────────────────────────┼────────┤
  *     │   0    │ magic "DOTTA"                      │  5 B   │
- *     │   5    │ version = 0x09                     │  1 B   │
- *     │   6    │ epoch fingerprint (BLAKE2b-8)      │  8 B   │
- *     │  14    │ SIV / MAC tag                      │ 32 B   │
- *     │  46    │ ciphertext (XChaCha20 keystream)   │  N B   │
+ *     │   5    │ version = 0x0a                     │  1 B   │
+ *     │   6    │ NUL = 0x00 (binary to Git)         │  1 B   │
+ *     │   7    │ epoch fingerprint (BLAKE2b-8)      │  8 B   │
+ *     │  15    │ SIV / MAC tag                      │ 32 B   │
+ *     │  47    │ ciphertext (XChaCha20 keystream)   │  N B   │
  *     └────────┴────────────────────────────────────┴────────┘
  *
- * The 14-byte header is the FIRST input absorbed into the SIV. Tampering any of
- * magic, version, or the epoch fingerprint fails MAC verification, not parse
- * validation, keeping error paths uniform.
+ * The 15-byte header is the FIRST input absorbed into the SIV. Tampering any of
+ * magic, version, the NUL or the epoch fingerprint fails MAC verification, not
+ * parse validation, keeping error paths uniform.
+ *
+ * The NUL is for Git, which reads a blob holding one in its first 8,000 bytes
+ * as binary (lib/libgit2/src/libgit2/diff_driver.c
+ * git_diff_driver_content_is_binary, merge_file.c merge_file__is_binary;
+ * lib/git/xdiff-interface.c buffer_is_binary). The bytes after the version are
+ * uniform and hold one only by chance, so the fixed NUL is what makes every seal
+ * binary: a patch says only that a seal changed, and no merge composes two.
  *
  * The epoch fingerprint (`kdf_epoch_fingerprint` of the epoch the producer derived
  * under) makes every ciphertext name the epoch that keyed it. Two key-free
@@ -82,7 +90,7 @@
 #define CIPHER_MAGIC_SIZE     5
 
 /** Cipher format version. See file-level "Format-version policy". */
-#define CIPHER_VERSION        0x09
+#define CIPHER_VERSION        0x0a
 
 /**
  * Detection-prefix length (magic + version).
@@ -91,20 +99,26 @@
  * cipher blob (`"DOTTA" || CIPHER_VERSION`) from arbitrary plaintext.
  * Classification lives at the infra layer (see `content_classify` in
  * `infra/content.h`); cipher exports only the format constants.
+ *
+ * The window is the format's identity and stops short of the NUL, a header byte
+ * as the fingerprint is: bound into the SIV and judged there. So bytes opening
+ * `"DOTTA" || CIPHER_VERSION` read as a seal whatever follows, and one whose
+ * NUL was bent fails its MAC rather than reading as plaintext.
  */
 #define CIPHER_DETECT_BYTES   6
 
 /**
- * Authenticated header size (magic + version + epoch fingerprint).
+ * Authenticated header size (magic + version + NUL + epoch fingerprint).
  *
  *   bytes [0..5)   = "DOTTA"
  *   byte   [5]     = CIPHER_VERSION
- *   bytes [6..14)  = epoch fingerprint (kdf_epoch_fingerprint)
+ *   byte   [6]     = 0x00, so Git reads every seal as binary
+ *   bytes [7..15)  = epoch fingerprint (kdf_epoch_fingerprint)
  *
  * Bound into the SIV as the first absorbed input — tampering fails MAC, not parse,
  * closing version-confusion / epoch-relabel attacks.
  */
-#define CIPHER_HEADER_SIZE    14
+#define CIPHER_HEADER_SIZE    15
 
 /** SIV / MAC tag size. Must equal `CRYPTO_MAC_SIZE`. */
 #define CIPHER_SIV_SIZE       32
@@ -125,8 +139,8 @@ _Static_assert(
     "SIV is a BLAKE2b-keyed tag"
 );
 _Static_assert(
-    CIPHER_HEADER_SIZE == CIPHER_MAGIC_SIZE + 1 + KDF_EPOCH_FP_SIZE,
-    "header layout drift: must be magic(5) + version(1) + epoch_fp(8)"
+    CIPHER_HEADER_SIZE == CIPHER_MAGIC_SIZE + 1 + 1 + KDF_EPOCH_FP_SIZE,
+    "header layout drift: must be magic(5) + version(1) + NUL(1) + epoch_fp(8)"
 );
 _Static_assert(
     CIPHER_OVERHEAD == CIPHER_HEADER_SIZE + CIPHER_SIV_SIZE,

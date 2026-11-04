@@ -221,13 +221,13 @@ That refusal is the safety net for the accident this procedure resembles — a d
 ## Security Properties
 
 - **Memory-hard key derivation** — Argon2id (RFC 9106) with bounded memory and pass counts.
-- **Deterministic AEAD** — Identical `(passphrase, profile, path, plaintext)` produces byte-identical ciphertext (v9), enabling Git delta deduplication and clean diffs.
+- **Deterministic AEAD** — Identical `(passphrase, profile, path, plaintext)` produces byte-identical ciphertext (v10), enabling Git deduplication. Git reads every encrypted file as binary: a commit's diff says only that its bytes differ, and no merge combines two versions of it.
 - **Path-bound authentication** — Files are authenticated against their storage path; moving a blob to a different path causes decryption to fail.
 - **Per-profile isolation** — Domain-separated subkeys derived via keyed BLAKE2b (`dot-mac\0`, `dot-prf\0`).
 - **Epoch binding** — Each cipher blob header embeds an 8-byte BLAKE2b fingerprint of the repository epoch.
 - **Nonce-misuse resistance** — Synthetic IV (SIV) derived from MAC over header, path, and plaintext; no random nonces to exhaust.
 - **Memory isolation** — Passphrase buffers, Argon2 work areas, and key manager slots reside in dedicated anonymous mappings (`secure_alloc`) that are `mlock`ed, excluded from core dumps (`MADV_DONTDUMP`), and erased via volatile memory wipes (`secure_wipe`). Core dumps are disabled globally (`RLIMIT_CORE = 0`).
-- **Fixed overhead** — Exactly 46 bytes overhead per encrypted file (14-byte authenticated header + 32-byte SIV tag).
+- **Fixed overhead** — Exactly 47 bytes overhead per encrypted file (15-byte authenticated header + 32-byte SIV tag).
 
 ## Limitations
 

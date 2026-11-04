@@ -98,23 +98,21 @@
  * Git's text driver for a name both sides changed, never merge.default's — libgit2
  * reads it only where the options name none (lib/libgit2/src/libgit2/merge.c
  * merge_normalize_opts), and its union is the union favor (merge_driver.c
- * git_merge_driver__union); and no favor, ever: a sealed blob with no NUL in
- * its first 8,000 bytes is text to Git (merge_file.c merge_file__is_binary),
- * and a favor would compose two ciphertexts into bytes no key opens. The text
- * driver itself composes no two ciphertexts: a sealed edit moves every byte past
- * the seal's header (crypto/cipher.h), so it keeps no line of its merge base's
- * but by chance, both sides' changes span the file, and two changes over one
- * span are a conflict wherever they differ (lib/git/xdiff/xmerge.c xdl_do_merge,
- * the xdiff libgit2 carries). Two answers stay Git's, stated: a merge attribute
- * in git's attributes files — the system's, the user's, the store's info/attributes
+ * git_merge_driver__union); and no favor, ever: a conflict is its caller's to
+ * settle — a side kept (stage_settle) or the two united (stage_unite), each at
+ * its caller's word — never the merge's. Nor is a seal ever composed: every seal
+ * holds a NUL in its header (crypto/cipher.h), so Git reads each as binary
+ * (merge_file.c merge_file__is_binary), and its binary merge takes a side whole
+ * under ours' or theirs' favor and leaves the conflict under any other
+ * (merge_file__binary). Two answers stay Git's, stated: a merge attribute in
+ * git's attributes files — the system's, the user's, the store's info/attributes
  * (attr.c attr_setup) — outranks the driver, and no option keeps it from the
  * merge (merge_driver.c merge_driver_name_for_path), so a name it matches merges
- * by its driver, a union composing two sealed blobs Git reads as text, both
- * standing in the merge's parents; and two heads with several best common ancestors
- * — a criss-cross, which two remotes swapped by `dotta remote set-url` reach —
- * merge over the first of them (merge.c git_merge_base), so a name two earlier
- * merges settled apart takes one of the two settles in silence, both standing
- * in the history.
+ * by its driver, a union composing two plaintexts, both standing in the merge's
+ * parents; and two heads with several best common ancestors — a criss-cross,
+ * which two remotes swapped by `dotta remote set-url` reach — merge over the
+ * first of them (merge.c git_merge_base), so a name two earlier merges settled
+ * apart takes one of the two settles in silence, both standing in the history.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, its object
  * writer, its ref writer and its merge base, nothing of mounts, content or dotta's

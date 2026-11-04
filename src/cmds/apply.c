@@ -3728,6 +3728,7 @@ const args_command_t spec_apply = {
         "  --keep-orphans leaves the orphans. Filesystem (~/.bashrc) and\n"
         "  storage (home/.bashrc) forms are both accepted. A path holding\n"
         "  *, ? or [ is also a pattern, and a \\ before each names it alone.\n"
+        "  A leading ! leaves it out.\n"
         "\n"
         "Exclusion Patterns:\n"
         "  Excluded paths are protected from deployment, directory\n"

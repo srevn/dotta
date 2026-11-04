@@ -70,7 +70,7 @@ static void prefix_storage(entry_t *e, const char *name) {
 
 /* A rule, parsed alone in the vocabulary its shape names.
  *
- * A slash-bearing glob speaks one of two vocabularies. Storage space — a label
+ * A slash-bearing rule speaks one of two vocabularies. Storage space — a label
  * prefix, or a leading `<star><star>`/`<star>` component — compiles as typed. A
  * filesystem shape (absolute, tilde, relative dot) is an anchor and a tail: the
  * components before the first that holds a byte the matcher reads as more than
@@ -88,7 +88,10 @@ static void prefix_storage(entry_t *e, const char *name) {
  * x there — while `~<star>/x` is no tilde path and is refused; anything else —
  * a bare `conf<star>/x` could mean either vocabulary — is refused toward the
  * self-announcing spellings. The shape is read past a leading '!', so a negated
- * rule is a rule in either vocabulary. */
+ * rule is a rule in either vocabulary — and a negation holding nothing the matcher
+ * reads as more than itself is rooted at its last component, so it leaves out
+ * the path it spells. A pattern holding a '.' or '..' component, which no subject
+ * has, is refused: `!./` is spelled as the directory it means. */
 static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
     bool negated = input[0] == '!';
     const char *body = input + (negated ? 1 : 0);
@@ -101,10 +104,16 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
         !str_starts_with(body, "**/") &&
         !str_starts_with(body, "*/")) {
         /* The tail starts at the component holding the first byte the matcher
-         * reads as more than itself (base/wildmatch.h wildmatch_literal_length);
-         * the head is what stands before that component's slash — or, when nothing
-         * does, the root or the working directory the first byte names. */
+         * reads as more than itself (base/wildmatch.h wildmatch_literal_length),
+         * or at the last component where none does — which only a negation reaches
+         * (infra/path.h path_input_announces_rule) — a directory's marker kept
+         * behind it; the head is what stands before that component's slash —
+         * or, when nothing does, the root or the working directory the first
+         * byte names. */
         const char *tail = body + wildmatch_literal_length(body);
+        if (*tail == '\0') {
+            while (tail > body && tail[-1] == '/') tail--;
+        }
         while (tail > body && tail[-1] != '/') tail--;
         size_t head_len = (size_t) (tail - body);
         if (head_len > 0) head_len--;
@@ -112,9 +121,15 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
         if ((body[0] != '/' && body[0] != '~' && body[0] != '.') ||
             (head_len == 0 && body[0] == '~')) {
             return error_create(
-                ERR_INVALID_ARG, "Glob pattern '%s' must be a basename, a storage path "
+                ERR_INVALID_ARG, "Pattern '%s' must be a basename, a storage path "
                 "or a filesystem path (/x, ~/x, ./x)", input
             );
+        }
+
+        /* The root alone has no last component, and a negation of it would leave
+         * out every path */
+        if (*tail == '/') {
+            return error_create(ERR_INVALID_ARG, "Pattern '%s' leaves out every path", input);
         }
 
         /* A wildcard or an escape in the first component leaves no head, and
@@ -133,20 +148,38 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
         const char *filesystem_path = NULL;
         error_t err = path_input_filesystem_path(head, arena, &filesystem_path);
         if (err) {
-            return error_wrap(err, "Invalid glob pattern '%s'", input);
+            return error_wrap(err, "Invalid pattern '%s'", input);
         }
 
         line = arena_str_format(arena, "%s/%s", negated ? "!" : "", tail);
         prefix_filesystem(out, filesystem_path);
     }
 
+    /* A component that is '.' or '..' matches no path — every subject the program
+     * reads is normalized — so a rule holding one is refused rather than kept
+     * to select, or leave out, nothing. The pattern alone is walked, as the storage
+     * grammar walks a name (infra/label.h label_validate_storage): a head above
+     * it is a spelling, folded by the argument's reading. */
+    for (const char *comp = line + negated; comp != NULL;) {
+        size_t dots = comp[0] == '.' ? 1 + (comp[1] == '.') : 0;
+        if (dots > 0 && (comp[dots] == '/' || comp[dots] == '\0')) {
+            return error_create(
+                ERR_INVALID_ARG, "Pattern '%s' holds '%.*s', which matches no path: "
+                "spell the directory instead", input, (int) dots, comp
+            );
+        }
+
+        const char *slash = strchr(comp, '/');
+        comp = slash ? slash + 1 : NULL;
+    }
+
     /* The grammar quotes a pattern only where its words are the refusal, which
-     * a rewritten tail — a metacharacter behind an anchor — never is: what it
-     * quotes is the text the user typed, and the wrap names the kind of input
-     * without repeating it. */
+     * a rewritten tail — a component behind an anchor — is not, save a name of
+     * spaces alone, trimmed to nothing: what it quotes is the text the user typed,
+     * and the wrap names the kind of input without repeating it. */
     error_t err = gitignore_rule_parse(arena, line, &out->rule);
     if (err) {
-        return error_wrap(err, "Invalid glob pattern");
+        return error_wrap(err, "Invalid pattern");
     }
 
     /* And the rule as its own spelling, in its shape: under one anchor, of one
@@ -190,7 +223,7 @@ error_t pathspec_create(
         const char *input = inputs[i];
         entry_t entry = { 0 };
 
-        if (strpbrk(input, "*?[")) {
+        if (path_input_announces_rule(input)) {
             error_t err = compile_rule(input, arena, &entry);
             if (err) return err;
             spec->rule_count++;
@@ -412,7 +445,7 @@ pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i) {
     CHECK_NULL(spec);
     CHECK_ARG(i < spec->count, "i is past the pathspec's entries");
     const entry_t *e = &spec->entries[i];
-    return (pathspec_entry_t){ .text = e->text, .glob = e->rule != NULL };
+    return (pathspec_entry_t){ .text = e->text, .rule = e->rule != NULL };
 }
 
 bool pathspec_entry_matches_at(

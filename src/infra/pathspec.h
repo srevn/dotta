@@ -6,15 +6,15 @@
  * against the subject of its own vocabulary. The vocabulary is the input's shape,
  * never an asker's: a filesystem shape is a filesystem path, a storage shape or
  * a bare pattern is a name. An exact entry selects the path it names and everything
- * beneath it. A rule — an input holding a glob metacharacter, in gitignore's
- * grammar — is one line of one ordered program: at each rung of the subject,
- * deepest first, the rules in reverse, each against its own vocabulary's subject,
- * and the first to match decides, a negation deciding "not in scope". A rule
- * matches its own spelling as well as its pattern, a negation's too, as git's
- * pathspec reads an item: `a[1].conf` selects itself and `a1.conf`, and a backslash
- * makes a byte itself, so `a\[1\].conf` is the one path. An exact hit selects
- * whatever any rule says. Every rule stands as typed: the pathspec selects rows
- * and walks nothing, so gitignore's "a parent directory cannot be re-included"
+ * beneath it. A rule — an input holding a wildcard or opening with '!', in
+ * gitignore's grammar — is one line of one ordered program: at each rung of the
+ * subject, deepest first, the rules in reverse, each against its own vocabulary's
+ * subject, and the first to match decides, a negation deciding "not in scope".
+ * A rule matches its own spelling as well as its pattern, a negation's too, as
+ * git's pathspec reads an item: `a[1].conf` selects itself and `a1.conf`, and a
+ * backslash makes a byte itself, so `a\[1\].conf` is the one path. An exact hit
+ * selects whatever any rule says. Every rule stands as typed: the pathspec selects
+ * rows and walks nothing, so gitignore's "a parent directory cannot be re-included"
  * — a rule about a traversal git prunes, and the ruleset's own walk where it
  * has a subject — has none here, and each rule is parsed and asked on its own
  * (base/gitignore.h, the rule alone). A filesystem-shaped rule is an anchor and
@@ -48,14 +48,16 @@ typedef struct pathspec pathspec_t;
  */
 typedef struct {
     const char *text;
-    bool glob;
+    bool rule;
 } pathspec_entry_t;
 
 /**
  * Compile a pathspec from a list of user-provided inputs.
  *
- * An input holding a glob metacharacter ('*', '?', '[') is a rule; any other is
- * an exact entry in the key it names (path_input_resolve: a filesystem shape
+ * An input that announces a rule (infra/path.h path_input_announces_rule) — a
+ * wildcard ('*', '?', '[') anywhere, or a leading '!' — is one, and a negation
+ * is one whatever it holds: `!~/.config/secret` leaves out that path. Any other
+ * is an exact entry in the key it names (path_input_resolve: a filesystem shape
  * normalized, a storage path validated and kept as typed). A label selects
  * everything of its kind — `custom/` is the namespace's own directory and every
  * custom/ claim beneath it, including those of a profile bound nowhere here,
@@ -65,8 +67,8 @@ typedef struct {
  * name beside a path is two, since they are two keys. Rules are never collapsed:
  * their order is their meaning.
  *
- * Glob rules:
- *   - Basename-only globs ("*.vim") match at any depth
+ * Rules:
+ *   - Basename-only rules ("*.vim", "!.a") match at any depth
  *   - Patterns containing '/' must use storage format (home/, root/, custom/),
  *     start with doublestar (recursive) or single star, or be a filesystem shape
  *     (absolute, tilde, relative dot): the components before the first that holds
@@ -83,9 +85,12 @@ typedef struct {
  *     directory (a leading dot is relative, as the resolver reads it); `~<star>/x`
  *     is no tilde path and is refused.
  *   - The shape is read past a leading '!', so a negation is a rule in either
- *     vocabulary
- *   - A glob the grammar refuses — a comment (a leading '#'), two lines — is
+ *     vocabulary; one holding nothing the matcher reads as more than itself is
+ *     rooted at its last component, a path's negation, and the root's is refused
+ *   - A rule the grammar refuses — a comment (a leading '#'), two lines — is
  *     refused in the grammar's words rather than compiled to nothing
+ *   - A rule holding a '.' or '..' component is refused as well, since no path
+ *     it reads has one: `!./` is spelled as the directory it means
  *
  * NULL / empty inputs short-circuit: `*out` is NULL (matches all). A NULL pathspec
  * passed to pathspec_matches matches all paths.

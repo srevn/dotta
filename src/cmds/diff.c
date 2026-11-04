@@ -893,7 +893,7 @@ static bool diff_validate_filter(
 
         /* No row at all is warned */
         pathspec_entry_t entry = pathspec_entry_at(path_filter, e);
-        if (entry.glob) {
+        if (entry.rule) {
             output_warning(
                 out, OUTPUT_NORMAL,
                 "No %s matches pattern '%s'",
@@ -1550,7 +1550,7 @@ const args_command_t spec_diff = {
     .notes        =
         "Path Arguments:\n"
         "  A path holding *, ? or [ is also a pattern, and a \\ before each\n"
-        "  names it alone.\n",
+        "  names it alone. A leading ! leaves it out.\n",
     .examples     =
         "  %s diff                          # Preview apply (default)\n"
         "  %s diff --name-only              # Only changed paths\n"

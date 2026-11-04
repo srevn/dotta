@@ -13,8 +13,8 @@
  *                             absolute filesystem path, a relative one's working
  *                             directory spelled under HOME, for a caller whose
  *                             grammar has no storage arm to dispatch to (add, a
- *                             target, ignore --test, the completion, a glob's
- *                             anchor)
+ *                             target, ignore --test, the completion, a filesystem
+ *                             rule's anchor)
  *
  *   path_input_target       - that key, held to a target's rules (infra/mount.h
  *                             mount_validate_target), for the three binders:
@@ -24,6 +24,11 @@
  *                           - the grammars' question, asked of a positional whose
  *                             slot is still undecided: a path, or a name (list,
  *                             diff, apply, update)
+ *
+ *   path_input_announces_rule
+ *                           - the filter's question: a rule, or a path named
+ *                             exactly (the pathspec's gate, and the pattern a
+ *                             positional announces above)
  *
  * One dispatch: the resolver reads the storage grammar itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the argument's reading,
@@ -57,7 +62,13 @@ bool path_input_announces_path(const char *input) {
      * and the reason this is not the resolver's reading of the same string
      * (infra/path.h). */
     return input[0] == '/' || input[0] == '~' || input[0] == '.' ||
-           label_prefixes(input) || strpbrk(input, "*?[") != NULL;
+           label_prefixes(input) || path_input_announces_rule(input);
+}
+
+bool path_input_announces_rule(const char *input) {
+    CHECK_NULL(input);
+
+    return input[0] == '!' || strpbrk(input, "*?[") != NULL;
 }
 
 error_t path_input_resolve(

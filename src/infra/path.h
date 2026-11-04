@@ -91,10 +91,8 @@ typedef struct {
  * A profile whose own name announces a path is named with -p, which is what each
  * of the four calls that flag at its own slot.
  *
- * The pattern alphabet is the pathspec's rule gate (infra/pathspec.c
- * pathspec_create), not wildmatch's whole grammar: a token answered here as a
- * pattern is one the filter compiles as a rule, and the two sets move together
- * or a pattern lands in the bucket that cannot read it.
+ * A pattern is what the filter compiles as a rule (path_input_announces_rule),
+ * so a token answered here as one never lands in a bucket that cannot read it.
  *
  * This is not the resolver's own reading of the same string, and neither implies
  * the other: this one is asked before a slot is decided, and the resolver's
@@ -106,6 +104,7 @@ typedef struct {
  *   config       no                 refused
  *   src/config   no                 $CWD/src/config
  *   *.conf       yes                refused
+ *   !.a          yes                refused
  *   ./config     yes                $CWD/config
  *   home/x       yes                home/x
  *   home         yes                home
@@ -123,6 +122,23 @@ typedef struct {
  * @return true iff the input announces a path, or a pattern that selects one
  */
 bool path_input_announces_path(const char *input);
+
+/**
+ * Does the input announce a rule — a pattern in the filter's grammar — rather
+ * than name a path exactly?
+ *
+ * A wildcard ('*', '?', '[') anywhere, or a leading '!', a negation whatever it
+ * holds. A backslash alone is no rule: a name holding one is its own, so the
+ * alphabet is the wildcards' and not the matcher's whole (base/wildmatch.h).
+ *
+ * Readers: infra/pathspec.c pathspec_create (the filter's gate) and
+ * path_input_announces_path (a pattern announces a path) — the one alphabet, so
+ * a pattern never lands in a bucket that cannot read it.
+ *
+ * @param input The input (must not be NULL)
+ * @return true iff the input announces a rule
+ */
+bool path_input_announces_rule(const char *input);
 
 /**
  * Read a CLI path argument: the shape dispatch, and nothing else.
@@ -263,9 +279,9 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
  *     and the target the editor's save reads — and the root the completion offers
  *     beneath (cmds/completion.c): a target names a directory on this machine
  *     and has no storage vocabulary to dispatch on.
- *   - a glob's anchor (infra/pathspec.c compile_rule): the components before
- *     the first that holds a wildcard or an escape, which that rule's own gate
- *     has already made a filesystem spelling.
+ *   - a filesystem rule's anchor (infra/pathspec.c compile_rule): the components
+ *     before the first that holds a wildcard or an escape, which that rule's
+ *     own gate has already made a filesystem spelling.
  *
  * @param input User-provided path (filesystem or tilde; must not be NULL; the
  *              empty string is refused)

@@ -2025,7 +2025,7 @@ const args_command_t spec_update = {
     .notes        =
         "Path Arguments:\n"
         "  A path holding *, ? or [ is also a pattern, and a \\ before each\n"
-        "  names it alone.\n"
+        "  names it alone. A leading ! leaves it out.\n"
         "\n"
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"

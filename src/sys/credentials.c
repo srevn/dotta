@@ -502,8 +502,7 @@ error_t credential_helper_fill(
      * below.
      *
      * Copying each value (heap_strdup) gives a right-sized heap allocation (no
-     * fixed-buffer truncation) that the caller scrubs and frees with
-     * buffer_secure_free. */
+     * fixed-buffer truncation) that secure_free_string wipes whole and frees. */
     char *user_buf = NULL;
     char *pass_buf = NULL;
 
@@ -533,8 +532,8 @@ error_t credential_helper_fill(
      * the caller falls through cleanly. The git credential protocol contracts
      * both fields on a successful fill. */
     if (!user_buf || !pass_buf) {
-        if (user_buf) buffer_secure_free(user_buf, strlen(user_buf) + 1);
-        if (pass_buf) buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
+        secure_free_string(user_buf);
+        secure_free_string(pass_buf);
         return NULL;
     }
 
@@ -543,8 +542,8 @@ error_t credential_helper_fill(
      * we forward elsewhere. Reject malformed values outright. */
     if (!is_valid_credential_field(user_buf) ||
         !is_valid_credential_field(pass_buf)) {
-        buffer_secure_free(user_buf, strlen(user_buf) + 1);
-        buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
+        secure_free_string(user_buf);
+        secure_free_string(pass_buf);
         return error_create(
             ERR_INTERNAL, "'git credential fill' answered a credential holding a "
             "line break, which ends a field in its protocol"

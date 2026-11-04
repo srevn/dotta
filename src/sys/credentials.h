@@ -130,8 +130,7 @@ int credential_make_default(git_credential **out);
  * has no creds for this URL" outcome is signalled by NULL out-params and a NULL
  * return value.
  *
- * Caller frees `*out_user` / `*out_pass` with buffer_secure_free (using
- * `strlen(buf) + 1` as the length).
+ * Caller ends `*out_user` / `*out_pass` with secure_free_string (base/secure.h).
  *
  * @param u                 Parsed remote URL
  * @param username_from_url Username encoded in URL (may be NULL); forwarded so

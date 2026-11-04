@@ -16,6 +16,7 @@
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/output.h"
+#include "base/secure.h"
 #include "sys/credentials.h"
 
 /**
@@ -136,8 +137,8 @@ void transfer_context_free(transfer_context_t *xfer) {
         next = pair->next;
         transfer_commit_credential_decision(xfer, pair);
 
-        buffer_secure_free(pair->username, strlen(pair->username) + 1);
-        buffer_secure_free(pair->password, strlen(pair->password) + 1);
+        secure_free_string(pair->username);
+        secure_free_string(pair->password);
         credential_url_deinit(&pair->url);
         free(pair);
     }
@@ -320,16 +321,6 @@ void transfer_configure_callbacks(
 }
 
 /**
- * Drop credentials handed back by credential_helper_fill that we couldn't install
- * (libgit2 cred construction failed under memory pressure). Both inputs are
- * heap-owned and must be wiped before free.
- */
-static void discard_obtained_credentials(char *user, char *pass) {
-    if (user) buffer_secure_free(user, strlen(user) + 1);
-    if (pass) buffer_secure_free(pass, strlen(pass) + 1);
-}
-
-/**
  * The pair the helper filled for an ask's key, or NULL: the same protocol and
  * host, and where the asking URL names a user, that user's — the first so filled,
  * as git matches a request against the pairs it holds, a field the request leaves
@@ -485,7 +476,11 @@ int transfer_credentials_callback(
                 xfer->op.offered = pair;
                 return 0;
             }
-            discard_obtained_credentials(fresh_user, fresh_pass);
+
+            /* The fill's credential that libgit2 could not make (its allocation
+             * failed): both strings let go, wiped */
+            secure_free_string(fresh_user);
+            secure_free_string(fresh_pass);
         }
         credential_url_deinit(&u);
 

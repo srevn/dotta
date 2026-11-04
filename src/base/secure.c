@@ -45,6 +45,10 @@
  * one pass over the bytes and buys the sentence. The lock is where the pages
  * are protected from swap, and the advisory below is the one place the process
  * says it could not lock: the first failure prints, every later one is silent.
+ *
+ * `secure_free_string` — the heap's end for a string that held a secret: every
+ * lock is a mapping's, so there is none to release, and the wipe and the free
+ * are the whole of it.
  */
 
 #include "base/secure.h"
@@ -52,6 +56,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 
@@ -128,4 +133,13 @@ void secure_free(void *ptr, size_t len) {
      * nothing here can act on. */
     (void) munlock(ptr, len);
     (void) munmap(ptr, len);
+}
+
+void secure_free_string(char *str) {
+    if (!str) {
+        return;
+    }
+
+    secure_wipe(str, strlen(str) + 1);
+    free(str);
 }

@@ -1,12 +1,14 @@
 /**
  * secure.h - Secure-memory utilities
  *
- * Three helpers for one lifecycle — "this memory is about to hold (or just held)
+ * Four helpers for one lifecycle — "this memory is about to hold (or just held)
  * a secret":
  *
- *   - `secure_wipe`  - compiler-resistant zeroization of any buffer.
- *   - `secure_alloc` - a mapping of its own for a secret that outlives a call.
- *   - `secure_free`  - the end of that mapping: wiped, unlocked, unmapped.
+ *   - `secure_wipe`        - compiler-resistant zeroization of any buffer.
+ *   - `secure_alloc`       - a mapping of its own for a secret that outlives a call.
+ *   - `secure_free`        - the end of that mapping: wiped, unlocked, unmapped.
+ *   - `secure_free_string` - the end of a heap string that held a secret: wiped,
+ *                            freed.
  *
  * `secure_wipe` is the chokepoint for scrubbing secret-bearing memory across
  * non-crypto layers (base/, sys/, infra/, core/, cmds/). The crypto layer
@@ -27,7 +29,8 @@
  * Stack copies (a master between resolve and subkey derivation, a subkey pair,
  * a candidate plaintext) stay where they are and are wiped, not locked; the
  * plaintext the content cache holds is about to be a file on disk and is wiped,
- * not locked.
+ * not locked; and a credential a helper answered is a heap string libgit2 copies
+ * into memory of its own, and is wiped, not locked (`secure_free_string`).
  *
  * The lock is best-effort, and the run has already asked for as much of it as
  * it may: sys/identity raises RLIMIT_MEMLOCK's soft limit to the hard one at
@@ -74,7 +77,7 @@
  * NULL-safe: `ptr == NULL` is a no-op. Zero-length: `len == 0` is a no-op.
  *
  * Does not unlock or free; a secret in its own mapping ends with `secure_free`,
- * and a heap string that held a credential with `buffer_secure_free`.
+ * and a heap string that held one with `secure_free_string`.
  *
  * @param ptr Memory to wipe (may be NULL)
  * @param len Number of bytes to wipe (may be 0)
@@ -99,12 +102,25 @@ void *secure_alloc(size_t len);
 /**
  * End a `secure_alloc` mapping: wipe, unlock, unmap.
  *
- * `len` is the length the mapping was made with — the caller's cleanup length,
- * as `buffer_secure_free` takes it. NULL-safe.
+ * `len` is the length the mapping was made with, the caller's to keep. A mapping
+ * and nothing else: a heap string ends with `secure_free_string`. NULL-safe.
  *
  * @param ptr The mapping (may be NULL)
  * @param len Its length
  */
 void secure_free(void *ptr, size_t len);
+
+/**
+ * End a heap string that held a secret: wipe, free.
+ *
+ * A string the heap made — `heap_strdup`'s exact copy, as a credential a helper
+ * answered is held (sys/credentials.h) — and never a `secure_alloc` mapping,
+ * which ends with `secure_free`. The wipe covers the string and its terminator,
+ * the whole of such a copy. Nothing on the heap is locked, so nothing is unlocked.
+ * NULL-safe.
+ *
+ * @param str The string (may be NULL)
+ */
+void secure_free_string(char *str);
 
 #endif /* DOTTA_SECURE_H */

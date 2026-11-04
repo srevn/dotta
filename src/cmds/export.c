@@ -1130,17 +1130,22 @@ static void print_dry_run(
  * Write raw bytes to stdout ('-o -').
  *
  * Byte-faithful: no headers, no trailing-newline normalization — unlike show's
- * (cmds/show.c show_write), which is a terminal display. Flushes so buffered IO
- * failures surface as a non-zero exit.
+ * (cmds/show.c show_write), which is a terminal display. A payload written past
+ * the output layer (base/output.h "Layout and data"): complete, or the run's
+ * error with its cause, its reader's going no failure. Flushes before returning,
+ * so a refused write is the run's error rather than one that vanishes at process
+ * teardown.
  */
 static error_t export_write(const buffer_t *content) {
-    if (content->size > 0 &&
-        fwrite(content->data, 1, content->size, stdout) != content->size) {
-        return error_create(ERR_FS, "Failed to write content to stdout");
+    if (content->size == 0) return NULL;   /* nothing to write */
+
+    if (fwrite(content->data, 1, content->size, stdout) != content->size ||
+        fflush(stdout) != 0) {
+        /* The reader's going is no failure: the bytes end where it went */
+        if (errno == EPIPE) return NULL;
+        return error_errno(errno, "Failed to write content to stdout");
     }
-    if (fflush(stdout) != 0) {
-        return error_create(ERR_FS, "Failed to write content to stdout");
-    }
+
     return NULL;
 }
 

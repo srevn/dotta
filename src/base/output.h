@@ -14,9 +14,13 @@
  * short by the bytes it takes past one (stated). A string handed to output any
  * other way — a list's title, tags and rows — is a datum whole. Bytes as they
  * are reach the stream through output_write alone: a payload the user asked to
- * see verbatim — save show's file text (cmds/show.c show_write), written past
- * the layer because a failed write is the run's error, and output_write returns
- * nothing.
+ * see verbatim — save those written past the layer, show's file text and export's
+ * bytes (cmds/show.c show_write, cmds/export.c export_write), because each is
+ * complete or the run's error, which output_write returns nothing to say. A
+ * payload's reader going is no failure: its bytes end where the reader went,
+ * and the run's status stands. A report's writes are unchecked, so a report a
+ * refused write cuts short — a full disk, a descriptor that takes no bytes —
+ * ends there too, quietly, the run's status standing.
  *
  * A line closes as a message does (base/error.h "Messages"), with no period and
  * no exclamation mark: a question keeps its question mark.

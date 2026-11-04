@@ -5,6 +5,7 @@
 #include "cmds/show.h"
 
 #include <config.h>
+#include <errno.h>
 #include <git2.h>
 #include <stdio.h>
 #include <string.h>
@@ -41,34 +42,27 @@ static bool show_binary(const unsigned char *data, size_t size) {
 /**
  * Write blob bytes to stdout with a trailing newline ensured
  *
- * The one payload written past the output layer (base/output.h "Layout and data"),
- * because a failed write is the run's error and output_write returns nothing.
+ * A payload written past the output layer (base/output.h "Layout and data"):
+ * complete, or the run's error with its cause, its reader's going no failure.
  * It is right by an order its caller keeps: the claim's header lands above it
  * through the output, so the report stands on stdout, its stream, before these
  * bytes; and the last line they leave open is ended here, so the report's position,
  * a line standing, is true after them.
  *
  * Terminal display normalization — byte-faithful extraction lives in `dotta
- * export`, not here. Flushes before returning so buffered IO failures (ENOSPC,
- * closed pipe with SIGPIPE ignored) surface as a non-zero exit instead of vanishing
- * at process teardown.
+ * export`, not here. Flushes before returning, so a refused write — a full disk,
+ * a descriptor that takes no bytes — is the run's error rather than one that
+ * vanishes at process teardown.
  */
 static error_t show_write(const buffer_t *content) {
-    if (content->size > 0 &&
-        fwrite(content->data, 1, content->size, stdout) != content->size) {
-        return error_create(ERR_FS, "Failed to write content to stdout");
-    }
+    if (content->size == 0) return NULL;   /* nothing to write, no line to end */
 
-    if (content->size > 0) {
-        const char *data = (const char *) content->data;
-        if (data[content->size - 1] != '\n' &&
-            fputc('\n', stdout) == EOF) {
-            return error_create(ERR_FS, "Failed to write content to stdout");
-        }
-    }
-
-    if (fflush(stdout) != 0) {
-        return error_create(ERR_FS, "Failed to write content to stdout");
+    if (fwrite(content->data, 1, content->size, stdout) != content->size ||
+        (content->data[content->size - 1] != '\n' && fputc('\n', stdout) == EOF) ||
+        fflush(stdout) != 0) {
+        /* The reader's going is no failure: the text ends where it went */
+        if (errno == EPIPE) return NULL;
+        return error_errno(errno, "Failed to write content to stdout");
     }
 
     return NULL;

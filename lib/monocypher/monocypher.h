@@ -159,7 +159,7 @@ typedef struct {
 	uint32_t algorithm;  // Argon2d, Argon2i, Argon2id
 	uint32_t nb_blocks;  // memory hardness, >= 8 * nb_lanes
 	uint32_t nb_passes;  // CPU hardness, >= 1 (>= 3 recommended for Argon2i)
-	uint32_t nb_lanes;   // parallelism level (single threaded anyway)
+	uint32_t nb_lanes;   // parallelism level, >= 1
 } crypto_argon2_config;
 
 typedef struct {
@@ -178,10 +178,27 @@ typedef struct {
 
 extern const crypto_argon2_extras crypto_argon2_no_extras;
 
+// Direct interface
 void crypto_argon2(uint8_t *hash, uint32_t hash_size, void *work_area,
                    crypto_argon2_config config,
                    crypto_argon2_inputs inputs,
                    crypto_argon2_extras extras);
+
+// Parallel interface
+typedef struct {
+	crypto_argon2_config config;
+	void    *work_area;
+	uint32_t hash_size;
+} crypto_argon2_ctx;
+
+void crypto_argon2_init(crypto_argon2_ctx *ctx, uint32_t hash_size,
+                        void *work_area,
+                        crypto_argon2_config config,
+                        crypto_argon2_inputs inputs,
+                        crypto_argon2_extras extras);
+void crypto_argon2_segment(const crypto_argon2_ctx *ctx,
+                           uint32_t pass, uint32_t slice, uint32_t lane);
+void crypto_argon2_final(const crypto_argon2_ctx *ctx, uint8_t *hash);
 
 
 // Key exchange (X-25519)
@@ -191,6 +208,8 @@ void crypto_argon2(uint8_t *hash, uint32_t hash_size, void *work_area,
 // Hash them to derive an actual shared key.
 void crypto_x25519_public_key(uint8_t       public_key[32],
                               const uint8_t secret_key[32]);
+void crypto_x25519_public_key_small(uint8_t       public_key[32],
+                                    const uint8_t secret_key[32]);
 void crypto_x25519(uint8_t       raw_shared_secret[32],
                    const uint8_t your_secret_key  [32],
                    const uint8_t their_public_key [32]);
@@ -314,7 +333,9 @@ int  crypto_elligator_rev(uint8_t hidden[32], const uint8_t curve [32],
 void crypto_elligator_key_pair(uint8_t hidden[32], uint8_t secret_key[32],
                                uint8_t seed[32]);
 
-#ifdef __cplusplus
+#ifdef MONOCYPHER_CPP_NAMESPACE
+}
+#elif defined(__cplusplus)
 }
 #endif
 

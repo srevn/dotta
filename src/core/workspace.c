@@ -3661,14 +3661,14 @@ static error_t workspace_partition(workspace_t *ws) {
  * The diverged items: every active item with something to say, in the active
  * items' order, then every orphan the load analyzed
  *
- * Something to say: a state but DEPLOYED, or a DEPLOYED item the route does not
- * call clean (workspace_item_route) — a squatter above it, a bit, or a pending
- * reassignment. One rule, read here over the verdicts the analyses wrote, and
- * none of them lists anything, so no two can list by two rules; an active item
- * none had anything to write on keeps what the partition made it — DEPLOYED,
- * nothing wrong — and is not among them. An orphan is never DEPLOYED, so every
- * analyzed one has something to say: a reclaim, a release, a prune, a skip, a
- * copy the landing above it clears, or a node the landing beneath it replaces.
+ * Something to say: every active item workspace_clean does not call clean — a
+ * state but DEPLOYED, or a squatter above it, a bit, or a pending reassignment.
+ * One rule, read here over the verdicts the analyses wrote, and none of them
+ * lists anything, so no two can list by two rules; an active item none had anything
+ * to write on keeps what the partition made it — DEPLOYED, nothing wrong — and
+ * is not among them. An orphan is never DEPLOYED, so every analyzed one has
+ * something to say: a reclaim, a release, a prune, a skip, a copy the landing
+ * above it clears, or a node the landing beneath it replaces.
  *
  * The reassignment is the one term no analysis writes: a clean row whose owned
  * record names another profile is REASSIGNED by the route, read over the item's
@@ -3691,10 +3691,7 @@ static void workspace_list(workspace_t *ws) {
     for (size_t i = 0; i < ws->dir_count + ws->file_count; i++) {
         workspace_item_t *item = ws->active[i];
 
-        if (item->state == WORKSPACE_STATE_DEPLOYED &&
-            workspace_item_route(item) == WORKSPACE_ROUTE_CLEAN) {
-            continue;
-        }
+        if (workspace_clean(item)) continue;
 
         workspace_note_diverged(ws, item);
     }

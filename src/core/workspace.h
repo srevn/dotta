@@ -1213,8 +1213,9 @@ typedef struct {
  * and seven readers, each named with the arm it reads; a reader not on this list
  * is a bug:
  *
- *   the diverged items' derivation CLEAN, the one arm a DEPLOYED item is left
- *                                  out on (workspace.c workspace_list)
+ *   the clean predicate            CLEAN, the one arm a DEPLOYED item is left
+ *                                  out of the diverged items on (workspace_clean,
+ *                                  read by workspace.c workspace_list)
  *   the line                       CLEAN, the one arm rendered as agreement —
  *                                  [clean], or [ancestor] on a derived rung;
  *                                  STALE and REASSIGNED, the colour's cyan, apply's
@@ -1471,6 +1472,25 @@ typedef enum {
  * @return The first route that applies
  */
 workspace_route_t workspace_item_route(const workspace_item_t *item);
+
+/**
+ * Clean: a deployed item the route calls clean — nothing to say of it
+ *
+ * DEPLOYED, its route CLEAN (workspace_item_route above): no squatter above it,
+ * no look that failed, no bit, no pending reassignment. Its line says agreement:
+ * [clean], or [ancestor] on a derived rung, which was compared with nothing
+ * (workspace_item_line). An item predicate beside workspace_untouched and
+ * workspace_capturable, placed after the route it reads. Not deploy's clean bucket
+ * (core/deploy.h deploy_partition_t), which holds a pending reassignment too:
+ * no landing's work there, where here nothing is left to say.
+ *
+ * Readers: core/workspace.c workspace_list (the diverged items are every other
+ * active item). A reader not on this list is a bug.
+ */
+static inline bool workspace_clean(const workspace_item_t *item) {
+    return item->state == WORKSPACE_STATE_DEPLOYED &&
+           workspace_item_route(item) == WORKSPACE_ROUTE_CLEAN;
+}
 
 /**
  * Workspace structure (opaque)
@@ -1752,16 +1772,15 @@ error_t workspace_load(
  * and update_print_skipped counts them off it.
  *
  * Every item it holds has something to say: a state but DEPLOYED, or a DEPLOYED
- * item the route does not call clean (workspace_item_route) — a squatter above
- * it, a divergence bit, or a pending reassignment, which a clean row's sources
- * and look derive where its owned record, of the row's own kind, names another
- * profile (workspace_reassigned: a record of another kind is a node the clean
- * row's look found gone). An active path with none of these is not among them,
- * and is lent among the active items all the same (workspace_active, and its
- * kind's: workspace_directories, workspace_files). So a load holding none is
- * clean. cmds/status.c status_partition files them, filtered or not, and
- * status_print_summary reads the workspace's line off what it filed, saying there
- * which of them the line counts.
+ * item workspace_clean does not call clean — a squatter above it, a divergence
+ * bit, or a pending reassignment, which a clean row's sources and look derive
+ * where its owned record, of the row's own kind, names another profile
+ * (workspace_reassigned: a record of another kind is a node the clean row's look
+ * found gone). A clean item is not among them, and is lent among the active items
+ * all the same (workspace_active, and its kind's: workspace_directories,
+ * workspace_files). So a load holding none is clean. cmds/status.c status_partition
+ * files them, filtered or not, and status_print_summary reads the workspace's
+ * line off what it filed, saying there which of them the line counts.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the diverged items

@@ -12,6 +12,7 @@
 #include "base/gitignore.h"
 #include "base/heap.h"
 #include "base/string.h"
+#include "base/wildmatch.h"
 #include "infra/label.h"
 #include "infra/path.h"
 
@@ -72,19 +73,22 @@ static void prefix_storage(entry_t *e, const char *name) {
  * A slash-bearing glob speaks one of two vocabularies. Storage space — a label
  * prefix, or a leading `<star><star>`/`<star>` component — compiles as typed. A
  * filesystem shape (absolute, tilde, relative dot) is an anchor and a tail: the
- * components before the first that holds a metacharacter are a directory spelling,
+ * components before the first that holds a byte the matcher reads as more than
+ * itself — a wildcard, or the backslash of an escape — are a directory spelling,
  * spelled by the argument's reading and compared literally, and the rest is the
  * pattern, rooted there as a .gitignore is rooted in its directory — a leading
  * slash on the tail so gitignore anchors it. The split is what keeps filesystem
  * bytes out of pattern syntax: what HOME or the working directory inserts is
- * never read as a class or a wildcard, while what the user typed past the split
- * is, as a shell would read it. A wildcard in the first component leaves no head:
- * under `/` the anchor is the root, and under `.` the working directory — the
- * resolver's own reading of a leading dot, so `.<star>/x` typed from HOME is
- * the dotdirs' x there — while `~<star>/x` is no tilde path and is refused;
- * anything else — a bare `conf<star>/x` could mean either vocabulary — is refused
- * toward the self-announcing spellings. The shape is read past a leading '!',
- * so a negated rule is a rule in either vocabulary. */
+ * never read as a class, a wildcard or an escape, while every byte the user typed
+ * reads as the pattern reads it — the head holds none the pattern would read
+ * otherwise — so an escape in a directory is an escape there, as it is in a storage
+ * rule. A wildcard or an escape in the first component leaves no head: under
+ * `/` the anchor is the root, and under `.` the working directory — the resolver's
+ * own reading of a leading dot, so `.<star>/x` typed from HOME is the dotdirs'
+ * x there — while `~<star>/x` is no tilde path and is refused; anything else —
+ * a bare `conf<star>/x` could mean either vocabulary — is refused toward the
+ * self-announcing spellings. The shape is read past a leading '!', so a negated
+ * rule is a rule in either vocabulary. */
 static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
     bool negated = input[0] == '!';
     const char *body = input + (negated ? 1 : 0);
@@ -96,10 +100,11 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
         !label_prefixes(body) &&
         !str_starts_with(body, "**/") &&
         !str_starts_with(body, "*/")) {
-        /* The tail starts at the component holding the first metacharacter; the
-         * head is what stands before that component's slash — or, when nothing
+        /* The tail starts at the component holding the first byte the matcher
+         * reads as more than itself (base/wildmatch.h wildmatch_literal_length);
+         * the head is what stands before that component's slash — or, when nothing
          * does, the root or the working directory the first byte names. */
-        const char *tail = strpbrk(body, "*?[");
+        const char *tail = body + wildmatch_literal_length(body);
         while (tail > body && tail[-1] != '/') tail--;
         size_t head_len = (size_t) (tail - body);
         if (head_len > 0) head_len--;
@@ -112,9 +117,9 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
             );
         }
 
-        /* A wildcard in the first component leaves no head, and the first byte
-         * says where the pattern is rooted — the guard above has already refused
-         * every byte but these two there. */
+        /* A wildcard or an escape in the first component leaves no head, and
+         * the first byte says where the pattern is rooted — the guard above has
+         * already refused every byte but these two there. */
         const char *head = body[0] == '/' ? "/" : ".";
         if (head_len > 0) {
             head = arena_strndup(arena, body, head_len);

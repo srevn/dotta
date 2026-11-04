@@ -2024,7 +2024,8 @@ const args_command_t spec_update = {
         "a file but keep it, use 'dotta remove'.\n",
     .notes        =
         "Path Arguments:\n"
-        "  A path holding *, ? or [ is also a pattern.\n"
+        "  A path holding *, ? or [ is also a pattern, and a \\ before each\n"
+        "  names it alone.\n"
         "\n"
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"

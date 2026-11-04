@@ -264,8 +264,8 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
  *     beneath (cmds/completion.c): a target names a directory on this machine
  *     and has no storage vocabulary to dispatch on.
  *   - a glob's anchor (infra/pathspec.c compile_rule): the components before
- *     the first metacharacter, which that rule's own gate has already made a
- *     filesystem spelling.
+ *     the first that holds a wildcard or an escape, which that rule's own gate
+ *     has already made a filesystem spelling.
  *
  * @param input User-provided path (filesystem or tilde; must not be NULL; the
  *              empty string is refused)

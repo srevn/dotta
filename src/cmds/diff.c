@@ -1549,7 +1549,8 @@ const args_command_t spec_diff = {
         "  [<path>...]           Restrict any mode to the named paths.\n",
     .notes        =
         "Path Arguments:\n"
-        "  A path holding *, ? or [ is also a pattern.\n",
+        "  A path holding *, ? or [ is also a pattern, and a \\ before each\n"
+        "  names it alone.\n",
     .examples     =
         "  %s diff                          # Preview apply (default)\n"
         "  %s diff --name-only              # Only changed paths\n"

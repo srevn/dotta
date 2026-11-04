@@ -96,7 +96,7 @@ To delete a file everywhere, delete it and run `dotta update`: see [Removing Fil
 
 ### Naming Paths
 
-A path holding `*`, `?` or `[` is also a pattern.
+A path holding `*`, `?` or `[` is also a pattern; a `\` before each `\`, `*`, `?` and `[` names that one path.
 
 ## Checking Status
 

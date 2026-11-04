@@ -18,10 +18,11 @@
  * — a rule about a traversal git prunes, and the ruleset's own walk where it
  * has a subject — has none here, and each rule is parsed and asked on its own
  * (base/gitignore.h, the rule alone). A filesystem-shaped rule is an anchor and
- * a tail: the components before the first that holds a wildcard are a directory
- * spelling, normalized and compared literally; the rest is the pattern, rooted
- * there as a `.gitignore` is rooted in its directory. The rungs are the matcher's
- * own walk.
+ * a tail: the components before the first that holds a wildcard or an escape
+ * are a directory spelling, normalized and compared literally, as the pattern
+ * would read them; the rest is the pattern, rooted there as a `.gitignore` is
+ * rooted in its directory. So an escape reads alike in either vocabulary, in a
+ * directory as in a name. The rungs are the matcher's own walk.
  *
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *
@@ -69,16 +70,18 @@ typedef struct {
  *   - Patterns containing '/' must use storage format (home/, root/, custom/),
  *     start with doublestar (recursive) or single star, or be a filesystem shape
  *     (absolute, tilde, relative dot): the components before the first that holds
- *     a wildcard are a directory, normalized and compared literally, and the
- *     rest is the pattern rooted there — `~/<star>.conf` is the conf files directly
- *     under HOME, `~/.config/<star><star>/<star>.lua` every lua beneath `.config`,
- *     `~/myd<star>/` the directories directly under HOME whose name says so (the
- *     trailing '/' is gitignore's directory marker, and the tail is never
- *     normalized). What HOME or the working directory inserts is never pattern
- *     syntax; what the user typed past the wildcard is. A wildcard in the first
- *     component is rooted where the first byte says: `/<star>/etc` at the root,
- *     `.<star>/x` at the working directory (a leading dot is relative, as the
- *     resolver reads it); `~<star>/x` is no tilde path and is refused.
+ *     a wildcard or an escape are a directory, normalized and compared literally,
+ *     and the rest is the pattern rooted there — `~/<star>.conf` is the conf
+ *     files directly under HOME, `~/.config/<star><star>/<star>.lua` every lua
+ *     beneath `.config`, `~/myd<star>/` the directories directly under HOME whose
+ *     name says so (the trailing '/' is gitignore's directory marker, and the
+ *     tail is never normalized), and `~/my\ dir/<star>.conf` the conf files in
+ *     `my dir`, as `home/my\ dir/<star>.conf` names them. What HOME or the working
+ *     directory inserts is never pattern syntax; what the user typed is, every
+ *     byte of it. A wildcard or an escape in the first component is rooted where
+ *     the first byte says: `/<star>/etc` at the root, `.<star>/x` at the working
+ *     directory (a leading dot is relative, as the resolver reads it); `~<star>/x`
+ *     is no tilde path and is refused.
  *   - The shape is read past a leading '!', so a negation is a rule in either
  *     vocabulary
  *   - A glob the grammar refuses — a comment (a leading '#'), two lines — is

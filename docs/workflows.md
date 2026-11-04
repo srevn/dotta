@@ -94,6 +94,10 @@ A plain `update` leaves alone a file that changed both on disk and in its profil
 
 To delete a file everywhere, delete it and run `dotta update`: see [Removing Files](#removing-files).
 
+### Naming Paths
+
+A path holding `*`, `?` or `[` is also a pattern.
+
 ## Checking Status
 
 ```bash

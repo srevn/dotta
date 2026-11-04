@@ -23,15 +23,17 @@
 /* One compiled input. `text` is what the coverage line prints — the input as
  * typed, since a filesystem rule is an anchor and a tail and has no one compiled
  * string. `key` is the vocabulary its subject is read in, decided by the input's
- * shape and never by an asker; its domain is two, as the argument's is. An exact
- * entry keeps the spelling it names in `prefix`, its length hoisted, for the
- * test the matcher and the attribution both ask of it; a filesystem rule keeps
- * its anchor there, the rung past which it reads; a storage rule keeps none.
- * Every byte is the arena's. */
+ * shape and never by an asker; its domain is two, as the argument's is. A rule
+ * keeps its own spelling beside it, asked wherever the rule is (rule_matches).
+ * An exact entry keeps the spelling it names in `prefix`, its length hoisted,
+ * for the test the matcher and the attribution both ask of it; a filesystem rule
+ * keeps its anchor there, the rung past which it reads; a storage rule keeps
+ * none. Every byte is the arena's. */
 typedef struct {
     const char *text;                /* the input as typed: what a coverage line prints */
     path_key_t key;                  /* the vocabulary its subject is read in: FILESYSTEM or STORAGE */
     gitignore_rule_t *rule;          /* the rule; NULL for an exact entry */
+    gitignore_rule_t *literal;       /* the rule's own spelling (base/gitignore.h gitignore_rule_literal); NULL for an exact entry */
     const char *prefix;              /* an exact entry's spelling, or a filesystem rule's anchor; NULL for a storage rule */
     size_t prefix_len;               /* strlen(prefix), hoisted for the boundary tests */
 } entry_t;
@@ -142,6 +144,10 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
         return error_wrap(err, "Invalid glob pattern");
     }
 
+    /* And the rule as its own spelling, in its shape: under one anchor, of one
+     * polarity, so a path the input spells is matched whatever its pattern says */
+    out->literal = gitignore_rule_literal(arena, out->rule);
+
     return NULL;
 }
 
@@ -236,6 +242,16 @@ static const char *rule_subject(const entry_t *e, const char *rung) {
     return str_path_beneath(rung, e->prefix, e->prefix_len);
 }
 
+/* A rule entry at one rung of its own subject: what it reads there (rule_subject),
+ * matched by its pattern or by its own spelling — git's literal compare beside
+ * its fnmatch, for an exclude as for any item (lib/git/dir.c match_pathspec_item).
+ * The two share one polarity, so either answers the entry's verdict. */
+static bool rule_matches(const entry_t *e, const char *rung, bool is_dir) {
+    const char *subject = rule_subject(e, rung);
+    return gitignore_rule_matches(e->rule, subject, is_dir) ||
+           gitignore_rule_matches(e->literal, subject, is_dir);
+}
+
 /* One subject's rungs above the leaf, deepest first: a copy of the subject,
  * shortened in place at each parent separator. The leaf is read from the subject
  * as given — most subjects decide there — so the copy is made only for an ascent,
@@ -302,10 +318,7 @@ static verdict_t scan_rung(
             continue;
         }
 
-        const char *subject = rule_subject(
-            e, own_subject(e, filesystem_path, storage_path)
-        );
-        if (subject && gitignore_rule_matches(e->rule, subject, is_dir)) {
+        if (rule_matches(e, own_subject(e, filesystem_path, storage_path), is_dir)) {
             return gitignore_rule_negated(e->rule) ? VERDICT_OUT : VERDICT_IN;
         }
     }
@@ -416,16 +429,14 @@ bool pathspec_entry_matches_at(
 
     /* The rule at the leaf, then at every rung above it; a match either way is
      * the entry doing something to the subject. */
-    const char *leaf = rule_subject(e, subject);
-    if (leaf && gitignore_rule_matches(e->rule, leaf, kind == PATH_KIND_DIRECTORY)) {
+    if (rule_matches(e, subject, kind == PATH_KIND_DIRECTORY)) {
         return true;
     }
     bool matched = false;
     rungs_t rungs;
     rungs_open(&rungs, subject);
     while (!matched && rungs_up(&rungs)) {
-        const char *rung = rule_subject(e, rungs.rung);
-        matched = rung && gitignore_rule_matches(e->rule, rung, true);
+        matched = rule_matches(e, rungs.rung, true);
     }
     rungs_close(&rungs);
     return matched;

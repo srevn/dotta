@@ -9,16 +9,19 @@
  * beneath it. A rule — an input holding a glob metacharacter, in gitignore's
  * grammar — is one line of one ordered program: at each rung of the subject,
  * deepest first, the rules in reverse, each against its own vocabulary's subject,
- * and the first to match decides, a negation deciding "not in scope". An exact
- * hit selects whatever any rule says. Every rule stands as typed: the pathspec
- * selects rows and walks nothing, so gitignore's "a parent directory cannot be
- * re-included" — a rule about a traversal git prunes, and the ruleset's own walk
- * where it has a subject — has none here, and each rule is parsed and asked on
- * its own (base/gitignore.h, the rule alone). A filesystem-shaped rule is an
- * anchor and a tail: the components before the first that holds a wildcard are
- * a directory spelling, normalized and compared literally; the rest is the pattern,
- * rooted there as a `.gitignore` is rooted in its directory. The rungs are the
- * matcher's own walk.
+ * and the first to match decides, a negation deciding "not in scope". A rule
+ * matches its own spelling as well as its pattern, a negation's too, as git's
+ * pathspec reads an item: `a[1].conf` selects itself and `a1.conf`, and a backslash
+ * makes a byte itself, so `a\[1\].conf` is the one path. An exact hit selects
+ * whatever any rule says. Every rule stands as typed: the pathspec selects rows
+ * and walks nothing, so gitignore's "a parent directory cannot be re-included"
+ * — a rule about a traversal git prunes, and the ruleset's own walk where it
+ * has a subject — has none here, and each rule is parsed and asked on its own
+ * (base/gitignore.h, the rule alone). A filesystem-shaped rule is an anchor and
+ * a tail: the components before the first that holds a wildcard are a directory
+ * spelling, normalized and compared literally; the rest is the pattern, rooted
+ * there as a `.gitignore` is rooted in its directory. The rungs are the matcher's
+ * own walk.
  *
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *
@@ -113,16 +116,17 @@ error_t pathspec_create(
  * leaf is a directory; every rung above it is): the rules in reverse insertion
  * order, each read at the rung of its own vocabulary — a storage rule the storage
  * rung, a filesystem rule the filesystem rung past its anchor and nothing at or
- * above it — and the first to match decides. In one sentence, the nearest rung
- * at which any rule matches decides, and at that rung the later input wins, a
- * negation deciding "not in scope". The rungs of the two subjects are counted
- * from the leaf — the tail is one tail under two roots — and the storage subject
- * runs out at its label while the filesystem subject climbs to the root, so
- * `~/etc/<star>.conf` followed by `!<star>.conf` excludes what the first selected
- * whichever vocabulary each is written in, which two rulesets OR'd would have
- * broken. The last storage rung is the label, as gitignore's walk stops at the
- * last component: `*.conf` reaches a conf at any depth, `cache/` a file beneath
- * any cache directory, and a bare rule meets the label itself at the last rung.
+ * above it — and the first to match, by its pattern or its own spelling, decides.
+ * In one sentence, the nearest rung at which any rule matches decides, and at
+ * that rung the later input wins, a negation deciding "not in scope". The rungs
+ * of the two subjects are counted from the leaf — the tail is one tail under
+ * two roots — and the storage subject runs out at its label while the filesystem
+ * subject climbs to the root, so `~/etc/<star>.conf` followed by `!<star>.conf`
+ * excludes what the first selected whichever vocabulary each is written in, which
+ * two rulesets OR'd would have broken. The last storage rung is the label, as
+ * gitignore's walk stops at the last component: `*.conf` reaches a conf at any
+ * depth, `cache/` a file beneath any cache directory, and a bare rule meets the
+ * label itself at the last rung.
  *
  * `kind` is the manifest's kind of the path (a tracked directory squatted by a
  * file is still a directory): gitignore's directory-only rules (`dir/`) match a
@@ -196,10 +200,10 @@ pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i);
 /**
  * The entry alone, for coverage attribution (cmds/diff.c diff_validate_filter):
  * an exact entry by equality or ancestry in its vocabulary; a rule by whether
- * it matches the subject of its vocabulary at any rung — either polarity, so a
- * negation that excluded something is not reported as matching nothing. `kind`
- * as for pathspec_matches; a subject the caller has no name for is NULL, and an
- * entry of that vocabulary answers false.
+ * it matches the subject of its vocabulary at any rung, by its pattern or its
+ * own spelling — either polarity, so a negation that excluded something is not
+ * reported as matching nothing. `kind` as for pathspec_matches; a subject the
+ * caller has no name for is NULL, and an entry of that vocabulary answers false.
  *
  * Returns false for a NULL pathspec. `i` MUST be < pathspec_count(spec); an `i`
  * out of bounds is a caller's bug, and the run dies of it (CHECK_ARG).

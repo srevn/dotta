@@ -67,8 +67,9 @@
  * report, arena lifetime and the composition it allows (a ruleset's compiled
  * rules copied into another, their strings shared), the rule parsed and asked
  * alone that infra/pathspec reads, the selection program beside the exclusion
- * one (gitignore.h has both), and the rule that names one path (gitignore_literal),
- * the grammar read backwards.
+ * one (gitignore.h has both), the rule that names one path (gitignore_literal),
+ * the grammar read backwards, and a rule read as its own spelling
+ * (gitignore_rule_literal), the matcher's literal compare asked of a whole body.
  *
  * Adaptations of shape only: drops macros, attributes and assignments
  * (gitignore-only, no gitattributes), drops the file-source abstraction — rules
@@ -109,7 +110,9 @@ struct gitignore_rule {
                                        * marker off, the escapes resolved */
     size_t len;                       /* strlen(body) */
     size_t prefix;                    /* its literal head (git's nowildcardlen);
-                                       * == len when nothing in it can glob */
+                                       * == len when nothing in it can glob, or
+                                       * where the rule is its own spelling
+                                       * (gitignore_rule_literal) */
     unsigned int flags;               /* GITIGNORE_FLAG_* bitmask */
     gitignore_origin_t origin;        /* the holding ruleset's tag; 0 for a rule alone */
     const char *pattern;              /* the rule as written, its line's span */
@@ -868,6 +871,22 @@ gitignore_origin_t gitignore_rule_origin(const gitignore_rule_t *rule) {
 
 size_t gitignore_rule_span(const char *line, size_t len) {
     return line ? rule_span(line, len) : 0;
+}
+
+gitignore_rule_t *gitignore_rule_literal(arena_t *arena, const gitignore_rule_t *rule) {
+    CHECK_NULL(arena);
+    CHECK_NULL(rule);
+
+    /* The record whole, its body one literal head: the compare the matcher makes
+     * of a rule that cannot glob (match_basename, match_fullpath), asked here
+     * of one that can. Every flag stands but the tail's shortcut, which a literal
+     * never takes. */
+    gitignore_rule_t *literal = arena_alloc(arena, sizeof(*literal));
+    *literal = *rule;
+    literal->prefix = literal->len;
+    literal->flags &= ~GITIGNORE_FLAG_ENDSWITH;
+
+    return literal;
 }
 
 /* --- The rule that names one path ------------------------------------ */

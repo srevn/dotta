@@ -1547,6 +1547,9 @@ const args_command_t spec_diff = {
         "  <commit>              Commit -> workspace.\n"
         "  <commit> <commit>     Commit -> commit (must share a profile).\n"
         "  [<path>...]           Restrict any mode to the named paths.\n",
+    .notes        =
+        "Path Arguments:\n"
+        "  A path holding *, ? or [ is also a pattern.\n",
     .examples     =
         "  %s diff                          # Preview apply (default)\n"
         "  %s diff --name-only              # Only changed paths\n"

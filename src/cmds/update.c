@@ -2023,6 +2023,9 @@ const args_command_t spec_update = {
         "machine's next apply deletes its unchanged copy. To stop tracking\n"
         "a file but keep it, use 'dotta remove'.\n",
     .notes        =
+        "Path Arguments:\n"
+        "  A path holding *, ? or [ is also a pattern.\n"
+        "\n"
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"
         "  config: core.auto_detect_new_files toggles detection,\n"

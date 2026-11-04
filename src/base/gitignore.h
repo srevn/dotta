@@ -518,6 +518,25 @@ gitignore_origin_t gitignore_rule_origin(const gitignore_rule_t *rule);
 size_t gitignore_rule_span(const char *line, size_t len);
 
 /**
+ * The rule that matches `rule`'s own spelling: its body read as its bytes, in
+ * its shape — the polarity, the anchor, the directory marker, the casing of the
+ * set that holds it. What the grammar took off the line (a trailing space) or
+ * resolved in it (an escaped space) is no part of it, as it is no part of the
+ * rule: so `a[1].conf`'s literal matches a basename `a[1].conf` at any depth
+ * and never `a1.conf`, and `a\[1\].conf`'s a name that holds its backslashes.
+ *
+ * git asks a pathspec item's spelling beside its pattern, an exclude's too
+ * (lib/git/dir.c match_pathspec_item: the literal compare before git_fnmatch),
+ * and a gitignore line's never: a ruleset holds no literal. Reader:
+ * infra/pathspec.c compile_rule, whose program asks every rule both ways.
+ *
+ * @param arena Arena the copy lives in (must not be NULL)
+ * @param rule  The rule (must not be NULL)
+ * @return The rule read as its spelling, the arena's; never NULL
+ */
+gitignore_rule_t *gitignore_rule_literal(arena_t *arena, const gitignore_rule_t *rule);
+
+/**
  * The rule that names `path` and no other: anchored at the top of the rules'
  * directory, every byte the matcher reads as more than itself escaped — its
  * alphabet, asked of it (base/wildmatch.h wildmatch_literal_length) — a final

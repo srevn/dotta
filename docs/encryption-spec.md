@@ -319,7 +319,7 @@ This write-boundary invariant guarantees that any blob written as plaintext will
 
 The record's base (`path_records.base_oid` in the state DB) carries no encryption flag: a load compares a copy against its base through `content_compare_blob_to_disk`, which classifies the base blob's bytes directly.
 
-### Session cache (`SESSION_CACHE_VERSION = 0x04`)
+### Session cache (`SESSION_VERSION = 0x04`)
 
 The cache file is named by the epoch, and is therefore the epoch's rather than any one checkout's:
 

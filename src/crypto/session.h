@@ -20,7 +20,7 @@
  * File format (113 bytes; little-endian; the offsets are session.c's):
  *
  *     magic[8]            "DOTTASES"
- *     version             SESSION_CACHE_VERSION (= 0x04)
+ *     version             SESSION_VERSION (= 0x04)
  *     created_at_le[8]    LE64 — Unix seconds, informational
  *     expires_at_le[8]    LE64 — Unix seconds; 0 = never expires
  *     nonce[24]           entropy_fill — the XChaCha20 nonce of the obfuscation

@@ -58,15 +58,15 @@
 
 /* Magic prefix: "DOTTASES" — Dotta SESsion. 8 bytes; the file is fixed-size and
  * never sniffed, so no length-byte header. */
-#define SESSION_CACHE_MAGIC      "DOTTASES"
-#define SESSION_CACHE_MAGIC_SIZE 8
+#define SESSION_MAGIC             "DOTTASES"
+#define SESSION_MAGIC_SIZE        8
 
 /* Format version. Bumps invalidate prior files without migration — an unsupported
  * version surfaces as ERR_CRYPTO and is unlinked. */
-#define SESSION_CACHE_VERSION    0x04
+#define SESSION_VERSION           0x04
 
 /* The directory under the invoker's home, spelled once for both paths. */
-#define SESSION_CACHE_DIR        ".cache/dotta"
+#define SESSION_DIR               ".cache/dotta"
 
 /* Field offsets within the on-disk layout. Named so parser and builder share
  * one source of truth.
@@ -79,33 +79,33 @@
  *   bytes [49..81)   obfuscated_key
  *   bytes [81..113)  mac
  */
-#define SESSION_OFF_MAGIC        0
-#define SESSION_OFF_VERSION      8
-#define SESSION_OFF_CREATED_AT   9
-#define SESSION_OFF_EXPIRES_AT   17
-#define SESSION_OFF_NONCE        25
-#define SESSION_OFF_OBFUSCATED   49
-#define SESSION_OFF_MAC          81
-#define SESSION_FILE_SIZE        113
+#define SESSION_OFFSET_MAGIC      0
+#define SESSION_OFFSET_VERSION    8
+#define SESSION_OFFSET_CREATED_AT 9
+#define SESSION_OFFSET_EXPIRES_AT 17
+#define SESSION_OFFSET_NONCE      25
+#define SESSION_OFFSET_OBFUSCATED 49
+#define SESSION_OFFSET_MAC        81
+#define SESSION_FILE_SIZE         113
 
 /* The XChaCha20 nonce: 24 bytes, per file. */
-#define SESSION_NONCE_SIZE       24
+#define SESSION_NONCE_SIZE        24
 
 /* Bytes covered by the MAC: the prefix before the MAC field (magic..obfuscated_key
  * inclusive). Bound to a named constant so save and load cannot accidentally
  * MAC a different range. */
-#define SESSION_MAC_INPUT_SIZE   81
+#define SESSION_MAC_INPUT_SIZE    81
 
 _Static_assert(
-    SESSION_OFF_MAC == SESSION_MAC_INPUT_SIZE,
+    SESSION_OFFSET_MAC == SESSION_MAC_INPUT_SIZE,
     "MAC input is the bytes [0..MAC_offset)"
 );
 _Static_assert(
-    SESSION_OFF_MAC + CRYPTO_MAC_SIZE == SESSION_FILE_SIZE,
+    SESSION_OFFSET_MAC + CRYPTO_MAC_SIZE == SESSION_FILE_SIZE,
     "session cache file size must include the MAC"
 );
 _Static_assert(
-    SESSION_OFF_OBFUSCATED + KDF_KEY_SIZE == SESSION_OFF_MAC,
+    SESSION_OFFSET_OBFUSCATED + KDF_KEY_SIZE == SESSION_OFFSET_MAC,
     "obfuscated_key must butt up against the MAC"
 );
 
@@ -114,7 +114,7 @@ _Static_assert(
  * byte order. */
 struct session_cache_file {
     uint8_t magic[8];                       /* "DOTTASES" */
-    uint8_t version;                        /* SESSION_CACHE_VERSION */
+    uint8_t version;                        /* SESSION_VERSION */
     uint8_t created_at_le[8];               /* LE64 — Unix seconds, informational */
     uint8_t expires_at_le[8];               /* LE64 — Unix seconds; 0 = never */
     uint8_t nonce[SESSION_NONCE_SIZE];      /* entropy_fill; the XChaCha20 nonce */
@@ -127,12 +127,12 @@ _Static_assert(
     "session_cache_file layout drift"
 );
 _Static_assert(
-    offsetof(struct session_cache_file, mac) == SESSION_OFF_MAC,
-    "MAC field offset must match SESSION_OFF_MAC"
+    offsetof(struct session_cache_file, mac) == SESSION_OFFSET_MAC,
+    "MAC field offset must match SESSION_OFFSET_MAC"
 );
 _Static_assert(
-    offsetof(struct session_cache_file, nonce) == SESSION_OFF_NONCE,
-    "nonce offset must match SESSION_OFF_NONCE"
+    offsetof(struct session_cache_file, nonce) == SESSION_OFFSET_NONCE,
+    "nonce offset must match SESSION_OFFSET_NONCE"
 );
 
 /**
@@ -155,7 +155,7 @@ static char *session_path(const kdf_epoch_t *epoch) {
     }
 
     return heap_str_format(
-        "%s/" SESSION_CACHE_DIR "/session-%s", identity()->home, fp_hex
+        "%s/" SESSION_DIR "/session-%s", identity()->home, fp_hex
     );
 }
 
@@ -198,7 +198,7 @@ error_t session_save(
     CHECK_NULL(epoch);
 
     char *cache_path = session_path(epoch);
-    char *cache_dir = heap_str_format("%s/" SESSION_CACHE_DIR, identity()->home);
+    char *cache_dir = heap_str_format("%s/" SESSION_DIR, identity()->home);
     int fd = -1;
     struct session_cache_file cache = { 0 };
     uint8_t cache_key[CRYPTO_KEY_SIZE] = { 0 };
@@ -213,8 +213,8 @@ error_t session_save(
     }
 
     /* Build the on-disk struct field by field. */
-    memcpy(cache.magic, SESSION_CACHE_MAGIC, SESSION_CACHE_MAGIC_SIZE);
-    cache.version = SESSION_CACHE_VERSION;
+    memcpy(cache.magic, SESSION_MAGIC, SESSION_MAGIC_SIZE);
+    cache.version = SESSION_VERSION;
     store_le64(cache.created_at_le, (uint64_t) time(NULL));
     store_le64(cache.expires_at_le, (uint64_t) expires_at);
 
@@ -422,17 +422,17 @@ error_t session_load(
 
     /* Magic + version. A version mismatch is an unloadable file (alpha policy:
      * no migration). */
-    if (memcmp(cache.magic, SESSION_CACHE_MAGIC, SESSION_CACHE_MAGIC_SIZE) != 0) {
+    if (memcmp(cache.magic, SESSION_MAGIC, SESSION_MAGIC_SIZE) != 0) {
         err = error_create(ERR_CRYPTO, "Session cache magic mismatch");
         unlink_on_fail = true;
         goto cleanup;
     }
-    if (cache.version != SESSION_CACHE_VERSION) {
+    if (cache.version != SESSION_VERSION) {
         err = error_create(
             ERR_CRYPTO,
             "Unsupported session cache version: %u "
             "(this build understands version %u)",
-            (unsigned) cache.version, (unsigned) SESSION_CACHE_VERSION
+            (unsigned) cache.version, (unsigned) SESSION_VERSION
         );
         unlink_on_fail = true;
         goto cleanup;

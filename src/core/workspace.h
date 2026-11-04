@@ -669,6 +669,16 @@ typedef enum {
  * the line that says it (workspace_item_line's metadata), and apply's prune split,
  * which counts the deletions (cmds/apply.c apply_print_cleanup_preview). A reader
  * not on this list is a bug.
+ *
+ * `blob_above` is the view's blob row standing above an overridden copy
+ * (core/manifest.h manifest_blob_above): the answer the orphan analysis decides
+ * the copy's state by (workspace.c workspace_analyze_orphans), kept as `departure`
+ * is and borrowed from the view, as `row` is. Set where the state is OVERRIDDEN,
+ * and only there: an orphan the ladder decides before that arm keeps NULL whatever
+ * stands above its path — an absent copy beneath a blob is a reclaim — and none
+ * stands beside a departure, an overridden copy being decided before any history
+ * is asked. Readers: cmds/status.c status_print_workspace's Overridden copies,
+ * whose rows name the blob whole. A reader not on this list is a bug.
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -692,6 +702,7 @@ typedef struct {
     workspace_fault_t fault;             /* Whose remedy the failed look is; NONE where none failed */
     workspace_relocation_t relocation;   /* The rule of a relocated claim's namespace, or NONE */
     const profile_departure_t *departure; /* An owned file orphan's history's answer, or NULL */
+    const manifest_row_t *blob_above;    /* The blob an overridden copy stands beneath, or NULL */
     git_oid base_oid;                    /* The base the verdict found disk at: the row's, or a blob its branch held */
     git_oid disk_oid;                    /* Or the entry disk's bytes are, where no base stands … */
     git_oid head;                        /* … and the view's head its history held none of them up to */
@@ -2176,10 +2187,12 @@ typedef struct {
  * Make an item's line, from the item alone
  *
  * The one way an item is printed, so one item reads alike, in one colour, wherever
- * it is listed. What a line says beyond the item reads the view, and is its
- * caller's to compose onto the metadata: the blob standing over an overridden
- * copy (cmds/status.c status_print_workspace), the claim that takes a deleted
- * path's place (cmds/update.c update_print_preview).
+ * it is listed. Two phrases are its callers' to compose onto the metadata: the
+ * blob standing over an overridden copy, which the item keeps (workspace_item_t's
+ * blob_above) and status names whole, its path no room of the line's (cmds/status.c
+ * status_print_workspace); and the claim that takes a deleted path's place, read
+ * off the view — a question about the commit update is making, which no load
+ * answers (cmds/update.c update_print_preview).
  *
  * Readers: cmds/status.c status_print_manifest and status_print_workspace, every
  * section's rows and the legends beneath them; cmds/update.c update_print_preview

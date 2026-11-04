@@ -662,15 +662,12 @@ static void status_partition(
  *
  * @param out Output context (must not be NULL)
  * @param partition The diverged items, filed (must not be NULL)
- * @param manifest The view the workspace was loaded over (must not be NULL; an
- *                 overridden copy's line names what stands over it, off the view)
  * @param config Configuration (must not be NULL; its switch words a [locked]
  *               legend line's remedy)
  */
 static void status_print_workspace(
     output_t *out,
     const status_partition_t *partition,
-    const manifest_t *manifest,
     const config_t *config
 ) {
     /* Section 1: Conflicts — the buckets no default verb resolves lead, each a
@@ -1052,11 +1049,11 @@ static void status_print_workspace(
      * where it can, and apply's skip names what keeps one. The workspace's line
      * counts none, a copy's work being its row's, which the line counts where
      * it shows that row (stated: a filter that hides it reads aligned over the
-     * copy). Its blob is the one each row names, found by the call the orphan
-     * analysis made the copy's state by (core/manifest.h manifest_blob_above),
-     * the profile's own or another's, read off the view, since the item's line
-     * reads the item alone, and composed onto its metadata in a buffer sized
-     * for the path. */
+     * copy). Its blob is the one each row names, the profile's own or another's:
+     * the item's, kept by the call the orphan analysis decided the copy's state
+     * by (core/workspace.h workspace_item_t's blob_above), both halves of the
+     * phrase read off it, and composed onto the metadata in a buffer sized for
+     * the path, which the line's room is not. */
     if (partition->overridden.count > 0) {
         output_list_t *list = output_list_create(
             out, "Overridden copies", "run 'dotta apply' to clear them where it can"
@@ -1065,18 +1062,17 @@ static void status_print_workspace(
         for (size_t i = 0; i < partition->overridden.count; i++) {
             const workspace_item_t *item = partition->overridden.entries[i];
             const workspace_line_t line = workspace_item_line(item);
-            const manifest_row_t *above = manifest_blob_above(manifest, item->filesystem_path);
             char metadata[256 + PATH_MAX];
 
-            if (strcmp(above->profile, item->profile) == 0) {
+            if (strcmp(item->blob_above->profile, item->profile) == 0) {
                 snprintf(
                     metadata, sizeof(metadata), "%s, beneath its own %s", line.metadata,
-                    above->filesystem_path
+                    item->blob_above->filesystem_path
                 );
             } else {
                 snprintf(
                     metadata, sizeof(metadata), "%s, beneath %s's %s", line.metadata,
-                    above->profile, above->filesystem_path
+                    item->blob_above->profile, item->blob_above->filesystem_path
                 );
             }
             output_list_add(list, line.tags, line.color, line.path, metadata);
@@ -1821,7 +1817,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     status_partition_t partition = { 0 };
     if (opts->show_local) {
         status_partition(ws, scope, ctx->arena, &partition);
-        status_print_workspace(out, &partition, manifest, config);
+        status_print_workspace(out, &partition, config);
     }
 
     /* The remote half (if requested): its transport, then its section — no remote

@@ -2473,7 +2473,8 @@ static void workspace_ask_departures(
  *     which position outranks;
  *   - position beneath a blob: a copy beneath a standing blob (core/manifest.h
  *     manifest_blob_above) — a file or link row, whose landing needs everything
- *     beneath its path gone — is OVERRIDDEN: that landing's, cleared with it
+ *     beneath its path gone — is OVERRIDDEN, the row kept on the item
+ *     (workspace_item_t's blob_above): that landing's, cleared with it
  *     (core/deploy.h deploy_clearance), whatever its profile claims, the gate
  *     or its history would say, and measured as every copy a landing may remove
  *     is. A claim its profile holds that stands nowhere stands beneath a blob
@@ -2682,8 +2683,11 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * nowhere stands beneath a blob by the view's own rule (core/manifest.h),
          * so it asks no arm of its own. Measured, as every copy a landing may
          * remove is (workspace_measure): its line says what changed or could
-         * not be read, and the landing's consent reads the same bits. */
-        if (manifest_blob_above(ws->manifest, item->filesystem_path)) {
+         * not be read, and the landing's consent reads the same bits. The blob
+         * is kept on the item, the answer its state was decided by
+         * (workspace_item_t's blob_above): none where none stands. */
+        item->blob_above = manifest_blob_above(ws->manifest, item->filesystem_path);
+        if (item->blob_above) {
             item->state = WORKSPACE_STATE_OVERRIDDEN;
             workspace_measure(ws, item);
             continue;
@@ -4756,8 +4760,9 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
              * still is that profile's, and a history that would not read is the
              * line's [unverified]; an overridden copy and a node are decided
              * before any history is asked. What stands over an overridden one
-             * is the view's to name, and this reads the item alone: the caller
-             * adds it (cmds/status.c status_print_workspace). */
+             * is the item's (workspace_item_t's blob_above), and its caller names
+             * it whole, the blob's path no room of the line's (cmds/status.c
+             * status_print_workspace). */
             if (item->departure && item->departure->kind == PROFILE_DEPARTURE_DELETED) {
                 snprintf(line.metadata, sizeof(line.metadata), "deleted from %s", item->profile);
             } else {

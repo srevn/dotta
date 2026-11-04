@@ -914,10 +914,10 @@ const manifest_row_t *manifest_lookup(
  *
  * Readers: cmds/add.c cmd_add, of the path an argument names — a capture beneath
  * one of the profile's own files, whichever label names either, over the one
- * profile's view its names come from; core/workspace.c workspace_analyze_orphans,
- * of an orphan's path — a copy beneath a standing blob is that blob's landing's
- * (WORKSPACE_STATE_OVERRIDDEN); and cmds/status.c status_print_workspace, of
- * such a copy, whose line names what stands over it, by the call that made it one.
+ * profile's view its names come from; and core/workspace.c
+ * workspace_analyze_orphans, of an orphan's path — a copy beneath a standing
+ * blob is that blob's landing's (WORKSPACE_STATE_OVERRIDDEN), the row kept on
+ * its item for what names it (core/workspace.h workspace_item_t's blob_above).
  *
  * @param manifest Manifest (must not be NULL)
  * @param filesystem_path Where to ask, absolute: a key (must not be NULL)

@@ -654,8 +654,10 @@ static void output_appendf(line_t *line, const char *fmt, ...) {
 /**
  * Are colours on for a stream, under a mode
  *
- * AUTO's is a terminal's yes: the stream a terminal, NO_COLOR unset or empty,
- * and TERM set to anything but "dumb".
+ * AUTO's is the run's request, then a terminal's yes: FORCE_COLOR set to anything
+ * but nothing — "0" included, as force-color.org reads it — turns them on, a
+ * pipe's included and NO_COLOR's whatever it says; else the stream a terminal,
+ * NO_COLOR unset or empty, and TERM set to anything but "dumb".
  */
 static bool output_colors_on(output_color_mode_t mode, FILE *stream) {
     switch (mode) {
@@ -664,6 +666,9 @@ static bool output_colors_on(output_color_mode_t mode, FILE *stream) {
         case OUTPUT_COLOR_NEVER:
             return false;
         case OUTPUT_COLOR_AUTO: {
+            const char *force_color = getenv("FORCE_COLOR");
+            if (force_color && force_color[0] != '\0') return true;
+
             if (!isatty(fileno(stream))) return false;
 
             const char *no_color = getenv("NO_COLOR");

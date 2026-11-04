@@ -67,6 +67,8 @@ verbosity = "normal"   # quiet, normal, verbose
 color = "auto"         # auto, always, never
 ```
 
+Under `auto`, `NO_COLOR` turns colors off and `FORCE_COLOR` on, through a pipe too.
+
 ### [commit]
 
 Custom commit message templates with variable substitution:

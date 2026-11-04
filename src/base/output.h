@@ -49,7 +49,7 @@ typedef enum {
  * Color mode
  */
 typedef enum {
-    OUTPUT_COLOR_AUTO,    /* Auto-detect (based on terminal) */
+    OUTPUT_COLOR_AUTO,    /* The run's request (FORCE_COLOR), else a terminal's yes */
     OUTPUT_COLOR_ALWAYS,  /* Always use colors */
     OUTPUT_COLOR_NEVER    /* Never use colors */
 } output_color_mode_t;
@@ -238,8 +238,8 @@ bool output_colors_enabled(const output_t *ctx);
  *
  * On a terminal alone a line is drawn while an act runs (output_progress) and
  * taken down once it is done (output_clear_line). Not the colours' question:
- * they can be on off a terminal (the configuration's color = "always") and off
- * on one (NO_COLOR, TERM=dumb).
+ * they can be on off a terminal (the configuration's color = "always", FORCE_COLOR)
+ * and off on one (NO_COLOR, TERM=dumb).
  *
  * @param ctx Output context (false for NULL)
  * @return Whether the report's stream is a terminal

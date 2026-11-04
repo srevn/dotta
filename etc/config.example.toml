@@ -187,7 +187,8 @@ verbosity = "normal"
 # Color Output
 # When to use colored output
 # Options:
-#   - "auto"   - Auto-detect terminal support (default)
+#   - "auto"   - Auto-detect terminal support (default); NO_COLOR turns
+#                colors off, FORCE_COLOR on
 #   - "always" - Always use colors
 #   - "never"  - Never use colors (useful for logs)
 # Default: auto

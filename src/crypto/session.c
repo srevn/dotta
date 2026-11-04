@@ -164,9 +164,10 @@ static char *session_path(const kdf_epoch_t *epoch) {
  *
  *     cache_key = BLAKE2b-32(salt ‖ params)
  *
- * The same 35 bytes the fingerprint hashes at length 8 (kdf_epoch_fingerprint);
- * the 32-byte output length keeps this derivation distinct from it. Both inputs
- * are fixed-width, so nothing is length-framed. Cannot fail.
+ * The same 35 bytes the fingerprint hashes at length 8, under its rule: no key,
+ * no wipe (kdf_epoch_fingerprint). The 32-byte output length keeps this derivation
+ * distinct from it. Both inputs are fixed-width, so nothing is length-framed.
+ * Cannot fail.
  *
  * @param epoch   The epoch
  * @param out_key 32-byte output buffer (cache_key)
@@ -175,18 +176,14 @@ static void derive_cache_key(
     const kdf_epoch_t *epoch,
     uint8_t out_key[CRYPTO_KEY_SIZE]
 ) {
-    uint8_t params[KDF_PARAMS_SIZE];
-    kdf_params_store(params, epoch->memory_mib, epoch->passes);
+    uint8_t blob[KDF_PARAMS_SIZE];
+    kdf_params_store(blob, epoch->params);
 
     crypto_blake2b_ctx ctx;
     crypto_blake2b_init(&ctx, CRYPTO_KEY_SIZE);
     crypto_blake2b_update(&ctx, epoch->salt, KDF_SALT_SIZE);
-    crypto_blake2b_update(&ctx, params, KDF_PARAMS_SIZE);
+    crypto_blake2b_update(&ctx, blob, KDF_PARAMS_SIZE);
     crypto_blake2b_final(&ctx, out_key);
-
-    /* The inputs are public; the state is scrubbed for the audit's sake, so every
-     * BLAKE2b context in the crypto layer ends the same way. */
-    crypto_wipe(&ctx, sizeof(ctx));
 }
 
 error_t session_save(

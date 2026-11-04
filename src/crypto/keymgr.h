@@ -12,12 +12,12 @@
  *      hidden behind a single resolve step.
  *
  * One master, one slot. The master is a function of (passphrase, epoch), and
- * the epoch — the salt and the Argon2id pair — is the repository's, minted once
- * and immutable under ciphertext (crypto/kdf.h, infra/epoch.h). A keymgr is bound
- * to one epoch at create time and holds at most one master. Nothing routes by
- * parameters: every blob names its epoch by fingerprint, and either it is this
- * repository's or no master here can open it — `keymgr_decrypt` refuses the foreign
- * one before asking for anything.
+ * the epoch — the salt and the Argon2id parameters — is the repository's, minted
+ * once and immutable under ciphertext (crypto/kdf.h, infra/epoch.h). A keymgr
+ * is bound to one epoch at create time and holds at most one master. Nothing
+ * routes by parameters: every blob names its epoch by fingerprint, and either
+ * it is this repository's or no master here can open it — `keymgr_decrypt` refuses
+ * the foreign one before asking for anything.
  *
  * Nothing enters the slot or the file unverified. A fresh master — derived from
  * a passphrase the environment or the prompt gave — is kept only after it has
@@ -386,7 +386,8 @@ bool keymgr_clear(keymgr *km);
 /**
  * The epoch this key manager is bound to.
  *
- * `dotta key status` prints its pair. Borrowed; valid for the keymgr's lifetime.
+ * `dotta key status` prints its parameters. Borrowed; valid for the keymgr's
+ * lifetime.
  *
  * @param km Key manager (non-NULL)
  * @return The epoch

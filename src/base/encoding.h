@@ -16,7 +16,7 @@
  * Single source of truth for byte-order conversions across the crypto stack:
  *   - `crypto/mac.c`      — canonical LE64 framing of every variable-
  *                           length input absorbed into keyed BLAKE2b.
- *   - `crypto/kdf.c`      — the LE16 memory_mib of the epoch's params
+ *   - `crypto/kdf.c`      — the LE16 memory of the epoch's params
  *                           blob at `refs/dotta/epoch`.
  *   - `crypto/session.c`  — the LE64 timestamps of the on-disk session
  *                           file.

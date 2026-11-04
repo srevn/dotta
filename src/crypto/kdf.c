@@ -7,7 +7,7 @@
  *   2. `kdf_siv_subkeys`: master_key + profile → (mac_key, prf_key) via two
  *      domain-separated keyed-BLAKE2b calls.
  *
- * Argon2id work-area lifecycle: one `secure_alloc` mapping of memory_mib MiB
+ * Argon2id work-area lifecycle: one `secure_alloc` mapping of the epoch's memory
  * (base/secure.h) — page-aligned, which is more than the u64 alignment monocypher's
  * `crypto_argon2` requires of its `blk *` (u64[128] per block); locked against
  * swap best-effort, with the one advisory the process prints when a lock fails;
@@ -18,13 +18,13 @@
  * wiped what.
  *
  * The epoch: the salt is generated once at `dotta init` via `entropy_fill` (see
- * KDF_SALT_SIZE for the 256-bit choice) beside the pair `init` was told to mint
- * with, and both are stored at `refs/dotta/epoch`, where they sync with the
- * repository. This makes each dotta repo a distinct attack target: a precomputation
- * table built against one repo cannot be reused against any other, even by an
- * attacker who has both repos' encrypted blobs. The epoch is public — the salt's
- * job is uniqueness, not secrecy, and the pair is the cost of a guess — and is
- * treated as ordinary input bytes (no mlock/wipe).
+ * KDF_SALT_SIZE for the 256-bit choice) beside the parameters `init` was told
+ * to mint with, and both are stored at `refs/dotta/epoch`, where they sync with
+ * the repository. This makes each dotta repo a distinct attack target: a
+ * precomputation table built against one repo cannot be reused against any other,
+ * even by an attacker who has both repos' encrypted blobs. The epoch is public
+ * — the salt's job is uniqueness, not secrecy, and the parameters are the cost
+ * of a guess — and is treated as ordinary input bytes (no mlock/wipe).
  */
 
 #include "crypto/kdf.h"
@@ -51,29 +51,43 @@ _Static_assert(
     "dotta requires a 64-bit host for Argon2 work-area sizing"
 );
 
+/* The params blob's fields, at the offsets the ref spells them in: an offset
+ * moved is another format for every epoch (refs/dotta/epoch:params, and the tail
+ * of the fingerprint's input). */
+#define KDF_PARAMS_OFFSET_MEMORY 0      /* LE16, MiB */
+#define KDF_PARAMS_OFFSET_PASSES 2
+
+_Static_assert(
+    KDF_PARAMS_OFFSET_PASSES == KDF_PARAMS_OFFSET_MEMORY + 2,
+    "passes must come immediately after the LE16 memory"
+);
+_Static_assert(
+    KDF_PARAMS_OFFSET_PASSES + 1 == KDF_PARAMS_SIZE,
+    "the params blob must end with its passes"
+);
+
 const kdf_preset_t kdf_presets[KDF_PRESET_COUNT] = {
-    { "fast",     64,   3 },  /* ~250–400 ms; CI / test */
-    { "balanced", 256,  3 },  /* ~1.0 s; recommended */
-    { "paranoid", 1024, 4 },  /* ~4–6 s; slow but firm */
+    { "fast",     { 64,   3 } },  /* ~250–400 ms; CI / test */
+    { "balanced", { 256,  3 } },  /* ~1.0 s; recommended */
+    { "paranoid", { 1024, 4 } },  /* ~4–6 s; slow but firm */
 };
 
-error_t kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
-    if (memory_mib < KDF_ARGON2_MEMORY_MIB_MIN
-        || memory_mib > KDF_ARGON2_MEMORY_MIB_MAX) {
+error_t kdf_validate_params(kdf_params_t params) {
+    if (params.memory < KDF_ARGON2_MEMORY_MIN || params.memory > KDF_ARGON2_MEMORY_MAX) {
         return error_create(
             ERR_CRYPTO,
             "Argon2 memory %u MiB out of range (%u..%u)",
-            (unsigned) memory_mib,
-            (unsigned) KDF_ARGON2_MEMORY_MIB_MIN,
-            (unsigned) KDF_ARGON2_MEMORY_MIB_MAX
+            (unsigned) params.memory,
+            (unsigned) KDF_ARGON2_MEMORY_MIN,
+            (unsigned) KDF_ARGON2_MEMORY_MAX
         );
     }
 
-    if (passes < KDF_ARGON2_PASSES_MIN || passes > KDF_ARGON2_PASSES_MAX) {
+    if (params.passes < KDF_ARGON2_PASSES_MIN || params.passes > KDF_ARGON2_PASSES_MAX) {
         return error_create(
             ERR_CRYPTO,
             "Argon2 passes %u out of range (%u..%u)",
-            (unsigned) passes,
+            (unsigned) params.passes,
             (unsigned) KDF_ARGON2_PASSES_MIN,
             (unsigned) KDF_ARGON2_PASSES_MAX
         );
@@ -82,22 +96,20 @@ error_t kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
     return NULL;
 }
 
-void kdf_params_store(
-    uint8_t out[KDF_PARAMS_SIZE],
-    uint16_t memory_mib,
-    uint8_t passes
-) {
-    store_le16(out, memory_mib);
-    out[2] = passes;
+void kdf_params_store(uint8_t out[KDF_PARAMS_SIZE], kdf_params_t params) {
+    store_le16(&out[KDF_PARAMS_OFFSET_MEMORY], params.memory);
+    out[KDF_PARAMS_OFFSET_PASSES] = params.passes;
 }
 
-void kdf_params_load(
-    const uint8_t in[KDF_PARAMS_SIZE],
-    uint16_t *out_memory_mib,
-    uint8_t *out_passes
-) {
-    *out_memory_mib = load_le16(in);
-    *out_passes = in[2];
+kdf_params_t kdf_params_load(const uint8_t in[KDF_PARAMS_SIZE]) {
+    return (kdf_params_t) {
+        .memory = load_le16(&in[KDF_PARAMS_OFFSET_MEMORY]),
+        .passes = in[KDF_PARAMS_OFFSET_PASSES],
+    };
+}
+
+bool kdf_params_equal(kdf_params_t a, kdf_params_t b) {
+    return a.memory == b.memory && a.passes == b.passes;
 }
 
 void kdf_epoch_fingerprint(
@@ -108,13 +120,13 @@ void kdf_epoch_fingerprint(
      * bytes — the salt, then the params as the ref spells them. No key, no wipe.
      * The 8-byte output length is baked into BLAKE2b's parameter block, giving
      * this use domain separation from every 32-byte derivation for free. */
-    uint8_t params[KDF_PARAMS_SIZE];
-    kdf_params_store(params, epoch->memory_mib, epoch->passes);
+    uint8_t blob[KDF_PARAMS_SIZE];
+    kdf_params_store(blob, epoch->params);
 
     crypto_blake2b_ctx ctx;
     crypto_blake2b_init(&ctx, KDF_EPOCH_FP_SIZE);
     crypto_blake2b_update(&ctx, epoch->salt, KDF_SALT_SIZE);
-    crypto_blake2b_update(&ctx, params, KDF_PARAMS_SIZE);
+    crypto_blake2b_update(&ctx, blob, KDF_PARAMS_SIZE);
     crypto_blake2b_final(&ctx, out_fp);
 }
 
@@ -153,10 +165,10 @@ error_t kdf_master_key(
         );
     }
 
-    /* memory_mib ∈ [8, 4096] by the ref's validation; product is at most 4096 *
-     * 2^20 = 2^32 bytes, fits size_t on the 64-bit hosts the static assert above
-     * admits. */
-    const size_t bytes = (size_t) epoch->memory_mib * 1024U * 1024U;
+    /* `memory` ∈ [8, 4096] MiB by the ref's validation, so the product is at
+     * most 2^32 bytes, which fits size_t on the 64-bit hosts the static assert
+     * above admits. */
+    const size_t bytes = (size_t) epoch->params.memory * 1024U * 1024U;
 
     /* The work area: a mapping of its own, page-aligned (Argon2 wants u64-aligned
      * blocks), locked best-effort, wiped and unmapped at the end. */
@@ -166,7 +178,7 @@ error_t kdf_master_key(
         return error_create(
             ERR_MEMORY,
             "Failed to map %zu MiB Argon2 work area: %s",
-            (size_t) epoch->memory_mib, strerror(errno)
+            (size_t) epoch->params.memory, strerror(errno)
         );
     }
 
@@ -179,13 +191,13 @@ error_t kdf_master_key(
      * does not provide. With lanes = 1 the memory hardness metric is `nb_blocks
      * * passes`; the presets compensate via pass count.
      *
-     * `nb_blocks` is in 1024-byte Argon2 blocks: memory_mib MiB = memory_mib *
-     * 1024 blocks. Bounded by KDF_ARGON2_MEMORY_MIB_MAX (= 4096 * 1024 = 4M
-     * blocks), well within `uint32_t`. */
+     * `nb_blocks` is in 1024-byte Argon2 blocks: `memory` MiB is `memory` * 1024
+     * blocks. Bounded by KDF_ARGON2_MEMORY_MAX (= 4096 * 1024 = 4M blocks), well
+     * within `uint32_t`. */
     const crypto_argon2_config config = {
         .algorithm = CRYPTO_ARGON2_ID,
-        .nb_blocks = (uint32_t) epoch->memory_mib * 1024U,
-        .nb_passes = epoch->passes,
+        .nb_blocks = (uint32_t) epoch->params.memory * 1024U,
+        .nb_passes = epoch->params.passes,
         .nb_lanes  = 1,
     };
     const crypto_argon2_inputs inputs = {

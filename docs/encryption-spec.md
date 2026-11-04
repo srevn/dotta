@@ -86,7 +86,7 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
         User passphrase (1..1024 bytes)
                     │
                     ▼  Argon2id (RFC 9106)
-                       memory_mib, passes from repository epoch
+                       memory, passes from repository epoch
                        lanes = 1 (Monocypher is single-threaded)
                        salt = 32-byte per-repo random in `refs/dotta/epoch:salt`
         ┌────────────────────────────────────────────┐
@@ -124,7 +124,7 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
 
 ### Argon2id parameters
 
-| Preset      | memory_mib | passes | Wall-clock target | memory × passes |
+| Preset      | memory     | passes | Wall-clock target | memory × passes |
 |-------------|------------|--------|-------------------|-----------------|
 | `fast`      |    64 MiB  |    3   | ~250–400 ms       | 192 MiB·passes  |
 | `balanced`  |   256 MiB  |    3   | ~1.0 s            | 768 MiB·passes  |
@@ -133,7 +133,7 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
 `lanes = 1` is forced by Monocypher's single-threaded implementation. With `lanes = 1`, `memory × passes` is the primary memory-hardness metric.
 
 **Parameter bounds** (enforced by `kdf_validate_params` at `epoch_load` and `epoch_adopt`):
-- `memory_mib` ∈ [8, 4096]. The 8 MiB floor is dotta's minimum operational security bound; the 4096 MiB ceiling is an allocation limit defending against hostile refs.
+- `memory` ∈ [8, 4096], in MiB. The 8 MiB floor is dotta's minimum operational security bound; the 4096 MiB ceiling is an allocation limit defending against hostile refs.
 - `passes` ∈ [1, 20].
 
 Parameters do not travel in individual blob headers. They are owned strictly by the repository epoch, preventing attackers from forcing parameter degradation on arbitrary files.
@@ -147,7 +147,7 @@ refs/dotta/epoch
   └── commit ("Initialize repository epoch")
         └── tree
               ├── salt   (32 bytes — random salt from OS CSPRNG)
-              └── params (3 bytes — LE16 memory_mib ‖ passes)
+              └── params (3 bytes — LE16 memory ‖ passes)
 ```
 
 The epoch structure guarantees that every input to key derivation except the passphrase itself has a single, immutable owner:
@@ -183,7 +183,7 @@ The epoch structure guarantees that every input to key derivation except the pas
 The census walks the **full history** of every local branch, not just the heads — `dotta show` and `dotta revert` open blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly as head ciphertext does. What it is asked depends on what the local ref yields, because the question is about the **bytes at the ref**, not about the epoch derived from them:
 
 - **The ref yields an epoch.** Attribution is by fingerprint: only ciphertext that epoch keys argues against replacing it; foreign-keyed blobs (pulled from a remote under its own epoch) argue *for* converging. Found → `CONFLICT`, clean → `ADOPT`.
-- **The ref stands and yields no epoch.** Its salt blob may be intact and may be the only copy of what keys this repository — but with the pair unreadable no fingerprint can be matched against anything, so the census asks for *any* ciphertext, any fingerprint, any version. Found → `DAMAGED`, clean → `ADOPT`. This is the same census `epoch_init` runs over the identical state, and on the found side it reaches the same verdict and prints the same remedy: restore the ref, do not replace it.
+- **The ref stands and yields no epoch.** Its salt blob may be intact and may be the only copy of what keys this repository — but with the parameters unreadable no fingerprint can be matched against anything, so the census asks for *any* ciphertext, any fingerprint, any version. Found → `DAMAGED`, clean → `ADOPT`. This is the same census `epoch_init` runs over the identical state, and on the found side it reaches the same verdict and prints the same remedy: restore the ref, do not replace it.
 - **The ref is absent.** No census: the bytes are already gone, so nothing this verdict licenses can make it worse, and the remote's epoch may be exactly the root that keys whatever is here. → `ADOPT`. (`epoch_init` *does* census this state, because a mint introduces a **new** root that would orphan the ciphertext, where an adopt installs the remote's.)
 
 Three routes reach one `ADOPT`, and the line `cmd_sync` prints for it names the act, never the census: only the third route ran a census it could attribute, so a success claiming "no local ciphertext depended on the replaced one" would describe work the other two did not do.
@@ -599,7 +599,7 @@ Memory protection for secret-bearing data is implemented across `base/secure.c` 
 - **Dedicated locked mappings (`secure_alloc` / `secure_free`)**: Every secret that outlives a function call resides in its own anonymous, page-aligned `mmap` mapping:
   - The `keymgr` struct and its internal master key slot.
   - Passphrase buffers allocated during prompt or environment acquisition (`sys/passphrase.c`).
-  - The Argon2id work area (`memory_mib << 20` bytes) allocated during derivation.
+  - The Argon2id work area (`memory << 20` bytes) allocated during derivation.
 - **Locking against paging**: Mappings are locked into RAM via `mlock(2)`. If memory locking fails (e.g. due to restrictive `RLIMIT_MEMLOCK`), dotta logs a single advisory and proceeds.
 - **Dump exclusion**: Where supported by the OS (Linux), mappings are tagged with `madvise(MADV_DONTDUMP)` to prevent inclusion in core dumps.
 - **Core dump disablement**: `identity_init` sets `RLIMIT_CORE` to 0 via `setrlimit(2)` at process startup. `PR_SET_DUMPABLE` was explicitly declined to preserve user debugging (`ptrace`, `gdb`, `lldb`).
@@ -634,7 +634,7 @@ auto_encrypt = [
 ]
 ```
 
-Cryptographic derivation parameters (`memory_mib` and `passes`) are **not** configured here; they belong to the repository epoch and are minted once via `dotta init --strength <fast|balanced|paranoid>`.
+Cryptographic derivation parameters (`memory` and `passes`) are **not** configured here; they belong to the repository epoch and are minted once via `dotta init --strength <fast|balanced|paranoid>`.
 
 ### Validation
 
@@ -644,8 +644,8 @@ Validation is performed at the boundary where parameters enter the system:
 |---|---|---|---|
 | `session_timeout` | Config load | `-1`, `0`, or `1..INT32_MAX` | `ERR_INVALID_ARG` |
 | `auto_encrypt[i]` | Config load, enabled or not | A string with no NUL, making one gitignore rule | `ERR_INVALID_ARG` (the value), `ERR_VALIDATION` (the rule) |
-| `epoch.memory_mib` | `epoch_load` / `epoch_adopt` | `8..4096` | `ERR_CRYPTO` |
-| `epoch.passes` | `epoch_load` / `epoch_adopt` | `1..20` | `ERR_CRYPTO` |
+| `epoch.params.memory` | `epoch_load` / `epoch_adopt` | `8..4096` | `ERR_CRYPTO` |
+| `epoch.params.passes` | `epoch_load` / `epoch_adopt` | `1..20` | `ERR_CRYPTO` |
 
 ### Hardcoded constants
 
@@ -653,7 +653,7 @@ Validation is performed at the boundary where parameters enter the system:
 |---|---|---|
 | KDF Algorithm | Argon2id | RFC 9106; memory-hard primitive in Monocypher |
 | Epoch salt size | 32 bytes (256 bits) | Matches codebase key buffer width (`KDF_KEY_SIZE`) |
-| Epoch params size | 3 bytes | LE16 memory_mib ‖ passes |
+| Epoch params size | 3 bytes | LE16 memory ‖ passes |
 | Epoch fingerprint | 8 bytes (64 bits) | BLAKE2b-8 over 35 bytes of salt ‖ params |
 | Cipher version | `0x0a` | Authenticated in header |
 | Cipher header size | 15 bytes | `"DOTTA"` (5) + version (1) + NUL (1) + epoch_fp (8) |
@@ -684,7 +684,7 @@ Validation is performed at the boundary where parameters enter the system:
 
 | Concern | Module | Public surface |
 |---|---|---|
-| Memory-hard derivation & Epoch | `src/crypto/kdf` | `kdf_epoch_t`, `kdf_epoch_fingerprint`, `kdf_master_key`, `kdf_siv_subkeys`, `kdf_validate_params`, `kdf_params_store/load`, `kdf_presets` |
+| Memory-hard derivation & Epoch | `src/crypto/kdf` | `kdf_epoch_t`, `kdf_params_t`, `kdf_epoch_fingerprint`, `kdf_master_key`, `kdf_siv_subkeys`, `kdf_validate_params`, `kdf_params_store/load`, `kdf_params_equal`, `kdf_presets` |
 | Keyed-BLAKE2b chokepoint | `src/crypto/mac` | `crypto_mac_init/absorb/final/oneshot`, `crypto_domain_t` |
 | SIV encrypt/decrypt + format | `src/crypto/cipher` | `cipher_encrypt`, `cipher_decrypt`, `cipher_read_header` |
 | Unlock proof & key manager | `src/crypto/keymgr` | `keymgr_create`, `keymgr_encrypt`, `keymgr_decrypt`, `keymgr_set`, `keymgr_clear`, `keymgr_cached`, `keymgr_epoch`, `keymgr_witness`, `keymgr_free` |

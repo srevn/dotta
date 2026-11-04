@@ -8,29 +8,28 @@
  *                                     (two domain-separated keyed-BLAKE2b calls)
  *
  * The epoch is the repository's contribution to the master key: everything the
- * derivation takes but the passphrase — the 32-byte salt and the Argon2id pair
- * (memory_mib, passes) — as one value with one owner. It is minted once, at `dotta
- * init` (from a preset below), synced as `refs/dotta/epoch` (infra/epoch), and
- * immutable for as long as ciphertext sealed under it exists: a master is a
- * function of (passphrase, epoch) and nothing else, so two machines on one
- * repository derive one master from one passphrase, and a change of strength is
- * a new epoch — every blob re-sealed — never a second master beside the first.
+ * derivation takes but the passphrase — the 32-byte salt and the Argon2id
+ * parameters (`kdf_params_t`) — as one value with one owner. It is minted once,
+ * at `dotta init` (from a preset below), synced as `refs/dotta/epoch`
+ * (infra/epoch), and immutable for as long as ciphertext sealed under it exists:
+ * a master is a function of (passphrase, epoch) and nothing else, so two machines
+ * on one repository derive one master from one passphrase, and a change of strength
+ * is a new epoch — every blob re-sealed — never a second master beside the first.
  *
  * keymgr is the only consumer that holds `master_key`; cipher receives only the
  * (mac_key, prf_key) pair derived per encrypt/decrypt operation. Independence
  * between mac_key and prf_key comes from distinct `crypto_domain_t` tags absorbed
  * at MAC init.
  *
- * Memory hardness is the only attacker-bounding work in the KDF. Argon2id's
- * `memory_mib × passes` product bounds the per-guess cost; everything else
- * (framing, the fingerprint, the locked work area) is hygiene around that one
- * primitive call.
+ * Memory hardness is the only attacker-bounding work in the KDF. Argon2id's `memory
+ * × passes` product bounds the per-guess cost; everything else (framing, the
+ * fingerprint, the locked work area) is hygiene around that one primitive call.
  *
- * Argon2 parameter bounds: the pair enters the process at two boundaries only —
- * a preset, in range by construction, when `init` mints; and the ref, validated
- * with `kdf_validate_params` where `infra/epoch` loads or fetches it. Everything
- * downstream trusts the epoch it is handed. The ceiling is an allocation bound
- * on the ref's own bytes, which the census and the reconcile already protect;
+ * Argon2 parameter bounds: the parameters enter the process at two boundaries
+ * only — a preset, in range by construction, when `init` mints; and the ref,
+ * validated with `kdf_validate_params` where `infra/epoch` loads or fetches it.
+ * Everything downstream trusts the epoch it is handed. The ceiling is an allocation
+ * bound on the ref's own bytes, which the census and the reconcile already protect;
  * no blob carries parameters, so nothing pulled from a remote can choose the work.
  *
  * Error contract: every error path scrubs partially-written output buffers via
@@ -49,7 +48,7 @@
 
 #define KDF_KEY_SIZE 32            /* All keys in the hierarchy share this size. */
 #define KDF_SALT_SIZE 32           /* Argon2id salt size — 32 bytes (256 bits). */
-#define KDF_PARAMS_SIZE 3          /* LE16 memory_mib ‖ passes — see kdf_params_store. */
+#define KDF_PARAMS_SIZE 3          /* LE16 memory ‖ passes — see kdf_params_store. */
 #define KDF_EPOCH_FP_SIZE 8        /* Epoch fingerprint — see kdf_epoch_fingerprint. */
 
 _Static_assert(
@@ -69,25 +68,37 @@ _Static_assert(
  * "Argon2 parameter bounds"). All values fit `uint16_t` / `uint8_t` for the ref's
  * params blob.
  */
-#define KDF_ARGON2_MEMORY_MIB_MIN 8       /* security floor */
-#define KDF_ARGON2_MEMORY_MIB_MAX 4096    /* allocation bound: 4× paranoid (1024 MiB) */
-#define KDF_ARGON2_PASSES_MIN     1
-#define KDF_ARGON2_PASSES_MAX     20      /* RFC 9106 high-end */
+#define KDF_ARGON2_MEMORY_MIN 8       /* MiB: security floor */
+#define KDF_ARGON2_MEMORY_MAX 4096    /* MiB: allocation bound, 4× paranoid's */
+#define KDF_ARGON2_PASSES_MIN 1
+#define KDF_ARGON2_PASSES_MAX 20      /* RFC 9106 high-end */
+
+/**
+ * The Argon2id parameters: what a guess costs.
+ *
+ * One value, held by the epoch beside its salt and by each preset under its name,
+ * and handed whole wherever the cost goes — validated, spelled as the ref's params
+ * blob, hashed into the fingerprint, compared — so a parameter the derivation
+ * gains is a field here and moves no signature. Public, as the epoch is.
+ */
+typedef struct kdf_params {
+    uint16_t memory;    /* MiB */
+    uint8_t passes;     /* over the memory */
+} kdf_params_t;
 
 /**
  * The three tuning points the derivation is offered at.
  *
  * `dotta init --strength <name>` mints the repository's epoch with one of them;
- * `dotta key status` names an epoch's pair back by the row that matches it, and
- * a pair no row names prints as its numbers. Wall-clock figures are indicative
- * — measured on a 2024-era laptop, they scale with single-thread memory bandwidth
- * and L3 size. Adding a preset is a row; the lookups are linear over
+ * `dotta key status` names an epoch's parameters back by the row they equal,
+ * and parameters no row names print as their numbers. Wall-clock figures are
+ * indicative — measured on a 2024-era laptop, they scale with single-thread memory
+ * bandwidth and L3 size. Adding a preset is a row; the lookups are linear over
  * KDF_PRESET_COUNT.
  */
 typedef struct kdf_preset {
     const char *name;
-    uint16_t memory_mib;
-    uint8_t passes;
+    kdf_params_t params;
 } kdf_preset_t;
 
 #define KDF_PRESET_COUNT   3
@@ -98,53 +109,57 @@ extern const kdf_preset_t kdf_presets[KDF_PRESET_COUNT];
 /**
  * The epoch: the repository's contribution to the master key.
  *
- * The salt and the Argon2id pair, as `infra/epoch` loads them from the ref. Public
- * — the salt's job is uniqueness across repositories, not secrecy, and the pair
- * is the cost of a guess — so an epoch is ordinary input bytes: no mlock, no
- * wipe. Passed by pointer everywhere a salt went.
+ * The salt and the Argon2id parameters, as `infra/epoch` loads them from the
+ * ref. Public — the salt's job is uniqueness across repositories, not secrecy,
+ * and the parameters are the cost of a guess — so an epoch is ordinary input
+ * bytes: no mlock, no wipe. Passed by pointer everywhere a salt went.
  */
 typedef struct kdf_epoch {
     uint8_t salt[KDF_SALT_SIZE];
-    uint16_t memory_mib;
-    uint8_t passes;
+    kdf_params_t params;
 } kdf_epoch_t;
 
 /**
- * Validate an Argon2id pair against KDF_ARGON2_*_MIN/MAX.
+ * Validate Argon2id parameters against KDF_ARGON2_*_MIN/MAX.
  *
  * The ref's gate: `infra/epoch` runs it on the params blob it loads or fetches,
  * before the epoch reaches anything that derives under it. Returns ERR_CRYPTO
  * on an out-of-range value so a damaged or hostile ref surfaces as a crypto-class
  * error.
  *
- * @param memory_mib Argon2 memory in MiB
- * @param passes     Argon2 pass count
+ * @param params The parameters
  * @return Error or NULL on success
  */
-error_t kdf_validate_params(uint16_t memory_mib, uint8_t passes);
+error_t kdf_validate_params(kdf_params_t params);
 
 /**
- * Encode / decode the Argon2id pair as the ref's params blob.
+ * Encode / decode the Argon2id parameters as the ref's params blob.
  *
- * Three bytes: LE16 memory_mib ‖ passes — the bytes `refs/dotta/epoch:params`
- * holds and the tail of the fingerprint's input, so the ref and the fingerprint
- * spell the pair one way. The decode does not validate; `kdf_validate_params`
- * is the boundary's, applied to what came back.
+ * Three bytes: LE16 memory ‖ passes — the bytes `refs/dotta/epoch:params` holds
+ * and the tail of the fingerprint's input, so the ref and the fingerprint spell
+ * the parameters one way. The value goes in and comes back whole, as store_le16
+ * and load_le16 hand theirs (base/encoding.h). The decode does not validate;
+ * `kdf_validate_params` is the boundary's, applied to what came back.
  *
- * @param out        Output buffer for KDF_PARAMS_SIZE bytes
- * @param memory_mib Argon2 memory in MiB
- * @param passes     Argon2 pass count
+ * @param out    Output buffer for KDF_PARAMS_SIZE bytes (the store's)
+ * @param params The parameters to spell (the store's)
+ * @param in     KDF_PARAMS_SIZE bytes (the load's)
+ * @return The parameters the bytes spell (the load's)
  */
-void kdf_params_store(
-    uint8_t out[KDF_PARAMS_SIZE],
-    uint16_t memory_mib,
-    uint8_t passes
-);
-void kdf_params_load(
-    const uint8_t in[KDF_PARAMS_SIZE],
-    uint16_t *out_memory_mib,
-    uint8_t *out_passes
-);
+void kdf_params_store(uint8_t out[KDF_PARAMS_SIZE], kdf_params_t params);
+kdf_params_t kdf_params_load(const uint8_t in[KDF_PARAMS_SIZE]);
+
+/**
+ * Whether two costs are one: each field equal.
+ *
+ * Readers: cmds/init.c cmd_init (a strength named against the epoch that stands)
+ * and cmds/key.c key_status (the preset an epoch's parameters are).
+ *
+ * @param a One cost
+ * @param b The other
+ * @return true iff every field is equal
+ */
+bool kdf_params_equal(kdf_params_t a, kdf_params_t b);
 
 /**
  * Compute the public 8-byte fingerprint of an epoch.
@@ -173,16 +188,16 @@ void kdf_epoch_fingerprint(
  * Derive the master key from a passphrase under an epoch, using Argon2id.
  *
  * Argon2id (RFC 9106), single-lane, over the epoch's salt at the epoch's
- * (memory_mib, passes). The salt's uniqueness across repositories forecloses
+ * parameters. The salt's uniqueness across repositories forecloses
  * cross-installation precomputation (a table built against one dotta repo is
- * useless against any other); the pair is the per-guess cost.
+ * useless against any other); the parameters are the per-guess cost.
  *
- * Maps `memory_mib * 1024 * 1024` bytes for the work area with `secure_alloc`
+ * Maps the parameters' memory, in MiB, for the work area with `secure_alloc`
  * (base/secure.h) — locked best-effort, with the one-time advisory on failure —
  * and ends it with `secure_free`: wiped and unmapped on every path.
  *
- * `epoch` is a loaded epoch: its pair is in range by the ref's validation
- * (`infra/epoch`) or a preset's construction, and is not re-checked here.
+ * `epoch` is a loaded epoch: its parameters are in range by the ref's validation
+ * (`infra/epoch`) or a preset's construction, and are not re-checked here.
  * `passphrase_len` is checked against UINT32_MAX (Argon2's representational limit)
  * to prevent silent truncation. Every error path scrubs `out_master_key` before
  * return.

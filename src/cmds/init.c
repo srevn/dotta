@@ -187,8 +187,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     kdf_epoch_t epoch;
     bool epoch_repaired = false;
     err = epoch_init(
-        repo, opts->preset->memory_mib, opts->preset->passes, COMMIT_ACTION_INIT, &epoch,
-        &epoch_repaired
+        repo, opts->preset->params, COMMIT_ACTION_INIT, &epoch, &epoch_repaired
     );
     if (err) goto cleanup;
     if (epoch_repaired) {
@@ -199,14 +198,13 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
      * told: a strength given by name that it does not match is refused — a change
      * of strength is a new epoch, never a note — and one that matches, or none
      * given, is the no-op it reads as. */
-    if (opts->strength && (epoch.memory_mib != opts->preset->memory_mib ||
-        epoch.passes != opts->preset->passes)) {
+    if (opts->strength && !kdf_params_equal(epoch.params, opts->preset->params)) {
         err = error_create(
             ERR_CONFLICT,
             "The repository's epoch is already minted at %u MiB, %u passes; "
             "a change of strength is a new epoch: remove the encrypted files, "
             "delete '%s', and run init again",
-            (unsigned) epoch.memory_mib, (unsigned) epoch.passes, EPOCH_REF
+            (unsigned) epoch.params.memory, (unsigned) epoch.params.passes, EPOCH_REF
         );
         goto cleanup;
     }
@@ -286,8 +284,8 @@ static args_want_t init_complete(
         for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
             fprintf(
                 out, "%s\t%u MiB, %u passes\n", kdf_presets[i].name,
-                (unsigned) kdf_presets[i].memory_mib,
-                (unsigned) kdf_presets[i].passes
+                (unsigned) kdf_presets[i].params.memory,
+                (unsigned) kdf_presets[i].params.passes
             );
         }
         return ARGS_WANT_NONE;

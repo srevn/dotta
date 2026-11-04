@@ -164,23 +164,22 @@ static void key_status(const dotta_ctx_t *ctx) {
         return;
     }
 
-    /* The configuration, at -v. The Argon2id pair is the repository's epoch —
-     * minted at init, the same on every machine — named by the preset that matches
-     * it when one does. Encryption-enabled implies the dispatcher created the
-     * keymgr. */
+    /* The configuration, at -v. The Argon2id parameters are the repository's
+     * epoch's — minted at init, the same on every machine — named by the preset
+     * they equal when one does. Encryption-enabled implies the dispatcher created
+     * the keymgr. */
     CHECK_NULL(keymgr);
     const kdf_epoch_t *epoch = keymgr_epoch(keymgr);
     const char *preset = NULL;
     for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
-        if (kdf_presets[i].memory_mib == epoch->memory_mib &&
-            kdf_presets[i].passes == epoch->passes) {
+        if (kdf_params_equal(kdf_presets[i].params, epoch->params)) {
             preset = kdf_presets[i].name;
         }
     }
     output_section(out, OUTPUT_VERBOSE, "Encryption configuration");
     output_print(
         out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes%s%s%s\n",
-        (unsigned) epoch->memory_mib, (unsigned) epoch->passes,
+        (unsigned) epoch->params.memory, (unsigned) epoch->params.passes,
         preset ? " (" : "", preset ? preset : "", preset ? ")" : ""
     );
 

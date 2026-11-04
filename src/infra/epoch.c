@@ -2,7 +2,7 @@
  * epoch.c - The repository's epoch: implementation
  *
  * Five entry points:
- *   - epoch_init            — mint the salt beside the pair given + write
+ *   - epoch_init            — mint the salt beside the parameters given + write
  *                             commit/tree/blobs (idempotent)
  *   - epoch_load            — walk ref → commit → tree → blobs, validate, copy
  *   - epoch_resolve         — pure fact-finder for cmd_sync's epoch policy, off
@@ -104,8 +104,8 @@ static error_t epoch_read_blob(
  * refused. `epoch_load` zeroes it at its one exit, which is where its header
  * states the promise, so no caller proceeds with stale stack content under a
  * swallowed error code; `epoch_read_commit` makes no such promise and its callers
- * discard a failed read whole. The pair is validated here — the boundary it enters
- * at — with `kdf_validate_params`.
+ * discard a failed read whole. The parameters are validated here — the boundary
+ * they enter at — with `kdf_validate_params`.
  */
 static error_t epoch_read_tree(
     git_repository *repo, git_tree *tree, kdf_epoch_t *out
@@ -115,14 +115,14 @@ static error_t epoch_read_tree(
     );
     if (err) return err;
 
-    uint8_t params[KDF_PARAMS_SIZE];
+    uint8_t blob[KDF_PARAMS_SIZE];
     err = epoch_read_blob(
-        repo, tree, EPOCH_PARAMS_BLOB, KDF_PARAMS_SIZE, params
+        repo, tree, EPOCH_PARAMS_BLOB, KDF_PARAMS_SIZE, blob
     );
     if (err) return err;
 
-    kdf_params_load(params, &out->memory_mib, &out->passes);
-    err = kdf_validate_params(out->memory_mib, out->passes);
+    out->params = kdf_params_load(blob);
+    err = kdf_validate_params(out->params);
     if (err) return error_wrap(err, "Params blob is out of range");
 
     return NULL;
@@ -185,8 +185,8 @@ error_t epoch_load(git_repository *repo, kdf_epoch_t *out) {
 }
 
 error_t epoch_init(
-    git_repository *repo, uint16_t memory_mib, uint8_t passes, commit_action_t action,
-    kdf_epoch_t *out, bool *out_repaired
+    git_repository *repo, kdf_params_t params, commit_action_t action, kdf_epoch_t *out,
+    bool *out_repaired
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
@@ -271,14 +271,13 @@ error_t epoch_init(
         );
     }
 
-    /* Mint: a fresh salt beside the pair given. entropy_fill scrubs the buffer
-     * to zeros on any failure, so a half-populated salt cannot leak out; its
-     * failure is the mint's first, said with the rest below. */
-    out->memory_mib = memory_mib;
-    out->passes = passes;
+    /* Mint: a fresh salt beside the parameters given. entropy_fill scrubs the
+     * buffer to zeros on any failure, so a half-populated salt cannot leak out;
+     * its failure is the mint's first, said with the rest below. */
+    out->params = params;
 
-    uint8_t params[KDF_PARAMS_SIZE];
-    kdf_params_store(params, memory_mib, passes);
+    uint8_t blob[KDF_PARAMS_SIZE];
+    kdf_params_store(blob, params);
 
     err = entropy_fill(out->salt, KDF_SALT_SIZE);
 
@@ -298,8 +297,7 @@ error_t epoch_init(
     }
     if (!err) {
         err = stage_put(
-            stage, EPOCH_PARAMS_BLOB, params, KDF_PARAMS_SIZE, GIT_FILEMODE_BLOB,
-            NULL
+            stage, EPOCH_PARAMS_BLOB, blob, KDF_PARAMS_SIZE, GIT_FILEMODE_BLOB, NULL
         );
     }
     if (!err) {
@@ -742,10 +740,11 @@ static error_t epoch_decide(
     if (err) {
         /* The ref stands and yields no epoch, whichever mechanism got there
          * (epoch.h). Its salt blob may be intact and may be the only copy of
-         * what keys this repository — but with the pair unreadable no fingerprint
-         * can be matched against anything, so the census asks for any ciphertext
-         * at all. Its own cause has nothing to add to either verdict: what the
-         * blob is wrong about does not change whether something is sealed. */
+         * what keys this repository — but with the parameters unreadable no
+         * fingerprint can be matched against anything, so the census asks for
+         * any ciphertext at all. Its own cause has nothing to add to either
+         * verdict: what the blob is wrong about does not change whether something
+         * is sealed. */
         bool any = false;
         err = epoch_census(repo, NULL, &any);
         if (err) return err;
@@ -842,15 +841,15 @@ error_t epoch_adopt(
          * sync route it alike — a wrap would keep the cause's code (ERR_CRYPTO
          * or ERR_GIT) and split them. The ways are two kinds, and the code cannot
          * tell them apart: bytes the read refused (a wrong size, a missing blob,
-         * a pair out of range, an object that is no commit), the remote's; and
-         * an object that would not load after a download that completed, this
-         * store's. So the words blame neither: the act that failed, and the root's
-         * — the blob the read refused, which object it was loading and the
-         * mechanism's sentence for it, one node as every libgit2 failure is
-         * (base/error.h error_git), or the bound the pair broke beneath the wrap
-         * naming the params blob. The act names the advertisement, where the
-         * reader names no ref (epoch_read_blob). A re-mint keeps one fact's words
-         * (base/error.h "Messages"). */
+         * parameters out of range, an object that is no commit), the remote's;
+         * and an object that would not load after a download that completed,
+         * this store's. So the words blame neither: the act that failed, and
+         * the root's — the blob the read refused, which object it was loading
+         * and the mechanism's sentence for it, one node as every libgit2 failure
+         * is (base/error.h error_git), or the bound the parameters broke beneath
+         * the wrap naming the params blob. The act names the advertisement, where
+         * the reader names no ref (epoch_read_blob). A re-mint keeps one fact's
+         * words (base/error.h "Messages"). */
         return error_create(
             ERR_CRYPTO, "Cannot adopt the epoch remote '%s' advertises: %s",
             remote_name, error_message(error_root(err))

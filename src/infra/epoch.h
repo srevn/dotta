@@ -17,7 +17,7 @@
  *       └── commit
  *             └── tree
  *                   ├── salt     (KDF_SALT_SIZE bytes — the Argon2id salt)
- *                   └── params   (KDF_PARAMS_SIZE bytes — LE16 memory_mib ‖ passes)
+ *                   └── params   (KDF_PARAMS_SIZE bytes — LE16 memory ‖ passes)
  *
  * The epoch is everything the master-key derivation takes but the passphrase
  * (`kdf_epoch_t`), and the repository is its one owner: a master is a function
@@ -106,19 +106,19 @@
  * finding below judges the commit at that id, as the reconcile's own reading
  * does (epoch_resolve). If the commit yields a valid salt and params, no-op
  * (idempotent on repeat `dotta init`, and across partial-init repair paths):
- * the pair given is ignored, and the epoch that stands is what `*out` carries —
- * the caller compares it against what it asked for. Otherwise generates
+ * the parameters given are ignored, and the epoch that stands is what `*out`
+ * carries — the caller compares it against what it asked for. Otherwise generates
  * KDF_SALT_SIZE random bytes via `entropy_fill`, writes a commit→tree→{`salt`,
- * `params`} with the pair given, naming its caller's action (infra/commit.h
+ * `params`} with the parameters given, naming its caller's action (infra/commit.h
  * commit_action_word), and points the ref at the new commit.
  *
  * Every fresh mint is gated on the ciphertext census, on both ways the ref can
  * fail to yield an epoch — it names a commit that yields none (a wrong-size blob,
- * a missing blob, a pair out of range, a broken shape, an object libgit2 will
- * not load) or it is absent. The danger is one danger: with the epoch's bytes
- * unavailable no blob's fingerprint can be matched against anything, so any
- * reachable ciphertext (any fingerprint, any version) may be keyed by what the
- * ref held, and a fresh epoch would orphan it permanently. With any reachable
+ * a missing blob, parameters out of range, a broken shape, an object libgit2
+ * will not load) or it is absent. The danger is one danger: with the epoch's
+ * bytes unavailable no blob's fingerprint can be matched against anything, so
+ * any reachable ciphertext (any fingerprint, any version) may be keyed by what
+ * the ref held, and a fresh epoch would orphan it permanently. With any reachable
  * ciphertext, the refusal names the state of the ref and the restore that repairs
  * it, and the evidence stays in place (a remote holding the true epoch heals a
  * divergence via sync's fetch paths instead). A census that found none and could
@@ -147,8 +147,7 @@
  * fetching this remote) finds it ready.
  *
  * @param repo         Repository (must not be NULL)
- * @param memory_mib   Argon2 memory in MiB to mint with (a preset's; in range)
- * @param passes       Argon2 pass count to mint with (a preset's; in range)
+ * @param params       The Argon2id parameters to mint with (a preset's; in range)
  * @param action       The command a mint's commit names: the caller's
  * @param out          The epoch that stands after the call: the existing one,
  *                     or the one minted (must not be NULL)
@@ -158,8 +157,7 @@
  */
 error_t epoch_init(
     git_repository *repo,
-    uint16_t memory_mib,
-    uint8_t passes,
+    kdf_params_t params,
     commit_action_t action,
     kdf_epoch_t *out,
     bool *out_repaired
@@ -169,9 +167,9 @@ error_t epoch_init(
  * Load the repository's epoch.
  *
  * Walks `refs/dotta/epoch` → commit → tree → the `salt` and `params` blobs and
- * fills `*out`: exactly KDF_SALT_SIZE salt bytes, and a pair validated with
- * `kdf_validate_params` — this is the boundary the pair enters the process at,
- * and nothing downstream re-checks it.
+ * fills `*out`: exactly KDF_SALT_SIZE salt bytes, and parameters validated with
+ * `kdf_validate_params` — this is the boundary they enter the process at, and
+ * nothing downstream re-checks them.
  *
  * Returns ERR_NOT_FOUND when — and only when — the ref itself is missing, the
  * canonical diagnostic for "this dotta repo has not been initialized" or "this
@@ -180,8 +178,8 @@ error_t epoch_init(
  * ref and never speaks for the payload.
  *
  * Returns ERR_CRYPTO when the ref exists but yields no epoch — the tree lacks a
- * blob, an entry is not a blob, a blob is the wrong size, or the pair is out of
- * range — each indicating tampering or a partial / format-broken commit.
+ * blob, an entry is not a blob, a blob is the wrong size, or the parameters are
+ * out of range — each indicating tampering or a partial / format-broken commit.
  *
  * A third code reaches callers and needs no type to tell it apart: ERR_GIT, from
  * an object libgit2 will not load, says exactly what ERR_CRYPTO says — the ref
@@ -290,8 +288,8 @@ typedef struct {
  * The question is about the BYTES at the ref, not about the epoch derived from
  * them, and the two come apart on exactly one input: a ref that stands and yields
  * no epoch may hold the only copy of the salt that keys this repository, one
- * blob away from a restore. With the pair unreadable no blob's fingerprint can
- * be matched against anything, so the census there must ask for ANY ciphertext
+ * blob away from a restore. With the parameters unreadable no blob's fingerprint
+ * can be matched against anything, so the census there must ask for ANY ciphertext
  * — any fingerprint, any version. That is the census `epoch_init` runs over the
  * identical state, for the same reason, reaching the same verdict: leave the
  * evidence in place for a restore. With a readable epoch only the ciphertext IT
@@ -339,12 +337,12 @@ error_t epoch_resolve(
  * proven epoch is written to `refs/dotta/epoch`, the one mutation this call makes
  * and its last step. Every failure of that proof returns one ERR_CRYPTO, worded
  * as an epoch that could not be adopted and caused by the mechanism's own sentence
- * — a wrong-size or missing blob, a pair out of range, an advertised object that
- * is no commit, one the read could not load — blaming neither side, since the
- * code cannot tell the remote's bytes from this store's read; and leaves the
- * local ref untouched: there is nothing to roll back, because an epoch that was
- * not proven never stood in `refs/dotta/epoch` for a later `epoch_resolve` or
- * `epoch_load` to read as canonical.
+ * — a wrong-size or missing blob, parameters out of range, an advertised object
+ * that is no commit, one the read could not load — blaming neither side, since
+ * the code cannot tell the remote's bytes from this store's read; and leaves
+ * the local ref untouched: there is nothing to roll back, because an epoch that
+ * was not proven never stood in `refs/dotta/epoch` for a later `epoch_resolve`
+ * or `epoch_load` to read as canonical.
  *
  * ERR_CRYPTO is read by cmds/clone.c cmd_clone, which warns past it; cmds/sync.c
  * sync_reconcile_epoch prints every failure whole and reads no code. Every failure

@@ -222,17 +222,21 @@ That refusal is the safety net for the accident this procedure resembles — a d
 
 This version writes encrypted files in a new format, and its epoch names the four lanes it derives on. A repository an earlier version encrypted is refused until it is moved over once: every encrypted command stops at its epoch, which "cannot be read".
 
-The move rewrites the repository's history. Every encrypted file in every commit is decrypted by the earlier version and encrypted again by this one, under a new epoch at the repository's own strength. Commits keep their authors, dates and messages, and the branches and the epoch are replaced in one push. Afterwards this version reads every commit, the earliest included; the earlier version reads none.
+The move rewrites the repository's history. Every encrypted file in every commit is decrypted by the earlier version and encrypted again by this one, under a new epoch at the repository's own strength. Commits keep their authors, dates and messages, and the branches holding encrypted files are replaced with the epoch in one push. Afterwards this version reads every commit, the earliest included; the earlier version reads none.
 
 Every machine then starts again from the moved repository:
 
 ```bash
+dotta profile list               # with the earlier version: its profiles, each custom/ one's target
 dotta key clear                  # with the earlier version: its cached key is the old epoch's
 mv ~/.local/share/dotta/repo ~/.local/share/dotta/repo.before-move
 dotta clone <url>                # with this version
-dotta profile enable <profile> --target <dir>    # each profile holding custom/ paths
+dotta profile fetch <profile>    # each profile the clone did not enable,
+dotta profile enable <profile> --target <dir>    # a custom/ one with its target
 dotta apply
 ```
+
+Where the earlier version is gone already, its cached key is the file under `~/.cache/dotta/` named by the old epoch's fingerprint, removed by hand.
 
 No machine syncs with the earlier version after the move: its repository still holds the history the move replaced.
 

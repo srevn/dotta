@@ -15,13 +15,13 @@
  * other way — a list's title, tags and rows — is a datum whole. Bytes as they
  * are reach the stream through output_write alone: a payload the user asked to
  * see verbatim — save those written past the layer, show's file text, export's
- * bytes and status's items (cmds/show.c show_write, cmds/export.c export_write,
- * cmds/status.c status_write), because each is complete or the run's error, which
- * output_write returns nothing to say. A payload's reader going is no failure:
- * its bytes end where the reader went, and the run's status stands. A report's
- * writes are unchecked, so a report a refused write cuts short — a full disk, a
- * descriptor that takes no bytes — ends there too, quietly, the run's status
- * standing.
+ * bytes, status's items and diff's raw patch (cmds/show.c show_write, cmds/export.c
+ * export_write, cmds/status.c status_write, cmds/diff.c diff_write_line_cb),
+ * because each is complete or the run's error, which output_write returns nothing
+ * to say. A payload's reader going is no failure: its bytes end where the reader
+ * went, and the run's status stands. A report's writes are unchecked, so a report
+ * a refused write cuts short — a full disk, a descriptor that takes no bytes —
+ * ends there too, quietly, the run's status standing.
  *
  * A line closes as a message does (base/error.h "Messages"), with no period and
  * no exclamation mark: a question keeps its question mark.
@@ -213,8 +213,8 @@ void output_set_color_mode(output_t *ctx, output_color_mode_t color_mode);
  * Move all subsequent output to another stream
  *
  * For a command that dedicates stdout to a byte payload (export -o -, status
- * --raw): every line dotta itself says — a warning, a dry-run preview, verbose
- * chatter — moves to the given stream so the payload arrives alone. Color
+ * --raw, diff --raw): every line dotta itself says — a warning, a dry-run preview,
+ * verbose chatter — moves to the given stream so the payload arrives alone. Color
  * capability is recomputed for the new stream: under AUTO, the payload's pipe
  * and the chatter's tty are different answers. Errors and prompts already live
  * on stderr and are unaffected.

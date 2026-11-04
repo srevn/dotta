@@ -126,14 +126,14 @@ dotta status -v
 `dotta status --raw` prints the same items for a program: each ends in a NUL, its fields a TAB apart -- tags, section, `active`/`orphan`/`scan`, `file`/`directory`, profile, other profile, reason, path -- with `-` for a field that has nothing to say. A script hands a path back escaped as [Naming Paths](#naming-paths) says:
 
 ```bash
-# Diff exactly the files status lists under Uncommitted changes
+# The patch of exactly the files status lists under Uncommitted changes
 paths=()
 while IFS=$'\t' read -r -d '' tags section population kind profile other reason path; do
     [[ $section == uncommitted && $kind == file ]] || continue
     [[ $path == *[*?[]* ]] && path=$(printf '%s\n' "$path" | sed -e 's/[\\*?[]/\\&/g' -e 's/ $/\\ /')
     paths+=("$path")
 done < <(dotta status --raw)
-(( ${#paths[@]} )) && dotta diff "${paths[@]}"
+(( ${#paths[@]} )) && dotta diff --raw --downstream "${paths[@]}" | delta
 ```
 
 **Remote state** -- `dotta status` and `dotta list --remote` say where each profile stands against its remote, a glyph beside the words: `= up-to-date`, `↑ 2 commits ahead`, `↓ 1 commit behind`, `↕ diverged (1 ahead, 2 behind)`, `• no remote branch` (never pushed there), `− deleted on the remote` (another machine deleted the profile; `− deleted on the remote, 2 commits ahead` where commits made here never reached it), `↻ recreated on the remote` (another machine deleted the profile and created it again; `, 2 commits ahead` likewise). `dotta status` asks the remote first. `dotta list --remote` and `dotta status --no-fetch` ask it nothing, and neither does a `dotta status` that cannot reach it: their section is then titled `Remote sync status (origin, as last seen)`, and shows each profile as it stood at the last fetch, so a profile deleted or recreated on the remote since shows there as it last stood. What `dotta sync` does with each is in [Syncing with Remote](#syncing-with-remote).
@@ -161,9 +161,14 @@ dotta diff b3e1f9a a4f2c8e
 
 # Only show the paths
 dotta diff --name-only
+
+# Only the patch, as git prints it, for a pager or a program
+dotta diff --raw --downstream | delta
 ```
 
 Each listed path opens with a status line: what differs, then what the previewed verb does about it, the `--force` that does it where the verb leaves the choice to you, or why it skips the path -- `modified locally (would be committed by update)`, `changed in Git (would be deployed by apply)`, `changed in Git and on disk (update --force <path> keeps disk's)`, `a different kind stands on disk (update skips it)`. A directory is listed as a file is, for its mode, its ownership or its kind. Beneath the line, differing bytes draw a hunk, and a differing kind names both kinds. `dotta diff` compares the paths your enabled profiles claim: new files in tracked directories are listed by `dotta update --dry-run`, and the copies apply would remove by `dotta apply --dry-run`.
+
+`dotta diff --raw` prints the patch alone; anything else dotta says goes to stderr, a path it has no patch for among it. Compared with the file on disk, a patch shows an encrypted file's plaintext, names each file mode `100644`, and names an encrypted one by its plaintext's hash; between two commits, an encrypted file reads as binary.
 
 ## Listing Files and History
 

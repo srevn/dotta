@@ -506,9 +506,10 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * status_print_workspace (Unverifiable's legend and Orphaned paths'), cmds/apply.c
  * apply_fault_label, apply_consent_label and the sudo and key closers of
  * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's status
- * line (diff_status_line) and its header for a commit's row whose look or read
- * failed (diff_print_view, classed by workspace_code_fault below). A reader not
- * on this list is a bug.
+ * line (diff_status_line), its header for a commit's row whose look or read failed
+ * (diff_print_view, classed by workspace_code_fault below), and the row --raw
+ * has no patch for, said on stderr in its status line's words (diff_write_item).
+ * A reader not on this list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
@@ -792,7 +793,8 @@ typedef struct {
  * node its row lands); cmds/diff.c diff_print_item (another kind standing at a
  * row of either kind, drawn by both kinds off the load's look, no blob read)
  * and diff_print_view (the kind rung, off the look a commit's row takes before
- * its blob is read). A reader not on this list is a bug.
+ * its blob is read), and their twins under --raw, diff_write_item and
+ * diff_write_view. A reader not on this list is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {

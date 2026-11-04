@@ -53,8 +53,7 @@
  * @return The line, or NULL
  */
 static const char *diff_status_line(
-    const workspace_item_t *item,
-    diff_direction_t direction
+    const workspace_item_t *item, diff_direction_t direction
 ) {
     /* --all asks each direction in turn, and post_parse resolves an unset one:
      * a direction is one of the two */
@@ -442,11 +441,8 @@ static int diff_print_patch_cb(
  * @param out Output context (must not be NULL)
  */
 static void diff_print_item(
-    const workspace_item_t *item,
-    const char *line,
-    content_cache_t *cache,
-    diff_direction_t direction,
-    output_t *out
+    const workspace_item_t *item, const char *line, content_cache_t *cache,
+    diff_direction_t direction, output_t *out
 ) {
     CHECK_NULL(item);
     CHECK_NULL(line);
@@ -588,7 +584,7 @@ static void diff_print_direction(
     size_t listed = 0;
 
     /* The comparison opens a block of its own: a name-only listing is one, paid
-     * by its first name, and each entry of the full form one more, its header
+     * by its first name, and each entry of the patch form one more, its header
      * asking its own (diff_print_header) */
     output_gap(out, OUTPUT_NORMAL);
 
@@ -611,7 +607,7 @@ static void diff_print_direction(
 
         /* Each entry is a block; a name-only listing's names are one, each with
          * its kind's slash */
-        if (opts->name_only) {
+        if (opts->form == DIFF_FORM_NAMES) {
             output_print(
                 out, OUTPUT_NORMAL, "%s%s\n",
                 item->filesystem_path, path_kind_suffix(item->item_kind)
@@ -623,7 +619,7 @@ static void diff_print_direction(
         listed++;
     }
 
-    if (listed == 0 && !opts->name_only) {
+    if (listed == 0 && opts->form != DIFF_FORM_NAMES) {
         output_summary(
             out, OUTPUT_NORMAL,
             scope_filters_profiles(scope) || scope_filters_paths(scope)
@@ -634,12 +630,213 @@ static void diff_print_direction(
 }
 
 /**
+ * Write a line of a patch to stdout as libgit2 hands it
+ *
+ * The payload --raw dedicates stdout to, written past the output layer
+ * (base/output.h "Layout and data"): a change line's origin, then its content,
+ * nothing added, as the screen's twin prints one (diff_print_line_cb), so the
+ * patch is libgit2's byte for byte. The first failed write ends the print, its
+ * errno kept in the payload: libgit2 hands the callback's non-zero back as a
+ * generic error of its own (lib/libgit2/src/util/errors.h
+ * git_error_set_after_callback_function), so why is the payload's to say.
+ */
+static int diff_write_line_cb(
+    const git_diff_delta *delta,
+    const git_diff_hunk *hunk,
+    const git_diff_line *line,
+    void *payload
+) {
+    int *failed = payload;
+    (void) delta;
+    (void) hunk;
+
+    /* A change line's origin first, as the twin writes it; each write refused
+     * ends the print, its errno read where it fails */
+    if (line->origin == GIT_DIFF_LINE_ADDITION ||
+        line->origin == GIT_DIFF_LINE_DELETION ||
+        line->origin == GIT_DIFF_LINE_CONTEXT) {
+        if (fputc(line->origin, stdout) == EOF) {
+            *failed = errno;
+            return -1;
+        }
+    }
+    if (fwrite(line->content, 1, line->content_len, stdout) != line->content_len) {
+        *failed = errno;
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * End a patch written for a program: complete, or the run's error with its cause
+ *
+ * stdout is line-buffered and every patch ends in a newline, so a failed write
+ * surfaces at the line it fails on; the last flush is checked all the same, as
+ * every payload's end is (cmds/status.c status_write).
+ *
+ * @param failed The first failed write's errno, or 0
+ * @return Error or NULL on success
+ */
+static error_t diff_write_end(int failed) {
+    if (!failed && fflush(stdout) != 0) failed = errno;
+
+    /* The reader's going is no failure: the patch ends where it went */
+    if (!failed || failed == EPIPE) return NULL;
+    return error_errno(failed, "Failed to write the patch to stdout");
+}
+
+/**
+ * Write a row's patch to stdout, off the caller's look
+ *
+ * The row's blob, read as the entry its type says it is, then the copy judged
+ * against it off the look, its patch written where the bytes differ
+ * (infra/compare.h compare_generate_diff); another kind, a copy gone since the
+ * look and one that is the row's write nothing. A read that fails is said on
+ * the report's stream, stderr under --raw, and the patch goes on, as the screen's
+ * row says its own: "No patch for '<storage path>': <cause>". Its readers are
+ * the two arms' writers, diff_write_item and diff_write_view, which hand it the
+ * look they took.
+ *
+ * @param row The row (must not be NULL)
+ * @param st The look the caller took at the row's path, of its own kind (must
+ *           not be NULL)
+ * @param cache Content cache (must not be NULL)
+ * @param direction Which side the patch shows first
+ * @param out Output context, the report's (must not be NULL)
+ * @return 0, or the failed write's errno
+ */
+static int diff_write_patch(
+    const manifest_row_t *row, const struct stat *st, content_cache_t *cache,
+    compare_direction_t direction, output_t *out
+) {
+    git_filemode_t mode = gitops_type_filemode(row->type);
+    const buffer_t *content = NULL;
+    compare_result_t result;    /* unread: only a difference writes, and its patch says it */
+    int failed = 0;
+
+    error_t err = content_cache_get_from_blob_oid(
+        cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
+    );
+    if (!err) {
+        err = compare_generate_diff(
+            content, row->filesystem_path, row->storage_path, mode, st, direction,
+            diff_write_line_cb, &failed, &result
+        );
+    }
+
+    /* A failed write ends the patch, and the error libgit2 made of it says less
+     * than its errno; a failed read is the row's alone */
+    if (err && !failed) {
+        output_warning(
+            out, OUTPUT_NORMAL, "No patch for '%s': %s",
+            row->storage_path, error_message(error_root(err))
+        );
+    }
+
+    return failed;
+}
+
+/**
+ * Write a listed row's patch for a program: diff_print_item's twin
+ *
+ * The rows the screen draws a patch for, by its tests: a byte or kind bit, then
+ * the row's own kind at the load's look, then the render's own look at its moment,
+ * as the screen takes it. A row the load could not look at carries no bit and
+ * is said on the report's stream in its status line's words — a difference nobody
+ * has ruled out, which a program must not read as none — as is a render's look
+ * that failed.
+ *
+ * @param item A listed item (must not be NULL)
+ * @param line Its status line for the direction listing it (must not be NULL)
+ * @param cache Content cache (must not be NULL)
+ * @param direction The direction listing it
+ * @param out Output context, the report's (must not be NULL)
+ * @return 0, or the failed write's errno
+ */
+static int diff_write_item(
+    const workspace_item_t *item, const char *line, content_cache_t *cache,
+    diff_direction_t direction, output_t *out
+) {
+    const manifest_row_t *row = item->row;
+
+    if (item->fault != WORKSPACE_FAULT_NONE) {
+        output_warning(out, OUTPUT_NORMAL, "No patch for '%s': %s", row->storage_path, line);
+        return 0;
+    }
+    if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE | DIVERGENCE_TYPE))) {
+        return 0;
+    }
+    if (item->occupant != workspace_type_occupant(row->type)) return 0;
+
+    struct stat st;
+    const fs_occupant_t occupant = fs_lstat_occupant(item->filesystem_path, &st);
+    if (occupant == FS_OCCUPANT_UNKNOWN) {
+        error_t err = error_errno(errno, "Failed to stat '%s'", item->filesystem_path);
+        output_warning(
+            out, OUTPUT_NORMAL, "No patch for '%s': %s",
+            row->storage_path, error_message(err)
+        );
+        return 0;
+    }
+    if (occupant == FS_OCCUPANT_NONE) return 0;
+
+    return diff_write_patch(
+        row, &st, cache, direction == DIFF_UPSTREAM ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM,
+        out
+    );
+}
+
+/**
+ * Write the patches a direction lists, then the patch's end: diff_print_direction's
+ * twin
+ *
+ * The rows the screen lists, by its three tests — the path filter, the profile
+ * filter, the direction's line — each its patch (diff_write_item), and nothing
+ * else: no header, sentence, separator or empty line. The stream's state is the
+ * first failed write's errno, which ends it.
+ *
+ * @param diverged Diverged items from workspace (borrowed slice)
+ * @param cache Content cache for blob access (must not be NULL)
+ * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
+ * @param scope Operation scope (profile + path dimensions; diff has no excludes)
+ * @param out Output context, the report's (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t diff_write_direction(
+    workspace_items_t diverged, content_cache_t *cache, diff_direction_t direction,
+    const scope_t *scope, output_t *out
+) {
+    int failed = 0;
+
+    for (size_t i = 0; !failed && i < diverged.count; i++) {
+        const workspace_item_t *item = diverged.entries[i];
+
+        /* The path filter (user-specified paths), the row read by its own kind */
+        if (!scope_accepts_path(
+            scope, item->filesystem_path, item->storage_path, item->item_kind
+            )) {
+            continue;
+        }
+
+        /* The profile filter (CLI filtering) */
+        if (!scope_accepts_profile(scope, item->profile)) continue;
+
+        /* The direction's line, or nothing to list */
+        const char *line = diff_status_line(item, direction);
+        if (!line) continue;
+
+        failed = diff_write_item(item, line, cache, direction, out);
+    }
+
+    return diff_write_end(failed);
+}
+
+/**
  * Print commit header with metadata, a block of its own
  */
 static void diff_print_commit(
-    output_t *out,
-    const git_commit *commit,
-    const char *profile
+    output_t *out, const git_commit *commit, const char *profile
 ) {
     output_gap(out, OUTPUT_NORMAL);
 
@@ -727,7 +924,6 @@ static error_t diff_print_stats(output_t *out, git_diff *diff) {
     }
 
     output_endline(out, OUTPUT_NORMAL);
-
     git_diff_stats_free(stats);
 
     return NULL;
@@ -779,7 +975,9 @@ static int diff_print_header_cb(
  * which found the row's kind — stands behind the triple taken at that confirmation
  * (core/state.h state_stat_matches), so disk holds those bytes and nothing need
  * be read to say so. A sealed blob's id names its binding, so a record of another
- * binding vouches for one only where it was forged (stated).
+ * binding vouches for one only where it was forged (stated). Its readers are
+ * the commit arm's two printers, diff_print_view's forms and diff_write_view,
+ * each off the one look a row takes.
  *
  * @param row The commit's row (must not be NULL)
  * @param record The record at its path, or NULL
@@ -789,8 +987,9 @@ static int diff_print_header_cb(
 static bool diff_vouched(
     const manifest_row_t *row, const state_record_t *record, const struct stat *st
 ) {
-    return workspace_base(record) && workspace_compare_confirmed(row, record) == CMP_EQUAL &&
-           state_stat_matches(record, st);
+    return workspace_base(record) &&
+        workspace_compare_confirmed(row, record) == CMP_EQUAL &&
+        state_stat_matches(record, st);
 }
 
 /**
@@ -838,12 +1037,8 @@ static bool diff_vouched(
  * @return Error or NULL on success
  */
 static error_t diff_print_view(
-    const manifest_t *view,
-    const pathspec_t *path_filter,
-    const cmd_diff_options_t *opts,
-    content_cache_t *cache,
-    const state_record_t *records,
-    size_t record_count,
+    const manifest_t *view, const pathspec_t *path_filter, const cmd_diff_options_t *opts,
+    content_cache_t *cache, const state_record_t *records, size_t record_count,
     output_t *out
 ) {
     CHECK_NULL(view);
@@ -854,7 +1049,7 @@ static error_t diff_print_view(
     size_t listed = 0;
 
     /* The comparison opens a block of its own: a name-only listing is one, paid
-     * by its first name, and each entry of the full form one more, its header
+     * by its first name, and each entry of the patch form one more, its header
      * asking its own (diff_print_header) */
     output_gap(out, OUTPUT_NORMAL);
 
@@ -879,14 +1074,14 @@ static error_t diff_print_view(
         struct stat st;
 
         /* Name-only output */
-        if (opts->name_only) {
+        if (opts->form == DIFF_FORM_NAMES) {
             /* One look, handed to the comparison below rather than left for it
              * to take one of its own: the lstat names the path itself (a broken
              * symlink is present — only its target is absent), and every answer
              * but the row's own kind — nothing standing, another kind, a look
              * that failed — is a difference named before a blob is loaded, there
              * being nothing to compare against. So this form asks its question
-             * through the window the full form has — one look, then the read
+             * through the window the patch form has — one look, then the read
              * off it — where it used to look twice and could see two different
              * worlds. */
             if (fs_lstat_occupant(row->filesystem_path, &st) ==
@@ -895,7 +1090,7 @@ static error_t diff_print_view(
                 if (diff_vouched(row, record, &st)) continue;
 
                 /* The commit's bytes against disk's; a read that fails lists
-                 * the row, a difference nobody has ruled out, as the full form
+                 * the row, a difference nobody has ruled out, as the patch form
                  * says it and as a look that failed is listed */
                 const buffer_t *content = NULL;
                 compare_result_t result;
@@ -903,7 +1098,9 @@ static error_t diff_print_view(
                     cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
                 );
                 if (!err) {
-                    err = compare_buffer_to_disk(content, row->filesystem_path, mode, &st, &result);
+                    err = compare_buffer_to_disk(
+                        content, row->filesystem_path, mode, &st, &result
+                    );
                 }
                 if (!err && result == CMP_EQUAL) continue;
             }
@@ -913,7 +1110,7 @@ static error_t diff_print_view(
             continue;
         }
 
-        /* Full diff output: the row's look, ahead of its blob, asked as the
+        /* The patch form: the row's look, ahead of its blob, asked as the
          * workspace's file analysis asks its own — an absence and another kind
          * are said off it with nothing read, as the name-only form names them,
          * and a copy the record vouches for is the commit's — then the blob,
@@ -1021,7 +1218,7 @@ static error_t diff_print_view(
         listed++;
     }
 
-    if (listed == 0 && !opts->name_only) {
+    if (listed == 0 && opts->form != DIFF_FORM_NAMES) {
         output_summary(
             out, OUTPUT_NORMAL,
             path_filter
@@ -1031,6 +1228,71 @@ static error_t diff_print_view(
     }
 
     return NULL;
+}
+
+/**
+ * Write a commit's patches for a program: diff_print_view's twin
+ *
+ * The file rows in the filter, each by the screen's ladder off its one look: a
+ * look that fails is said on the report's stream, stderr under --raw, as the
+ * screen's row says it; an absence, another kind and a copy the record vouches
+ * for have no patch; every other row is read and its patch written, the commit's
+ * side first (diff_write_patch). The rows in the commit's tree order, as the
+ * screen lists them; then the patch's end.
+ *
+ * @param view The commit's view (must not be NULL)
+ * @param path_filter Path filter for CLI (can be NULL for no filter)
+ * @param cache Shared content cache (the run's, must not be NULL)
+ * @param records The record's snapshot (core/state.h state_records; NULL when
+ *                record_count is 0)
+ * @param record_count Records in it
+ * @param out Output context, the report's (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t diff_write_view(
+    const manifest_t *view, const pathspec_t *path_filter, content_cache_t *cache,
+    const state_record_t *records, size_t record_count, output_t *out
+) {
+    int failed = 0;
+
+    manifest_rows_t rows = manifest_rows(view);
+    for (size_t i = 0; !failed && i < rows.count; i++) {
+        const manifest_row_t *row = rows.entries[i];
+
+        /* A directory row: no content to diff */
+        if (row->type == PATH_TYPE_DIRECTORY) continue;
+
+        /* Check the path filter */
+        if (!pathspec_matches(
+            path_filter, row->filesystem_path, row->storage_path, PATH_KIND_FILE
+            )) {
+            continue;
+        }
+
+        const state_record_t *record = state_find_record(
+            records, record_count, row->filesystem_path
+        );
+        struct stat st;
+
+        const fs_occupant_t occupant = fs_lstat_occupant(row->filesystem_path, &st);
+        if (occupant == FS_OCCUPANT_UNKNOWN) {
+            error_t err = error_errno(errno, "Failed to stat '%s'", row->filesystem_path);
+            output_warning(
+                out, OUTPUT_NORMAL, "No patch for '%s': %s",
+                row->storage_path, error_message(err)
+            );
+            continue;
+        }
+
+        /* An absence, another kind and a copy the record vouches for: no patch */
+        if (occupant != workspace_type_occupant(row->type) || diff_vouched(row, record, &st)) {
+            continue;
+        }
+
+        failed = diff_write_patch(row, &st, cache, CMP_DIR_DOWNSTREAM, out);
+    }
+
+    return diff_write_end(failed);
 }
 
 /**
@@ -1071,9 +1333,7 @@ static error_t diff_print_view(
  *         no filter
  */
 static bool diff_validate_filter(
-    const pathspec_t *path_filter,
-    const manifest_t *view,
-    const char *what,
+    const pathspec_t *path_filter, const manifest_t *view, const char *what,
     output_t *out
 ) {
     if (!path_filter) return true;
@@ -1091,9 +1351,7 @@ static bool diff_validate_filter(
         for (size_t i = 0; i < rows.count; i++) {
             const manifest_row_t *row = rows.entries[i];
             if (pathspec_entry_matches_at(
-                path_filter, e,
-                row->filesystem_path,
-                row->storage_path,
+                path_filter, e, row->filesystem_path, row->storage_path,
                 path_type_kind(row->type)
                 )) {
                 reached = row;
@@ -1111,15 +1369,11 @@ static bool diff_validate_filter(
         pathspec_entry_t entry = pathspec_entry_at(path_filter, e);
         if (entry.rule) {
             output_warning(
-                out, OUTPUT_NORMAL,
-                "No %s matches pattern '%s'",
-                what, entry.text
+                out, OUTPUT_NORMAL, "No %s matches pattern '%s'", what, entry.text
             );
         } else {
             output_warning(
-                out, OUTPUT_NORMAL,
-                "No %s matches '%s'",
-                what, entry.text
+                out, OUTPUT_NORMAL, "No %s matches '%s'", what, entry.text
             );
         }
     }
@@ -1149,9 +1403,7 @@ static bool diff_validate_filter(
  * @return Error or NULL on success
  */
 static error_t diff_commit_to_workspace(
-    const dotta_ctx_t *ctx,
-    const char *commit_ref,
-    const scope_t *scope,
+    const dotta_ctx_t *ctx, const char *commit_ref, const scope_t *scope,
     const cmd_diff_options_t *opts
 ) {
     CHECK_NULL(ctx);
@@ -1187,28 +1439,10 @@ static error_t diff_commit_to_workspace(
     );
     if (err) goto cleanup;
 
-    /* Step 2: Print commit header */
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
 
-    /* Warn when more than one profile was searched: only the profile containing
-     * the commit is compared against the filesystem. */
-    if (searched->count > 1) {
-        output_info(
-            out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
-            "(commit-to-workspace compares one profile at a time)", name
-        );
-    }
-
-    output_gap(out, OUTPUT_NORMAL);
-    output_print(
-        out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n",
-        oid_str
-    );
-
-    diff_print_commit(out, commit, name);
-
-    /* Step 3: Get tree from THE HISTORICAL COMMIT (not HEAD!) — from the commit
+    /* Step 2: Get tree from THE HISTORICAL COMMIT (not HEAD!) — from the commit
      * in hand, the OID helper beside it being a second lookup of what is here. */
     int rc = git_commit_tree(&tree, commit);
     if (rc < 0) {
@@ -1216,7 +1450,7 @@ static error_t diff_commit_to_workspace(
         goto cleanup;
     }
 
-    /* Step 4: Build the historical view: the profile at the commit's tree, built
+    /* Step 3: Build the historical view: the profile at the commit's tree, built
      * into a view and let go.
      *
      * The tree's own claim sheet is the profile's to read (core/profiles.h), so
@@ -1232,24 +1466,55 @@ static error_t diff_commit_to_workspace(
     profile_free(profile);
     if (err) goto cleanup;
 
-    /* Step 5: The record, read once for every row: whose an absence is, by the
-     * record at its path (diff_print_view) */
+    /* Step 4: The record, read once for every row: whose an absence is, and which
+     * copies are the commit's unread, by the record at each row's path */
     state_record_t *records = NULL;
     size_t record_count = 0;
     err = state_records(state, arena, &records, &record_count);
     if (err) goto cleanup;
 
-    /* Step 6: The filter's coverage over the commit's view, answered before
-     * anything is compared, as the workspace arm answers it over its own. Where
-     * no entry reaches a row, nothing can diff, and the answers are the whole
-     * report. */
-    if (!diff_validate_filter(path_filter, historical, "path of the commit", out)) {
-        goto cleanup;
-    }
+    /* Step 5: What the run prints, chosen once its facts are in hand, so a commit
+     * whose tree or sheet will not read is refused with nothing above it. Each
+     * form answers the filter's coverage over the commit's view before anything
+     * is compared, as the workspace arm answers it over its own: where no entry
+     * reaches a row, nothing can diff, and the answers are the whole report. */
+    switch ((diff_form_t) opts->form) {
+        case DIFF_FORM_RAW:
+            /* libgit2's patches alone, for a program */
+            if (diff_validate_filter(path_filter, historical, "path of the commit", out)) {
+                err = diff_write_view(
+                    historical, path_filter, cache, records, record_count, out
+                );
+            }
+            break;
 
-    /* Step 7: Compare the commit's view against the current filesystem, the
-     * comparison saying its own empty line */
-    err = diff_print_view(historical, path_filter, opts, cache, records, record_count, out);
+        case DIFF_FORM_NAMES:
+        case DIFF_FORM_PATCH:
+            /* Warn when more than one profile was searched: only the profile
+             * containing the commit is compared against the filesystem. */
+            if (searched->count > 1) {
+                output_info(
+                    out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
+                    "(commit-to-workspace compares one profile at a time)", name
+                );
+            }
+
+            output_gap(out, OUTPUT_NORMAL);
+            output_print(
+                out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n",
+                oid_str
+            );
+
+            diff_print_commit(out, commit, name);
+
+            /* The comparison saying its own empty line */
+            if (diff_validate_filter(path_filter, historical, "path of the commit", out)) {
+                err = diff_print_view(
+                    historical, path_filter, opts, cache, records, record_count, out
+                );
+            }
+            break;
+    }
 
 cleanup:
     git_tree_free(tree);
@@ -1343,11 +1608,8 @@ static int diff_select_delta_cb(
  * @return Error or NULL on success
  */
 static error_t diff_commits(
-    const dotta_ctx_t *ctx,
-    const char *commit1_ref,
-    const char *commit2_ref,
-    const scope_t *scope,
-    const cmd_diff_options_t *opts
+    const dotta_ctx_t *ctx, const char *commit1_ref, const char *commit2_ref,
+    const scope_t *scope, const cmd_diff_options_t *opts
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(commit1_ref);
@@ -1383,19 +1645,9 @@ static error_t diff_commits(
     );
     if (err) goto cleanup;
 
-    /* Print diff range header */
     char oid1_str[8], oid2_str[8];
     git_oid_tostr(oid1_str, sizeof(oid1_str), git_commit_id(commit1));
     git_oid_tostr(oid2_str, sizeof(oid2_str), git_commit_id(commit2));
-
-    output_gap(out, OUTPUT_NORMAL);
-    output_print(
-        out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n",
-        oid1_str, oid2_str
-    );
-
-    /* Print second commit header (the "new" one) */
-    diff_print_commit(out, commit2, profile);
 
     /* Get trees from the two commits in hand — the OID helper beside this one
      * would look each of them up a second time (the workspace arm above reads
@@ -1416,8 +1668,7 @@ static error_t diff_commits(
      * selection is borrowed for the call: libgit2 reads the payload only while
      * generating. */
     diff_selection_t selection = {
-        .filter = path_filter, .mounts = mounts, .profile = profile,
-        .arena  = arena
+        .filter = path_filter, .mounts = mounts, .profile = profile, .arena  = arena
     };
     git_diff_options diff_opts;
     git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
@@ -1429,37 +1680,62 @@ static error_t diff_commits(
     err = gitops_diff_trees(repo, tree1, tree2, &diff_opts, &diff);
     if (err) goto cleanup;
 
-    /* The range's body, a block beneath the header: the names, or the statistics
-     * above the patch */
-    output_gap(out, OUTPUT_NORMAL);
-    if (opts->name_only) {
-        /* Name-only: each changed path, cyan, as the patch's file header colours
-         * it — written here as the datum it is, never libgit2's name-only line,
-         * which is the path raw where git quotes it (lib/libgit2/src/libgit2/
-         * diff_print.c diff_print_one_name_only). Every delta is a change: a
-         * tree-to-tree diff drops an unmodified one unless INCLUDE_UNMODIFIED
-         * is asked (diff_generate.c diff_delta__from_two), and dotta never asks
-         * it. */
-        size_t count = git_diff_num_deltas(diff);
-        for (size_t i = 0; i < count; i++) {
-            const git_diff_delta *delta = git_diff_get_delta(diff, i);
-            output_colored(
-                out, OUTPUT_NORMAL, OUTPUT_COLOR_CYAN, "%s\n",
-                delta->new_file.path
+    /* What the run prints, chosen once the diff is in hand */
+    switch ((diff_form_t) opts->form) {
+        case DIFF_FORM_RAW: {
+            /* libgit2's patch whole, for a program: the first failed write's
+             * errno ends it, and libgit2's own error over that write says less */
+            int failed = 0;
+            rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, diff_write_line_cb, &failed);
+            err = rc < 0 && !failed ? error_git(rc, "Cannot print the diff")
+                                    : diff_write_end(failed);
+            break;
+        }
+
+        case DIFF_FORM_NAMES:
+        case DIFF_FORM_PATCH:
+            output_gap(out, OUTPUT_NORMAL);
+            output_print(
+                out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n",
+                oid1_str, oid2_str
             );
-        }
-    } else {
-        /* Full diff: statistics followed by patch */
-        err = diff_print_stats(out, diff);
-        if (err) goto cleanup;
 
-        output_gap(out, OUTPUT_NORMAL);
+            /* Print second commit header (the "new" one) */
+            diff_print_commit(out, commit2, profile);
 
-        rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, diff_print_line_cb, out);
-        if (rc < 0) {
-            err = error_git(rc, "Cannot print the diff");
-            goto cleanup;
-        }
+            /* The range's body, a block beneath the header: the names, or the
+             * statistics above the patch */
+            output_gap(out, OUTPUT_NORMAL);
+            if (opts->form == DIFF_FORM_NAMES) {
+                /* Name-only: each changed path, cyan, as the patch's file header
+                 * colours it — written here as the datum it is, never libgit2's
+                 * name-only line, which is the path raw where git quotes it
+                 * (lib/libgit2/src/libgit2/ diff_print.c diff_print_one_name_only).
+                 * Every delta is a change: a tree-to-tree diff drops an unmodified
+                 * one unless INCLUDE_UNMODIFIED is asked (diff_generate.c
+                 * diff_delta__from_two), and dotta never asks it. */
+                size_t count = git_diff_num_deltas(diff);
+                for (size_t i = 0; i < count; i++) {
+                    const git_diff_delta *delta = git_diff_get_delta(diff, i);
+                    output_colored(
+                        out, OUTPUT_NORMAL, OUTPUT_COLOR_CYAN, "%s\n",
+                        delta->new_file.path
+                    );
+                }
+            } else {
+                /* The patch form: statistics followed by patch */
+                err = diff_print_stats(out, diff);
+                if (err) goto cleanup;
+
+                output_gap(out, OUTPUT_NORMAL);
+
+                rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, diff_print_line_cb, out);
+                if (rc < 0) {
+                    err = error_git(rc, "Cannot print the diff");
+                    goto cleanup;
+                }
+            }
+            break;
     }
 
 cleanup:
@@ -1490,9 +1766,7 @@ cleanup:
  * @return Error or NULL on success
  */
 static error_t diff_workspace(
-    const dotta_ctx_t *ctx,
-    const scope_t *scope,
-    const cmd_diff_options_t *opts
+    const dotta_ctx_t *ctx, const scope_t *scope, const cmd_diff_options_t *opts
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(scope);
@@ -1509,7 +1783,9 @@ static error_t diff_workspace(
     /* Step 1: The filter's coverage over the view — the one the workspace joins,
      * and all the question needs. Where no entry reaches a row, nothing can diff,
      * the answers are the whole report, and no workspace is loaded. */
-    if (!diff_validate_filter(scope_paths(scope), manifest, "active path", out)) return NULL;
+    if (!diff_validate_filter(scope_paths(scope), manifest, "active path", out)) {
+        return NULL;
+    }
 
     /* Step 2: Load the workspace over the rows alone. What apply would remove
      * is apply -n's to preview, and the new files update -n's, so no orphan is
@@ -1528,23 +1804,34 @@ static error_t diff_workspace(
     /* Step 3: Get pre-analyzed divergence from workspace */
     workspace_items_t diverged = workspace_diverged(ws);
 
-    /* Step 4: The listings, by direction, each saying its own empty line. A row
-     * the analysis could not look at is listed by its status line, which names
-     * its class, so no listing is empty over it. */
-    if (opts->direction == DIFF_BOTH) {
-        /* Both directions under their headers, the upstream section first */
-        output_section(out, OUTPUT_NORMAL, "Upstream (repository → filesystem)");
-        output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change");
-        diff_print_direction(diverged, cache, DIFF_UPSTREAM, scope, opts, out);
+    /* Step 4: What the run prints, chosen once the diverged items are in hand:
+     * the patches alone, for a program, or the listings, by direction, each saying
+     * its own empty line. A row the analysis could not look at is listed by its
+     * status line, which names its class, so no listing is empty over it; under
+     * --raw it is said on stderr (diff_write_item). */
+    switch ((diff_form_t) opts->form) {
+        case DIFF_FORM_RAW:
+            /* One direction: --all is refused beside --raw (diff_post_parse) */
+            return diff_write_direction(diverged, cache, opts->direction, scope, out);
 
-        output_section(out, OUTPUT_NORMAL, "Downstream (filesystem → repository)");
-        output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit");
-        diff_print_direction(diverged, cache, DIFF_DOWNSTREAM, scope, opts, out);
-    } else {
-        diff_print_direction(diverged, cache, opts->direction, scope, opts, out);
+        case DIFF_FORM_NAMES:
+        case DIFF_FORM_PATCH:
+            if (opts->direction == DIFF_BOTH) {
+                /* Both directions under their headers, the upstream section first */
+                output_section(out, OUTPUT_NORMAL, "Upstream (repository → filesystem)");
+                output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change");
+                diff_print_direction(diverged, cache, DIFF_UPSTREAM, scope, opts, out);
+
+                output_section(out, OUTPUT_NORMAL, "Downstream (filesystem → repository)");
+                output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit");
+                diff_print_direction(diverged, cache, DIFF_DOWNSTREAM, scope, opts, out);
+            } else {
+                diff_print_direction(diverged, cache, opts->direction, scope, opts, out);
+            }
+            return NULL;
     }
 
-    return NULL;
+    CHECK_ARG(false, "a diff form no enumerator names");
 }
 
 /**
@@ -1559,6 +1846,11 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     output_t *out = ctx->out;
 
     scope_t *scope = NULL;
+
+    /* --raw dedicates stdout to the patch: every line dotta says — the scope's
+     * refusal, the filter's coverage answers, a row it has no patch for — goes
+     * to stderr, moved before one can land (base/output.h output_set_stream) */
+    if (opts->form == DIFF_FORM_RAW) output_set_stream(out, stderr);
 
     /* Build operation scope
      *
@@ -1686,6 +1978,12 @@ static error_t diff_post_parse(
     if (!direction_explicit) {
         o->direction = DIFF_UPSTREAM;  /* Legacy default. */
     }
+
+    /* One stream, one direction: the two sections --all prints are the screen's,
+     * refused in the engine's words (base/args.c apply_flag_set) */
+    if (o->form == DIFF_FORM_RAW && o->direction == DIFF_BOTH) {
+        return error_create(ERR_INVALID_ARG, "Option '--raw' contradicts '--all'");
+    }
     return NULL;
 }
 
@@ -1742,10 +2040,18 @@ static const args_opt_t diff_opts[] = {
         cmd_diff_options_t,direction,          DIFF_BOTH,
         "Show both directions in labelled sections"
     ),
-    ARGS_FLAG(
+    /* Two forms, each writing its enum into the same int, so giving both is the
+     * engine's refusal (base/args.c apply_flag_set). Default (no flag): the field
+     * stays 0, DIFF_FORM_PATCH. */
+    ARGS_FLAG_SET(
         "name-only",
-        cmd_diff_options_t,name_only,
+        cmd_diff_options_t,form,               DIFF_FORM_NAMES,
         "Print changed paths only"
+    ),
+    ARGS_FLAG_SET(
+        "raw",
+        cmd_diff_options_t,form,               DIFF_FORM_RAW,
+        "Print only the patch, in git's format"
     ),
     /* Classified positionals: paths go to paths[], git refs to git_refs[],
      * everything else to profiles[]. The classify() function above decides. */
@@ -1774,10 +2080,17 @@ const args_command_t spec_diff = {
     .notes        =
         "Path Arguments:\n"
         "  A path holding *, ? or [ is also a pattern, and a \\ before each\n"
-        "  names it alone. A leading ! leaves it out.\n",
+        "  names it alone. A leading ! leaves it out.\n"
+        "\n"
+        "Patches:\n"
+        "  Compared with the file on disk, a patch shows an encrypted file's\n"
+        "  plaintext; under --raw it names each file mode 100644 and by its\n"
+        "  plaintext's hash. Between two commits, an encrypted file reads as\n"
+        "  binary.\n",
     .examples     =
         "  %s diff                          # Preview apply (default)\n"
         "  %s diff --name-only              # Only changed paths\n"
+        "  %s diff --raw --downstream       # Only the patch, for a pager\n"
         "  %s diff --downstream             # Preview update\n"
         "  %s diff --all                    # Both directions\n"
         "  %s diff home/.bashrc             # Workspace, single file\n"

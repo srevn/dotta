@@ -934,8 +934,8 @@ error_t state_records(
  * (whose node a link above a capture is), cmds/update.c update_write_record (a
  * deleted path's record, which its reclaim retires), cmds/revert.c revert_reclaims
  * (the restored place's), core/manifest.c manifest_diff (whether a departed claim
- * leaves an orphan), cmds/diff.c diff_print_view (the record at a commit's row,
- * whose an absence is).
+ * leaves an orphan), cmds/diff.c diff_print_view and diff_write_view (the record
+ * at a commit's row: whose an absence is, and whether it vouches for the copy).
  *
  * @param records The snapshot (NULL when count is 0)
  * @param count Records in it

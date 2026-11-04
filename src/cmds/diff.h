@@ -1,9 +1,11 @@
 /**
  * diff.h - Show differences between profiles and filesystem
  *
- * The workspace form previews the two verbs at the view's rows: each direction
+ * The workspace mode previews the two verbs at the view's rows: each direction
  * lists the rows its verb acts on or refuses there — a file's content, kind or
- * claim, a directory's kind or claim — with a hunk where bytes differ.
+ * claim, a directory's kind or claim — with a hunk where bytes differ. Under
+ * --raw a run writes libgit2's patches alone, for a program, and says every line
+ * of its own on stderr.
  *
  * Direction semantics (unified diff representation):
  * - DIFF_UPSTREAM:   old=filesystem, new=repo  — '-' lines are current on disk,
@@ -45,6 +47,21 @@ typedef enum {
 } diff_direction_t;
 
 /**
+ * What a run prints
+ *
+ * Each listed row's header with its patch or its sentence beneath, the names
+ * alone, or libgit2's patch for a program. 0 is the patch, the spec engine's
+ * "no flag given": --name-only and --raw are two ARGS_FLAG_SET rows on the field,
+ * so giving both is the engine's refusal in its own words (base/args.c
+ * apply_flag_set).
+ */
+typedef enum {
+    DIFF_FORM_PATCH = 0,  /* Each listed row's header, its patch or its sentence beneath */
+    DIFF_FORM_NAMES,      /* --name-only: the paths alone */
+    DIFF_FORM_RAW         /* --raw: libgit2's patch, nothing of dotta's */
+} diff_form_t;
+
+/**
  * Command options
  *
  * `mode`, `commit1`, `commit2` are derived by `diff_post_parse` from the three
@@ -62,7 +79,7 @@ typedef struct {
     const char *commit2;        /* Second commit (new, NULL = workspace) */
     char **profiles;            /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
-    bool name_only;             /* Only show file names, not diffs */
+    int form;                   /* What to print (diff_form_t) */
     char **git_refs;            /* Classified git-ref positionals */
     size_t git_ref_count;
 } cmd_diff_options_t;

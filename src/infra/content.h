@@ -468,8 +468,8 @@ content_cache_t *content_cache_create(
  * Readers, and every one of them names a view row's blob or a commit entry's,
  * never a record's: `core/workspace.c workspace_analyze_file` (the sealed arm
  * of the first question), `core/deploy.c deploy_file`, `cmds/diff.c
- * diff_print_item` and `cmds/diff.c diff_print_view`. A reader not on this list
- * is a bug.
+ * diff_print_item`, `cmds/diff.c diff_print_view` and `cmds/diff.c
+ * diff_write_patch`. A reader not on this list is a bug.
  *
  * What the memo is for, named rather than assumed: one binding asked twice in
  * one run. A workspace load asks each managed path once, so a load never hits

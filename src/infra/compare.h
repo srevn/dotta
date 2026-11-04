@@ -57,7 +57,8 @@
  * — reads a failure as "not at base", the conservative answer; and cmds/diff.c
  * says it in the row's block and goes on — diff_print_item under the load's
  * verdict, diff_print_view by the failure's class (core/workspace.h
- * workspace_code_fault).
+ * workspace_code_fault), and under --raw on stderr, the patch going on
+ * (diff_write_patch).
  *
  * One verdict in the tree is reached from no look at all: core/workspace.h
  * workspace_compare_confirmed judges a row against a pair dotta already found

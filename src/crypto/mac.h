@@ -29,10 +29,11 @@
  *   The build fails if any pair collides; no runtime test required.
  *
  * Output zeroization:
- *   - After `crypto_mac_final` the caller MUST `crypto_wipe(&ctx, sizeof(ctx))`
- *     if the context held secret-keyed state. The wrapper struct on the caller's
- *     stack still carries derived material even after `crypto_blake2b_final`
- *     clears its internal accumulator.
+ *   - `crypto_mac_final` leaves nothing in the context: `crypto_blake2b_final`
+ *     zeroes the whole of the context it finishes, and the wrapper is that context
+ *     and no more (mac.c asserts it). The caller wipes it after all, as every
+ *     context that took a key is wiped where it ends, so that each wipe in the
+ *     tree marks a secret (crypto/kdf.c kdf_epoch_fingerprint: no key, no wipe).
  *   - `crypto_mac_oneshot` wipes its internal context on every exit path; callers
  *     need no further scrub.
  *
@@ -75,8 +76,8 @@ typedef enum {
  * `sizeof(crypto_mac_ctx) == sizeof(crypto_blake2b_ctx)` — the type's cost is
  * purely compile-time discipline.
  *
- * Caller-provided storage. After `_final`, the caller must `crypto_wipe(&ctx,
- * sizeof(ctx))`.
+ * Caller-provided storage, zeroed by `_final` and wiped by its caller after,
+ * the mark of a context that took a key (the file's "Output zeroization").
  */
 typedef struct crypto_mac_ctx {
     crypto_blake2b_ctx blake;
@@ -120,9 +121,9 @@ void crypto_mac_absorb(
 /**
  * Finalize the MAC and write 32 bytes of output.
  *
- * The caller MUST `crypto_wipe(ctx, sizeof(*ctx))` after this if the context
- * held key-derived state — `crypto_blake2b_final` clears its internal accumulator,
- * but the wrapper struct on the caller's stack is the caller's responsibility.
+ * Leaves `ctx` zeroed — `crypto_blake2b_final` wipes the whole context, which
+ * is all the wrapper holds — and its caller wipes it after all: a context that
+ * took a key is wiped where it ends (the file's "Output zeroization").
  *
  * @param ctx Initialized context (consumed; do not reuse without re-init)
  * @param out 32-byte output buffer

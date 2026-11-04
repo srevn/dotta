@@ -151,9 +151,8 @@ void crypto_mac_final(
     uint8_t out[CRYPTO_MAC_SIZE]
 ) {
     crypto_blake2b_final(&ctx->blake, out);
-    /* Caller is responsible for `crypto_wipe(ctx, sizeof(*ctx))`.
-     * `crypto_blake2b_final` zeroes its internal accumulator, but the wrapper
-     * struct still occupies stack space. See header. */
+    /* The final zeroed the whole context, the wrapper's one field; the caller's
+     * wipe after this marks a context that took a key (mac.h) */
 }
 
 void crypto_mac_oneshot(

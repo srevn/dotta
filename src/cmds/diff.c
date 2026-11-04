@@ -820,6 +820,11 @@ static bool diff_vouched(
  * never had. And a copy of the row's own kind the record vouches for is the
  * commit's, its blob unread (diff_vouched): an unchanged tree reads no blob,
  * and a cold key is asked for only where a sealed file changed since the commit.
+ * A look or a read that fails is the row's — its header says the failure's class
+ * over its cause — and the comparison goes on; under --name-only the row is listed.
+ * A print that fails once its patch began says the row's header twice, at the
+ * patch's file header and over the failure: libgit2's own failure to format a
+ * patch it holds, no ordinary path (stated).
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)
@@ -889,19 +894,18 @@ static error_t diff_print_view(
                 /* The record vouches for the commit's own copy: nothing to read */
                 if (diff_vouched(row, record, &st)) continue;
 
-                /* Get content from historical commit (cached) */
+                /* The commit's bytes against disk's; a read that fails lists
+                 * the row, a difference nobody has ruled out, as the full form
+                 * says it and as a look that failed is listed */
                 const buffer_t *content = NULL;
+                compare_result_t result;
                 error_t err = content_cache_get_from_blob_oid(
                     cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
                 );
-                if (err) return err;
-
-                /* Compare with filesystem */
-                compare_result_t result;
-                err = compare_buffer_to_disk(content, row->filesystem_path, mode, &st, &result);
-                if (err) return err;
-
-                if (result == CMP_EQUAL) continue;
+                if (!err) {
+                    err = compare_buffer_to_disk(content, row->filesystem_path, mode, &st, &result);
+                }
+                if (!err && result == CMP_EQUAL) continue;
             }
 
             output_print(out, OUTPUT_NORMAL, "%s\n", row->filesystem_path);
@@ -918,12 +922,12 @@ static error_t diff_print_view(
          * look of the row's own kind, compare's kind rung stands, so another
          * kind is this look's alone to say. */
         compare_result_t result;
+        error_t err = NULL;
+
         const fs_occupant_t occupant = fs_lstat_occupant(row->filesystem_path, &st);
         if (occupant == FS_OCCUPANT_UNKNOWN) {
-            return error_errno(errno, "Failed to stat '%s'", row->filesystem_path);
-        }
-
-        if (occupant == FS_OCCUPANT_NONE) {
+            err = error_errno(errno, "Failed to stat '%s'", row->filesystem_path);
+        } else if (occupant == FS_OCCUPANT_NONE) {
             result = CMP_MISSING;
         } else if (occupant != workspace_type_occupant(row->type)) {
             result = CMP_TYPE_DIFF;
@@ -933,20 +937,53 @@ static error_t diff_print_view(
             result = CMP_EQUAL;
         } else {
             const buffer_t *content = NULL;
-            error_t err = content_cache_get_from_blob_oid(
+            err = content_cache_get_from_blob_oid(
                 cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
             );
-            if (err) return err;
+            if (!err) {
+                /* The header a difference of bytes says, at its patch's */
+                diff_header_t header = {
+                    .out = out, .row = row, .line = "modified locally since commit"
+                };
+                err = compare_generate_diff(
+                    content, row->filesystem_path, row->storage_path, mode, &st,
+                    CMP_DIR_DOWNSTREAM, diff_print_header_cb, &header, &result
+                );
+            }
+        }
 
-            /* The header a difference of bytes says, at its patch's */
-            diff_header_t header = {
-                .out = out, .row = row, .line = "modified locally since commit"
-            };
-            err = compare_generate_diff(
-                content, row->filesystem_path, row->storage_path, mode, &st,
-                CMP_DIR_DOWNSTREAM, diff_print_header_cb, &header, &result
+        if (err) {
+            /* The row's look or a read failed — a component the run may not search,
+             * a cold key, a seal this build cannot open — and the row is said
+             * by whose remedy that is (core/workspace.h workspace_code_fault),
+             * in the words diff's status line says it with, over the failure's
+             * root: the row's alone, and the comparison goes on, as the workspace
+             * arm's render says its own. One error per such row stays for the
+             * run (base/error.h); a cold key is one, the keymgr's standing refusal
+             * answering every row after the first */
+            switch (workspace_code_fault(error_code(err))) {
+                case WORKSPACE_FAULT_LOCKED:
+                    diff_print_header(out, row, "locked");
+                    break;
+
+                case WORKSPACE_FAULT_UNREADABLE:
+                    diff_print_header(out, row, "cannot be read");
+                    break;
+
+                case WORKSPACE_FAULT_UNVERIFIED:
+                    diff_print_header(out, row, "could not be verified");
+                    break;
+
+                case WORKSPACE_FAULT_NONE:
+                    CHECK_ARG(false, "a failed read classed from no failure");
+            }
+            output_print(
+                out, OUTPUT_NORMAL, "{dim}# Error:{reset}   %s\n",
+                error_message(error_root(err))
             );
-            if (err) return err;
+
+            listed++;
+            continue;
         }
 
         /* The verdict, in the commit's words: a copy that is the commit's prints

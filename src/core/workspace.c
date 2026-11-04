@@ -344,17 +344,8 @@ static divergence_type_t workspace_compare_ownership(
 
 /**
  * Class a failed look by whose remedy it is
- *
- * The code, and nothing else (workspace.h, workspace_fault_t): ERR_LOCKED is
- * the run's key, ERR_PERMISSION the run's identity — sudo the remedy offered,
- * never promised — and every other a refusal dotta cannot name one remedy for.
- * The code is the root's (base/error.h error_code): the layers above it added
- * the subject the row already names, and the producer chose it (crypto/keymgr.h,
- * "The codes"). This is the one reader of the two classes base/error.h "Codes"
- * fixes for every producer, so every code is named here, and a new one is classed
- * by hand rather than folded into the rest unasked.
  */
-static workspace_fault_t workspace_code_fault(error_code_t code) {
+workspace_fault_t workspace_code_fault(error_code_t code) {
     switch (code) {
         case ERR_LOCKED:
             return WORKSPACE_FAULT_LOCKED;

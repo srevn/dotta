@@ -91,7 +91,7 @@
  * before it branches.
  *
  * Two are read as a class instead, across frames and from any producer, each by
- * the remedy its reader offers (core/workspace.c workspace_code_fault, the one
+ * the remedy its reader offers (core/workspace.h workspace_code_fault, the one
  * reader of both), so their meaning is fixed here. ERR_LOCKED is the run's want
  * of a key: crypto/keymgr's refusals, and infra/content's over a sealed blob
  * with no key in reach or the feature off. ERR_PERMISSION is a refusal an identity

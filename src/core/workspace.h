@@ -477,7 +477,8 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  *
  * The words on screen: a tag says the class on every arm (workspace_item_line),
  * and a sentence says it "locked", "cannot be read" or "could not be verified"
- * — diff's status line (cmds/diff.c diff_status_line) — where apply's label says
+ * — diff's status line (cmds/diff.c diff_status_line), and the header of a commit's
+ * row whose look or read failed (diff_print_view) — where apply's label says
  * "locked", "unreadable" or "cannot verify" (cmds/apply.c apply_fault_label).
  * Status's legends, beneath Unverifiable paths and Orphaned paths (cmds/status.c
  * status_print_workspace), name the remedy alone. Update says no class: its summary
@@ -505,7 +506,9 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * status_print_workspace (Unverifiable's legend and Orphaned paths'), cmds/apply.c
  * apply_fault_label, apply_consent_label and the sudo and key closers of
  * apply_print_deploy_skips and apply_print_cleanup_skips, and cmds/diff.c's status
- * line (diff_status_line). A reader not on this list is a bug.
+ * line (diff_status_line) and its header for a commit's row whose look or read
+ * failed (diff_print_view, classed by workspace_code_fault below). A reader not
+ * on this list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
@@ -513,6 +516,28 @@ typedef enum {
     WORKSPACE_FAULT_UNREADABLE,   /* Refused by permissions — sudo may lift it */
     WORKSPACE_FAULT_UNVERIFIED    /* Anything else — no remedy dotta can name */
 } workspace_fault_t;
+
+/**
+ * Class a failed look by whose remedy it is
+ *
+ * The code, and nothing else: ERR_LOCKED is the run's key, ERR_PERMISSION the
+ * run's identity — sudo the remedy offered, never promised — and every other a
+ * refusal dotta cannot name one remedy for. The code is the root's (base/error.h
+ * error_code): the layers above it added the subject the row already names, and
+ * the producer chose it (crypto/keymgr.h, "The codes"). This is the one reader
+ * of the two classes base/error.h "Codes" fixes for every producer, so every
+ * code is named here, and a new one is classed by hand rather than folded into
+ * the rest unasked.
+ *
+ * Readers: the load's folds — core/workspace.c workspace_look, workspace_measure
+ * and workspace_scan, where they hold an errno, and workspace_error_fault, where
+ * they hold an error — and cmds/diff.c diff_print_view, the row of a commit whose
+ * look or read failed, which no load carries. A reader not on this list is a bug.
+ *
+ * @param code The failed look's code, never OK
+ * @return Its class, never WORKSPACE_FAULT_NONE
+ */
+workspace_fault_t workspace_code_fault(error_code_t code);
 
 /**
  * One path the workspace knows — a row of the view, a record the view lacks, or

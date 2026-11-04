@@ -51,12 +51,13 @@
  * kind does. A look that could not be made is none of them — it is the error
  * the function returns, and what a failure means is the caller's. This module
  * cannot know whether an unreadable path annotates a row or sinks the command,
- * and the tree answers it four ways: core/workspace.c workspace_analyze_file
+ * and the tree answers it three ways: core/workspace.c workspace_analyze_file
  * and workspace_analyze_orphans mark the path (the item's fault, never fatal to
  * the load); the second question the first of them asks — ours against the base
- * — reads a failure as "not at base", the conservative answer; cmds/diff.c
- * diff_print_item says it in the row's block and goes on; diff_print_view fails
- * the run.
+ * — reads a failure as "not at base", the conservative answer; and cmds/diff.c
+ * says it in the row's block and goes on — diff_print_item under the load's
+ * verdict, diff_print_view by the failure's class (core/workspace.h
+ * workspace_code_fault).
  *
  * One verdict in the tree is reached from no look at all: core/workspace.h
  * workspace_compare_confirmed judges a row against a pair dotta already found

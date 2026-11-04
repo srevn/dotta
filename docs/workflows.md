@@ -123,17 +123,35 @@ dotta status -v
 
 `dotta status` groups paths by what to do about them and tags each one -- `[undeployed]`, `[clean]`, `[modified]`, `[deleted]`, `[orphaned]` and more. A path can carry several tags at once (`[orphaned] [relocated]`), and where a tag needs explaining, status prints a short legend under the group. `dotta status --full` lists every managed path with its state and the profile it comes from.
 
-`dotta status --raw` prints the same items for a program: each ends in a NUL, its fields a TAB apart -- tags, section, `active`/`orphan`/`scan`, `file`/`directory`, profile, other profile, reason, path -- with `-` for a field that has nothing to say. A script hands a path back escaped as [Naming Paths](#naming-paths) says:
+`dotta status --raw` prints the same items for a program. Each item is eight fields a TAB apart, and ends in a NUL rather than a newline, since a file name can hold a newline; a field with nothing to say holds `-`. To read it yourself, `dotta status --raw | tr '\0' '\n'`.
+
+| # | Field | What it holds |
+|---|-------|---------------|
+| 1 | tags | the item's tags as status shows them, without brackets, comma-joined: `orphaned,relocated` |
+| 2 | section | the group status lists it under: `conflicts`, `unconfirmed`, `squatted`, `displaced`, `unverifiable`, `uncommitted`, `reassigned`, `undeployed`, `new`, `overridden`, `orphaned`, `released` -- or `-` for an unchanged path, which `--full` lists |
+| 3 | `active`, `orphan` or `scan` | `active`: an enabled profile claims the path; `orphan`: dotta remembers it, but no enabled profile claims it any more (a disabled profile's, say); `scan`: the search for new files found it -- a new file in a tracked directory, or a directory it could not read |
+| 4 | `file` or `directory` | a symlink is a `file` |
+| 5 | profile | the profile the path belongs to |
+| 6 | other profile | the second profile status names beside the path: the one it is reassigned from, or the one whose file stands above an overridden copy |
+| 7 | reason | the reason status gives beside an orphan: `deleted`, `removed`, `not-in-history`, `no-branch`, `never-deployed` |
+| 8 | path | the full path, byte for byte, a directory's without a trailing `/` |
+
+Items come in the order status lists them, group by group, with the unchanged paths last. One path can be listed twice, under two values of field 3 -- a tracked directory you cannot read, for one -- so a script tells items apart by field 3 and the path together. The remote's state is not included, and a program that stops reading early (`head`, `fzf`) is no failure.
+
+A script hands a path back escaped as [Naming Paths](#naming-paths) says:
 
 ```bash
-# The patch of exactly the files status lists under Uncommitted changes
+# Diff exactly the files status lists under Uncommitted changes
 paths=()
-while IFS=$'\t' read -r -d '' tags section population kind profile other reason path; do
+while IFS=$'\t' read -r -d '' _ section _ kind _ _ _ path; do
     [[ $section == uncommitted && $kind == file ]] || continue
-    [[ $path == *[*?[]* ]] && path=$(printf '%s\n' "$path" | sed -e 's/[\\*?[]/\\&/g' -e 's/ $/\\ /')
+    if [[ $path == *[*?[]* ]]; then   # a pattern too: escape it to name just this path
+        path=${path//\\/\\\\} path=${path//\*/\\*} path=${path//\?/\\?} path=${path//\[/\\[}
+        [[ $path == *' ' ]] && path="${path% }\\ "
+    fi
     paths+=("$path")
 done < <(dotta status --raw)
-(( ${#paths[@]} )) && dotta diff --raw --downstream "${paths[@]}" | delta
+(( ${#paths[@]} )) && dotta diff "${paths[@]}"
 ```
 
 **Remote state** -- `dotta status` and `dotta list --remote` say where each profile stands against its remote, a glyph beside the words: `= up-to-date`, `↑ 2 commits ahead`, `↓ 1 commit behind`, `↕ diverged (1 ahead, 2 behind)`, `• no remote branch` (never pushed there), `− deleted on the remote` (another machine deleted the profile; `− deleted on the remote, 2 commits ahead` where commits made here never reached it), `↻ recreated on the remote` (another machine deleted the profile and created it again; `, 2 commits ahead` likewise). `dotta status` asks the remote first. `dotta list --remote` and `dotta status --no-fetch` ask it nothing, and neither does a `dotta status` that cannot reach it: their section is then titled `Remote sync status (origin, as last seen)`, and shows each profile as it stood at the last fetch, so a profile deleted or recreated on the remote since shows there as it last stood. What `dotta sync` does with each is in [Syncing with Remote](#syncing-with-remote).

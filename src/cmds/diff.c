@@ -770,6 +770,30 @@ static int diff_print_header_cb(
 }
 
 /**
+ * Whether the record vouches that the copy at a commit's row is the row's own,
+ * its blob unread
+ *
+ * The workspace's base fast path, asked of a commit's row: the record at the
+ * row's path confirmed the row's very blob, as its kind (core/workspace.h
+ * workspace_base, workspace_compare_confirmed), and the row's look — the caller's,
+ * which found the row's kind — stands behind the triple taken at that confirmation
+ * (core/state.h state_stat_matches), so disk holds those bytes and nothing need
+ * be read to say so. A sealed blob's id names its binding, so a record of another
+ * binding vouches for one only where it was forged (stated).
+ *
+ * @param row The commit's row (must not be NULL)
+ * @param record The record at its path, or NULL
+ * @param st The row's look, which found the row's kind (must not be NULL)
+ * @return Whether the copy is the commit's, by the record alone
+ */
+static bool diff_vouched(
+    const manifest_row_t *row, const state_record_t *record, const struct stat *st
+) {
+    return workspace_base(record) && workspace_compare_confirmed(row, record) == CMP_EQUAL &&
+           state_stat_matches(record, st);
+}
+
+/**
  * Compare a commit's view against the current filesystem
  *
  * The commit-to-workspace comparison: every file row of the view
@@ -793,7 +817,9 @@ static int diff_print_header_cb(
  * difference of bytes says at the patch's own file header (diff_print_header_cb).
  * An absence is worded by the record at its path: "deleted locally" where this
  * profile's record confirmed bytes there, "not deployed" for a file this machine
- * never had.
+ * never had. And a copy of the row's own kind the record vouches for is the
+ * commit's, its blob unread (diff_vouched): an unchanged tree reads no blob,
+ * and a cold key is asked for only where a sealed file changed since the commit.
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)
@@ -860,6 +886,9 @@ static error_t diff_print_view(
              * worlds. */
             if (fs_lstat_occupant(row->filesystem_path, &st) ==
                 workspace_type_occupant(row->type)) {
+                /* The record vouches for the commit's own copy: nothing to read */
+                if (diff_vouched(row, record, &st)) continue;
+
                 /* Get content from historical commit (cached) */
                 const buffer_t *content = NULL;
                 error_t err = content_cache_get_from_blob_oid(
@@ -881,11 +910,12 @@ static error_t diff_print_view(
         }
 
         /* Full diff output: the row's look, ahead of its blob, asked as the
-         * workspace's judges ask theirs — an absence and another kind are said
-         * off it with nothing read, as the name-only form names them — then the
-         * blob, and the comparison off that look, which prints the patch where
-         * the bytes differ: the bytes judged are the bytes printed. Handed only
-         * a look of the row's own kind, compare's kind rung stands, so another
+         * workspace's file analysis asks its own — an absence and another kind
+         * are said off it with nothing read, as the name-only form names them,
+         * and a copy the record vouches for is the commit's — then the blob,
+         * and the comparison off that look, which prints the patch where the
+         * bytes differ: the bytes judged are the bytes printed. Handed only a
+         * look of the row's own kind, compare's kind rung stands, so another
          * kind is this look's alone to say. */
         compare_result_t result;
         const fs_occupant_t occupant = fs_lstat_occupant(row->filesystem_path, &st);
@@ -897,6 +927,10 @@ static error_t diff_print_view(
             result = CMP_MISSING;
         } else if (occupant != workspace_type_occupant(row->type)) {
             result = CMP_TYPE_DIFF;
+        } else if (diff_vouched(row, record, &st)) {
+            /* The record vouches for the commit's own copy, in compare's words:
+             * what a read would have found, with nothing read */
+            result = CMP_EQUAL;
         } else {
             const buffer_t *content = NULL;
             error_t err = content_cache_get_from_blob_oid(

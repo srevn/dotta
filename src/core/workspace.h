@@ -802,8 +802,9 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * Readers: core/workspace.c workspace_analyze_file's base fast path, which reaches
  * its row-against-disk verdict through this one — a live look standing behind
  * the pair's stat means disk IS the pair, so what the row is to the pair is what
- * it is to disk — and workspace_stale below, the boolean reading of it. A reader
- * not on this list is a bug.
+ * it is to disk — workspace_stale below, the boolean reading of it, and cmds/diff.c
+ * diff_vouched, the same fast path asked of a commit's row. A reader not on this
+ * list is a bug.
  *
  * Not this: core/workspace.c workspace_compare_base's stat — the second question's
  * and an orphan's — whose reference IS the record's pair. Nothing stands on the
@@ -1015,8 +1016,8 @@ static inline bool workspace_unlearned(
  * add_refuse_ancestry (whether only --force replaces dotta's own link above a
  * capture, the half of workspace_untouched no measure is needed for); cmds/diff.c
  * diff_print_view (whether an absent row of a commit is a file the user had,
- * classify_absent's rule less its stale clause). A reader not on this list is a
- * bug.
+ * classify_absent's rule less its stale clause) and diff_vouched (the base fast
+ * path's bytes, asked of a commit's row). A reader not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->base_oid) ? record : NULL;

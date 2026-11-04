@@ -405,10 +405,11 @@ typedef struct state_record {
  * Whether there is a stat to ask about is the asker's question, not this one's.
  *
  * Readers: core/workspace.c workspace_analyze_file, of the base and of the bytes
- * a load kept unconfirmed (its two fast paths), and workspace_compare_base, of
- * the base or an orphan's record — the fast paths, which must not disagree about
- * what a stat proves, and cannot: each hands in a record whole, and the triple
- * is never asked under a kind not its own.
+ * a load kept unconfirmed (its two fast paths), workspace_compare_base, of the
+ * base or an orphan's record, and cmds/diff.c diff_vouched, of the base under a
+ * commit's row — the fast paths, which must not disagree about what a stat proves,
+ * and cannot: each hands in a record whole, and the triple is never asked under
+ * a kind not its own.
  */
 static inline bool state_stat_matches(const state_record_t *record, const struct stat *st) {
     return record->stat.mtime != 0

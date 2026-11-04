@@ -15,8 +15,8 @@
  * Command options
  *
  * `show_local` / `show_remote` are derived by `status_post_parse` from the explicit
- * `want_local` / `want_remote` intent flags. If neither was given, both derived
- * fields are true (show both scopes, matching the legacy default).
+ * `want_local` / `want_remote` intent flags: neither given, both halves, and
+ * under `raw` the workspace's alone, the remote's state having no raw form.
  */
 typedef struct {
     char **profiles;            /* Profile names (NULL = use state/config) */
@@ -25,10 +25,11 @@ typedef struct {
     bool no_fetch;              /* Skip fetch before remote status check */
     bool all_profiles;          /* Show all profiles, not just enabled ones */
     bool full;                  /* List the whole manifest: every active path with its state */
+    bool raw;                   /* Print the items for a program, the workspace's half alone */
 
     /* Intent flags (written by ARGS_FLAG; derived outputs below). */
-    int want_local;             /* 1 if --local was seen */
-    int want_remote;            /* 1 if --remote was seen */
+    bool want_local;            /* --local was given */
+    bool want_remote;           /* --remote was given */
 
     /* Derived by post_parse — consumers read these. */
     bool show_local;            /* Show filesystem status */
@@ -38,10 +39,11 @@ typedef struct {
 /**
  * Show status of managed files
  *
- * Compares the filesystem with the view and the record. Reports:
- * - Files that would be deployed
- * - Files that have been modified locally
- * - Files that are up to date
+ * Compares the filesystem with the view and the record, and each profile with
+ * its remote: the enabled profiles, the workspace's diverged items in the sections
+ * that settle them, the remote's rows, and a summary of each half. Under --raw,
+ * the workspace's items alone, for a program: each once, the sections' in their
+ * order, then under --full the clean rows (cmds/status.c status_write).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

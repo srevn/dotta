@@ -1498,7 +1498,8 @@ workspace_route_t workspace_item_route(const workspace_item_t *item);
  * no landing's work there, where here nothing is left to say.
  *
  * Readers: core/workspace.c workspace_list (the diverged items are every other
- * active item). A reader not on this list is a bug.
+ * active item) and cmds/status.c status_write (the clean rows --full writes after
+ * the sections). A reader not on this list is a bug.
  */
 static inline bool workspace_clean(const workspace_item_t *item) {
     return item->state == WORKSPACE_STATE_DEPLOYED &&
@@ -2185,7 +2186,7 @@ workspace_items_t workspace_displaced_orphans(
  * the same spelling by hand (cmds/apply.c apply_print_deploy_receipt).
  */
 typedef struct {
-    /* What the arms decide — the values, which a program reads */
+    /* What the arms decide — the values a program reads (cmds/status.c status_write_item) */
     const char *tags[WORKSPACE_ITEM_MAX_TAGS];      /* Each its arm's literal, in Tag Priority */
     size_t tag_count;                               /* How many the arms wrote, one at least */
     const char *reason;                             /* Why an orphan goes as it goes, or NULL */
@@ -2210,10 +2211,11 @@ typedef struct {
  * answers (cmds/update.c update_print_preview).
  *
  * Readers: cmds/status.c status_print_manifest and status_print_workspace, every
- * section's rows and the legends beneath them; cmds/update.c update_print_preview
- * and cmd_update's places not scanned; cmds/apply.c apply_print_cleanup_preview,
- * a released file's row, its path and what let it go. A reader not on this list
- * is a bug.
+ * section's rows and the legends beneath them, and status_write_item, an item's
+ * values alone — its tags, its reason and its other profile, never their spelling;
+ * cmds/update.c update_print_preview and cmd_update's places not scanned;
+ * cmds/apply.c apply_print_cleanup_preview, a released file's row, its path and
+ * what let it go. A reader not on this list is a bug.
  *
  * Clean (DEPLOYED, and the route CLEAN — workspace_item_route): one tag, the
  * only one that renders agreement, and only status's full listing hands such an

@@ -5,6 +5,7 @@
 #include "cmds/status.h"
 
 #include <config.h>
+#include <errno.h>
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
@@ -1287,6 +1288,114 @@ static void status_print_workspace(
 }
 
 /**
+ * Write one item for a program: eight fields a TAB apart, a NUL at its end
+ *
+ * The tags, comma-joined; the section's word; active, orphan or scan; file or
+ * directory; the profile; the other profile; the reason; and the path, raw, a
+ * directory's without its slash. No field is empty — one with nothing to say
+ * reads '-' — so a reader that joins adjacent TABs, a shell's read, still splits
+ * every one; and none but the path holds a TAB, a newline or a NUL, so a reader
+ * splits seven TABs and takes the path whole.
+ *
+ * @param item The item (must not be NULL)
+ * @param section The section's word, or NULL where no section lists the item
+ * @return 0, or the failed write's errno
+ */
+static int status_write_item(const workspace_item_t *item, const char *section) {
+    const workspace_line_t line = workspace_item_line(item);
+
+    /* The tags, each as its arm wrote it — every line carries one at least */
+    for (size_t t = 0; t < line.tag_count; t++) {
+        if (fprintf(stdout, "%s%s", t > 0 ? "," : "", line.tags[t]) < 0) return errno;
+    }
+
+    /* The rest, '-' where a field has nothing to say, then the NUL that ends
+     * the item. Every word is a closed one, and a profile is a branch's name,
+     * which holds no TAB, newline or NUL and is never '-' (sys/gitops.h
+     * gitops_branch_refname). Active, orphan or scan is which source made the
+     * item: a row, a record, or neither (core/workspace.h workspace_item_t). */
+    const int written = fprintf(
+        stdout, "\t%s\t%s\t%s\t%s\t%s\t%s\t%s%c", section ? section : "-",
+        item->row ? "active" : item->record ? "orphan" : "scan",
+        item->item_kind == PATH_KIND_DIRECTORY ? "directory" : "file", item->profile,
+        line.other ? line.other : "-", line.reason ? line.reason : "-",
+        item->filesystem_path, '\0'
+    );
+
+    return written < 0 ? errno : 0;
+}
+
+/**
+ * Write the items for a program, the payload --raw dedicates stdout to
+ *
+ * The diverged items in scope, each once, the sections in the screen's order
+ * and each in the order it lists them (status_print_workspace); under --full,
+ * then the clean rows in scope, in the active items' order (core/workspace.h
+ * workspace_active: the directories, then the files, each in path order). Nothing
+ * else — no header, legend, count or colour. A payload written past the output
+ * layer (base/output.h "Layout and data"): complete, or the run's error with
+ * its cause, its reader's going no failure. stdout is line-buffered and an item
+ * ends in a NUL, so a failure the buffer held surfaces at the last flush, which
+ * is checked.
+ *
+ * @param partition The diverged items, filed (must not be NULL)
+ * @param ws Workspace (must not be NULL)
+ * @param scope Operation scope (must not be NULL; its filter dimension picks
+ *              the clean rows, as the partition picked the rest)
+ * @param full Whether the clean rows follow the sections
+ * @return Error or NULL on success
+ */
+static error_t status_write(
+    const status_partition_t *partition, const workspace_t *ws, const scope_t *scope, bool full
+) {
+    /* The sections in the screen's print order, each by its title's key word, a
+     * table in status_print_summary's shape */
+    const struct {
+        const char *word;
+        const workspace_items_t *items;
+    } sections[] = {
+        { "conflicts",    &partition->conflicts    },
+        { "unconfirmed",  &partition->unconfirmed  },
+        { "squatted",     &partition->squatted     },
+        { "displaced",    &partition->displaced    },
+        { "unverifiable", &partition->unverifiable },
+        { "uncommitted",  &partition->uncommitted  },
+        { "reassigned",   &partition->reassigned   },
+        { "undeployed",   &partition->undeployed   },
+        { "new",          &partition->new_files    },
+        { "overridden",   &partition->overridden   },
+        { "orphaned",     &partition->orphaned     },
+        { "released",     &partition->released     },
+    };
+
+    /* The stream's state: the first failed write's errno, which ends it */
+    int failed = 0;
+
+    for (size_t s = 0; !failed && s < sizeof(sections) / sizeof(sections[0]); s++) {
+        for (size_t i = 0; !failed && i < sections[s].items->count; i++) {
+            failed = status_write_item(sections[s].items->entries[i], sections[s].word);
+        }
+    }
+
+    /* The clean rows in scope, which no section lists, the filter read as the
+     * Manifest reads it (status_print_manifest) */
+    const workspace_items_t active = workspace_active(ws);
+    for (size_t i = 0; full && !failed && i < active.count; i++) {
+        const workspace_item_t *item = active.entries[i];
+
+        if (workspace_clean(item) && scope_accepts_profile(scope, item->profile)) {
+            failed = status_write_item(item, NULL);
+        }
+    }
+
+    if (!failed && fflush(stdout) != 0) failed = errno;
+
+    /* The reader's going is no failure: the items end where it went */
+    if (!failed || failed == EPIPE) return NULL;
+    return error_errno(failed, "Failed to write the items to stdout");
+}
+
+/**
  * A profile of the remote section: its branch against the remote, or why it could
  * not be read
  */
@@ -1781,12 +1890,17 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     error_t err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
     if (err) return err;
 
-    /* Load workspace for divergence analysis (only needed for local status)
+    /* The workspace's half, loaded and filed (with profile filtering for Coherent
+     * Scope)
      *
      * The workspace's profile set is the view's — the persistent enabled set —
-     * so orphan detection is exact whatever -p narrowed.
+     * so orphan detection is exact whatever -p narrowed. status_partition then
+     * applies the CLI filter dimension via scope_accepts_profile so `dotta status
+     * -p work` matches `dotta apply -p work` behavior, and the sections, the
+     * items and the summary read what it filed.
      */
     workspace_t *ws = NULL;
+    status_partition_t partition = { 0 };
     if (opts->show_local) {
         workspace_options_t ws_opts = {
             .analyze_orphans   = true,
@@ -1796,6 +1910,17 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
         );
         if (err) return err;
+
+        status_partition(ws, scope, ctx->arena, &partition);
+    }
+
+    /* The items, for a program: stdout is theirs alone, the report moved to stderr
+     * as export's -o - moves it (base/output.h output_set_stream), and nothing
+     * of the screen follows — the workspace's half alone was asked
+     * (status_post_parse) */
+    if (opts->raw) {
+        output_set_stream(out, stderr);
+        return status_write(&partition, ws, scope, opts->full);
     }
 
     /* The enabled profiles and the last deployment of each */
@@ -1807,16 +1932,8 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         status_print_manifest(out, ws, scope);
     }
 
-    /* The workspace's half (with profile filtering for Coherent Scope)
-     *
-     * The workspace was loaded over the persistent enabled set (the view's) for
-     * accurate divergence analysis. status_partition then applies the CLI filter
-     * dimension via scope_accepts_profile so `dotta status -p work` matches `dotta
-     * apply -p work` behavior, and the sections and the summary read what it filed.
-     */
-    status_partition_t partition = { 0 };
+    /* The workspace's sections, each under the verb that settles it */
     if (opts->show_local) {
-        status_partition(ws, scope, ctx->arena, &partition);
         status_print_workspace(out, &partition, config);
     }
 
@@ -1840,9 +1957,11 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Resolve the --local / --remote intent pair into show_local / show_remote. Legacy
- * default: both true when neither flag given. Explicit flags reduce to their
- * own scope; giving both is identical to the default.
+ * Resolve the --local / --remote intent pair into show_local / show_remote: neither
+ * flag gives both halves, each flag its own half, and both the two. --raw is
+ * the workspace's half alone: --remote beside it is refused, the remote's state
+ * having no raw form, and --no-fetch, --all and -v, which reach the remote half
+ * and the profiles block, are accepted and do nothing.
  */
 static error_t status_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1851,12 +1970,16 @@ static error_t status_post_parse(
     (void) cmd;
     cmd_status_options_t *o = opts_v;
 
+    if (o->raw && o->want_remote) {
+        return error_create(ERR_INVALID_ARG, "Option '--raw' contradicts '--remote'");
+    }
+
     if (!o->want_local && !o->want_remote) {
         o->show_local = true;
-        o->show_remote = true;
+        o->show_remote = !o->raw;
     } else {
-        o->show_local = o->want_local != 0;
-        o->show_remote = o->want_remote != 0;
+        o->show_local = o->want_local;
+        o->show_remote = o->want_remote;
     }
     return NULL;
 }
@@ -1912,6 +2035,11 @@ static const args_opt_t status_opts[] = {
         cmd_status_options_t,full,
         "List every active path with its state"
     ),
+    ARGS_FLAG(
+        "raw",
+        cmd_status_options_t,raw,
+        "Print the items for a program, the workspace alone"
+    ),
     ARGS_FLAG_SET(
         "v verbose",
         cmd_status_options_t,verbosity,    DOTTA_VERBOSITY_VERBOSE,
@@ -1936,7 +2064,13 @@ const args_command_t spec_status = {
         "Ownership:\n"
         "  Ownership is compared like mode, without privileges. A path whose\n"
         "  permissions refuse the read is reported as [unreadable]; sudo may\n"
-        "  lift it.\n",
+        "  lift it.\n"
+        "\n"
+        "Items (--raw):\n"
+        "  Each item ends in a NUL; its fields, a TAB apart: tags (comma-joined),\n"
+        "  section, active/orphan/scan, file/directory, profile, other profile,\n"
+        "  reason, path. The path is last and raw; '-' stands for a field with\n"
+        "  nothing to say. A stream cut by a failed write exits 1.\n",
     .examples     =
         "  %s status                         # Local + remote\n"
         "  %s status --local                 # Filesystem only\n"
@@ -1944,7 +2078,8 @@ const args_command_t spec_status = {
         "  %s status --no-fetch              # Local + remote as last seen\n"
         "  %s status -p work -p home         # Named profiles only\n"
         "  %s status --all                   # Include non-enabled profiles\n"
-        "  %s status --full                  # Every active path, clean ones too\n",
+        "  %s status --full                  # Every active path, clean ones too\n"
+        "  %s status --raw --full            # Every item, for a program\n",
     .epilogue     =
         "See also:\n"
         "  %s apply           # Deploy the pending filesystem changes\n"

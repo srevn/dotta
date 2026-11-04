@@ -444,9 +444,11 @@ int main(int argc, char **argv) {
      * Flush granularity is what differs, so flush granularity is what is fixed:
      * one line, matching stderr's, makes the order the reader sees the order
      * the code wrote, for every writer in every layer. The report is at most a
-     * few hundred lines and never bulk data (the machine-readable command,
-     * completion, bypasses this stream), so the extra write(2) per line buys
-     * ordering at no cost worth naming.
+     * few hundred lines, so the extra write(2) per line buys ordering at no cost
+     * worth naming. What a run writes past the report shares the stream — show's
+     * text, export's bytes and status's items, the payloads (base/output.h "Layout
+     * and data"), and completion's candidates — and an item ends in a NUL, never
+     * a newline, so the items leave as the buffer fills.
      *
      * Set before anything can print — the libgit2 failure below included.
      */

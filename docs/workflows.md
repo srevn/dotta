@@ -123,6 +123,19 @@ dotta status -v
 
 `dotta status` groups paths by what to do about them and tags each one -- `[undeployed]`, `[clean]`, `[modified]`, `[deleted]`, `[orphaned]` and more. A path can carry several tags at once (`[orphaned] [relocated]`), and where a tag needs explaining, status prints a short legend under the group. `dotta status --full` lists every managed path with its state and the profile it comes from.
 
+`dotta status --raw` prints the same items for a program: each ends in a NUL, its fields a TAB apart -- tags, section, `active`/`orphan`/`scan`, `file`/`directory`, profile, other profile, reason, path -- with `-` for a field that has nothing to say. A script hands a path back escaped as [Naming Paths](#naming-paths) says:
+
+```bash
+# Diff exactly the files status lists under Uncommitted changes
+paths=()
+while IFS=$'\t' read -r -d '' tags section population kind profile other reason path; do
+    [[ $section == uncommitted && $kind == file ]] || continue
+    [[ $path == *[*?[]* ]] && path=$(printf '%s\n' "$path" | sed -e 's/[\\*?[]/\\&/g' -e 's/ $/\\ /')
+    paths+=("$path")
+done < <(dotta status --raw)
+(( ${#paths[@]} )) && dotta diff "${paths[@]}"
+```
+
 **Remote state** -- `dotta status` and `dotta list --remote` say where each profile stands against its remote, a glyph beside the words: `= up-to-date`, `↑ 2 commits ahead`, `↓ 1 commit behind`, `↕ diverged (1 ahead, 2 behind)`, `• no remote branch` (never pushed there), `− deleted on the remote` (another machine deleted the profile; `− deleted on the remote, 2 commits ahead` where commits made here never reached it), `↻ recreated on the remote` (another machine deleted the profile and created it again; `, 2 commits ahead` likewise). `dotta status` asks the remote first. `dotta list --remote` and `dotta status --no-fetch` ask it nothing, and neither does a `dotta status` that cannot reach it: their section is then titled `Remote sync status (origin, as last seen)`, and shows each profile as it stood at the last fetch, so a profile deleted or recreated on the remote since shows there as it last stood. What `dotta sync` does with each is in [Syncing with Remote](#syncing-with-remote).
 
 ## Viewing Differences

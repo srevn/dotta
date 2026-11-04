@@ -1132,7 +1132,7 @@ static void update_print_preview(
             const workspace_item_t *item = partition->modified_files.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1153,7 +1153,7 @@ static void update_print_preview(
             const workspace_item_t *item = partition->unconfirmed.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1171,7 +1171,7 @@ static void update_print_preview(
             const workspace_item_t *item = partition->new_files.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1228,9 +1228,9 @@ static void update_print_preview(
                     metadata, sizeof(metadata), "%s, %s's takes its place", line.metadata,
                     other->profile
                 );
-                output_list_add(list, line.tags, line.color, line.path, metadata);
+                output_list_add(list, line.tag_string, line.color, line.path, metadata);
             } else {
-                output_list_add(list, line.tags, line.color, line.path, line.metadata);
+                output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
             }
         }
 
@@ -1251,7 +1251,7 @@ static void update_print_preview(
             const workspace_item_t *item = partition->modified_dirs.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1274,7 +1274,7 @@ static void update_print_preview(
             const workspace_item_t *item = partition->unencrypted.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -1580,7 +1580,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             const workspace_item_t *item = partition.unscanned.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);

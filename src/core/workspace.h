@@ -677,8 +677,10 @@ typedef enum {
  * and only there: an orphan the ladder decides before that arm keeps NULL whatever
  * stands above its path — an absent copy beneath a blob is a reclaim — and none
  * stands beside a departure, an overridden copy being decided before any history
- * is asked. Readers: cmds/status.c status_print_workspace's Overridden copies,
- * whose rows name the blob whole. A reader not on this list is a bug.
+ * is asked. Readers: the line, which keeps its profile beside the copy's
+ * (workspace_item_line's other), and cmds/status.c status_print_workspace's
+ * Overridden copies, whose rows name the blob whole. A reader not on this list
+ * is a bug.
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -2163,24 +2165,37 @@ workspace_items_t workspace_displaced_orphans(
  * tag and [displaced] ride beside the last two alone, and [type] beside them
  * and [stale], where Git moved the kind too, and agreement's one tag — [clean],
  * or [ancestor] on a derived rung — stands alone (workspace_item_line, whose
- * Tag Priority this counts; a tag added there is counted here). Each takes sixteen
- * bytes of the line's room: its word, its brackets and the space before it. */
+ * Tag Priority this counts; a tag added there is counted here). Each takes a
+ * slot of the line's tags and sixteen bytes of their string: its word, its brackets
+ * and the space before it. */
 #define WORKSPACE_ITEM_MAX_TAGS 6
 
 /**
- * An item's line: its tags, their colour, where it stands and whose it is
+ * An item's line: what its arms decide, and how a list spells it
  *
- * A value workspace_item_line makes whole, nothing in it borrowed. The tags are
- * spelled as the line shows them, each bracketed, a space between: the string a
- * list prints and its legend explains (base/output.h output_list_add,
- * output_list_legend). Apply's receipt writes a fixed directory's two claim tags
- * in the same spelling by hand (cmds/apply.c apply_print_deploy_receipt).
+ * A value workspace_item_line makes whole. Its values are what the arms decide:
+ * the tags, the words a program keys on, and the reason an orphan goes as it
+ * goes — each an arm's literal — and the profile named beside the item's own, a
+ * record's or a view row's string borrowed for the workspace's life, whole where
+ * the metadata's room cuts a long name. Their spelling is the screen's alone:
+ * the tags each bracketed, a space between, spelled as each is added — the string
+ * a list prints and its legend explains (base/output.h output_list_add,
+ * output_list_legend) — their one colour, the path with a directory's slash,
+ * and whose it is. Apply's receipt writes a fixed directory's two claim tags in
+ * the same spelling by hand (cmds/apply.c apply_print_deploy_receipt).
  */
 typedef struct {
-    char tags[WORKSPACE_ITEM_MAX_TAGS * 16];  /* "[modified] [stale]": the words, in Tag Priority */
-    output_color_t color;                     /* The tags' one colour */
-    char path[PATH_MAX + 1];                  /* Where it stands, a directory's with its slash */
-    char metadata[256];                       /* Whose it is: "from p", "p → q", "in p", … */
+    /* What the arms decide — the values, which a program reads */
+    const char *tags[WORKSPACE_ITEM_MAX_TAGS];      /* Each its arm's literal, in Tag Priority */
+    size_t tag_count;                               /* How many the arms wrote, one at least */
+    const char *reason;                             /* Why an orphan goes as it goes, or NULL */
+    const char *other;                              /* The profile named beside the item's, or NULL */
+
+    /* Their spelling — what a list prints */
+    char tag_string[WORKSPACE_ITEM_MAX_TAGS * 16];  /* The tags as a list shows them: "[modified] [stale]" */
+    output_color_t color;                           /* The tags' one colour */
+    char path[PATH_MAX + 1];                        /* Where it stands, a directory's with its slash */
+    char metadata[256];                             /* Whose it is: "from p", "p → q", "in p", … */
 } workspace_line_t;
 
 /**
@@ -2285,27 +2300,32 @@ typedef struct {
  * occupant's, so a squatted directory keeps its slash and the tag names the
  * squatter.
  *
- * Metadata Format:
+ * Metadata Format, and the value each phrase keeps:
  *   - "from {profile}" - Standard source profile
  *   - "{old} → {new}" - A pending reassignment (workspace_reassigned), on a
- *     deployed row and on an undeployed one
+ *     deployed row and on an undeployed one: `other` is {old}, the record's
  *   - "in {profile}" - For the scan's items: a new file, and a place the scan
  *     could not look, whose one tag is the fault's word, beside the join's "from"
  *     line where both stand at one path
  *   - "deleted from {profile}" - An orphan its profile's history says update
- *     deleted (workspace_item_t's departure), whose prune is the one coming
+ *     deleted (workspace_item_t's departure), whose prune is the one coming:
+ *     `reason` is "deleted"
  *   - On a released item, what let it go wherever the item can say: "removed
  *     from {profile}", "not in {profile}'s history" or "{profile} has no branch"
- *     — the history's three answers that keep a file's copies — else "from
- *     {profile}, never deployed", the ownership gate's; "from {profile}" on the
+ *     — the history's three answers that keep a file's copies, `reason` "removed",
+ *     "not-in-history" or "no-branch" — else "from {profile}, never deployed",
+ *     the ownership gate's, `reason` "never-deployed"; "from {profile}" on the
  *     entry's release and a directory's, by what it holds, which the item cannot
  *     tell apart and the legend names (cmds/status.c status_print_workspace) —
  *     and apply's preview says a released file's in the same words (cmds/apply.c
  *     apply_print_cleanup_preview)
+ *   - "from {profile}" on an overridden copy: `other` is the profile of the blob
+ *     standing over it (workspace_item_t's blob_above), whose phrase its caller
+ *     composes, the blob's path beside it
  *
  * The metadata's room is 256 bytes: a profile name past about 120 characters is
  * cut on a reassignment's line, both names riding it, and past about 250 on any
- * other.
+ * other; `other` keeps it whole.
  *
  * A pure function of the item.
  *

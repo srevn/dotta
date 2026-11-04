@@ -4422,20 +4422,25 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
 }
 
 /**
- * A tag on the line, after the ones before it, as the line shows it: bracketed,
- * a space before every one but the first. The line's room is the count's
- * (WORKSPACE_ITEM_MAX_TAGS), so a tag past it is the count's bug.
+ * A tag on the line, after the ones before it: kept as its arm wrote it, and
+ * spelled as the line shows it — bracketed, a space before every one but the
+ * first. Both rooms are the count's (WORKSPACE_ITEM_MAX_TAGS), so a tag past
+ * either is the count's bug.
  */
 static void workspace_line_add(workspace_line_t *line, const char *tag) {
-    const size_t used = strlen(line->tags);
+    const size_t used = strlen(line->tag_string);
     const int written = snprintf(
-        line->tags + used, sizeof(line->tags) - used, "%s[%s]", used > 0 ? " " : "", tag
+        line->tag_string + used, sizeof(line->tag_string) - used, "%s[%s]",
+        used > 0 ? " " : "", tag
     );
 
     CHECK_ARG(
-        written >= 0 && (size_t) written < sizeof(line->tags) - used,
+        line->tag_count < WORKSPACE_ITEM_MAX_TAGS && written >= 0 &&
+        (size_t) written < sizeof(line->tag_string) - used,
         "a line's tags fit the room WORKSPACE_ITEM_MAX_TAGS counts"
     );
+
+    line->tags[line->tag_count++] = tag;
 }
 
 /**
@@ -4481,9 +4486,9 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
              * same pair the DEPLOYED arm prints. */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 workspace_line_add(&line, "reassigned");
+                line.other = item->record->profile;
                 snprintf(
-                    line.metadata, sizeof(line.metadata), "%s → %s",
-                    item->record->profile, item->profile
+                    line.metadata, sizeof(line.metadata), "%s → %s", line.other, item->profile
                 );
             } else {
                 snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
@@ -4610,10 +4615,10 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
              * divergence tags as secondary information */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 workspace_line_add(&line, "reassigned");
+                line.other = item->record->profile;
 
                 snprintf(
-                    line.metadata, sizeof(line.metadata), "%s → %s",
-                    item->record->profile, item->profile
+                    line.metadata, sizeof(line.metadata), "%s → %s", line.other, item->profile
                 );
             } else {
                 snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
@@ -4759,15 +4764,19 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
              * answers here add nothing to the line: a name its profile holds
              * still is that profile's, and a history that would not read is the
              * line's [unverified]; an overridden copy and a node are decided
-             * before any history is asked. What stands over an overridden one
-             * is the item's (workspace_item_t's blob_above), and its caller names
-             * it whole, the blob's path no room of the line's (cmds/status.c
-             * status_print_workspace). */
+             * before any history is asked. */
             if (item->departure && item->departure->kind == PROFILE_DEPARTURE_DELETED) {
+                line.reason = "deleted";
                 snprintf(line.metadata, sizeof(line.metadata), "deleted from %s", item->profile);
             } else {
                 snprintf(line.metadata, sizeof(line.metadata), "from %s", item->profile);
             }
+
+            /* What stands over an overridden copy is the item's (workspace_item_t's
+             * blob_above): its profile kept beside the copy's, and the phrase
+             * its caller's, the blob's path no room of the line's (cmds/status.c
+             * status_print_workspace) */
+            if (item->blob_above) line.other = item->blob_above->profile;
             break;
         }
 
@@ -4828,18 +4837,21 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
             if (item->departure) {
                 switch (item->departure->kind) {
                     case PROFILE_DEPARTURE_REMOVED:
+                        line.reason = "removed";
                         snprintf(
                             line.metadata, sizeof(line.metadata), "removed from %s",
                             item->profile
                         );
                         break;
                     case PROFILE_DEPARTURE_NEVER_HELD:
+                        line.reason = "not-in-history";
                         snprintf(
                             line.metadata, sizeof(line.metadata), "not in %s's history",
                             item->profile
                         );
                         break;
                     case PROFILE_DEPARTURE_GONE:
+                        line.reason = "no-branch";
                         snprintf(
                             line.metadata, sizeof(line.metadata), "%s has no branch",
                             item->profile
@@ -4853,6 +4865,7 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
                         CHECK_ARG(false, "a released file's history keeps its copies");
                 }
             } else if (item->record->deployed_at == 0) {
+                line.reason = "never-deployed";
                 snprintf(
                     line.metadata, sizeof(line.metadata), "from %s, never deployed",
                     item->profile

@@ -437,7 +437,7 @@ static void status_print_manifest(
          * actionable thing. */
         const workspace_line_t line = workspace_item_line(item);
 
-        output_list_add(list, line.tags, line.color, line.path, line.metadata);
+        output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
     }
 
     output_list_render(list);
@@ -707,7 +707,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->conflicts.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
 
             /* [type] where the line leads with it: no conflict is displaced (the
              * DISPLACED_* routes file it below), so the tag is the bit */
@@ -715,7 +715,7 @@ static void status_print_workspace(
                 ? "run 'dotta remove <profile> <path>' to stop tracking it "
                 "on every machine"
                 : "or run 'dotta apply --force <path>' to keep Git's";
-            output_list_legend(list, line.tags, legend);
+            output_list_legend(list, line.tag_string, legend);
         }
 
         output_list_render(list);
@@ -752,9 +752,9 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->unconfirmed.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
             output_list_legend(
-                list, line.tags, "or run 'dotta apply --force <path>' to keep Git's"
+                list, line.tag_string, "or run 'dotta apply --force <path>' to keep Git's"
             );
         }
 
@@ -779,7 +779,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->squatted.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -811,7 +811,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->displaced.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -835,7 +835,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->unverifiable.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
 
             /* The failed look's way out: the key for the locked rows, and the
              * switch before it where encryption is off, a run that holds no key
@@ -861,7 +861,7 @@ static void status_print_workspace(
                 case WORKSPACE_FAULT_UNVERIFIED:
                     break;
             }
-            output_list_legend(list, line.tags, legend);
+            output_list_legend(list, line.tag_string, legend);
         }
 
         output_list_render(list);
@@ -888,7 +888,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->uncommitted.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
 
             const char *legend = NULL;
 
@@ -926,7 +926,7 @@ static void status_print_workspace(
                         false, "the uncommitted bucket holds DEPLOYED and DELETED alone"
                     );
             }
-            output_list_legend(list, line.tags, legend);
+            output_list_legend(list, line.tag_string, legend);
         }
 
         output_list_render(list);
@@ -945,7 +945,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->reassigned.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
         }
 
         output_list_render(list);
@@ -970,7 +970,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->undeployed.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
 
             const char *legend = NULL;
 
@@ -1004,7 +1004,7 @@ static void status_print_workspace(
                         false, "the undeployed bucket holds DEPLOYED and UNDEPLOYED alone"
                     );
             }
-            output_list_legend(list, line.tags, legend);
+            output_list_legend(list, line.tag_string, legend);
         }
 
         output_list_render(list);
@@ -1028,9 +1028,9 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->new_files.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
             output_list_legend(
-                list, line.tags,
+                list, line.tag_string,
                 "or run 'dotta ignore <profile> --add <pattern>' to keep it out"
             );
         }
@@ -1075,7 +1075,7 @@ static void status_print_workspace(
                     item->blob_above->profile, item->blob_above->filesystem_path
                 );
             }
-            output_list_add(list, line.tags, line.color, line.path, metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, metadata);
         }
 
         output_list_render(list);
@@ -1105,7 +1105,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->orphaned.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
 
             const char *legend = NULL;
 
@@ -1210,7 +1210,7 @@ static void status_print_workspace(
                         false, "the orphaned bucket holds ORPHANED and OBSTRUCTING alone"
                     );
             }
-            output_list_legend(list, line.tags, legend);
+            output_list_legend(list, line.tag_string, legend);
         }
 
         output_list_render(list);
@@ -1232,7 +1232,7 @@ static void status_print_workspace(
             const workspace_item_t *item = partition->released.entries[i];
             const workspace_line_t line = workspace_item_line(item);
 
-            output_list_add(list, line.tags, line.color, line.path, line.metadata);
+            output_list_add(list, line.tag_string, line.color, line.path, line.metadata);
 
             const char *legend = NULL;
 
@@ -1278,7 +1278,7 @@ static void status_print_workspace(
                         false, "the released bucket holds ORPHANED and RELEASED alone"
                     );
             }
-            output_list_legend(list, line.tags, legend);
+            output_list_legend(list, line.tag_string, legend);
         }
 
         output_list_render(list);

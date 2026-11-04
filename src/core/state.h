@@ -897,10 +897,11 @@ const char *state_target(
  *     (whose node a link above a capture is), cmds/update.c update_write_record
  *     (whose record a deleted path holds, read under the phase's lock),
  *     cmds/revert.c revert_write_record (whose record the restored place holds,
- *     read before the lock and under it), and core/manifest.c manifest_diff
- *     (whether a departed claim leaves an orphan, handed the array by cmds/sync.c
- *     sync_print_manifest): by path, through state_find_record, which rests on
- *     strcmp order
+ *     read before the lock and under it), core/manifest.c manifest_diff (whether
+ *     a departed claim leaves an orphan, handed the array by cmds/sync.c
+ *     sync_print_manifest), and cmds/diff.c diff_commit_to_workspace (the record
+ *     at each row of a commit's view, read once a run): by path, through
+ *     state_find_record, which rests on strcmp order
  *   - cmds/remove.c remove_owes and remove_write_record (every record, for the
  *     ones the removal reaches at this machine's places, before the lock and
  *     under it): walks, key order unread
@@ -932,7 +933,8 @@ error_t state_records(
  * (whose node a link above a capture is), cmds/update.c update_write_record (a
  * deleted path's record, which its reclaim retires), cmds/revert.c revert_reclaims
  * (the restored place's), core/manifest.c manifest_diff (whether a departed claim
- * leaves an orphan).
+ * leaves an orphan), cmds/diff.c diff_print_view (the record at a commit's row,
+ * whose an absence is).
  *
  * @param records The snapshot (NULL when count is 0)
  * @param count Records in it

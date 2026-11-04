@@ -20,6 +20,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/scope.h"
+#include "core/state.h"
 #include "core/workspace.h"
 #include "infra/compare.h"
 #include "infra/content.h"
@@ -790,12 +791,18 @@ static int diff_print_header_cb(
  * a sealed one's key never asked for — and a look of the row's own kind is what
  * the comparison judges, its patch printed beneath the row's header, which a
  * difference of bytes says at the patch's own file header (diff_print_header_cb).
+ * An absence is worded by the record at its path: "deleted locally" where this
+ * profile's record confirmed bytes there, "not deployed" for a file this machine
+ * never had.
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)
  * @param path_filter Path filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
  * @param cache Shared content cache (the run's, must not be NULL)
+ * @param records The record's snapshot (core/state.h state_records; NULL when
+ *                record_count is 0)
+ * @param record_count Records in it
  * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
@@ -804,6 +811,8 @@ static error_t diff_print_view(
     const pathspec_t *path_filter,
     const cmd_diff_options_t *opts,
     content_cache_t *cache,
+    const state_record_t *records,
+    size_t record_count,
     output_t *out
 ) {
     CHECK_NULL(view);
@@ -833,6 +842,9 @@ static error_t diff_print_view(
         }
 
         git_filemode_t mode = gitops_type_filemode(row->type);
+        const state_record_t *record = state_find_record(
+            records, record_count, row->filesystem_path
+        );
         struct stat st;
 
         /* Name-only output */
@@ -914,7 +926,18 @@ static error_t diff_print_view(
                 break;
 
             case CMP_MISSING:
-                diff_print_header(out, row, "deleted locally (file missing)");
+                /* Whose the absence is, by the record at its path: this profile's
+                 * record that confirmed bytes there is a file the user had and
+                 * deleted, and any other absence is a file this machine never
+                 * had — core/workspace.c classify_absent's rule, less its stale
+                 * clause: a record that confirmed a later blob than the commit's
+                 * still says the user had the file */
+                diff_print_header(
+                    out, row,
+                    workspace_base(record) && strcmp(record->profile, row->profile) == 0
+                        ? "deleted locally (file missing)"
+                        : "not deployed (file missing)"
+                );
                 break;
 
             case CMP_TYPE_DIFF:
@@ -1066,6 +1089,7 @@ static error_t diff_commit_to_workspace(
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
+    const state_t *state = ctx->run.state;
     const mount_table_t *mounts = ctx->run.mounts;
     content_cache_t *cache = ctx->run.content_cache;
     arena_t *arena = ctx->arena;
@@ -1137,7 +1161,14 @@ static error_t diff_commit_to_workspace(
     profile_free(profile);
     if (err) goto cleanup;
 
-    /* Step 5: The filter's coverage over the commit's view, answered before
+    /* Step 5: The record, read once for every row: whose an absence is, by the
+     * record at its path (diff_print_view) */
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    err = state_records(state, arena, &records, &record_count);
+    if (err) goto cleanup;
+
+    /* Step 6: The filter's coverage over the commit's view, answered before
      * anything is compared, as the workspace arm answers it over its own. Where
      * no entry reaches a row, nothing can diff, and the answers are the whole
      * report. */
@@ -1145,9 +1176,9 @@ static error_t diff_commit_to_workspace(
         goto cleanup;
     }
 
-    /* Step 6: Compare the commit's view against the current filesystem, the
+    /* Step 7: Compare the commit's view against the current filesystem, the
      * comparison saying its own empty line */
-    err = diff_print_view(historical, path_filter, opts, cache, out);
+    err = diff_print_view(historical, path_filter, opts, cache, records, record_count, out);
 
 cleanup:
     git_tree_free(tree);

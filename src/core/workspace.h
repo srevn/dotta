@@ -1013,8 +1013,10 @@ static inline bool workspace_unlearned(
  * below (whether a measured copy is the one dotta confirmed); workspace_item_route
  * (whether a base proves an edit's mover: the UNCONFIRMED arm); cmds/add.c
  * add_refuse_ancestry (whether only --force replaces dotta's own link above a
- * capture, the half of workspace_untouched no measure is needed for). A reader
- * not on this list is a bug.
+ * capture, the half of workspace_untouched no measure is needed for); cmds/diff.c
+ * diff_print_view (whether an absent row of a commit is a file the user had,
+ * classify_absent's rule less its stale clause). A reader not on this list is a
+ * bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->base_oid) ? record : NULL;

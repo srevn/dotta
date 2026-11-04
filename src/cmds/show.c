@@ -356,10 +356,13 @@ static error_t show_file(
 }
 
 /**
- * Callback for printing diff lines with color
+ * Print one line of a patch as libgit2 hands it, coloured by its origin
  *
- * Colorizes additions (green), deletions (red), and headers (cyan). Matches the
- * diff command's output style.
+ * Nothing is added: a change line that ends without a newline is followed by
+ * libgit2's end-of-file line, which opens with the newline that line lacks
+ * (lib/libgit2/src/libgit2/diff_xdiff.c git_xdiff_cb), so the lines printed as
+ * handed are git's patch, and `git apply` over it gives the commit's tree. The
+ * twin of cmds/diff.c diff_print_line_cb.
  */
 static int show_print_line_cb(
     const git_diff_delta *delta,
@@ -397,12 +400,6 @@ static int show_print_line_cb(
         output_write(out, OUTPUT_NORMAL, line_color, &line->origin, 1);
     }
     output_write(out, OUTPUT_NORMAL, line_color, line->content, line->content_len);
-
-    /* Add newline if not present */
-    if (line->content_len == 0 ||
-        line->content[line->content_len - 1] != '\n') {
-        output_endline(out, OUTPUT_NORMAL);
-    }
 
     return 0;
 }

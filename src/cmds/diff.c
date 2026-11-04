@@ -594,7 +594,13 @@ static error_t diff_print_stats(output_t *out, git_diff *diff) {
 }
 
 /**
- * Print one line of a patch (git_diff_print's GIT_DIFF_FORMAT_PATCH)
+ * Print one line of a patch as libgit2 hands it, coloured by its origin
+ *
+ * Nothing is added: a change line that ends without a newline is followed by
+ * libgit2's end-of-file line, which opens with the newline that line lacks
+ * (lib/libgit2/src/libgit2/diff_xdiff.c git_xdiff_cb), so the lines printed as
+ * handed are git's patch, and `git apply` over it gives the side it names. The
+ * twin of cmds/show.c show_print_line_cb.
  */
 static int diff_print_line_cb(
     const git_diff_delta *delta,
@@ -632,11 +638,6 @@ static int diff_print_line_cb(
         output_write(out, OUTPUT_NORMAL, line_color, &line->origin, 1);
     }
     output_write(out, OUTPUT_NORMAL, line_color, line->content, line->content_len);
-
-    /* Add newline if not present */
-    if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
-        output_endline(out, OUTPUT_NORMAL);
-    }
 
     return 0;
 }

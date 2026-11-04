@@ -504,11 +504,12 @@ static int revert_print_line_cb(
 }
 
 /**
- * Print the changes between two blobs: a row of the preview, then the patch
+ * Print the changes between two blobs — a row of the preview, then the patch —
+ * or that their contents are one
  *
- * The lines added and removed are a row of the revert's preview, which the caller
- * opened and which names the file already; the patch is a block of its own beneath
- * it.
+ * The lines added and removed, or that a binary change moved, are a row of the
+ * revert's preview, which the caller opened and which names the file already;
+ * the patch is a block of its own beneath it.
  *
  * Uses content layer to transparently decrypt encrypted files before diffing,
  * so users see readable plaintext diffs instead of encrypted gibberish. The content
@@ -527,9 +528,11 @@ static int revert_print_line_cb(
  * `target_oid` is the object the commit holds and never the id a reseal would
  * take: that one names no object yet, and nothing here would open under it.
  *
- * The two blobs differ: the caller reaches this only from the preview arm that
- * says so, and the arm beside it is what a copy with the same bytes and a different
- * mode gets.
+ * The two blobs' ids differ: the caller reaches this only from the preview arm
+ * that says so, and the arm beside it is what a copy with the same blob and a
+ * different mode gets. Two ids can still hold one plaintext — a seal made or
+ * opened in place — and the patch, made from the plaintexts, says so where the
+ * ids cannot: its delta unmodified, the preview says the sentence that arm says.
  *
  * That arm is also why the caller hands the restored claim's name in here: the
  * head's entry is looked up at the name the revert writes, so wherever there is
@@ -621,21 +624,39 @@ static error_t revert_print_diff(
         return error_git(rc, "Cannot compare the two versions of '%s'", head_name);
     }
 
-    /* Get patch stats */
-    size_t additions = 0;
-    size_t deletions = 0;
-    git_patch_line_stats(NULL, &additions, &deletions, patch);
+    /* What the patch found, off libgit2's own tests, set as it was built: two
+     * plaintexts that are one — a seal made or opened in place, the bytes kept
+     * under another id — move nothing a patch shows, and the revert restores
+     * the claim alone, said in the words the caller's arm on equal ids says it */
+    const git_diff_delta *delta = git_patch_get_delta(patch);
+    if (delta->status == GIT_DELTA_UNMODIFIED) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_print(
+            out, OUTPUT_NORMAL,
+            "{green}Contents unchanged; restoring the commit's mode, ownership "
+            "and stamp{reset}\n"
+        );
+    } else {
+        /* The changes, a row of the preview's block: a binary change has no line
+         * to count, and says so */
+        if (delta->flags & GIT_DIFF_FLAG_BINARY) {
+            output_print(out, OUTPUT_NORMAL, "  Changes: binary\n");
+        } else {
+            size_t additions = 0;
+            size_t deletions = 0;
+            git_patch_line_stats(NULL, &additions, &deletions, patch);
 
-    /* The stats, a row of the preview's block */
-    output_print(
-        out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
-        additions, deletions
-    );
-    output_gap(out, OUTPUT_NORMAL);
+            output_print(
+                out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
+                additions, deletions
+            );
+        }
+        output_gap(out, OUTPUT_NORMAL);
 
-    /* The patch it holds, each line as libgit2 hands it */
-    if (git_patch_print(patch, revert_print_line_cb, out) < 0) {
-        output_warning(out, OUTPUT_NORMAL, "Could not format diff output");
+        /* The patch it holds, each line as libgit2 hands it */
+        if (git_patch_print(patch, revert_print_line_cb, out) < 0) {
+            output_warning(out, OUTPUT_NORMAL, "Could not format diff output");
+        }
     }
 
     git_patch_free(patch);
@@ -1112,7 +1133,10 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * or its bytes do. The middle arm is *the blob is the same and the change
      * test said something differs*, and what is left to differ is the entry's
      * filemode and the four fields of the claim beside it, so the sentence names
-     * those rather than two of them. */
+     * those rather than two of them. Its proof here is the ids, which needs no
+     * byte read, so a cold key keeps the preview; two ids that hold one plaintext
+     * are its twin, which only a read can prove, and revert_print_diff says the
+     * same sentence off the two plaintexts. */
     if (head.kind == PROFILE_HELD_NOTHING) {
         output_gap(out, OUTPUT_NORMAL);
         output_print(

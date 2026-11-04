@@ -218,6 +218,24 @@ Error: Repository epoch 'refs/dotta/epoch' is missing and encrypted files may be
 
 That refusal is the safety net for the accident this procedure resembles — a deleted, lost or unreadable epoch ref, where the remedy is to restore it, not to mint. `dotta sync` meets that state against a divergent remote too: a ref that is gone it replaces with the remote's epoch, which restores it where the remote holds this repository's; over one that cannot be read it prints the same finding and the same remedy, and refuses to replace the ref for you. The refspec is forced (`+`) because an epoch commit is an orphan: over a ref that is present but damaged, a plain fetch is rejected as non-fast-forward and restores nothing. A ref that names no commit at all — the null id, a symbolic ref to nothing, a file Git cannot parse — no fetch restores: git's own dies over it, so `dotta init` refuses it and `dotta sync` leaves it alone, each naming what is broken, and it is removed by hand before anything else. `dotta remove` needs no key and works either way. Naming a `--strength` that an existing epoch does not match is refused rather than silently ignored, and an existing valid epoch is always preserved.
 
+### Moving a Repository an Earlier Version Encrypted
+
+This version writes encrypted files in a new format, and its epoch names the four lanes it derives on. A repository an earlier version encrypted is refused until it is moved over once: every encrypted command stops at its epoch, which "cannot be read".
+
+The move rewrites the repository's history. Every encrypted file in every commit is decrypted by the earlier version and encrypted again by this one, under a new epoch at the repository's own strength. Commits keep their authors, dates and messages, and the branches and the epoch are replaced in one push. Afterwards this version reads every commit, the earliest included; the earlier version reads none.
+
+Every machine then starts again from the moved repository:
+
+```bash
+dotta key clear                  # with the earlier version: its cached key is the old epoch's
+mv ~/.local/share/dotta/repo ~/.local/share/dotta/repo.before-move
+dotta clone <url>                # with this version
+dotta profile enable <profile> --target <dir>    # each profile holding custom/ paths
+dotta apply
+```
+
+No machine syncs with the earlier version after the move: its repository still holds the history the move replaced.
+
 ## Security Properties
 
 - **Memory-hard key derivation** — Argon2id (RFC 9106) with bounded memory and pass counts.

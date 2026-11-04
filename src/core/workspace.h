@@ -765,8 +765,9 @@ typedef struct {
  * the row's is measured from — every axis unreconciled where none stands);
  * core/deploy.c occupant_conflicts (what stands at a planned path, against the
  * node its row lands); cmds/diff.c diff_print_item (another kind standing at a
- * row of either kind, drawn by both kinds off the load's look, no blob read). A
- * reader not on this list is a bug.
+ * row of either kind, drawn by both kinds off the load's look, no blob read)
+ * and diff_print_view (the kind rung, off the look a commit's row takes before
+ * its blob is read). A reader not on this list is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {

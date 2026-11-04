@@ -785,10 +785,11 @@ static int diff_print_header_cb(
  * under a filter, which passed over every row outside it, else of the whole;
  * under --name-only nothing, its names being the whole answer.
  *
- * A row is looked at once, before its blob is read: an absence is said off the
- * look, and the look is what the comparison judges, its patch printed beneath
- * the row's header, which a difference of bytes says at the patch's own file
- * header (diff_print_header_cb).
+ * A row is looked at once, before its blob is read: an absence and another kind
+ * are said off the look, so no blob is read where no bytes could be compared —
+ * a sealed one's key never asked for — and a look of the row's own kind is what
+ * the comparison judges, its patch printed beneath the row's header, which a
+ * difference of bytes says at the patch's own file header (diff_print_header_cb).
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)
@@ -838,40 +839,42 @@ static error_t diff_print_view(
         if (opts->name_only) {
             /* One look, handed to the comparison below rather than left for it
              * to take one of its own: the lstat names the path itself (a broken
-             * symlink is present — only its target is absent), and a path nothing
-             * stands at is named before a blob is loaded, there being nothing
-             * to compare against. So this form asks its question through the
-             * window the full form has — one look, then the read off it — where
-             * it used to look twice and could see two different worlds. */
-            if (fs_lstat(row->filesystem_path, &st) != 0) {
-                output_print(out, OUTPUT_NORMAL, "%s\n", row->filesystem_path);
-                listed++;
-                continue;
+             * symlink is present — only its target is absent), and every answer
+             * but the row's own kind — nothing standing, another kind, a look
+             * that failed — is a difference named before a blob is loaded, there
+             * being nothing to compare against. So this form asks its question
+             * through the window the full form has — one look, then the read
+             * off it — where it used to look twice and could see two different
+             * worlds. */
+            if (fs_lstat_occupant(row->filesystem_path, &st) ==
+                workspace_type_occupant(row->type)) {
+                /* Get content from historical commit (cached) */
+                const buffer_t *content = NULL;
+                error_t err = content_cache_get_from_blob_oid(
+                    cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
+                );
+                if (err) return err;
+
+                /* Compare with filesystem */
+                compare_result_t result;
+                err = compare_buffer_to_disk(content, row->filesystem_path, mode, &st, &result);
+                if (err) return err;
+
+                if (result == CMP_EQUAL) continue;
             }
 
-            /* Get content from historical commit (cached) */
-            const buffer_t *content = NULL;
-            error_t err = content_cache_get_from_blob_oid(
-                cache, &row->blob_oid, mode, row->storage_path, row->profile, &content
-            );
-            if (err) return err;
-
-            /* Compare with filesystem */
-            compare_result_t result;
-            err = compare_buffer_to_disk(content, row->filesystem_path, mode, &st, &result);
-            if (err) return err;
-
-            if (result != CMP_EQUAL) {
-                output_print(out, OUTPUT_NORMAL, "%s\n", row->filesystem_path);
-                listed++;
-            }
+            output_print(out, OUTPUT_NORMAL, "%s\n", row->filesystem_path);
+            listed++;
             continue;
         }
 
-        /* Full diff output: the row's look, ahead of its blob — an absence is
-         * said off it with nothing read, as the name-only form names one — then
-         * the blob, and the comparison off that look, which prints the patch
-         * where the bytes differ: the bytes judged are the bytes printed */
+        /* Full diff output: the row's look, ahead of its blob, asked as the
+         * workspace's judges ask theirs — an absence and another kind are said
+         * off it with nothing read, as the name-only form names them — then the
+         * blob, and the comparison off that look, which prints the patch where
+         * the bytes differ: the bytes judged are the bytes printed. Handed only
+         * a look of the row's own kind, compare's kind rung stands, so another
+         * kind is this look's alone to say. */
         compare_result_t result;
         const fs_occupant_t occupant = fs_lstat_occupant(row->filesystem_path, &st);
         if (occupant == FS_OCCUPANT_UNKNOWN) {
@@ -880,6 +883,8 @@ static error_t diff_print_view(
 
         if (occupant == FS_OCCUPANT_NONE) {
             result = CMP_MISSING;
+        } else if (occupant != workspace_type_occupant(row->type)) {
+            result = CMP_TYPE_DIFF;
         } else {
             const buffer_t *content = NULL;
             error_t err = content_cache_get_from_blob_oid(

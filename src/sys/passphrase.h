@@ -29,7 +29,8 @@
  *
  * Non-reentrant: the armed settings are one slot (base/terminal), so a single
  * process must not call passphrase_prompt concurrently (from multiple threads
- * or recursively). Dotta is single-threaded.
+ * or recursively). One thread prompts: the key derivation's threads (crypto/kdf.c)
+ * start once the passphrase is read, and end before the derivation returns.
  */
 
 #ifndef DOTTA_PASSPHRASE_H

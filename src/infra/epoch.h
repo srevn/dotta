@@ -17,7 +17,7 @@
  *       └── commit
  *             └── tree
  *                   ├── salt     (KDF_SALT_SIZE bytes — the Argon2id salt)
- *                   └── params   (KDF_PARAMS_SIZE bytes — LE16 memory ‖ passes)
+ *                   └── params   (KDF_PARAMS_SIZE bytes — LE16 memory ‖ passes ‖ lanes)
  *
  * The epoch is everything the master-key derivation takes but the passphrase
  * (`kdf_epoch_t`), and the repository is its one owner: a master is a function

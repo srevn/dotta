@@ -75,7 +75,8 @@ void secure_wipe(void *ptr, size_t len) {
  * cannot be told from here. On Linux every non-trivial Argon2 setting exceeds
  * the default, which makes failure the common case on a default-configured system.
  * The process-wide gate keeps it to one line. Not thread-safe (a plain `static
- * bool`); dotta is single-threaded.
+ * bool`): one thread maps secrets, and the key derivation's threads compute into
+ * a mapping their caller made (crypto/kdf.c).
  */
 static void mlock_warn(int saved_errno, size_t len) {
     static bool warned = false;

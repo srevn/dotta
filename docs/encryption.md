@@ -19,7 +19,7 @@ The configuration file controls only local client preferences: whether encryptio
 
 Each dotta repository owns its derivation parameters as an immutable **epoch** stored at `refs/dotta/epoch`. The epoch is created once at `dotta init` and holds two blobs:
 - `salt` (32 random bytes from the OS CSPRNG)
-- `params` (3 bytes: memory cost in MiB and pass count)
+- `params` (4 bytes: memory cost in MiB, pass count and lanes)
 
 The epoch makes every repository a distinct cracking target: precomputation against one repository's passphrase guesses cannot be reused against any other, and every machine that shares the repository derives the identical master key from the same passphrase.
 
@@ -30,12 +30,12 @@ The epoch ref travels with the repository: `dotta clone` fetches it, and `dotta 
 The Argon2id work factor is chosen when initializing the repository with `--strength`:
 
 ```bash
-dotta init --strength fast        # 64 MiB RAM, 3 passes (~250–400 ms)
-dotta init --strength balanced    # 256 MiB RAM, 3 passes (~1.0 s, default)
-dotta init --strength paranoid    # 1024 MiB RAM, 4 passes (~4–6 s)
+dotta init --strength fast        # 64 MiB RAM, 3 passes (~85 ms)
+dotta init --strength balanced    # 256 MiB RAM, 3 passes (~0.3 s, default)
+dotta init --strength paranoid    # 1024 MiB RAM, 4 passes (~1.2 s)
 ```
 
-Memory hardness is the primary wall bounding an attacker's guessing speed: parallelism is constrained by memory bandwidth rather than CPU cores.
+Every preset derives on four lanes, as RFC 9106 recommends, computed side by side on four threads: the times are an unlock on a desktop i9, and grow with fewer free cores or less memory bandwidth. Memory hardness is the primary wall bounding an attacker's guessing speed: each guess holds the preset's memory for as long as it runs.
 
 Once minted, the epoch is immutable for as long as encrypted files exist. An existing valid epoch is preserved across re-initialization. `dotta key status -v` displays the repository's epoch parameters and the matching preset name.
 

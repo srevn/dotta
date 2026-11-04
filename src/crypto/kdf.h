@@ -48,7 +48,7 @@
 
 #define KDF_KEY_SIZE 32            /* All keys in the hierarchy share this size. */
 #define KDF_SALT_SIZE 32           /* Argon2id salt size — 32 bytes (256 bits). */
-#define KDF_PARAMS_SIZE 3          /* LE16 memory ‖ passes — see kdf_params_store. */
+#define KDF_PARAMS_SIZE 4          /* LE16 memory ‖ passes ‖ lanes — see kdf_params_store. */
 #define KDF_EPOCH_FP_SIZE 8        /* Epoch fingerprint — see kdf_epoch_fingerprint. */
 
 _Static_assert(
@@ -65,13 +65,17 @@ _Static_assert(
  *
  * `_MIN` is dotta's operational security floor (well above the Argon2 spec floor
  * of ~8 KiB). `_MAX` is an allocation bound on the ref's bytes (see file-level
- * "Argon2 parameter bounds"). All values fit `uint16_t` / `uint8_t` for the ref's
+ * "Argon2 parameter bounds"). The lanes' `_MAX` bounds the threads a slice starts,
+ * one fewer than the lanes, and keeps the memory floor at 512 blocks a lane,
+ * above the 8 Argon2 needs. All values fit `uint16_t` / `uint8_t` for the ref's
  * params blob.
  */
 #define KDF_ARGON2_MEMORY_MIN 8       /* MiB: security floor */
 #define KDF_ARGON2_MEMORY_MAX 4096    /* MiB: allocation bound, 4× paranoid's */
 #define KDF_ARGON2_PASSES_MIN 1
 #define KDF_ARGON2_PASSES_MAX 20      /* RFC 9106 high-end */
+#define KDF_ARGON2_LANES_MIN  1
+#define KDF_ARGON2_LANES_MAX  16      /* 15 threads a slice */
 
 /**
  * The Argon2id parameters: what a guess costs.
@@ -84,6 +88,7 @@ _Static_assert(
 typedef struct kdf_params {
     uint16_t memory;    /* MiB */
     uint8_t passes;     /* over the memory */
+    uint8_t lanes;      /* side by side: one on the caller, each other on a thread */
 } kdf_params_t;
 
 /**
@@ -91,10 +96,13 @@ typedef struct kdf_params {
  *
  * `dotta init --strength <name>` mints the repository's epoch with one of them;
  * `dotta key status` names an epoch's parameters back by the row they equal,
- * and parameters no row names print as their numbers. Wall-clock figures are
- * indicative — measured on a 2024-era laptop, they scale with single-thread memory
- * bandwidth and L3 size. Adding a preset is a row; the lookups are linear over
- * KDF_PRESET_COUNT.
+ * and parameters no row names print as their numbers. Every row computes four
+ * lanes, RFC 9106 §4's "Select p=4 lanes", and `fast` is exactly its second
+ * recommended option (64 MiB, 3 passes); the others keep its lanes and add memory
+ * or passes. Wall-clock figures are indicative — a cold unlock measured on an
+ * i9-10900K desktop; they scale with the memory bandwidth the four threads share,
+ * and with the cores free to run them. Adding a preset is a row; the lookups
+ * are linear over KDF_PRESET_COUNT.
  */
 typedef struct kdf_preset {
     const char *name;
@@ -135,11 +143,11 @@ error_t kdf_validate_params(kdf_params_t params);
 /**
  * Encode / decode the Argon2id parameters as the ref's params blob.
  *
- * Three bytes: LE16 memory ‖ passes — the bytes `refs/dotta/epoch:params` holds
- * and the tail of the fingerprint's input, so the ref and the fingerprint spell
- * the parameters one way. The value goes in and comes back whole, as store_le16
- * and load_le16 hand theirs (base/encoding.h). The decode does not validate;
- * `kdf_validate_params` is the boundary's, applied to what came back.
+ * Four bytes: LE16 memory ‖ passes ‖ lanes — the bytes `refs/dotta/epoch:params`
+ * holds and the tail of the fingerprint's input, so the ref and the fingerprint
+ * spell the parameters one way. The value goes in and comes back whole, as
+ * store_le16 and load_le16 hand theirs (base/encoding.h). The decode does not
+ * validate; `kdf_validate_params` is the boundary's, applied to what came back.
  *
  * @param out    Output buffer for KDF_PARAMS_SIZE bytes (the store's)
  * @param params The parameters to spell (the store's)
@@ -164,7 +172,7 @@ bool kdf_params_equal(kdf_params_t a, kdf_params_t b);
 /**
  * Compute the public 8-byte fingerprint of an epoch.
  *
- * Unkeyed BLAKE2b with an 8-byte digest over salt ‖ params (35 bytes; the output
+ * Unkeyed BLAKE2b with an 8-byte digest over salt ‖ params (36 bytes; the output
  * length is part of BLAKE2b's parameter block, so this cannot collide with any
  * other BLAKE2b use in the tree — every other call produces 32 bytes). The
  * fingerprint is *identity*, not key material: `cipher_encrypt` stamps it into
@@ -187,20 +195,26 @@ void kdf_epoch_fingerprint(
 /**
  * Derive the master key from a passphrase under an epoch, using Argon2id.
  *
- * Argon2id (RFC 9106), single-lane, over the epoch's salt at the epoch's
- * parameters. The salt's uniqueness across repositories forecloses
+ * Argon2id (RFC 9106) over the epoch's salt at the epoch's parameters, its lanes
+ * computed side by side: lane 0 on the caller and each other on a thread of its
+ * own, which ends before its slice does, so no thread outlives the call. A lane
+ * whose thread will not start is computed on the caller; the key is the same
+ * whoever computes a lane. The salt's uniqueness across repositories forecloses
  * cross-installation precomputation (a table built against one dotta repo is
  * useless against any other); the parameters are the per-guess cost.
  *
  * Maps the parameters' memory, in MiB, for the work area with `secure_alloc`
  * (base/secure.h) — locked best-effort, with the one-time advisory on failure —
- * and ends it with `secure_free`: wiped and unmapped on every path.
+ * before any thread starts, and ends it with `secure_free` after every one has
+ * ended: wiped and unmapped on every path.
  *
  * `epoch` is a loaded epoch: its parameters are in range by the ref's validation
- * (`infra/epoch`) or a preset's construction, and are not re-checked here.
- * `passphrase_len` is checked against UINT32_MAX (Argon2's representational limit)
- * to prevent silent truncation. Every error path scrubs `out_master_key` before
- * return.
+ * (`infra/epoch`) or a preset's construction, and are not re-checked here — but
+ * for the lanes, which divide the memory and size the threads a slice starts:
+ * lanes out of range, which only an epoch built by hand can carry, are a caller's
+ * bug the run dies of (base/error.h CHECK_ARG). `passphrase_len` is checked against
+ * UINT32_MAX (Argon2's representational limit) to prevent silent truncation.
+ * Every error path scrubs `out_master_key` before return.
  *
  * @param passphrase     Passphrase bytes (non-NULL; len > 0)
  * @param passphrase_len Passphrase length in bytes (≤ UINT32_MAX)

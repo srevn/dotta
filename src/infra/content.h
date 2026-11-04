@@ -240,7 +240,8 @@ size_t content_estimated_plaintext_size(size_t blob_size, bool encrypted);
  * - Callers receive borrowed references (const buffer_t*)
  * - Cache freed at end of operation (frees all buffers)
  *
- * Thread safety: Not thread-safe (dotta is single-threaded)
+ * Thread safety: not thread-safe — one thread caches, and the key derivation's
+ * threads (crypto/kdf.c) never reach a cache
  */
 typedef struct content_cache content_cache_t;
 

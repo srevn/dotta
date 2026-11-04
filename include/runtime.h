@@ -531,8 +531,10 @@ typedef struct dotta_run {
  * linked library's exhaustion and a bound the design chose (`sys/filesystem.c
  * FS_MAX_READ_SIZE`, `sys/process.h PROCESS_CAPTURE_MAX`) are refusals. A new
  * scope needs the evidence one has: a genuinely shorter lifetime in code, and a
- * number — a hypothesised need is not enough. Single-threaded by design (no
- * pthread, no async I/O loop), so concurrent allocation is not a concern.
+ * number — a hypothesised need is not enough. One thread allocates: the key
+ * derivation's threads (crypto/kdf.c) compute into a mapping their caller made,
+ * allocate nothing and end inside the derivation, and there is no async I/O loop,
+ * so concurrent allocation is not a concern.
  *
  * Exit-code override
  * ------------------

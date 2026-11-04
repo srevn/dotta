@@ -178,8 +178,9 @@ static void key_status(const dotta_ctx_t *ctx) {
     }
     output_section(out, OUTPUT_VERBOSE, "Encryption configuration");
     output_print(
-        out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes%s%s%s\n",
+        out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes, %u lanes%s%s%s\n",
         (unsigned) epoch->params.memory, (unsigned) epoch->params.passes,
+        (unsigned) epoch->params.lanes,
         preset ? " (" : "", preset ? preset : "", preset ? ")" : ""
     );
 

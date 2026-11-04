@@ -164,7 +164,7 @@ static char *session_path(const kdf_epoch_t *epoch) {
  *
  *     cache_key = BLAKE2b-32(salt ‖ params)
  *
- * The same 35 bytes the fingerprint hashes at length 8, under its rule: no key,
+ * The same 36 bytes the fingerprint hashes at length 8, under its rule: no key,
  * no wipe (kdf_epoch_fingerprint). The 32-byte output length keeps this derivation
  * distinct from it. Both inputs are fixed-width, so nothing is length-framed.
  * Cannot fail.

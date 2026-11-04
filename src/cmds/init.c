@@ -201,10 +201,11 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     if (opts->strength && !kdf_params_equal(epoch.params, opts->preset->params)) {
         err = error_create(
             ERR_CONFLICT,
-            "The repository's epoch is already minted at %u MiB, %u passes; "
+            "The repository's epoch is already minted at %u MiB, %u passes, %u lanes; "
             "a change of strength is a new epoch: remove the encrypted files, "
             "delete '%s', and run init again",
-            (unsigned) epoch.params.memory, (unsigned) epoch.params.passes, EPOCH_REF
+            (unsigned) epoch.params.memory, (unsigned) epoch.params.passes,
+            (unsigned) epoch.params.lanes, EPOCH_REF
         );
         goto cleanup;
     }
@@ -283,9 +284,10 @@ static args_want_t init_complete(
     if (ARGS_VALUE_IS(at, cmd_init_options_t, strength)) {
         for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
             fprintf(
-                out, "%s\t%u MiB, %u passes\n", kdf_presets[i].name,
+                out, "%s\t%u MiB, %u passes, %u lanes\n", kdf_presets[i].name,
                 (unsigned) kdf_presets[i].params.memory,
-                (unsigned) kdf_presets[i].params.passes
+                (unsigned) kdf_presets[i].params.passes,
+                (unsigned) kdf_presets[i].params.lanes
             );
         }
         return ARGS_WANT_NONE;
@@ -337,8 +339,8 @@ const args_command_t spec_init = {
         "  .dottaignore already at its ref is kept.\n"
         "\n"
         "Strength:\n"
-        "  The repository's Argon2id strength — the memory and passes every\n"
-        "  passphrase is derived under, on every machine — is minted once,\n"
+        "  The repository's Argon2id strength — the memory, passes and lanes\n"
+        "  every passphrase is derived under, on every machine — is minted once,\n"
         "  here, and travels with the repository. It cannot be changed in\n"
         "  place: a new strength is a new epoch, which means removing the\n"
         "  encrypted files, deleting refs/dotta/epoch, and running init again.\n"

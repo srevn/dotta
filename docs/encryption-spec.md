@@ -78,7 +78,7 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
 | `CRYPTO_DOMAIN_SIV_PRF`        | `dot-prf\0`  | kdf: master + profile → prf_key                          |
 | `CRYPTO_DOMAIN_CIPHER_SIV`     | `dot-siv\0`  | cipher: SIV over (header, path, plaintext)               |
 | `CRYPTO_DOMAIN_CIPHER_KEY`     | `dot-key\0`  | cipher: keystream-seed from SIV under prf_key            |
-| `CRYPTO_DOMAIN_SESSION_MAC`    | `dot-ses\0`  | session: cache MAC over the 76-byte prefix               |
+| `CRYPTO_DOMAIN_SESSION_MAC`    | `dot-ses\0`  | session: cache MAC over the 81-byte prefix               |
 
 ## Key hierarchy
 
@@ -86,8 +86,8 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
         User passphrase (1..1024 bytes)
                     │
                     ▼  Argon2id (RFC 9106)
-                       memory, passes from repository epoch
-                       lanes = 1 (Monocypher is single-threaded)
+                       memory, passes, lanes from repository epoch
+                       lanes side by side, one thread each
                        salt = 32-byte per-repo random in `refs/dotta/epoch:salt`
         ┌────────────────────────────────────────────┐
         │              Master key (32 B)             │
@@ -124,17 +124,18 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
 
 ### Argon2id parameters
 
-| Preset      | memory     | passes | Wall-clock target | memory × passes |
-|-------------|------------|--------|-------------------|-----------------|
-| `fast`      |    64 MiB  |    3   | ~250–400 ms       | 192 MiB·passes  |
-| `balanced`  |   256 MiB  |    3   | ~1.0 s            | 768 MiB·passes  |
-| `paranoid`  |  1024 MiB  |    4   | ~4–6 s            |   4 GiB·passes  |
+| Preset      | memory     | passes | lanes | Wall-clock target | memory × passes |
+|-------------|------------|--------|-------|-------------------|-----------------|
+| `fast`      |    64 MiB  |    3   |   4   | ~85 ms            | 192 MiB·passes  |
+| `balanced`  |   256 MiB  |    3   |   4   | ~0.3 s            | 768 MiB·passes  |
+| `paranoid`  |  1024 MiB  |    4   |   4   | ~1.2 s            |   4 GiB·passes  |
 
-`lanes = 1` is forced by Monocypher's single-threaded implementation. With `lanes = 1`, `memory × passes` is the primary memory-hardness metric.
+Every preset computes four lanes, RFC 9106 §4's "Select p=4 lanes", and `fast` is exactly its second recommended option. `kdf_master_key` computes each slice's lanes side by side — lane 0 on the caller, each other on a thread joined at the slice's end (`kdf_slice`), a lane whose thread will not start computed on the caller — so a derivation takes about one lane's time (the targets: a cold unlock on an i9-10900K desktop). `memory × passes` stays the memory-hardness metric; at the same memory and passes, four lanes let a guess finish up to four times sooner for the defender and for an attacker with cores to spare alike, the time-area product of RFC 9106 §7.2.
 
 **Parameter bounds** (enforced by `kdf_validate_params` at `epoch_load` and `epoch_adopt`):
 - `memory` ∈ [8, 4096], in MiB. The 8 MiB floor is dotta's minimum operational security bound; the 4096 MiB ceiling is an allocation limit defending against hostile refs.
 - `passes` ∈ [1, 20].
+- `lanes` ∈ [1, 16]. The 16 ceiling bounds the threads a slice starts, 15.
 
 Parameters do not travel in individual blob headers. They are owned strictly by the repository epoch, preventing attackers from forcing parameter degradation on arbitrary files.
 
@@ -147,13 +148,13 @@ refs/dotta/epoch
   └── commit ("Initialize repository epoch")
         └── tree
               ├── salt   (32 bytes — random salt from OS CSPRNG)
-              └── params (3 bytes — LE16 memory ‖ passes)
+              └── params (4 bytes — LE16 memory ‖ passes ‖ lanes)
 ```
 
 The epoch structure guarantees that every input to key derivation except the passphrase itself has a single, immutable owner:
 - **`salt`** (32 bytes): Ensures that every repository presents a unique attack surface. Precomputation built against one repository cannot be reused against another.
-- **`params`** (3 bytes): Serialized via `kdf_params_store` (LE16 memory in MiB followed by pass count).
-- **`fingerprint`** (8 bytes): Computed as BLAKE2b-8 over `salt ‖ params` (35 bytes). The fingerprint is public identity material embedded in every cipher blob header, allowing key-free readers (such as the ciphertext census or `keymgr_decrypt`'s preflight check) to determine whether a blob belongs to the current repository without prompting for a passphrase.
+- **`params`** (4 bytes): Serialized via `kdf_params_store` (LE16 memory in MiB, then the pass count, then the lanes).
+- **`fingerprint`** (8 bytes): Computed as BLAKE2b-8 over `salt ‖ params` (36 bytes). The fingerprint is public identity material embedded in every cipher blob header, allowing key-free readers (such as the ciphertext census or `keymgr_decrypt`'s preflight check) to determine whether a blob belongs to the current repository without prompting for a passphrase.
 
 | Operation                       | Where                                          |
 |---------------------------------|------------------------------------------------|
@@ -161,7 +162,7 @@ The epoch structure guarantees that every input to key derivation except the pas
 | Loaded & Validated              | `main.c::open_run` via `epoch_load` |
 | Adopted & Reconciled            | `dotta clone` and `dotta sync` via `epoch_resolve` / `epoch_adopt`, over the command's one fetch |
 | Inspected (raw)                 | `dotta git show refs/dotta/epoch:salt`, `dotta git show refs/dotta/epoch:params` |
-| Inspected (CLI)                 | `dotta key status -v` (prints MiB, passes, and preset name) |
+| Inspected (CLI)                 | `dotta key status -v` (prints MiB, passes, lanes, and preset name) |
 
 `epoch_init` reads the ref's id once and judges the commit at it, as the reconcile does. A commit that yields no epoch over a clean census is deleted from that id — a ref another writer moved since is refused — and re-minted, and `dotta init` says it repaired one; over any ciphertext it is refused, the restore named. A ref no read reaches — at the null id, a symbolic ref to nothing, a file Git cannot parse — has no id to judge or to delete from, and is refused before any census, naming what is broken and no restore: git's own fetch dies over such a ref, and neither git nor dotta makes one.
 
@@ -209,7 +210,7 @@ Inputs: `(plaintext, mac_key, prf_key, storage_path, epoch_fp)`.
    bytes [0..5)   = "DOTTA"
    byte   [5]     = CIPHER_VERSION (0x0a)
    byte   [6]     = 0x00
-   bytes [7..15)  = epoch_fp (BLAKE2b-8 over epoch's 35 bytes)
+   bytes [7..15)  = epoch_fp (BLAKE2b-8 over epoch's 36 bytes)
    ```
 
 2. **Compute the synthetic IV** (32 bytes) over `(header, path, plaintext)`:
@@ -351,7 +352,7 @@ Total: 113 bytes. All multi-byte integers are little-endian.
 cache_key = BLAKE2b(salt || params, out_size = 32)
 ```
 
-Unkeyed BLAKE2b over the 35 bytes of the repository's epoch. The derivation uses only public epoch bytes.
+Unkeyed BLAKE2b over the 36 bytes of the repository's epoch. The derivation uses only public epoch bytes.
 
 #### Obfuscation keystream
 
@@ -646,6 +647,7 @@ Validation is performed at the boundary where parameters enter the system:
 | `auto_encrypt[i]` | Config load, enabled or not | A string with no NUL, making one gitignore rule | `ERR_INVALID_ARG` (the value), `ERR_VALIDATION` (the rule) |
 | `epoch.params.memory` | `epoch_load` / `epoch_adopt` | `8..4096` | `ERR_CRYPTO` |
 | `epoch.params.passes` | `epoch_load` / `epoch_adopt` | `1..20` | `ERR_CRYPTO` |
+| `epoch.params.lanes` | `epoch_load` / `epoch_adopt` | `1..16` | `ERR_CRYPTO` |
 
 ### Hardcoded constants
 
@@ -653,8 +655,8 @@ Validation is performed at the boundary where parameters enter the system:
 |---|---|---|
 | KDF Algorithm | Argon2id | RFC 9106; memory-hard primitive in Monocypher |
 | Epoch salt size | 32 bytes (256 bits) | Matches codebase key buffer width (`KDF_KEY_SIZE`) |
-| Epoch params size | 3 bytes | LE16 memory ‖ passes |
-| Epoch fingerprint | 8 bytes (64 bits) | BLAKE2b-8 over 35 bytes of salt ‖ params |
+| Epoch params size | 4 bytes | LE16 memory ‖ passes ‖ lanes |
+| Epoch fingerprint | 8 bytes (64 bits) | BLAKE2b-8 over 36 bytes of salt ‖ params |
 | Cipher version | `0x0a` | Authenticated in header |
 | Cipher header size | 15 bytes | `"DOTTA"` (5) + version (1) + NUL (1) + epoch_fp (8) |
 | Cipher MAC tag size | 32 bytes | BLAKE2b keyed output; 256-bit collision boundary |

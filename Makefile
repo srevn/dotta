@@ -249,7 +249,7 @@ $(BUILD_DIR)/lib/monocypher.o: $(MONOCYPHER_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/
 # Link main executable
 $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 	@echo "LD $@ ($(BUILD_TYPE))"
-	@$(CC) $(CFLAGS) $^ $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -o $@
+	@$(CC) $(CFLAGS) $^ $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
 
 # Debug build
 .PHONY: debug
@@ -266,8 +266,9 @@ $(LIBDOTTA): $(LIB_OBJ)
 # Tests — the unit binaries live in the build type's tree beside the objects
 # they were linked from; under BUILD_TYPE=debug they are sanitizer binaries,
 # the runtime coming in through the same flags on the link. They link with
-# -pthread, which a suite that runs an ask on a stack of its own needs
-# (tests/test-source.c stack_used) and a platform with its threads outside libc
+# -pthread, as the binary does, which the key derivation's threads need
+# (crypto/kdf.c), as does a suite that runs an ask on a stack of its own
+# (tests/test-source.c stack_used), and a platform with its threads outside libc
 # (FreeBSD's libthr) needs said.
 TESTS_DIR := tests
 TESTS_BIN_DIR := $(BUILD_DIR)/tests

@@ -362,7 +362,7 @@ static error_t show_file(
  * libgit2's end-of-file line, which opens with the newline that line lacks
  * (lib/libgit2/src/libgit2/diff_xdiff.c git_xdiff_cb), so the lines printed as
  * handed are git's patch, and `git apply` over it gives the commit's tree. The
- * twin of cmds/diff.c diff_print_line_cb.
+ * twin of cmds/diff.c diff_print_line_cb and cmds/revert.c revert_print_line_cb.
  */
 static int show_print_line_cb(
     const git_diff_delta *delta,

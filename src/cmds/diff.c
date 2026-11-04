@@ -360,7 +360,7 @@ static void diff_print_mismatch(output_t *out, git_filemode_t mode, const struct
  * libgit2's end-of-file line, which opens with the newline that line lacks
  * (lib/libgit2/src/libgit2/diff_xdiff.c git_xdiff_cb), so the lines printed as
  * handed are git's patch, and `git apply` over it gives the side it names. The
- * twin of cmds/show.c show_print_line_cb.
+ * twin of cmds/show.c show_print_line_cb and cmds/revert.c revert_print_line_cb.
  */
 static int diff_print_line_cb(
     const git_diff_delta *delta,

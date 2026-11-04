@@ -1159,43 +1159,6 @@ void output_draw(output_t *ctx, const char *fmt, ...) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * Diff Output
- * ═══════════════════════════════════════════════════════════════════ */
-
-/**
- * The colour a patch line carries, or OUTPUT_COLOR_RESET for one that carries none
- *
- * The origin character is the whole rule, and the second byte is what tells a
- * change from a file header: `+++` and `---` repeat their first byte where `+x`
- * and `-x` do not. Reading the second needs no length — the caller walks a
- * NUL-terminated text and enters only on a line that has a first byte, so the
- * second is at worst the terminator.
- */
-static output_color_t output_diff_color(const char *line) {
-    if (line[0] == '+' && line[1] != '+') return OUTPUT_COLOR_GREEN;
-    if (line[0] == '-' && line[1] != '-') return OUTPUT_COLOR_RED;
-    if (line[0] == '@' && line[1] == '@') return OUTPUT_COLOR_CYAN;
-
-    return OUTPUT_COLOR_RESET;
-}
-
-void output_print_diff(
-    output_t *ctx, output_verbosity_t min_level, const char *diff_text
-) {
-    if (!ctx || !diff_text || !*diff_text) return;
-    if (ctx->verbosity < min_level) return;
-
-    /* A line and its newline are one step; the last line needs no newline. A
-     * patch is a payload, each of its lines written as it is. */
-    for (const char *line = diff_text; *line;) {
-        size_t len = strcspn(line, "\n");
-        output_write(ctx, min_level, output_diff_color(line), line, len);
-        output_endline(ctx, min_level);
-        line += len + (line[len] == '\n');
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════════
  * Utilities
  * ═══════════════════════════════════════════════════════════════════ */
 

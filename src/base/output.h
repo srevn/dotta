@@ -625,27 +625,6 @@ void output_draw(output_t *ctx, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
- * Print a patch, one line at a time
- *
- * Each line is written once and ended once: a patch that already ends in a newline
- * leaves no blank line behind it, and an empty one writes nothing. A patch is a
- * payload: each line's bytes are written as they are (output_write). The colour
- * a line carries is read off its origin character — green for an addition, red
- * for a deletion, cyan for a hunk header, none for a `---` or `+++` file header,
- * whose second byte repeats its first. It changes a line's bytes and never their
- * number: the patch a pipe reads and the one a terminal reads have the same shape.
- *
- * @param ctx Output context (NULL-safe, no-op)
- * @param min_level Minimum verbosity level
- * @param diff_text Unified diff text (NULL or empty: no-op)
- */
-void output_print_diff(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *diff_text
-);
-
-/**
  * Format file size in human-readable form
  *
  * Formats byte sizes into human-readable strings (B, KiB, MiB, GiB). The buffer

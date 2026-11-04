@@ -455,6 +455,55 @@ static error_t revert_target_claim(
 }
 
 /**
+ * Print one line of a patch as libgit2 hands it, coloured by its origin
+ *
+ * Nothing is added: a change line that ends without a newline is followed by
+ * libgit2's end-of-file line, which opens with the newline that line lacks
+ * (lib/libgit2/src/libgit2/diff_xdiff.c git_xdiff_cb), so the lines printed as
+ * handed are git's patch. The twin of cmds/diff.c diff_print_line_cb and
+ * cmds/show.c show_print_line_cb, so a preview's patch reads as show's.
+ */
+static int revert_print_line_cb(
+    const git_diff_delta *delta,
+    const git_diff_hunk *hunk,
+    const git_diff_line *line,
+    void *payload
+) {
+    output_t *out = (output_t *) payload;
+    (void) delta;
+    (void) hunk;
+
+    output_color_t line_color = OUTPUT_COLOR_RESET;
+
+    switch (line->origin) {
+        case GIT_DIFF_LINE_ADDITION:
+            line_color = OUTPUT_COLOR_GREEN;
+            break;
+        case GIT_DIFF_LINE_DELETION:
+            line_color = OUTPUT_COLOR_RED;
+            break;
+        case GIT_DIFF_LINE_FILE_HDR:
+        case GIT_DIFF_LINE_HUNK_HDR:
+            line_color = OUTPUT_COLOR_CYAN;
+            break;
+        default:
+            break;
+    }
+
+    /* A patch line is a payload, its bytes the file's own and libgit2's quoted
+     * headers, written as they are: a change line's origin first, each in the
+     * line's colour */
+    if (line->origin == GIT_DIFF_LINE_ADDITION ||
+        line->origin == GIT_DIFF_LINE_DELETION ||
+        line->origin == GIT_DIFF_LINE_CONTEXT) {
+        output_write(out, OUTPUT_NORMAL, line_color, &line->origin, 1);
+    }
+    output_write(out, OUTPUT_NORMAL, line_color, line->content, line->content_len);
+
+    return 0;
+}
+
+/**
  * Print the changes between two blobs: a row of the preview, then the patch
  *
  * The lines added and removed are a row of the revert's preview, which the caller
@@ -584,16 +633,11 @@ static error_t revert_print_diff(
     );
     output_gap(out, OUTPUT_NORMAL);
 
-    /* Print patch */
-    git_buf buf = { 0 };
-    rc = git_patch_to_buf(&buf, patch);
-    if (rc < 0) {
+    /* The patch it holds, each line as libgit2 hands it */
+    if (git_patch_print(patch, revert_print_line_cb, out) < 0) {
         output_warning(out, OUTPUT_NORMAL, "Could not format diff output");
-    } else if (buf.ptr) {
-        output_print_diff(out, OUTPUT_NORMAL, buf.ptr);
     }
 
-    git_buf_dispose(&buf);
     git_patch_free(patch);
 
     /* Free plaintext buffers */

@@ -3,7 +3,10 @@
  *
  * Single-entrypoint module. Inline raw-mode interface that lets the user select,
  * reorder, and target-bind profiles before applying them. The public surface is
- * exactly `spec_interactive`; everything below is file-local.
+ * exactly `spec_interactive`; everything below is file-local. The frame is drawn
+ * through the output in the run's colours (base/output.h output_draw), every
+ * datum spelled as every screen spells one; the cursor's own control is
+ * base/terminal's.
  */
 
 #include "cmds/interactive.h"
@@ -20,9 +23,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/heap.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "base/terminal.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -32,16 +33,7 @@
 #include "sys/gitops.h"
 #include "sys/identity.h"
 
-/* --- Style macros --- */
-
-#define UI_BOLD          "\033[1m"
-#define UI_DIM           "\033[2m"
-#define UI_RESET         "\033[0m"
-#define UI_YELLOW        "\033[33m"
-#define UI_BOLD_YELLOW   "\033[1;33m"
-
-#define UI_CURSOR        "\033[1;36m▶\033[0m"
-#define UI_CHECK         "\033[1;32m✓\033[0m"
+/* --- Geometry --- */
 
 /* Row prefix: "  " + cursor + " " + checkbox + " " = 6 visible columns. */
 #define ROW_PREFIX_COLS       6
@@ -510,20 +502,6 @@ rollback:
 
 /* --- Render --- */
 
-/* A datum onto the row, as a terminal may show it: a profile's name, a target,
- * the text typed at the prompt — each spelled by str_display (base/string.h),
- * whole, so no byte one holds moves the cursor or sets a colour in the editor's
- * screen. Measured, then spelled into the heap: a row is redrawn per key, and a
- * datum has no bound a row can promise. */
-static void interactive_datum(const char *datum) {
-    size_t len = strlen(datum);
-    size_t shown = str_display(NULL, 0, datum, len);
-    char *spelled = heap_alloc(shown + 1);
-    str_display(spelled, shown + 1, datum, len);
-    fputs(spelled, stdout);
-    free(spelled);
-}
-
 /* Five row shapes, all the same line count:
  *   1. Prompt-active   "  ▶   Target: <buffer>_"
  *   2. Bound           "  ▶ ✓ name → <target>"
@@ -532,35 +510,31 @@ static void interactive_datum(const char *datum) {
  *   5. No branch       "  ▶ ✓ name (no branch)", a bound row's after its arrow
  *
  * Trailing '_' is the visible caret; hardware cursor stays hidden for the whole
- * session. Every datum prints through interactive_datum, the row's layout through
- * its own fprintf; stdout is line-buffered and view_render emits a single
- * fflush. */
-static void row_render(const view_t *view, size_t i) {
+ * session. Every byte is drawn through the output (base/output.h output_draw),
+ * the row's layout and glyphs a format in the run's colours and each datum — a
+ * name, a target, the text typed at the prompt — spelled, so none moves the cursor
+ * or sets a colour; view_render emits a single flush. */
+static void row_render(output_t *out, const view_t *view, size_t i) {
     const item_t *it = &view->items[i];
     bool is_cursor = (i == view->cursor);
     bool is_prompt = (view->prompt.active && i == view->prompt.item_index);
 
-    fprintf(stdout, "\r" ANSI_CLEAR_LINE);
+    output_draw(out, "\r" ANSI_CLEAR_LINE);
 
     if (is_prompt) {
         /* The cursor is always on the prompt row by construction (prompt_open_*
          * anchors item_index to view->cursor and navigation keys are shadowed
          * while active). */
-        fputs("  " UI_CURSOR "   " UI_BOLD "Target:" UI_RESET " ", stdout);
-        interactive_datum(view->prompt.buffer.data);
-        fputs("_\r\n", stdout);
+        output_draw(
+            out, "  {bold;cyan}▶{reset}   {bold}Target:{reset} %s_\r\n",
+            view->prompt.buffer.data
+        );
         return;
     }
 
-    const char *cursor_glyph = is_cursor ? UI_CURSOR : " ";
-    const char *checkbox = it->enabled ? UI_CHECK : " ";
-    bool dim_name = !it->enabled && !is_cursor;
-    const char *name_open = dim_name ? UI_DIM : "";
-    const char *name_close = dim_name ? UI_RESET : "";
-
-    fprintf(stdout, "  %s %s %s", cursor_glyph, checkbox, name_open);
-    interactive_datum(it->name);
-    fputs(name_close, stdout);
+    output_draw(out, is_cursor ? "  {bold;cyan}▶{reset} " : "    ");
+    output_draw(out, it->enabled ? "{bold;green}✓{reset} " : "  ");
+    output_draw(out, (it->enabled || is_cursor) ? "%s" : "{dim}%s{reset}", it->name);
 
     /* Three questions, in order. Does the row hold a binding — the store's, or
      * this session's? Shown wherever one is held: on a home-only row bound on
@@ -572,66 +546,61 @@ static void row_render(const view_t *view, size_t i) {
     if (it->target) {
         char shown[PATH_MAX];
         output_format_path(it->target, identity()->home, shown, sizeof(shown));
-        fputs(" " UI_DIM "→ ", stdout);
-        interactive_datum(shown);
-        fputs(UI_RESET, stdout);
+        output_draw(out, " {dim}→ %s{reset}", shown);
     } else if (it->unreadable) {
-        fprintf(stdout, " " UI_DIM "(unreadable)" UI_RESET);
+        output_draw(out, " {dim}(unreadable){reset}");
     } else if (it->needs_target) {
-        fprintf(stdout, " " UI_DIM "(needs a target)" UI_RESET);
+        output_draw(out, " {dim}(needs a target){reset}");
     }
 
     /* And a fourth, whatever those answered: has the profile a branch? A row
      * Git lists none for says so after its binding, in the word and the colour
      * status and the listing use; SPACE is its way out here, status's disable. */
     if (it->missing) {
-        fprintf(stdout, " " UI_YELLOW "(no branch)" UI_RESET);
+        output_draw(out, " {yellow}(no branch){reset}");
     }
-    fprintf(stdout, "\r\n");
+    output_draw(out, "\r\n");
 }
 
-static void render_header(const view_t *view) {
-    fprintf(stdout, "\r" ANSI_CLEAR_LINE);
+static void render_header(output_t *out, const view_t *view) {
+    output_draw(out, "\r" ANSI_CLEAR_LINE);
     if (view->modified) {
-        fprintf(
-            stdout, "  " UI_BOLD "Profiles:" UI_RESET
-            " " UI_YELLOW "(modified)" UI_RESET "\r\n"
-        );
+        output_draw(out, "  {bold}Profiles:{reset} {yellow}(modified){reset}\r\n");
     } else {
-        fprintf(stdout, "  " UI_BOLD "Profiles:" UI_RESET "\r\n");
+        output_draw(out, "  {bold}Profiles:{reset}\r\n");
     }
 }
 
-static void render_footer(const view_t *view) {
-    fprintf(stdout, "\r" ANSI_CLEAR_LINE);
+static void render_footer(output_t *out, const view_t *view) {
+    output_draw(out, "\r" ANSI_CLEAR_LINE);
     if (view->prompt.active) {
-        fprintf(
-            stdout,
-            UI_DIM "enter" UI_RESET " confirm  "
-            UI_DIM "esc" UI_RESET " cancel  "
-            UI_DIM "backspace" UI_RESET " delete"
+        output_draw(
+            out,
+            "{dim}enter{reset} confirm  "
+            "{dim}esc{reset} cancel  "
+            "{dim}backspace{reset} delete"
         );
         return;
     }
 
     if (view->modified) {
-        fprintf(
-            stdout,
-            UI_DIM "↑↓" UI_RESET " navigate  "
-            UI_DIM "space" UI_RESET " toggle  "
-            UI_DIM "J/K" UI_RESET " move  "
-            UI_DIM "t" UI_RESET " target  "
-            UI_BOLD_YELLOW "w" UI_RESET " " UI_BOLD_YELLOW "save" UI_RESET "  "
-            UI_DIM "q" UI_RESET " quit"
+        output_draw(
+            out,
+            "{dim}↑↓{reset} navigate  "
+            "{dim}space{reset} toggle  "
+            "{dim}J/K{reset} move  "
+            "{dim}t{reset} target  "
+            "{bold;yellow}w{reset} {bold;yellow}save{reset}  "
+            "{dim}q{reset} quit"
         );
     } else {
-        fprintf(
-            stdout,
-            UI_DIM "↑↓" UI_RESET " navigate  "
-            UI_DIM "space" UI_RESET " toggle  "
-            UI_DIM "J/K" UI_RESET " move  "
-            UI_DIM "t" UI_RESET " target  "
-            UI_DIM "q" UI_RESET " quit"
+        output_draw(
+            out,
+            "{dim}↑↓{reset} navigate  "
+            "{dim}space{reset} toggle  "
+            "{dim}J/K{reset} move  "
+            "{dim}t{reset} target  "
+            "{dim}q{reset} quit"
         );
     }
 }
@@ -641,15 +610,15 @@ static int view_required_lines(const view_t *view) {
     return (int) view->item_count + 4;
 }
 
-static int view_render(const view_t *view) {
-    render_header(view);
-    fprintf(stdout, "\r" ANSI_CLEAR_LINE "\r\n");
+static int view_render(output_t *out, const view_t *view) {
+    render_header(out, view);
+    output_draw(out, "\r" ANSI_CLEAR_LINE "\r\n");
     for (size_t i = 0; i < view->item_count; i++) {
-        row_render(view, i);
+        row_render(out, view, i);
     }
-    fprintf(stdout, "\r" ANSI_CLEAR_LINE "\r\n");
-    render_footer(view);
-    fflush(stdout);
+    output_draw(out, "\r" ANSI_CLEAR_LINE "\r\n");
+    render_footer(out, view);
+    fflush(out->stream);
     return view_required_lines(view);
 }
 
@@ -866,7 +835,8 @@ static error_t check_screen(const view_t *view) {
 }
 
 static error_t view_loop(
-    view_t *view, git_repository *repo, state_t *deploy_state, int initial_lines
+    view_t *view, git_repository *repo, state_t *deploy_state, output_t *out,
+    int initial_lines
 ) {
     int lines_drawn = initial_lines;
 
@@ -888,12 +858,12 @@ static error_t view_loop(
         }
 
         terminal_cursor_up(lines_drawn - 1);
-        lines_drawn = view_render(view);
+        lines_drawn = view_render(out, view);
     }
 }
 
 static error_t interactive_run(
-    git_repository *repo, state_t *deploy_state, arena_t *arena
+    git_repository *repo, state_t *deploy_state, arena_t *arena, output_t *out
 ) {
     if (!terminal_is_tty()) {
         return error_create(ERR_INVALID_ARG, "Interactive mode requires a TTY");
@@ -911,20 +881,20 @@ static error_t interactive_run(
     if (err) return err;
 
     terminal_cursor_hide();
-    int lines = view_render(view);
+    int lines = view_render(out, view);
 
     /* The prompt's text is the user's typing: a buffer, reserved so the keystroke
      * handler stays alloc-free on the common typing path, and given back when
      * the loop ends — the session's one exit past it. */
     buffer_reserve(&view->prompt.buffer, PROMPT_INITIAL_CAP);
-    err = view_loop(view, repo, deploy_state, lines);
+    err = view_loop(view, repo, deploy_state, out, lines);
     buffer_deinit(&view->prompt.buffer);
 
     /* Always move past the UI before terminal_restore brings the cursor back,
      * regardless of whether the loop exited cleanly or with an error.
      * TERMINAL_CLEANUP handles the rest. */
-    fprintf(stdout, "\r\n");
-    fflush(stdout);
+    output_draw(out, "\r\n");
+    fflush(out->stream);
     return err;
 }
 
@@ -935,7 +905,7 @@ static error_t interactive_run(
 static error_t interactive_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     (void) opts_v;
-    return interactive_run(ctx->run.repo, ctx->run.state, ctx->arena);
+    return interactive_run(ctx->run.repo, ctx->run.state, ctx->arena, ctx->out);
 }
 
 const args_command_t spec_interactive = {

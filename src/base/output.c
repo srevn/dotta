@@ -1140,6 +1140,24 @@ void output_clear_line(output_t *ctx) {
     ctx->progress_drawn = false;
 }
 
+void output_draw(output_t *ctx, const char *fmt, ...) {
+    if (!ctx || !fmt) return;
+
+    /* A screen's line, never the report's: opened as every line is and never
+     * landed, so no boundary is paid and the report stays where it stood */
+    output_clear_line(ctx);
+
+    line_t line;
+    output_open(&line, ctx, ctx->stream);
+
+    va_list args;
+    va_start(args, fmt);
+    output_walk(&line, fmt, &args);
+    va_end(args);
+
+    output_put(&line);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Diff Output
  * ═══════════════════════════════════════════════════════════════════ */

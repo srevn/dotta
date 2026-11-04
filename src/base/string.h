@@ -300,10 +300,9 @@ const char *str_shell_quote(arena_t *arena, const char *word);
  * (NULL, 0). A unit that would not fit whole is not begun: a cut answer ends on
  * a whole character or a whole escape.
  *
- * Readers: base/output.c output_datum (every %s and %c a format carries) and
- * output_list_render (a row's tags, measured); infra/commit.c commit_spelled
- * (every name a commit message's template inserts); cmds/interactive.c
- * interactive_datum (the editor's rows).
+ * Readers: base/output.c output_datum (every %s and %c a format carries, the
+ * editor's rows among them) and output_list_render (a row's tags, measured);
+ * infra/commit.c commit_spelled (every name a commit message's template inserts).
  *
  * @param dst  Where the spelling goes (may be NULL when size is 0)
  * @param size dst's bytes, its terminator's among them

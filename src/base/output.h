@@ -113,6 +113,8 @@ typedef enum {
  * so what follows it spaces itself against what stood before it, on the row the
  * line held — every line that lands takes it down first. Off a terminal no such
  * line is drawn: a redirected report holds what an act did, never that it ran.
+ * Nor is a line of a screen that redraws itself in place (output_draw): it is
+ * drawn where the cursor stands, and the report stays as it was.
  *
  * Read in base/output.c alone: `output_land` asks what is owed and keeps the
  * summary's block, output_gap asks whether anything stands to owe it, and the
@@ -595,6 +597,26 @@ void output_progress(
  * @param ctx Output context (NULL: nothing)
  */
 void output_clear_line(output_t *ctx);
+
+/**
+ * Draw a line of a screen that redraws itself in place
+ *
+ * The format walked as every emitter walks one — its {tags} in the stream's
+ * colours, each conversion a datum ("Layout and data" above) — and written once,
+ * where the cursor stands, never landed: no boundary paid or owed, the report
+ * where it stood, and no level asked, so a quiet run draws it too. A progress
+ * line standing is taken down first, as before any line. Nothing is flushed:
+ * the screen flushes once its frame is drawn.
+ *
+ * Readers: cmds/interactive.c's frame — row_render, render_header, render_footer,
+ * view_render — and interactive_run's last line end. A reader not on this list
+ * is a bug.
+ *
+ * @param ctx Output context (NULL: nothing)
+ * @param fmt The line's format (printf-style)
+ */
+void output_draw(output_t *ctx, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Print a patch, one line at a time

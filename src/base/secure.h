@@ -13,8 +13,8 @@
  * `secure_wipe` is the chokepoint for scrubbing secret-bearing memory across
  * non-crypto layers (base/, sys/, infra/, core/, cmds/). The crypto layer
  * (src/crypto/) calls monocypher's `crypto_wipe` directly — its primitives are
- * already in scope. Each layer cluster uses its native wipe; both implementations
- * are functionally identical doubly-volatile loops. Keeping `secure_wipe`
+ * already in scope. Each layer cluster uses its native wipe, and the two are
+ * one loop: volatile bytes through a plain pointer. Keeping `secure_wipe`
  * vendor-free is what lets non-crypto modules wipe secrets without dragging a
  * crypto dependency into layers below the crypto layer.
  *
@@ -44,17 +44,15 @@
  * line three times in one command.
  *
  * Implementation guarantee for `secure_wipe`: writes are not elided by dead-store
- * elimination or whole-program optimization. Implemented via a
- * doubly-volatile-pointer loop (`volatile unsigned char *volatile`) that hardens
- * against both per-write elision (the writes are volatile) and pointer-variable
- * elision (the pointer is volatile). `unsigned char` is the strict-aliasing-safe
- * access type per C11 §6.5p7, so this works for any buffer regardless of its
- * declared type.
+ * elimination or whole-program optimization. Each is a store through a
+ * volatile-qualified lvalue (`volatile unsigned char *`), a volatile access the
+ * implementation performs (C23 §5.1.2.3; base/secure.c says why the pointer itself
+ * is plain). `unsigned char` is the strict-aliasing-safe access type per C11
+ * §6.5p7, so this works for any buffer regardless of its declared type.
  *
- * Out-of-line by design: the call appears in disassembly and lives at a single
- * machine-code address, which keeps the audit chokepoint legible. Cost is one
- * indirect call per scrub — negligible against the allocator and syscall work
- * that surrounds every secret-bearing lifecycle in this codebase.
+ * The chokepoint is the source's one definition. The release build's link (`-flto`)
+ * may copy it into each caller, so the binary need hold no `secure_wipe` of its
+ * own; every copy is the same volatile stores.
  *
  * Use `secure_wipe` whenever a buffer that has held a secret (passphrase bytes,
  * derived keys, decrypted plaintext, credential helper output) is about to be

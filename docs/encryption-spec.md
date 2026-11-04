@@ -58,9 +58,9 @@ Dotta uses [Monocypher](https://monocypher.org/), a small auditable C library im
 | Keyed hash / MAC      | `crypto_blake2b_keyed*`                      | BLAKE2b, RFC 7693                     |
 | Stream cipher         | `crypto_chacha20_x`                          | XChaCha20 (RFC 8439 + 24-byte nonce)  |
 | Constant-time compare | `crypto_verify32`                            | —                                     |
-| Memory clearing       | `crypto_wipe`                                | Doubly-volatile loop                  |
+| Memory clearing       | `crypto_wipe`                                | Volatile byte stores                  |
 
-Inside `src/crypto/` the canonical wipe primitive is `crypto_wipe`. Other layers use `secure_wipe` from `base/secure.h` (functionally identical; removes the vendor dependency from non-crypto layers).
+Inside `src/crypto/` the canonical wipe primitive is `crypto_wipe`. Other layers use `secure_wipe` from `base/secure.h` (the same loop, volatile bytes through a plain pointer; removes the vendor dependency from non-crypto layers).
 
 ### `crypto/mac` chokepoint
 

@@ -22,7 +22,7 @@
  *
  * Wipe primitive: this layer uses monocypher's `crypto_wipe` directly (already
  * in scope via `<monocypher.h>`); non-crypto layers use `secure_wipe` from
- * `base/secure.h`. Functionally identical doubly-volatile loops.
+ * `base/secure.h`. The same loop: volatile bytes through a plain pointer.
  */
 
 #include "crypto/cipher.h"

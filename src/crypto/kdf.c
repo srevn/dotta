@@ -13,9 +13,9 @@
  * swap best-effort, with the one advisory the process prints when a lock fails;
  * wiped and unmapped by `secure_free`. monocypher zeroes the work area itself
  * on return, so the bytes are wiped twice: the second pass is `secure_free`'s
- * own, paid (about seven percent of a cold derivation) so that every secret-bearing
- * mapping in the tree ends the one way and no site reasons about which primitive
- * wiped what.
+ * own, paid (about 0.24 ms per MiB, a cost no preset moves) so that every
+ * secret-bearing mapping in the tree ends the one way and no site reasons about
+ * which primitive wiped what.
  *
  * The epoch: the salt is generated once at `dotta init` via `entropy_fill` (see
  * KDF_SALT_SIZE for the 256-bit choice) beside the parameters `init` was told

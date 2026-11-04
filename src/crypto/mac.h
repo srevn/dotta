@@ -37,8 +37,8 @@
  *     need no further scrub.
  *
  * Wipe primitive: this layer uses monocypher's `crypto_wipe` directly; non-crypto
- * layers use `secure_wipe` from base/secure.h. Functionally identical
- * doubly-volatile loops.
+ * layers use `secure_wipe` from base/secure.h. The same loop: volatile bytes
+ * through a plain pointer.
  */
 
 #ifndef DOTTA_CRYPTO_MAC_H

@@ -153,7 +153,8 @@ Unverifiable paths (1 item) (dotta could not verify them; apply and update skip 
 
   [locked] - run 'dotta key set' to unlock it
 
-Workspace: 1 item diverged, 1 dotta could not verify
+Status summary
+  Workspace: 1 item diverged, 1 dotta could not verify
 ```
 
 | Tag | Meaning | Remedy |

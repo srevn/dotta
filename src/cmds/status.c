@@ -1671,8 +1671,10 @@ static void status_print_remote(const dotta_ctx_t *ctx, const status_remote_t *r
 
 /**
  * Print the run's summary: the workspace's verdict, with what the filter hid,
- * then where the set stands against the remote — a line each half, one block,
- * beneath everything the report listed, and nothing of a half that did not run
+ * then where the set stands against the remote — a line each half, in a section
+ * titled Status summary beneath everything the report listed, whose title says
+ * the report ends there; nothing of a half that did not run, and no section where
+ * neither did
  *
  * The workspace's line is said on every run of its half, one with nothing diverged
  * included: it is the run's answer, and where nothing diverged it says what it
@@ -1705,6 +1707,16 @@ static void status_print_summary(
     CHECK_NULL(remote);
 
     output_t *out = ctx->out;
+
+    /* The section stands where a half says its line: a run of the remote's half
+     * alone says none where no section of its own stood — no remote, no profile,
+     * a remote it could not read (status_remote) */
+    if (!ws && !remote->name) return;
+
+    /* Status is the report read most and the one with the most to say: its summary
+     * is a section like the rest of it, where every other command's stands at
+     * the margin (base/output.h "Where the report stands") */
+    output_section(out, OUTPUT_NORMAL, "Status summary");
 
     if (ws) {
         /* The workspace's line, one fold whatever the filter: the items of the
@@ -1788,7 +1800,7 @@ static void status_print_summary(
         }
 
         const char *phrase = string_array_join(ctx->arena, &clauses, ", ");
-        output_summary(out, OUTPUT_NORMAL, "Workspace: %s", phrase);
+        output_print(out, OUTPUT_NORMAL, "  Workspace: %s\n", phrase);
     }
 
     if (remote->name) {
@@ -1825,8 +1837,8 @@ static void status_print_summary(
 
         /* One line, its non-zero counts in the readings' order, as sync's Manifest
          * rows say theirs (cmds/sync.c sync_print_manifest) — composed first,
-         * since a summary's line is said whole and a count joined into a phrase
-         * is a datum, uncoloured (base/output.h "Layout and data") */
+         * its clauses joined as the workspace's are, and a count joined into a
+         * phrase is a datum, uncoloured (base/output.h "Layout and data") */
         const struct {
             size_t count;
             const char *word;
@@ -1853,8 +1865,8 @@ static void status_print_summary(
 
         /* The remote by its name alone: whether its rows were read with no contact
          * is their section's title's to say (status_print_remote) */
-        output_summary(
-            out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}': %s", remote->name, phrase
+        output_print(
+            out, OUTPUT_NORMAL, "  Remote '{cyan}%s{reset}': %s\n", remote->name, phrase
         );
     }
 }
@@ -1946,7 +1958,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         status_print_remote(ctx, &remote);
     }
 
-    /* The summary, last: what each half found, a line each, in one block */
+    /* The summary, last: what each half found, a line each, in its own section */
     status_print_summary(ctx, ws, scope, &partition, &remote);
 
     return NULL;

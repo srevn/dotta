@@ -108,10 +108,13 @@ typedef enum {
  * own; a remedy said beneath it asks none, and is the block's last line
  * (output_hint). What the run says after its summary stands at the margin too:
  * a caveat a later phase raises, with the remedy it calls for beneath it, and a
- * post-hook's account (utils/hooks.h hook_fire_post). So no report ends on a
- * section's or a list's rows, which read as a block still open above whatever
- * follows the run. A run asked for a payload ends where the payload does, its
- * bytes its own (output_write).
+ * post-hook's account (utils/hooks.h hook_fire_post). One report says its summary
+ * as a section of its own instead, the report with the most sections (cmds/status.c
+ * status_print_summary): its lines are the section's rows, and its title, not
+ * the margin, says the report ends there. So no report ends on another section's
+ * or a list's rows, which read as a block still open above whatever follows the
+ * run. A run asked for a payload ends where the payload does, its bytes its own
+ * (output_write).
  *
  * On a terminal, the line an act draws while it runs (output_progress) is no
  * line of the report: it pays no boundary, owes none, and moves the report nowhere,

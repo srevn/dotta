@@ -119,7 +119,8 @@ const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token);
  * of the branches named — one that names no branch contributes nothing — or,
  * when none is named or none is a branch, of the enabled set in precedence order,
  * where show and diff resolve a bare reference. Interleaved histories are labelled
- * by branch.
+ * by branch. A history's recent commits are those `git log` lists first from
+ * its head; the shell shows every candidate in its own order.
  */
 void completion_commits(
     const dotta_ctx_t *ctx, FILE *out,

@@ -336,14 +336,18 @@ static size_t commits_walk(
     error_t err = gitops_load_branch_commit(repo, profile, &head);
     if (err) return 0;
 
-    /* The history from that head: the push copies the head's id, so the head is
-     * freed once it is taken (infra/epoch.c's walk) */
+    /* The history from that head in git's order, newest first, each commit's
+     * parents read as it is passed: libgit2's unsorted walk inserts them by date
+     * (revwalk.c get_revision), as git log does (lib/git/revision.c get_revision_1)
+     * and sys/revision.c revision_search walks — so a TAB reads the commits it
+     * offers, where a sort reads every commit the head reaches before the first
+     * (revwalk.c limit_list). Which commits are offered is the walk's; the order
+     * they show in is the shell's, which sorts. A commit whose parent will not
+     * parse is never yielded, and the offer ends there. The push copies the head's
+     * id, so the head is freed once it is taken. */
     git_revwalk *walker = NULL;
     int rc = git_revwalk_new(&walker, repo);
-    if (rc == 0) {
-        git_revwalk_sorting(walker, GIT_SORT_TIME);
-        rc = git_revwalk_push(walker, git_commit_id(head));
-    }
+    if (rc == 0) rc = git_revwalk_push(walker, git_commit_id(head));
     git_commit_free(head);
 
     size_t offered = 0;

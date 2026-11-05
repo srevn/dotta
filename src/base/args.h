@@ -245,21 +245,24 @@ typedef error_t (*args_postparse)(
  */
 typedef struct args_completion {
     const args_opt_t *value_of;  /* Non-NULL: the cursor is this option's value */
-    const char *current;         /* What is being typed: the token, or the text after
-                                  * `=` of an inline `--name=text`; "" when nothing */
+    const char *current;         /* What is being typed, as the shell reads it — its
+                                  * quoting resolved, nothing expanded: the token, or
+                                  * the text after `=` of an inline `--name=text`;
+                                  * "" when nothing */
 } args_completion_t;
 
 /**
  * What the hook may ask the shell to add beside its candidates: its own completion
- * of `current`, in the shells' own words — files, or directories only (bash's
- * -f and -d, zsh's _files and _directories, fish's __fish_complete_path and
- * __fish_complete_directories). One thing at most; a file completion includes
- * the directories, as every shell's does, a file being reached through them.
+ * of the token being typed, as typed, in the shells' own words — files, or
+ * directories only (bash's -f and -d, zsh's _files and _directories, fish's
+ * __fish_complete_path and __fish_complete_directories). One thing at most; a
+ * file completion includes the directories, as every shell's does, a file being
+ * reached through them.
  */
 typedef enum args_want {
     ARGS_WANT_NONE,    /* Nothing beyond the candidates printed */
-    ARGS_WANT_FILES,   /* Native file completion of `current`, directories included */
-    ARGS_WANT_DIRS     /* Native directory completion of `current` */
+    ARGS_WANT_FILES,   /* Native file completion of the token, directories included */
+    ARGS_WANT_DIRS     /* Native directory completion of the token */
 } args_want_t;
 
 /**
@@ -509,13 +512,13 @@ args_outcome_t args_parse(
  *
  * `argv[1..argc)` are the complete tokens of the line, argv[0] the program as
  * at dispatch; `current` is the token being typed — possibly empty, never routed
- * to a bucket. The line is resolved and consumed exactly as `args_parse` would
- * — the registry for argv[1], the subcommand tree, the option loop — except that
- * it stops where the tokens stop: a trailing value flag names the value being
- * typed instead of being refused, and a line the command would refuse (an unknown
- * flag, one positional too many) still has a next token, since the stream reads
- * on past what it refuses. Then the command's `complete` hook answers with the
- * buckets as they stand.
+ * to a bucket — as the shell reads it, as the complete tokens are. The line is
+ * resolved and consumed exactly as `args_parse` would — the registry for argv[1],
+ * the subcommand tree, the option loop — except that it stops where the tokens
+ * stop: a trailing value flag names the value being typed instead of being refused,
+ * and a line the command would refuse (an unknown flag, one positional too many)
+ * still has a next token, since the stream reads on past what it refuses. Then
+ * the command's `complete` hook answers with the buckets as they stand.
  *
  * Nothing is printed and no hook is called where the exported rules already answer
  * or nothing can: the root slot (the command names), a tree's subcommand slot
@@ -525,18 +528,20 @@ args_outcome_t args_parse(
  * Output — the candidates protocol the exported wrapper reads:
  *
  *   token<TAB>description, or token     one candidate per line;
- *   <TAB>files<TAB>current              the shell completes paths natively;
- *   <TAB>dirs<TAB>current               the shell completes directories.
+ *   <TAB>files                          the shell completes paths natively;
+ *   <TAB>dirs                           the shell completes directories.
  *
  * A token is never empty, so a line beginning with a tab is a request — and there
  * is at most one, printed after the hook has returned: the last line. The wrapper
  * reads it there and passes every line before it through untouched, so a large
- * answer costs the shell nothing per line.
+ * answer costs the shell nothing per line. A request names no text: the shell
+ * completes the token being typed as it was typed, its quoting the shell's own
+ * to read.
  *
  * @param commands NULL-terminated root registry.
  * @param argc     Count of `argv`.
  * @param argv     The program name, then the complete tokens of the line.
- * @param current  The token being typed; "" when none.
+ * @param current  The token being typed, as the shell reads it; "" when none.
  * @param arena    Arena for the options struct and its buckets.
  * @param ctx      Opaque payload handed to the hook, as `dispatch`'s.
  * @param out      Output stream for the candidates.
@@ -619,9 +624,10 @@ void args_render_help(
  *     `__<prog>_using_default_subcommand`, `__<prog>_using_subcommand`,
  *     `__<prog>_positional`), reading the line as the engine does;
  *   - the wrapper `__<prog>_candidates`, which runs `<prog> <candidates>` with
- *     the line's tokens and reads the candidates protocol back
- *     (`args_complete_candidates`): the candidates pass through, a path request
- *     — the last line, when there is one — goes to the shell's own path completion;
+ *     the line's tokens, each as fish reads it, and reads the candidates protocol
+ *     back (`args_complete_candidates`): the candidates pass through, a path
+ *     request — the last line, when there is one — goes to the shell's own path
+ *     completion of the token as typed;
  *   - one positional rule, under any command, that asks the wrapper — unless
  *     the token being typed is a flag name, which the flag rows answer;
  *   - top-level built-ins (`-h`, `-v`),

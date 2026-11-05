@@ -1009,10 +1009,10 @@ void args_complete_candidates(
         case ARGS_WANT_NONE:
             break;
         case ARGS_WANT_FILES:
-            fprintf(out, "\tfiles\t%s\n", at.current);
+            fputs("\tfiles\n", out);
             break;
         case ARGS_WANT_DIRS:
-            fprintf(out, "\tdirs\t%s\n", at.current);
+            fputs("\tdirs\n", out);
             break;
     }
 }
@@ -1732,12 +1732,19 @@ static void emit_block(
  * the third token is the subcommand when it names one, the default subcommand's
  * when it is a flag name.
  *
- * The positional guard mirrors `classify_token` for the token being typed: fish
- * runs the positional rule's generator for a flag name too, and the binary would
- * answer it with nothing (`args_complete_candidates`) after a full start. The
- * mirror errs toward asking — a `--` standing as a flag's value reads as the
- * end of options here, not in the engine — so it can only spare a call, never a
- * candidate.
+ * The line is read through `commandline -o`, each token as fish reads it: its
+ * quoting resolved, an unfinished quote or escape included, and nothing expanded.
+ * fish 4.0 deprecated `-o` for `-x`, which expands `~`, variables and braces,
+ * and `string unescape` reads no unfinished escape: `-o` is the one form that
+ * reads a token so, and every reading of the line moves with it the day fish
+ * removes it.
+ *
+ * The positional guard mirrors `classify_token` for the token being typed, as
+ * the binary is handed it: fish runs the positional rule's generator for a flag
+ * name too, and the binary would answer it with nothing
+ * (`args_complete_candidates`) after a full start. The mirror errs toward asking
+ * — a `--` standing as a flag's value reads as the end of options here, not in
+ * the engine — so it can only spare a call, never a candidate.
  */
 static const char fish_helpers[] =
     "function __%s_needs_command\n"
@@ -1782,7 +1789,7 @@ static const char fish_helpers[] =
     "    # `-<digit>` are positionals. Spares the binary a call it would answer\n"
     "    # with nothing.\n"
     "    contains -- -- (commandline -opc)[3..]; and return 0\n"
-    "    not string match -qr -- '^-[^0-9]' (commandline -ct)\n"
+    "    not string match -qr -- '^-[^0-9]' (commandline -ot)\n"
     "end\n"
     "\n";
 
@@ -1793,13 +1800,20 @@ static const char fish_helpers[] =
  * so the shell's work does not grow with their number. The guard on the final
  * printf keeps an empty answer empty — fish's printf prints its format once with
  * no arguments.
+ *
+ * The token being typed is read once for each reader. The binary compares it
+ * with names, so it is handed the token's value, as the complete tokens are;
+ * fish's own path completion parses its argument again, so a request is answered
+ * from the spelling (`commandline -ct`), an inline `--name=` dropped as fish's
+ * own __fish_complete_directories drops it.
  */
 static const char fish_candidates_head[] =
     "function __%s_candidates\n"
     "    # Ask the binary what can stand at the cursor: the complete tokens after\n"
-    "    # `%s`, and the token being typed. One candidate per line; a last line\n"
-    "    # beginning with a tab asks for the shell's own path completion.\n"
-    "    set -l current (commandline -ct)\n"
+    "    # `%s`, and the token being typed, each as fish reads it. One candidate\n"
+    "    # per line; a last line beginning with a tab asks for the shell's own path\n"
+    "    # completion of the token as it was typed.\n"
+    "    set -l current (commandline -ot)\n"
     "    set -l out (";
 
 static const char fish_candidates_tail[] =
@@ -1807,11 +1821,14 @@ static const char fish_candidates_tail[] =
     "    if string match -q -- \\t'*' \"$out[-1]\"\n"
     "        set -l request (string split \\t -- $out[-1])\n"
     "        set -e out[-1]\n"
+    "        # The token as typed, an inline --name= dropped, as fish's own\n"
+    "        # __fish_complete_directories reads it\n"
+    "        set -l typed (commandline -ct | string replace -r -- '^-[^=]*=' '')\n"
     "        switch $request[2]\n"
     "            case files\n"
-    "                __fish_complete_path $request[3]\n"
+    "                __fish_complete_path \"$typed\"\n"
     "            case dirs\n"
-    "                __fish_complete_directories $request[3]\n"
+    "                __fish_complete_directories \"$typed\"\n"
     "        end\n"
     "    end\n"
     "    set -q out[1]; and printf '%%s\\n' $out\n"

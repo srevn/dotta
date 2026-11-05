@@ -13,13 +13,13 @@
  *
  *   dotta __complete [--current=<token>] -- <tokens>... Hidden. What can stand
  *       at the cursor of a command line: <tokens> are the complete ones after
- *       `dotta`, <token> the one being typed. The line is consumed as the parser
- *       would consume it and the command's hook answers
- *       (`args_complete_candidates`). The script's wrapper is the caller, and
- *       it reads silence as "no candidates": never an error message, nothing on
- *       failure, exit 0 outside a repository — where every source prints nothing,
- *       and only native path requests (ARGS_WANT_FILES / ARGS_WANT_DIRS), which
- *       need none, come back.
+ *       `dotta`, <token> the one being typed, each as the shell reads it. The
+ *       line is consumed as the parser would consume it and the command's hook
+ *       answers (`args_complete_candidates`). The script's wrapper is the caller,
+ *       and it reads silence as "no candidates": never an error message, nothing
+ *       on failure, exit 0 outside a repository — where every source prints
+ *       nothing, and only native path requests (ARGS_WANT_FILES / ARGS_WANT_DIRS),
+ *       which need none, come back.
  *
  * The sources print newline-separated candidates to a stream, one authority each:
  * a source reads the enabled set, the view, Git, the names the remote's last
@@ -186,7 +186,8 @@ bool completion_paths_under(
  * `dotta __complete` options: the line, as the shell's wrapper passes it.
  */
 typedef struct {
-    const char *current;      /* The token being typed (--current=); NULL when none */
+    const char *current;      /* The token being typed, as the shell reads it
+                               * (--current=); NULL when none */
 
     /* The complete tokens after the program, after `--`. */
     char **positional_args;

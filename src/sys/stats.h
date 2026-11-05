@@ -63,9 +63,10 @@ typedef struct {
  * The summary is the message's first line with its trailing whitespace trimmed,
  * and empty for a commit with no message. The one producer of a commit_info_t:
  * every change the history walks answer, each branch head a verbose profile row
- * prints (cmds/list.c list_profiles), and each head beneath a verbose remote
- * row (cmds/status.c status_print_remote), so a row's commit and a file's read
- * alike.
+ * prints (cmds/list.c list_profiles), each head beneath a verbose remote row
+ * (cmds/status.c status_print_remote), and each commit a completion offers
+ * (cmds/completion.c commits_walk), so a row's commit, a file's and a candidate's
+ * read alike.
  *
  * @param arena Arena the summary lives in (required)
  * @param commit The commit (required, borrowed)

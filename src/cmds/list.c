@@ -20,6 +20,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -39,6 +40,7 @@
 #define LIST_MAX_MSG_ALIGN 60
 #define LIST_MAX_NAME_ALIGN 40
 #define LIST_MIN_NAME_ALIGN 12
+#define LIST_SUMMARY_MAX 40
 
 /**
  * One verbose profile line's facts
@@ -343,12 +345,14 @@ static error_t list_profiles(
             char time_str[64];
             timeutil_relative(last->time, time_str, sizeof(time_str));
 
-            size_t summary_len = strlen(last->summary);
-            if (summary_len > 40) summary_len = 40;
+            /* Cut on a whole character (base/string.h str_display), which the
+             * print's own spelling of a datum leaves as it is */
+            char summary[LIST_SUMMARY_MAX + 1];
+            str_display(summary, sizeof(summary), last->summary, strlen(last->summary));
 
             output_print(
-                out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
-                oid_str, (int) summary_len, last->summary, time_str
+                out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %s {dim}(%s){reset}",
+                oid_str, summary, time_str
             );
         }
 
@@ -714,12 +718,14 @@ static error_t list_files(
                 char time_str[64];
                 timeutil_relative(last->time, time_str, sizeof(time_str));
 
-                size_t summary_len = strlen(last->summary);
-                if (summary_len > 40) summary_len = 40;
+                /* Cut on a whole character (base/string.h str_display), which
+                 * the print's own spelling of a datum leaves as it is */
+                char summary[LIST_SUMMARY_MAX + 1];
+                str_display(summary, sizeof(summary), last->summary, strlen(last->summary));
 
                 output_print(
-                    out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
-                    oid_str, (int) summary_len, last->summary, time_str
+                    out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %s {dim}(%s){reset}",
+                    oid_str, summary, time_str
                 );
             }
         }

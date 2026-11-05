@@ -35,6 +35,7 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/remote.h"
+#include "sys/stats.h"
 
 /* Emission limits */
 #define COMPLETE_COMMIT_SHORT_OID_LEN 8
@@ -358,29 +359,22 @@ static size_t commits_walk(
             continue;
         }
 
-        const char *message = git_commit_message(commit);
-        if (!message) {
-            git_commit_free(commit);
-            continue;
-        }
-
         /* Format short OID */
         char oid_str[COMPLETE_COMMIT_SHORT_OID_LEN + 1];
         git_oid_tostr(oid_str, sizeof(oid_str), &oid);
 
-        /* Extract first line of commit message */
-        const char *newline = strchr(message, '\n');
-        size_t msg_len =
-            newline ? (size_t) (newline - message) : strlen(message);
-        if (msg_len > COMPLETE_COMMIT_SUMMARY_MAX) {
-            msg_len = COMPLETE_COMMIT_SUMMARY_MAX;
-        }
+        /* The summary every screen reads (sys/stats.h stats_commit_info), as a
+         * terminal may show it, cut on a whole character (base/string.h
+         * str_display) */
+        const commit_info_t info = stats_commit_info(ctx->arena, commit);
+        char summary[COMPLETE_COMMIT_SUMMARY_MAX + 1];
+        str_display(summary, sizeof(summary), info.summary, strlen(info.summary));
 
         if (prefix) fprintf(out, "%s@", prefix);
         if (interleaved) {
-            fprintf(out, "%s\t%s: %.*s\n", oid_str, profile, (int) msg_len, message);
+            fprintf(out, "%s\t%s: %s\n", oid_str, profile, summary);
         } else {
-            fprintf(out, "%s\t%.*s\n", oid_str, (int) msg_len, message);
+            fprintf(out, "%s\t%s\n", oid_str, summary);
         }
 
         git_commit_free(commit);

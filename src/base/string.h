@@ -302,7 +302,9 @@ const char *str_shell_quote(arena_t *arena, const char *word);
  *
  * Readers: base/output.c output_datum (every %s and %c a format carries, the
  * editor's rows among them) and output_list_render (a row's tags, measured);
- * infra/commit.c commit_spelled (every name a commit message's template inserts).
+ * infra/commit.c commit_spelled (every name a commit message's template inserts);
+ * cmds/completion.c commits_walk (a candidate's description) and cmds/list.c
+ * list_profiles and list_files (a verbose row's summary), each cut to its limit.
  *
  * @param dst  Where the spelling goes (may be NULL when size is 0)
  * @param size dst's bytes, its terminator's among them

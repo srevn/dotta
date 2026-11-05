@@ -56,8 +56,6 @@ typedef struct {
  */
 commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit) {
     const char *message = git_commit_message(commit);
-    if (!message) message = "";
-
     size_t len = strcspn(message, "\n");
     while (len > 0 && isspace((unsigned char) message[len - 1])) len--;
 

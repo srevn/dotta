@@ -41,7 +41,6 @@
 #define COMPLETE_COMMIT_SHORT_OID_LEN 8
 #define COMPLETE_COMMIT_LIMIT 20
 #define COMPLETE_COMMIT_SUMMARY_MAX 60
-#define COMPLETE_REFSPEC_FILES_MAX 2000
 
 /**
  * Profile names, by the set the slot admits
@@ -232,12 +231,11 @@ void completion_directories(
     profile_free(profile);
 }
 
-/* The refspec walk: where the tokens go, and how many went. */
+/* The refspec walk: where the tokens go. */
 typedef struct {
     FILE *out;
     const char *profile;  /* current profile (source of the "<profile>:" prefix) */
     bool prefix;          /* prefix "<profile>:" (every profile) vs bare path (pinned) */
-    size_t emitted;       /* tokens printed so far, every profile's */
 } refspec_walk_t;
 
 /**
@@ -247,13 +245,12 @@ typedef struct {
  * of every entry's whole name: a name in the grammar is content, and whatever
  * else a branch holds — a top-level blob under no label, .dotta/, whatever a
  * hand left beside them — is its machinery, pruned with its subtree and no token.
- * The walk stops at the cap, and the loop over the profiles reads the count.
  */
 static error_t refspec_emit(
     const char *path, const git_tree_entry *entry, void *payload,
     gitops_next_t *next
 ) {
-    refspec_walk_t *walk = payload;
+    const refspec_walk_t *walk = payload;
 
     if (!label_prefixes(path)) {                                  /* the content gate */
         *next = GITOPS_NEXT_SKIP;
@@ -265,10 +262,6 @@ static error_t refspec_emit(
         fprintf(walk->out, "%s:%s\n", walk->profile, path);
     } else {
         fprintf(walk->out, "%s\t%s\n", path, walk->profile);
-    }
-
-    if (++walk->emitted >= COMPLETE_REFSPEC_FILES_MAX) {
-        *next = GITOPS_NEXT_STOP;
     }
     return NULL;
 }
@@ -288,8 +281,7 @@ void completion_refspecs(
         string_array_push(&profiles, pinned);
     } else {
         error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
-        if (err) return;              /* silent-failure model */
-        string_array_sort(&profiles); /* deterministic order under the cap */
+        if (err) return;  /* silent-failure model */
     }
 
     refspec_walk_t walk = {
@@ -297,9 +289,10 @@ void completion_refspecs(
         .prefix = (pinned == NULL)
     };
 
-    /* Every profile until the cap is reached: the walk that reached it stopped
-     * there */
-    for (size_t i = 0; i < profiles.count && walk.emitted < COMPLETE_REFSPEC_FILES_MAX; i++) {
+    /* Every profile's tree, whole: the shell matches what is typed against all
+     * of it, its substring and subsequence matches among them, and sorts what
+     * it offers */
+    for (size_t i = 0; i < profiles.count; i++) {
         const char *profile = profiles.entries[i];
 
         git_tree *tree = NULL;

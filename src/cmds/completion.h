@@ -96,7 +96,8 @@ void completion_directories(
 /**
  * A profile's files, from Git rather than the view, so the verbs that name a
  * profile — remove, list, show, revert, export — reach every file the profile
- * holds: one another claim stands over here, or one in a profile not enabled here.
+ * holds, however many: one another claim stands over here, or one in a profile
+ * not enabled here.
  *
  * @param pinned NULL: every local profile, as `<profile>:<path>`. Else that profile
  *               only, as bare `<path>` (the profile is pinned).

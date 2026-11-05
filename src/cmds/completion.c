@@ -314,83 +314,77 @@ void completion_refspecs(
 }
 
 /**
- * Walk each branch's history from its head, newest first, up to the per-branch
- * limit; a name that resolves to no branch contributes nothing. When more than
- * one history is listed, the description carries the branch so the interleaved
- * hashes stay attributable. `prefix`, when given, is printed before every token
- * as `<prefix>@<token>`.
+ * One branch's recent commits, from its head, up to the per-branch limit; a name
+ * that resolves to no branch offers nothing. `prefix`, when given, is printed
+ * before every token as `<prefix>@<token>`. Where several histories are listed
+ * together, each description carries its branch so the interleaved hashes stay
+ * attributable.
  *
- * @return Number of commits emitted
+ * @return Number of commits offered
  */
 static size_t commits_walk(
-    git_repository *repo, FILE *out, const char *prefix,
-    const char *const *profiles, size_t profile_count
+    const dotta_ctx_t *ctx, FILE *out, const char *prefix, const char *profile,
+    bool interleaved
 ) {
-    bool label = profile_count > 1;
-    size_t emitted = 0;
+    git_repository *repo = ctx->run.repo;
 
-    for (size_t b = 0; b < profile_count; b++) {
-        const char *profile = profiles[b];
+    /* The branch's head, as every verb that takes one of these commits reads it
+     * (sys/gitops.h gitops_load_branch_commit) — never a DWIM, whose tag of the
+     * same name would win and offer commits no branch holds. A name that is no
+     * branch, or a head that will not read, offers nothing. */
+    git_commit *head = NULL;
+    error_t err = gitops_load_branch_commit(repo, profile, &head);
+    if (err) return 0;
 
-        /* The branch's head, as every verb that takes one of these commits reads
-         * it (sys/gitops.h gitops_load_branch_commit) — never a DWIM, whose tag
-         * of the same name would win and offer commits no branch holds. A name
-         * that is no branch, or a head that will not read, offers nothing. */
-        git_commit *head = NULL;
-        error_t err = gitops_load_branch_commit(repo, profile, &head);
-        if (err) continue;
+    /* The history from that head: the push copies the head's id, so the head is
+     * freed once it is taken (infra/epoch.c's walk) */
+    git_revwalk *walker = NULL;
+    int rc = git_revwalk_new(&walker, repo);
+    if (rc == 0) {
+        git_revwalk_sorting(walker, GIT_SORT_TIME);
+        rc = git_revwalk_push(walker, git_commit_id(head));
+    }
+    git_commit_free(head);
 
-        git_revwalk *walker = NULL;
-        if (git_revwalk_new(&walker, repo) != 0) {
-            git_commit_free(head);
+    size_t offered = 0;
+    git_oid oid;
+    while (rc == 0 && offered < COMPLETE_COMMIT_LIMIT && git_revwalk_next(&oid, walker) == 0) {
+        git_commit *commit = NULL;
+        if (git_commit_lookup(&commit, repo, &oid) != 0) {
             continue;
         }
-        git_revwalk_push(walker, git_commit_id(head));
-        git_revwalk_sorting(walker, GIT_SORT_TIME);
 
-        git_oid oid;
-        long count = 0;
-        while (count < COMPLETE_COMMIT_LIMIT && git_revwalk_next(&oid, walker) == 0) {
-            git_commit *commit = NULL;
-            if (git_commit_lookup(&commit, repo, &oid) != 0) {
-                continue;
-            }
-
-            const char *message = git_commit_message(commit);
-            if (!message) {
-                git_commit_free(commit);
-                continue;
-            }
-
-            /* Format short OID */
-            char oid_str[COMPLETE_COMMIT_SHORT_OID_LEN + 1];
-            git_oid_tostr(oid_str, sizeof(oid_str), &oid);
-
-            /* Extract first line of commit message */
-            const char *newline = strchr(message, '\n');
-            size_t msg_len =
-                newline ? (size_t) (newline - message) : strlen(message);
-            if (msg_len > COMPLETE_COMMIT_SUMMARY_MAX) {
-                msg_len = COMPLETE_COMMIT_SUMMARY_MAX;
-            }
-
-            if (prefix) fprintf(out, "%s@", prefix);
-            if (label) {
-                fprintf(out, "%s\t%s: %.*s\n", oid_str, profile, (int) msg_len, message);
-            } else {
-                fprintf(out, "%s\t%.*s\n", oid_str, (int) msg_len, message);
-            }
-
+        const char *message = git_commit_message(commit);
+        if (!message) {
             git_commit_free(commit);
-            count++;
-            emitted++;
+            continue;
         }
 
-        git_revwalk_free(walker);
-        git_commit_free(head);
+        /* Format short OID */
+        char oid_str[COMPLETE_COMMIT_SHORT_OID_LEN + 1];
+        git_oid_tostr(oid_str, sizeof(oid_str), &oid);
+
+        /* Extract first line of commit message */
+        const char *newline = strchr(message, '\n');
+        size_t msg_len =
+            newline ? (size_t) (newline - message) : strlen(message);
+        if (msg_len > COMPLETE_COMMIT_SUMMARY_MAX) {
+            msg_len = COMPLETE_COMMIT_SUMMARY_MAX;
+        }
+
+        if (prefix) fprintf(out, "%s@", prefix);
+        if (interleaved) {
+            fprintf(out, "%s\t%s: %.*s\n", oid_str, profile, (int) msg_len, message);
+        } else {
+            fprintf(out, "%s\t%.*s\n", oid_str, (int) msg_len, message);
+        }
+
+        git_commit_free(commit);
+        offered++;
     }
 
-    return emitted;
+    git_revwalk_free(walker);    /* NULL-safe: revwalk.c git_revwalk_free */
+    return offered;
 }
 
 /**
@@ -401,9 +395,7 @@ static void commits_emit(
     const dotta_ctx_t *ctx, FILE *out, const char *prefix,
     const char *const *profiles, size_t profile_count
 ) {
-    git_repository *repo = ctx->run.repo;
-    state_t *state = ctx->run.state;
-    if (repo == NULL) return;
+    if (ctx->run.repo == NULL) return;
 
     static const struct {
         const char *ref;
@@ -419,19 +411,20 @@ static void commits_emit(
         fprintf(out, "%s\t%s\n", references[i].ref, references[i].summary);
     }
 
-    if (profile_count > 0 &&
-        commits_walk(repo, out, prefix, profiles, profile_count) > 0) {
-        return;
+    /* The branches named, each its own history */
+    size_t offered = 0;
+    for (size_t i = 0; i < profile_count; i++) {
+        offered += commits_walk(ctx, out, prefix, profiles[i], profile_count > 1);
     }
+    if (offered > 0) return;
 
     /* None named, or none of them a branch (a positional handed in as a guess
-     * may be a path): the enabled histories stand in. */
-    state_profiles_t rows = state_profiles(state);
-    const char **enabled = arena_calloc(ctx->arena, rows.count, sizeof(*enabled));
+     * may be a path): the enabled histories stand in, in precedence order, each
+     * row's name as the row holds it. */
+    state_profiles_t rows = state_profiles(ctx->run.state);
     for (size_t i = 0; i < rows.count; i++) {
-        enabled[i] = rows.entries[i].name;
+        commits_walk(ctx, out, prefix, rows.entries[i].name, rows.count > 1);
     }
-    commits_walk(repo, out, prefix, enabled, rows.count);
 }
 
 /**

@@ -270,9 +270,11 @@ typedef enum args_want {
  *
  * Prints candidates to `out`, one per line as `token` or `token<TAB>description`
  * — the sources are the application's, the engine never reads them — and returns
- * what the shell should add. `ctx` is the same opaque payload `dispatch` receives.
- * A command without a hook offers nothing beyond its flags and subcommands, which
- * the exported rules carry.
+ * what the shell should add. A name holding a newline or a TAB, the bytes the
+ * lines are framed on, reaches the shell split — one opening with a TAB read as
+ * a request — and is typed instead. `ctx` is the same opaque payload `dispatch`
+ * receives. A command without a hook offers nothing beyond its flags and
+ * subcommands, which the exported rules carry.
  */
 typedef args_want_t (*args_complete)(
     const void *ctx, const void *opts,

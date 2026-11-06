@@ -73,16 +73,18 @@
  * committed.
  *
  * Every entry names a blob the ODB holds by commit time: stage_put writes it,
+ * stage_put_unwritten keeps its bytes and the commit's tree write writes them,
  * stage_put_blob trusts the caller (a restore's blob is looked up from a commit),
  * and the tree write refuses an id the ODB lacks. *By commit time* is the whole
  * of the promise: the put itself does not check, so an id whose object is not
  * written yet is admitted and refused only if the commit still lacks it. A writer
- * that must decide before it writes puts the id and materialises the bytes later
- * — revert's restore puts a reseal's hash before its preview (core/profiles.h
- * profile_restore_file), and revert stores the object only past the prompt, so
- * a dry run leaves the database as it found it. Bytes are stored as given — no
- * clean filter, no autocrlf, no filemode config — the way apply writes them back;
- * the mode is the caller's word.
+ * that must decide before it writes puts what it will write without writing it:
+ * its bytes unwritten, the stage's to write at its commit, or an id whose object
+ * it materialises itself later — revert's restore puts a reseal's hash before
+ * its preview (core/profiles.h profile_restore_file), and revert stores the object
+ * only past the prompt — so a dry run leaves the database as it found it. Bytes
+ * are stored as given — no clean filter, no autocrlf, no filemode config — the
+ * way apply writes them back; the mode is the caller's word.
  *
  * Nothing here touches HEAD, a working directory, or the repository's own index,
  * and neither an open nor an admission writes anything — the ref is resolved
@@ -91,14 +93,16 @@
  * (lib/libgit2/src/libgit2/merge.c merge_conflict_invoke_driver). So a stage
  * freed before its first put leaves the repository as it found it, those blobs
  * aside, loose. A put admits its path before it writes a byte, so a refused put
- * writes nothing; one admitted writes its blob at once — a union its own — and
- * a stage freed after either without a commit, or whose commit was refused, leaves
- * loose objects and no ref. A put whose blob write fails leaves its entry at
- * the null id, which the commit's tree write refuses, and an entry it replaced
- * is gone from the index: a writer abandons a stage whose put failed, as one
- * whose settle failed. One commit per stage: after it the ref names the commit
- * and the stage still describes the tree it opened on, so a second commit is
- * refused by the head check — a writer with more to write opens another.
+ * writes nothing; one admitted writes its blob at once — a union its own — where
+ * an unwritten put writes its own only at the commit's tree write, and only while
+ * the index still names it there. A stage freed after a put without a commit,
+ * or whose commit was refused, leaves loose objects and no ref. A put whose blob
+ * write fails leaves its entry at the null id, which the commit's tree write
+ * refuses, and an entry it replaced is gone from the index: a writer abandons a
+ * stage whose put failed, as one whose settle failed. One commit per stage: after
+ * it the ref names the commit and the stage still describes the tree it opened
+ * on, so a second commit is refused by the head check — a writer with more to
+ * write opens another.
  *
  * A merge is Git's, under three options of the stage's own, whatever the
  * configuration says: no rename paired — dotta has no rename verb, so a pairing
@@ -434,6 +438,34 @@ error_t stage_put_blob(
 );
 
 /**
+ * The entry at `path` for bytes whose blob the commit's tree write writes, and
+ * nothing before it
+ *
+ * The same rules as stage_put, its entry put at the id the bytes hash to
+ * (git_odb_hash) and the bytes kept, the stage's copy: so a writer that decides
+ * before it writes — a preview, a hook or a prompt between — leaves the database
+ * as it found it where the stage is freed first. The commit writes each kept
+ * blob the index still names at its path, before its tree (stage_commit); one a
+ * later put or removal there displaced is never written. A refused put keeps
+ * nothing, and neither does an entry the index already holds as given (the header):
+ * its blob is the store's, or one an earlier put kept.
+ *
+ * @param st Stage (must not be NULL)
+ * @param path Tree path (must not be NULL; canonical, see the header)
+ * @param data The bytes (may be NULL when size is 0)
+ * @param size Byte count
+ * @param mode The entry's filemode
+ * @return Error or NULL on success
+ */
+error_t stage_put_unwritten(
+    stage_t *st,
+    const char *path,
+    const void *data,
+    size_t size,
+    git_filemode_t mode
+);
+
+/**
  * Remove the entry at `path`
  *
  * A path the stage lacks is an error (ERR_NOT_FOUND): the caller's model of the
@@ -668,13 +700,15 @@ error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out);
  * The tree, and — when it differs from the opened one, or a merge records it —
  * one commit
  *
- * The index is written as a tree; a conflict a merge left standing refuses the
- * write in Git's words (lib/libgit2/src/libgit2/tree.c git_tree__write_index),
- * and nothing is committed. A tree equal to the opened one is not committed —
- * nothing moves, and the commit answered is Git's null id — save a merge's, whose
- * second parent records the integration whatever its tree. Otherwise one commit
- * with the opened head as its first parent (a root for an orphan's stage), a
- * merge's other commit as its second, and the action in its header (sys/gitops.h
+ * The blobs the unwritten puts kept are written first, each the index still names
+ * at its path (stage_put_unwritten), a failure the commit's and nothing committed;
+ * then the index is written as a tree, and a conflict a merge left standing refuses
+ * the write in Git's words (lib/libgit2/src/libgit2/tree.c git_tree__write_index),
+ * nothing committed. A tree equal to the opened one is not committed — nothing
+ * moves, and the commit answered is Git's null id — save a merge's, whose second
+ * parent records the integration whatever its tree. Otherwise one commit with
+ * the opened head as its first parent (a root for an orphan's stage), a merge's
+ * other commit as its second, and the action in its header (sys/gitops.h
  * gitops_create_commit), written apart from the ref, then the ref written to it
  * only from what the open read (gitops_write_reference): a head that moved, or
  * a ref that appeared, reads as ERR_CONFLICT naming the ref; a head deleted since,
@@ -709,7 +743,8 @@ error_t stage_commit(
  * Free the stage
  *
  * Safe with NULL. Nothing in the repository is undone: what was committed stands,
- * what was not is loose objects.
+ * what was not is loose objects, and the bytes an unwritten put kept for a commit
+ * that never came go unwritten.
  *
  * @param st Stage (can be NULL)
  */

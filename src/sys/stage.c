@@ -25,20 +25,30 @@
 
 #include "base/arena.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/string.h"
 #include "sys/gitops.h"
 
+/* The bytes an unwritten put kept for the commit's tree write (stage_put_unwritten) */
+typedef struct {
+    char *path;         /* The name its entry was put at; owned */
+    git_oid id;         /* The id the entry names, the bytes' own */
+    buffer_t bytes;     /* The bytes, the stage's copy */
+} stage_unwritten_t;
+
 struct stage {
-    git_repository *repo;   /* borrowed */
-    char *refname;          /* owned */
-    git_commit *parent;     /* the head at open, the first parent; NULL for an orphan's stage */
-    git_commit *theirs;     /* a merge's second parent; NULL over no merge */
-    git_tree *tree;         /* the parent's tree, or the empty tree */
-    git_tree *theirs_tree;  /* the second parent's tree; NULL over no merge */
-    git_tree *merge_base;   /* the merge base's tree, or the empty tree; NULL over no merge */
-    git_index *index;       /* ownerless: the tree read into it, or Git's merge of the three */
+    git_repository *repo;           /* borrowed */
+    char *refname;                  /* owned */
+    git_commit *parent;             /* the head at open, the first parent; NULL for an orphan's stage */
+    git_commit *theirs;             /* a merge's second parent; NULL over no merge */
+    git_tree *tree;                 /* the parent's tree, or the empty tree */
+    git_tree *theirs_tree;          /* the second parent's tree; NULL over no merge */
+    git_tree *merge_base;           /* the merge base's tree, or the empty tree; NULL over no merge */
+    git_index *index;               /* ownerless: the tree read into it, or Git's merge of the three */
+    stage_unwritten_t *unwritten;   /* each unwritten put's bytes, in put order; owned */
+    size_t unwritten_count;
 };
 
 struct stage_admission {
@@ -402,7 +412,8 @@ static error_t stage_beneath(git_index *index, const char *path, bool *out) {
  * it, where the index was read from one (index.c read_tree_cb) — so a blob a
  * hand's tree spells 100664 is not the entry a put of 100644 gives.
  *
- * Reader: stage_put_entry, before its add.
+ * Readers: stage_put_entry, before its add; and stage_put_unwritten, whether
+ * its bytes are kept.
  */
 static bool stage_holds_entry(git_index *index, const git_index_entry *entry) {
     const git_index_entry *held = git_index_get_bypath(index, entry->path, 0);
@@ -603,6 +614,49 @@ error_t stage_put_blob(
     git_oid_cpy(&entry.id, blob);
 
     return stage_put_entry(st->index, &entry);
+}
+
+error_t stage_put_unwritten(
+    stage_t *st, const char *path, const void *data, size_t size, git_filemode_t mode
+) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+    CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
+
+    /* The entry at the id the bytes will be written under, hashed and nothing
+     * written (git_odb_hash) */
+    git_index_entry entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.mode = (uint32_t) mode;
+    entry.path = path;
+    int rc = git_odb_hash(&entry.id, size > 0 ? data : "", size, GIT_OBJECT_BLOB);
+    if (rc < 0) {
+        return error_git(rc, "Failed to hash the blob for '%s'", path);
+    }
+
+    /* An entry the index already holds as given keeps nothing: its blob is the
+     * store's, the tree the index was read from naming it, or one an earlier
+     * put kept. The put is asked all the same, its refusals with it, and moves
+     * nothing (stage_put_entry) */
+    if (stage_holds_entry(st->index, &entry)) {
+        return stage_put_entry(st->index, &entry);
+    }
+
+    /* Otherwise the put, then the bytes kept for the commit's tree write
+     * (stage_commit): the stage's own copy, sized exactly (base/buffer.h
+     * buffer_reserve), so a refused put keeps nothing */
+    error_t err = stage_put_entry(st->index, &entry);
+    if (err) return err;
+
+    st->unwritten = heap_realloc(
+        st->unwritten, (st->unwritten_count + 1) * sizeof(*st->unwritten)
+    );
+    stage_unwritten_t *put = &st->unwritten[st->unwritten_count++];
+    *put = (stage_unwritten_t){ .path = heap_strdup(path), .id = entry.id };
+    buffer_reserve(&put->bytes, size);
+    buffer_append(&put->bytes, data, size);
+
+    return NULL;
 }
 
 error_t stage_remove(stage_t *st, const char *path) {
@@ -935,6 +989,26 @@ error_t stage_commit(
         *out_commit = (git_oid) GIT_OID_SHA1_ZERO;
     }
 
+    /* The bytes each unwritten put kept, written first: the tree write asks the
+     * store for every object a subtree it rebuilds names (tree.c check_entry,
+     * under libgit2's strict object creation), and the put's id is this write's
+     * own, the same bytes hashed. Each the index still names at its path, so a
+     * blob a later put or removal there displaced is never written; a failure
+     * is the commit's, and nothing is committed */
+    for (size_t i = 0; i < st->unwritten_count; i++) {
+        const stage_unwritten_t *put = &st->unwritten[i];
+        const git_index_entry *entry = git_index_get_bypath(st->index, put->path, 0);
+        if (!entry || !git_oid_equal(&entry->id, &put->id)) continue;
+
+        git_oid blob;
+        int rc = git_blob_create_from_buffer(
+            &blob, st->repo, put->bytes.size > 0 ? put->bytes.data : "", put->bytes.size
+        );
+        if (rc < 0) {
+            return error_git(rc, "Failed to write the blob for '%s'", put->path);
+        }
+    }
+
     /* The tree, which a conflict a merge left standing refuses in Git's words
      * (tree.c git_tree__write_index) */
     git_oid tree_oid;
@@ -1022,6 +1096,14 @@ void stage_free(stage_t *st) {
     if (!st) {
         return;
     }
+
+    /* The bytes the unwritten puts kept, written or not: a commit wrote what it
+     * needed, and a stage freed first writes none */
+    for (size_t i = 0; i < st->unwritten_count; i++) {
+        free(st->unwritten[i].path);
+        buffer_deinit(&st->unwritten[i].bytes);
+    }
+    free(st->unwritten);
 
     git_index_free(st->index);
     git_tree_free(st->merge_base);

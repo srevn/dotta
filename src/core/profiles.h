@@ -829,9 +829,9 @@ error_t profile_sealed(profile_t *profile, const char *storage_path, bool *out);
  * What a profile's history says of a name: whether it left, and what took it
  *
  * Six answers, one table over the commits that took the name away (sys/history.h
- * history_removals): a removal whose action is update's deletes, and any other
- * action, or none, keeps (infra/commit.h commit_action_t) — and a removal that
- * keeps decides beside every other removal and every line unread.
+ * history_removals): a removal whose action is update's or revert's deletes,
+ * and any other action, or none, keeps (infra/commit.h commit_action_t) — and a
+ * removal that keeps decides beside every other removal and every line unread.
  *
  * The words on screen: an orphan's line says what took it (core/workspace.c
  * workspace_item_line) — "deleted from p", "removed from p", "not in p's history",
@@ -846,7 +846,7 @@ error_t profile_sealed(profile_t *profile, const char *storage_path, bool *out);
  */
 typedef enum {
     PROFILE_DEPARTURE_HELD,         /* the head holds the name: it has not left */
-    PROFILE_DEPARTURE_DELETED,      /* every removal names update, and every line read */
+    PROFILE_DEPARTURE_DELETED,      /* every removal names update or revert, and every line read */
     PROFILE_DEPARTURE_REMOVED,      /* a removal names another action, or none: beside an unread line too */
     PROFILE_DEPARTURE_NEVER_HELD,   /* no commit took it: every line read to its root */
     PROFILE_DEPARTURE_GONE,         /* no head: the branch is gone */

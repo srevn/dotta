@@ -29,25 +29,26 @@
  * word their own messages, and the template never renders theirs.
  *
  * What an action means for the copies a removal leaves is one rule: update's
- * removals delete the files they take, and every other action's keep them. Two
- * read it, the copies' fate from a profile's history (core/profiles.c
- * profile_departures) and the heading a message stands its removals under, Deleted
- * or Removed (commit_message's {paths}). An action with another effect is another
- * word: a remove that deleted files would write its own, never "remove". A hand's
- * commit names none, and keeps — save git's amend in a worktree of the store,
- * which carries every extra header but a signature onto the commit it writes
- * (lib/git/builtin/commit.c cmd_commit, read_commit_extra_headers): its removals
- * read as the action the amended commit named (stated).
+ * and revert's removals delete the files they take, and every other action's
+ * keep them. Two read it, the copies' fate from a profile's history
+ * (core/profiles.c profile_departures) and the heading a message stands its
+ * removals under, Deleted or Removed (commit_message's {paths}). An action with
+ * another effect is another word: a remove that deleted files would write its
+ * own, never "remove". A hand's commit names none, and keeps — save git's amend
+ * in a worktree of the store, which carries every extra header but a signature
+ * onto the commit it writes (lib/git/builtin/commit.c cmd_commit,
+ * read_commit_extra_headers): its removals read as the action the amended commit
+ * named (stated).
  *
  * The words on screen are the files', since a directory goes by what is left in
  * it whatever took its claim (core/workspace.c workspace_analyze_orphans): update
- * deletes — status's [deleted] legend line (cmds/status.c status_print_workspace),
- * update's Deleted paths header and help (cmds/update.c update_print_preview,
- * spec_update), apply's help, "files deleted from their profiles" (cmds/apply.c
- * spec_apply) — and every other action keeps, "no file is deleted from disk, on
- * any machine" in remove's help (cmds/remove.c spec_remove), a profile's deletion
- * among them, no history answering for a branch that is gone (cmds/remove.h
- * cmd_remove).
+ * and revert delete — status's [deleted] legend line, a local deletion being
+ * update's to commit (cmds/status.c status_print_workspace), update's Deleted
+ * paths header and help (cmds/update.c update_print_preview, spec_update), apply's
+ * help, "files deleted from their profiles" (cmds/apply.c spec_apply) — and every
+ * other action keeps, "no file is deleted from disk, on any machine" in remove's
+ * help (cmds/remove.c spec_remove), a profile's deletion among them, no history
+ * answering for a branch that is gone (cmds/remove.h cmd_remove).
  */
 typedef enum {
     COMMIT_ACTION_ADD,         /* cmds/add.c */
@@ -74,18 +75,19 @@ typedef enum {
  * (base/error.h CHECK_ARG).
  *
  * The word outlives the binary that wrote it: the departure compares each removal's
- * word with update's as spelled here (core/profiles.c profile_departures), so a
- * re-spelled word reads every removal an earlier spelling committed as a keep.
+ * word with update's and revert's as spelled here (core/profiles.c
+ * profile_departures), so a re-spelled word reads every removal an earlier spelling
+ * committed as a keep.
  *
  * Readers: core/profiles.c profile_commit — every claim writer's commit, and a
- * profile's merge — and profile_departures, update's word against each removal's;
- * cmds/ignore.c ignore_edit and ignore_modify; cmds/bootstrap.c bootstrap_edit;
- * infra/epoch.c epoch_init, and epoch_adopt, the install's line; core/ignore.c
- * ignore_seed_baseline; cmds/sync.c sync_execute, the line of each branch a pull
- * moves or a create writes, and cmds/clone.c land_profiles, the line of each
- * branch it creates (sys/gitops.h gitops_create_branch); cmds/sync.c cmd_sync,
- * cmds/clone.c cmd_clone and cmds/remove.c remove_profile, the word every line
- * their session writes names (sys/remote.h remote_open).
+ * profile's merge — and profile_departures, update's and revert's words against
+ * each removal's; cmds/ignore.c ignore_edit and ignore_modify; cmds/bootstrap.c
+ * bootstrap_edit; infra/epoch.c epoch_init, and epoch_adopt, the install's line;
+ * core/ignore.c ignore_seed_baseline; cmds/sync.c sync_execute, the line of each
+ * branch a pull moves or a create writes, and cmds/clone.c land_profiles, the
+ * line of each branch it creates (sys/gitops.h gitops_create_branch); cmds/sync.c
+ * cmd_sync, cmds/clone.c cmd_clone and cmds/remove.c remove_profile, the word
+ * every line their session writes names (sys/remote.h remote_open).
  *
  * @param action The action
  * @return Its word, static
@@ -146,8 +148,8 @@ typedef struct commit_changes {
  *   {date}          - Local date (YYYY-MM-DD)
  *   {datetime}      - Local timestamp with timezone (ISO 8601)
  *   {paths}         - Each change under its heading (Added, Updated, Removed;
- *                     an update's removals Deleted), at most five names a heading;
- *                     one line where none
+ *                     an update's and a revert's removals Deleted), at most five
+ *                     names a heading; one line where none
  *   {target_commit} - The commit a revert restores from; empty otherwise, so a
  *                     body line whose only variable it is shows on a revert alone
  *

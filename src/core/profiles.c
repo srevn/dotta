@@ -1035,16 +1035,18 @@ void profile_departures(
     history_removals_t *found = arena_calloc(frame, count, sizeof(*found));
     history_removals(repo, head, storage_paths, count, frame, found);
 
-    /* The one table: update's removals delete the files they take, and every
-     * other action's — none's too — keep them; a removal that keeps decides beside
-     * every other removal and every line unread */
+    /* The one table: update's and revert's removals delete the files they take,
+     * and every other action's — none's too — keep them; a removal that keeps
+     * decides beside every other removal and every line unread */
     const char *update = commit_action_word(COMMIT_ACTION_UPDATE);
+    const char *revert = commit_action_word(COMMIT_ACTION_REVERT);
     for (size_t i = 0; i < count; i++) {
         const history_removals_t *removals = &found[i];
 
         const history_removal_t *kept = NULL;
         for (size_t k = 0; k < removals->count && !kept; k++) {
-            if (!str_equal(removals->entries[k].action, update)) {
+            const char *action = removals->entries[k].action;
+            if (!str_equal(action, update) && !str_equal(action, revert)) {
                 kept = &removals->entries[k];
             }
         }

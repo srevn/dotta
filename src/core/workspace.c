@@ -2517,15 +2517,15 @@ static void workspace_ask_departures(
  *     the one the view read an enabled profile's rows at, a disabled one's branch
  *     now (workspace_ask_departures): HELD, the profile holds it still — disabled,
  *     or the claim moved with its root — and DELETED, every commit that took it
- *     named update, the user's deletion, are dotta's to prune, divergence
- *     permitting; REMOVED, NEVER_HELD and GONE — a commit that took it named
- *     another action or none, no commit of the history held it, the branch is
- *     gone — leave the deployed copy alone (RELEASED). UNVERIFIED — a history
- *     that would not read, the head's own among it — keeps the orphan skipped
- *     until it reads, since a release would retire the record and a prune would
- *     remove the copy and neither is a guess to make — until --force, which lifts
- *     every skip a file carries (core/cleanup.h cleanup_verdict), and so may
- *     remove a copy its history would have released. Skipped and not measured:
+ *     named update or revert, a deletion its profile committed, are dotta's to
+ *     prune, divergence permitting; REMOVED, NEVER_HELD and GONE — a commit that
+ *     took it named another action or none, no commit of the history held it,
+ *     the branch is gone — leave the deployed copy alone (RELEASED). UNVERIFIED
+ *     — a history that would not read, the head's own among it — keeps the orphan
+ *     skipped until it reads, since a release would retire the record and a prune
+ *     would remove the copy and neither is a guess to make — until --force, which
+ *     lifts every skip a file carries (core/cleanup.h cleanup_verdict), and so
+ *     may remove a copy its history would have released. Skipped and not measured:
  *     no reader shows a bit beside a fault, so a compare would only give the
  *     item a second reason for the one fate it already has. The departure raises
  *     nothing, so a history that would not read is this orphan's skip and never
@@ -2760,11 +2760,11 @@ static void workspace_analyze_orphans(workspace_t *ws) {
                     break;
 
                 case PROFILE_DEPARTURE_DELETED:
-                    /* The user's deletion, committed by update: dotta's to prune,
-                     * divergence permitting. A name the head lacks is in no row
-                     * of its profile — an enabled one's rows were read at that
-                     * head, and a disabled one has none — so no relocation is
-                     * read */
+                    /* A deletion its profile committed, update's or revert's:
+                     * dotta's to prune, divergence permitting. A name the head
+                     * lacks is in no row of its profile — an enabled one's rows
+                     * were read at that head, and a disabled one has none — so
+                     * no relocation is read */
                     workspace_measure(ws, item);
                     continue;
 
@@ -4802,11 +4802,11 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
                 workspace_line_add(&line, "relocated");
             }
 
-            /* Whose copy it is, and where its profile's history says update deleted
-             * it, that act (workspace_item_t's departure). The history's other
-             * answers here add nothing to the line: a name its profile holds
-             * still is that profile's, and a history that would not read is the
-             * line's [unverified]; an overridden copy and a node are decided
+            /* Whose copy it is, and where its profile's history says the profile
+             * deleted it, that act (workspace_item_t's departure). The history's
+             * other answers here add nothing to the line: a name its profile
+             * holds still is that profile's, and a history that would not read
+             * is the line's [unverified]; an overridden copy and a node are decided
              * before any history is asked. */
             if (item->departure && item->departure->kind == PROFILE_DEPARTURE_DELETED) {
                 line.reason = "deleted";

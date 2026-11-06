@@ -130,7 +130,7 @@ typedef struct {
  */
 typedef struct {
     size_t removed;     /* REMOVED, NEVER_HELD, GONE: no deletion committed */
-    size_t deleted;     /* DELETED: update's removals took it */
+    size_t deleted;     /* DELETED: update's or revert's removals took it */
     size_t unverified;  /* UNVERIFIED */
 } sync_departure_counts_t;
 
@@ -302,8 +302,9 @@ static error_t sync_push(remote_t *remote, sync_row_t *row, const git_oid *targe
  *
  * The merge itself is asked nothing: both its parents lack each such name, so
  * its history follows each line to its removal (sys/history.h), and the one naming
- * no update keeps the name's copies on every machine (core/profiles.h
- * profile_departure_t) — the line's last word, whatever either side did.
+ * neither update nor revert keeps the name's copies on every machine
+ * (core/profiles.h profile_departure_t) — the line's last word, whatever either
+ * side did.
  *
  * A history that will not say is no line (stated): no merge base, a tree or a
  * commit that will not load, a side whose walk went unread. Its error is dropped,
@@ -741,8 +742,8 @@ static void sync_print_done(output_t *out, const sync_row_t *row, bool no_push) 
  * Print, beneath a merge's row, each name its two sides took one deleting and
  * one removing: what this side and the remote did, the remote's removal, and
  * that the merge keeps the name's copies — it holds both removals, and the one
- * naming no update keeps them on every machine (sync_disagreements) — LIST_LIMIT
- * lines, and a count of the rest
+ * naming neither update nor revert keeps them on every machine (sync_disagreements)
+ * — LIST_LIMIT lines, and a count of the rest
  */
 static void sync_print_disagreements(output_t *out, const sync_row_t *row) {
     const sync_disagreements_t *disagreements = &row->disagreements;

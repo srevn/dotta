@@ -152,8 +152,8 @@ static const char *commit_spelled(arena_t *arena, const char *name) {
 
 /**
  * {paths}: each change under its heading — Added, Updated, then the removals,
- * Deleted under update and Removed under every other action, in that order —
- * or, where the commit changes no explicit claim, the one line that says so
+ * Deleted under update and revert and Removed under every other action, in that
+ * order — or, where the commit changes no explicit claim, the one line that says so
  *
  * A heading stands over a list that names something, and nowhere else. A removal
  * is the one change the action words: the lists are the draft's, one edit to a
@@ -175,9 +175,13 @@ static void commit_paths(
         const char *heading;
         const string_array_t *names;
     } lists[] = {
-        { "Added:",                                                 &changes->added   },
-        { "Updated:",                                               &changes->updated },
-        { action == COMMIT_ACTION_UPDATE ? "Deleted:" : "Removed:", &changes->removed },
+        { "Added:",   &changes->added   },
+        { "Updated:", &changes->updated },
+        {
+            action == COMMIT_ACTION_UPDATE || action == COMMIT_ACTION_REVERT
+                ? "Deleted:" : "Removed:",
+            &changes->removed
+        },
     };
 
     *out = (buffer_t){ 0 };

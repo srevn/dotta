@@ -467,14 +467,15 @@ error_t manifest_build(
  * stands there, which is what manifest_lookup_claim's own note is about; the
  * name a profile gives a path argument, over whatever tree its reader selected
  * (core/scope.c scope_resolve_name, which asks it manifest_claim_name for the
- * -p arms of show and list); revert's two questions of a tree, the claim held
- * at a path and the second-name admission (cmds/revert.c revert_claim_held,
- * revert_refuse_second_name); add, which builds one over its draft's base
- * (core/profiles.h profile_draft_base) and asks it every naming question for
- * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
- * (cmds/ignore.c ignore_test); and the two cross-profile searches, which build
- * one per local profile (cmds/revert.c revert_select_profile, through
- * revert_claim_held, and cmds/remove.c remove_overlaps).
+ * -p arms of show and list, and for completion's commit slot after a path);
+ * revert's two questions of a tree, the claim held at a path and the second-name
+ * admission (cmds/revert.c revert_claim_held, revert_refuse_second_name); add,
+ * which builds one over its draft's base (core/profiles.h profile_draft_base)
+ * and asks it every naming question for the length of the command (cmds/add.c
+ * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); and the
+ * two cross-profile searches, which build one per local profile (cmds/revert.c
+ * revert_select_profile, through revert_claim_held, and cmds/remove.c
+ * remove_overlaps).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -1374,9 +1375,10 @@ const char *manifest_name(
  * Reader: the name a profile gives a file argument (core/scope.c
  * scope_resolve_name), over the view of the tree its reader selected — for the
  * -p arms of show and list the head, or the commit the user named, so a name
- * that changed since is found as of then. `export` selects rows instead, `remove`
- * matches its own claims, `revert` reads the claim held in the tree it edits
- * (cmds/revert.c revert_claim_held), and `ignore --test` asks manifest_name itself.
+ * that changed since is found as of then, and for completion's commit slot after
+ * a path the head. `export` selects rows instead, `remove` matches its own claims,
+ * `revert` reads the claim held in the tree it edits (cmds/revert.c
+ * revert_claim_held), and `ignore --test` asks manifest_name itself.
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

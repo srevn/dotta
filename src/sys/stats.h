@@ -176,7 +176,8 @@ error_t stats_last_changes(
  * and a directory the profile tracks with nothing beneath it, which is no tree's
  * entry — its history is what its subtree once held, or none.
  *
- * Reader: cmds/list.c list_path_history.
+ * Readers: cmds/list.c list_path_history, and the commit slot after a path that
+ * completion offers (cmds/completion.c changes_emit).
  *
  * @param repo Repository (required)
  * @param head_oid The head the history is read back from, read once by the caller

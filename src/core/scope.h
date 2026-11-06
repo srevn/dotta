@@ -429,7 +429,7 @@ error_t scope_resolve_claim(
  * question — and is refused where the sheet will not load, where a name proceeds.
  *
  * Readers: cmds/show.c cmd_show and cmds/list.c list_path_history, each with a
- * profile named.
+ * profile named, and cmds/completion.c changes_emit, the commit slot after a path.
  *
  * @param profile The profile, at the tree its reader selected (must not be NULL;
  *                for a path, its sheet is read through it)

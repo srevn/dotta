@@ -759,7 +759,7 @@ error_t gitops_load_reference_commit(
  * core/scope.c scope_resolve_commit and scope_resolve_range, which read a branch's
  * head once and ask it; cmds/list.c list_profiles, list_files and
  * list_path_history, which read every fact a screen prints off it;
- * cmds/completion.c commits_walk, which walks back from it.
+ * cmds/completion.c commits_walk and changes_emit, which walk back from it.
  *
  * @param repo Repository (must not be NULL)
  * @param branch Branch name (must not be NULL)

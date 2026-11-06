@@ -30,7 +30,9 @@
  * One state read or one view build, never a workspace load. The filesystem source
  * asks the enabled set for the root it lists under — the one the command reads
  * its arguments under — and never for the paths, which are the disk's alone
- * (completion_paths_under).
+ * (completion_paths_under). A path's own changes are Git's alone, and this
+ * machine's table is asked only for the name a profile gives a path typed as
+ * one (completion_path_history).
  */
 
 #ifndef DOTTA_CMD_COMPLETION_H
@@ -137,10 +139,46 @@ void completion_history(
 );
 
 /**
- * The commit part of a `<prefix>@<commit>` token being typed: every candidate
- * of `completion_history` as `<prefix>@<token>`, from the history of `pinned`,
- * else of the profile the prefix names (`completion_profile_of`).
+ * The commits that changed the path a word names, for the commit slot after it
  *
+ * The word read as the commands read it (base/refspec.h), `[profile:]<path>`:
+ * its profile the word's own, else `pinned` — the one the line names for it, -p
+ * or the profile word before it — as a refspec's profile wins over -p in each
+ * command's grammar. The path is the profile's name for it at its head
+ * (core/scope.h scope_resolve_name), and its changes are the walk's from that
+ * head (sys/stats.h stats_path_history): a file's, or each commit that changed
+ * anything beneath a directory, newest first, each a commit as completion_history
+ * prints one, and no reference form — HEAD's steps are the profile's, never the
+ * path's.
+ *
+ * A word no profile names is the caller's: a path typed alone, whose profile
+ * the line does not know, keeps the profile's list or the enabled histories
+ * (completion_history). A word the grammar refuses, or one that names its commit
+ * already, leaves no commit slot and offers nothing; so does a name that is no
+ * branch, an argument that will not read, or a walk that fails. The three-word
+ * forms of show and revert read the path word as typed, never as a refspec: the
+ * two readings part only on a line those commands refuse.
+ *
+ * @param pinned The profile the line names for the word, or NULL
+ * @param token  The word naming the path
+ * @return true where a profile is known and the slot was answered, whatever it
+ *         offered; false where none is, and the caller's rules apply
+ */
+bool completion_path_history(
+    const dotta_ctx_t *ctx, FILE *out, const char *pinned, const char *token
+);
+
+/**
+ * The commit part of a `<prefix>@<commit>` token being typed, each candidate as
+ * `<prefix>@<candidate>`: the prefix read as completion_path_history reads its
+ * word. A profile and a path: the path's own changes. A prefix that announces
+ * no path (infra/path.h path_input_announces_path) is a profile alone: the
+ * reference forms, then its history alone, never the enabled histories in its
+ * place, so a name that is no branch offers nothing. A path no profile names
+ * offers nothing: show refuses a file at a commit with no profile, and revert's
+ * own search for one is no TAB's.
+ *
+ * @param pinned The profile the line names for the token, or NULL
  * @return true when `current` carried an `@` and was answered; false when it
  *         did not, and the caller's positional rules apply.
  */

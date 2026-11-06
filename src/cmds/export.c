@@ -1519,8 +1519,9 @@ static error_t export_post_parse(
  * profile or a refspec first. After `profile:path` the destination, a filesystem
  * path; after a bare profile a file or directory claim of that profile, or a
  * commit; after `profile@commit` a claim of that profile alone, its commit given;
- * then the commit. An `@` in the token being typed completes its commit part
- * from the profile's history; -o takes a path.
+ * then the commit, the path's own changes (completion_path_history). An `@` in
+ * the token being typed completes its commit part, its profile the token's own
+ * or the bare profile's before it (completion_commits_at); -o takes a path.
  */
 static args_want_t export_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1531,7 +1532,19 @@ static args_want_t export_complete(
     if (ARGS_VALUE_IS(at, cmd_export_options_t, output)) {
         return ARGS_WANT_FILES;
     }
-    if (completion_commits_at(ctx, out, at->current, NULL)) {
+
+    /* The first word read as the command reads it, by the refspec: one it refuses
+     * leads nowhere */
+    refspec_t rs = { 0 };
+    if (o->positional_count > 0 &&
+        refspec_parse(ctx->arena, o->positional_args[0], &rs) != NULL) {
+        return ARGS_WANT_NONE;
+    }
+
+    /* A bare profile names the profile a path after it is read in, so an `@`
+     * after that path asks it; a word naming a path or its commit pins none */
+    const char *pinned = rs.profile == NULL && rs.commit == NULL ? rs.file : NULL;
+    if (completion_commits_at(ctx, out, at->current, pinned)) {
         return ARGS_WANT_NONE;
     }
 
@@ -1541,13 +1554,7 @@ static args_want_t export_complete(
         return ARGS_WANT_NONE;
     }
 
-    /* The first word read as the command reads it, by the refspec: one it refuses
-     * leads nowhere, and after `profile:path` the destination follows, nothing
-     * after it */
-    refspec_t rs = { 0 };
-    if (refspec_parse(ctx->arena, o->positional_args[0], &rs) != NULL) {
-        return ARGS_WANT_NONE;
-    }
+    /* After `profile:path` the destination follows, nothing after it */
     if (rs.profile != NULL) {
         return o->positional_count == 1 ? ARGS_WANT_FILES : ARGS_WANT_NONE;
     }
@@ -1557,7 +1564,7 @@ static args_want_t export_complete(
         completion_directories(ctx, out, rs.file);
         if (rs.commit == NULL) completion_history(ctx, out, rs.file);
     } else if (o->positional_count == 2 && rs.commit == NULL) {
-        completion_history(ctx, out, rs.file);
+        completion_path_history(ctx, out, rs.file, o->positional_args[1]);
     }
     return ARGS_WANT_NONE;
 }

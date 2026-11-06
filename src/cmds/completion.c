@@ -6,10 +6,10 @@
  * would consume it, and the command's `complete` hook prints what its grammar
  * admits at that position. The sources the hooks draw on live here, one authority
  * each: the enabled set (state), the view (every enabled profile at HEAD,
- * precedence resolved), Git (a branch's tree or history), or the filesystem (the
- * paths a re-rooting flag reads under). The hooks compose them per command; nothing
- * here guesses which one a command wants. `dotta completion <shell>` prints the
- * script that asks.
+ * precedence resolved), Git (a branch's tree or history, or one path's changes
+ * in it), or the filesystem (the paths a re-rooting flag reads under). The hooks
+ * compose them per command; nothing here guesses which one a command wants. `dotta
+ * completion <shell>` prints the script that asks.
  *
  * The sources fail silently: errors result in no output rather than messages to
  * stderr, and outside a repository every source prints nothing.
@@ -28,6 +28,7 @@
 #include "base/string.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
+#include "core/scope.h"
 #include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -304,6 +305,26 @@ void completion_refspecs(
 }
 
 /**
+ * The reference forms, valid against any branch: its head and the head's first
+ * three steps, `<prefix>@` before each where a prefix is given
+ */
+static void commits_references(FILE *out, const char *prefix) {
+    static const struct {
+        const char *ref;
+        const char *summary;
+    } references[] = {
+        { "HEAD",   "Current commit"  },
+        { "HEAD~1", "Previous commit" },
+        { "HEAD~2", "2 commits ago"   },
+        { "HEAD~3", "3 commits ago"   },
+    };
+    for (size_t i = 0; i < sizeof(references) / sizeof(*references); i++) {
+        if (prefix) fprintf(out, "%s@", prefix);
+        fprintf(out, "%s\t%s\n", references[i].ref, references[i].summary);
+    }
+}
+
+/**
  * One branch's recent commits, from its head, up to the per-branch limit; a name
  * that resolves to no branch offers nothing. `prefix`, when given, is printed
  * before every token as `<prefix>@<token>`. Where several histories are listed
@@ -375,33 +396,20 @@ static size_t commits_walk(
 }
 
 /**
- * The commit candidates, with or without a `<prefix>@` in front of each: the
- * reference forms first, then the named histories, else the enabled ones.
+ * The commit candidates: the reference forms first, then the named histories,
+ * else the enabled ones.
  */
 static void commits_emit(
-    const dotta_ctx_t *ctx, FILE *out, const char *prefix,
-    const char *const *profiles, size_t profile_count
+    const dotta_ctx_t *ctx, FILE *out, const char *const *profiles, size_t profile_count
 ) {
     if (ctx->run.repo == NULL) return;
 
-    static const struct {
-        const char *ref;
-        const char *summary;
-    } references[] = {
-        { "HEAD",   "Current commit"  },
-        { "HEAD~1", "Previous commit" },
-        { "HEAD~2", "2 commits ago"   },
-        { "HEAD~3", "3 commits ago"   },
-    };
-    for (size_t i = 0; i < sizeof(references) / sizeof(*references); i++) {
-        if (prefix) fprintf(out, "%s@", prefix);
-        fprintf(out, "%s\t%s\n", references[i].ref, references[i].summary);
-    }
+    commits_references(out, NULL);
 
     /* The branches named, each its own history */
     size_t offered = 0;
     for (size_t i = 0; i < profile_count; i++) {
-        offered += commits_walk(ctx, out, prefix, profiles[i], profile_count > 1);
+        offered += commits_walk(ctx, out, NULL, profiles[i], profile_count > 1);
     }
     if (offered > 0) return;
 
@@ -410,7 +418,70 @@ static void commits_emit(
      * row's name as the row holds it. */
     state_profiles_t rows = state_profiles(ctx->run.state);
     for (size_t i = 0; i < rows.count; i++) {
-        commits_walk(ctx, out, prefix, rows.entries[i].name, rows.count > 1);
+        commits_walk(ctx, out, NULL, rows.entries[i].name, rows.count > 1);
+    }
+}
+
+/**
+ * The commits that changed one path of one profile, newest first, `<prefix>@`
+ * before each where a prefix is given: the argument read as the commands read
+ * one, the profile's name for it at its head, and the walk of its lines from
+ * that head. An argument that does not read, a name that is no branch, or a head,
+ * a sheet or a walk that will not read, offers nothing.
+ */
+static void changes_emit(
+    const dotta_ctx_t *ctx, FILE *out, const char *prefix, const char *name,
+    const char *path
+) {
+    git_repository *repo = ctx->run.repo;
+    const mount_table_t *mounts = ctx->run.mounts;
+    if (repo == NULL || mounts == NULL) return;
+
+    /* The argument first, in the key it names (infra/path.h): one the commands
+     * refuse offers nothing, and nothing is read for it */
+    path_input_t arg;
+    error_t err = path_input_resolve(path, ctx->arena, &arg);
+    if (err) return;
+
+    /* The branch's head, read once, as commits_walk reads it: the name the path
+     * is given and the history behind it are that one commit's. The id is kept
+     * and the commit let go. */
+    git_commit *head = NULL;
+    err = gitops_load_branch_commit(repo, name, &head);
+    if (err) return;
+
+    git_oid head_oid;
+    git_oid_cpy(&head_oid, git_commit_id(head));
+    git_tree *tree = NULL;
+    int rc = git_commit_tree(&tree, head);
+    git_commit_free(head);
+    if (rc < 0) return;
+
+    /* The profile at the head's tree names the path (core/scope.h
+     * scope_resolve_name): a name as typed, a path its own view's */
+    profile_t *profile = profile_open(name, tree);
+    const char *storage_path = NULL;
+    err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
+    profile_free(profile);
+    git_tree_free(tree);
+    if (err) return;
+
+    /* Its changes from that head, a file's or everything beneath a directory's
+     * (sys/stats.h stats_path_history), each printed as commits_walk prints one */
+    path_history_t history;
+    err = stats_path_history(repo, &head_oid, storage_path, ctx->arena, &history);
+    if (err) return;
+
+    for (size_t i = 0; i < history.count; i++) {
+        const commit_info_t *commit = &history.commits[i];
+
+        char oid_str[COMPLETE_COMMIT_SHORT_OID_LEN + 1];
+        git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
+        char summary[COMPLETE_COMMIT_SUMMARY_MAX + 1];
+        str_display(summary, sizeof(summary), commit->summary, strlen(commit->summary));
+
+        if (prefix) fprintf(out, "%s@", prefix);
+        fprintf(out, "%s\t%s\n", oid_str, summary);
     }
 }
 
@@ -435,7 +506,7 @@ void completion_commits(
 ) {
     /* The hooks hold `char **` buckets; the walk reads them. C has no implicit
      * widening to a pointer to const pointer to const. */
-    commits_emit(ctx, out, NULL, (const char *const *) profiles, profile_count);
+    commits_emit(ctx, out, (const char *const *) profiles, profile_count);
 }
 
 /**
@@ -444,7 +515,27 @@ void completion_commits(
 void completion_history(
     const dotta_ctx_t *ctx, FILE *out, const char *pinned
 ) {
-    commits_emit(ctx, out, NULL, &pinned, pinned != NULL ? 1 : 0);
+    commits_emit(ctx, out, &pinned, pinned != NULL ? 1 : 0);
+}
+
+/**
+ * The commits that changed the path a word names
+ */
+bool completion_path_history(
+    const dotta_ctx_t *ctx, FILE *out, const char *pinned, const char *token
+) {
+    /* The word read as the commands read it (base/refspec.h): one they refuse,
+     * or one that names its commit already, leaves no commit slot after it */
+    refspec_t rs = { 0 };
+    if (refspec_parse(ctx->arena, token, &rs) != NULL || rs.commit != NULL) return true;
+
+    /* Its profile, else the one the line pinned: none, and the caller's rules
+     * stand */
+    const char *profile = rs.profile ? rs.profile : pinned;
+    if (profile == NULL) return false;
+
+    changes_emit(ctx, out, NULL, profile, rs.file);
+    return true;
 }
 
 /**
@@ -456,11 +547,30 @@ bool completion_commits_at(
     /* The prefix is everything before the last '@'. */
     const char *at = strrchr(current, '@');
     if (at == NULL) return false;
+    if (ctx->run.repo == NULL) return true;
 
+    /* Read as the commands read it (base/refspec.h): a prefix they refuse, or
+     * one whose last '@' is its commit's own — a reflog's HEAD@{ being typed —
+     * leaves no commit to offer */
     char *prefix = arena_strndup(ctx->arena, current, (size_t) (at - current));
+    refspec_t rs = { 0 };
+    if (refspec_parse(ctx->arena, prefix, &rs) != NULL || rs.commit != NULL) return true;
 
-    const char *profile = pinned ? pinned : completion_profile_of(ctx, prefix);
-    commits_emit(ctx, out, prefix, &profile, 1);
+    /* Its profile, else the one the line pinned: with a path, the path's own
+     * changes. A prefix that announces no path is the profile itself: its history
+     * alone, and the reference forms beside it only where it is a branch — the
+     * walk's count says so, as commits_emit reads it — so a name that is no branch
+     * offers nothing. The shell sorts every candidate (cmds/completion.h), so
+     * the forms printed after the walk read as they would before it. */
+    const char *profile = rs.profile ? rs.profile : pinned;
+    if (profile) {
+        changes_emit(ctx, out, prefix, profile, rs.file);
+    } else if (!path_input_announces_path(rs.file)) {
+        if (commits_walk(ctx, out, prefix, rs.file, false) > 0) {
+            commits_references(out, prefix);
+        }
+    }
+
     return true;
 }
 
@@ -627,6 +737,7 @@ const args_command_t spec_complete = {
     .payload        = &(const dotta_needs_t){
         .repo       = DOTTA_REPO_OPEN,
         .state      = DOTTA_STATE_READ,
+        .mounts     = true,
         .tolerant   = true,
     },
     .dispatch       = complete_dispatch,

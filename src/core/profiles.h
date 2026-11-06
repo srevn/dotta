@@ -268,12 +268,13 @@ typedef struct profile profile_t;
  * cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c cmd_export,
  * cmds/show.c cmd_show and cmds/list.c list_path_history (the tree the verb
  * selected), cmds/list.c list_profiles and list_files (the tree of the head each
- * listing read, so what each prints is that commit's), cmds/remove.c remove_profile
- * (the tree of the head its deletion is from: every claim for its hooks, the
- * counts for its preview); profile_load, at the head it read; a profile's draft,
- * at the tree its stage opened at — a head, or Git's empty tree — every opener
- * through one seed (profile_draft_seed); and a merge, at theirs and at its merge
- * base (profile_draft_merge).
+ * listing read, so what each prints is that commit's), cmds/completion.c
+ * changes_emit (the tree of the head a path's changes are walked back from),
+ * cmds/remove.c remove_profile (the tree of the head its deletion is from: every
+ * claim for its hooks, the counts for its preview); profile_load, at the head
+ * it read; a profile's draft, at the tree its stage opened at — a head, or Git's
+ * empty tree — every opener through one seed (profile_draft_seed); and a merge,
+ * at theirs and at its merge base (profile_draft_merge).
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)

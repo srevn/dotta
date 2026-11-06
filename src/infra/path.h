@@ -203,6 +203,10 @@ bool path_input_announces_rule(const char *input);
  *     show and list hand either to the enabled set's view (core/scope.h
  *     scope_resolve_claim): a path is the row standing there, a name its one
  *     holder.
+ *   - completion's commit slot after a path (cmds/completion.c changes_emit)
+ *     takes either, as show and list do with a profile named: the profile names
+ *     the argument (core/scope.h scope_resolve_name), and one the resolver refuses
+ *     offers nothing.
  *   - add's storage head (cmds/add.c) takes the name alone: its own predicate
  *     dispatched on the storage shape, so a filesystem path arriving there is
  *     its bug and says so.

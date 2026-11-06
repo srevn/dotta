@@ -231,7 +231,8 @@ typedef enum dotta_verbosity {
  * `state`. A command declares it when it asks one of the table's verbs: where a
  * claim stands (`mount_resolve`: diff, ignore, remove, revert, update), a view
  * of one profile placed by it (`manifest_build_profile`: diff, export, ignore,
- * list, remove, revert, show), or a claim's ancestors climbed
+ * list, remove, revert, show, and `__complete`, whose commit slot after a path
+ * asks the profile's name for it), or a claim's ancestors climbed
  * (`profile_capture_ancestors`, `profile_derive_ancestors`: update). Reading a
  * CLI path is not one of those verbs: an argument's key is the normalizer's own
  * string and no root's spelling is read to make it (`infra/path.h`), so apply,

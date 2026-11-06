@@ -1432,10 +1432,14 @@ static error_t revert_post_parse(
 /**
  * What can stand at the cursor, by the shapes revert_post_parse reads — as show,
  * without the bare-commit form: first a file of any profile as `profile:path`,
- * bare once -p pins one; after one positional the files of the profile it pins
- * or that profile's history, the grammar deciding by the next token; after two,
- * the commit. An `@` in the token being typed completes its commit part from
- * the refspec's history.
+ * bare once -p pins one. After one positional, a word naming a profile and a
+ * path — `profile:path`, or a path once -p pins one — is followed by its commit,
+ * the path's own changes (completion_path_history); any other word by the files
+ * of the profile it may name or that profile's history, the grammar deciding by
+ * the next token, a path no profile names by the enabled histories. After two,
+ * the commit: the second word's own changes in the profile the first names. An
+ * `@` in the token being typed completes its commit part, its profile the token's
+ * own or the line's (completion_commits_at).
  */
 static args_want_t revert_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1450,24 +1454,25 @@ static args_want_t revert_complete(
     if (at->value_of != NULL) {
         return ARGS_WANT_NONE;   /* -m: free text */
     }
-    if (completion_commits_at(ctx, out, at->current, o->profile)) {
-        return ARGS_WANT_NONE;
-    }
 
+    /* The profile the line names before the cursor: -p's, else the first word's */
     const char *pinned = o->profile;
     if (pinned == NULL && o->positional_count >= 1) {
         pinned = completion_profile_of(ctx, o->positional_args[0]);
+    }
+    if (completion_commits_at(ctx, out, at->current, pinned)) {
+        return ARGS_WANT_NONE;
     }
 
     if (o->positional_count == 0) {
         completion_refspecs(ctx, out, pinned);
     } else if (o->positional_count == 1) {
-        if (o->profile == NULL) {
+        if (!completion_path_history(ctx, out, o->profile, o->positional_args[0])) {
             completion_refspecs(ctx, out, pinned);
+            completion_history(ctx, out, pinned);
         }
-        completion_history(ctx, out, pinned);
     } else if (o->positional_count == 2) {
-        completion_history(ctx, out, pinned);
+        completion_path_history(ctx, out, pinned, o->positional_args[1]);
     }
     return ARGS_WANT_NONE;
 }

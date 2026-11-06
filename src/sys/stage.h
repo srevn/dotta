@@ -54,6 +54,14 @@
  * as a tree with an empty-named component, so the stage checks the shape itself,
  * before libgit2 is asked.
  *
+ * And a put of what the index already holds — the entry at its path, its id under
+ * its mode, the two facts a tree records — is no put: the entry stands as it
+ * stood, and the tree cache the index was read with beside it, so the commit's
+ * tree write reuses every subtree no other edit touched. libgit2's add replaces
+ * an entry with its twin as with any other and invalidates the subtrees above
+ * it (lib/libgit2/src/libgit2/index.c git_index_add); Git's own add leaves an
+ * unchanged entry standing (lib/git/read-cache.c add_to_index).
+ *
  * That rule is askable before a byte is read, of the tree one writer intends
  * (stage_admission_t): the ref's own entries, and every blob the writer has
  * admitted since. stage_admit_blob and stage_admit_subtree are its two halves —
@@ -408,7 +416,9 @@ error_t stage_put(
  * The entry at `path` for a blob already in the ODB
  *
  * The same rules as stage_put over a blob the caller wrote or looked up; an id
- * the ODB lacks is refused at the tree write, not here.
+ * the ODB lacks is refused at the tree write, not here. An entry the index already
+ * holds as given is left as it stands (the header): a restore of what the head
+ * holds moves nothing, and costs the commit's tree write no subtree.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

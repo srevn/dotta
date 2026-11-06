@@ -392,8 +392,27 @@ static error_t stage_beneath(git_index *index, const char *path, bool *out) {
 }
 
 /**
+ * Whether `index` already holds `entry` as given: the staged entry at its path,
+ * its id under its mode — the two facts a tree records
+ *
+ * Asked at stage 0, the staged entry's, by one lookup in the index's own map
+ * (lib/libgit2/src/libgit2/index.c git_index_get_bypath), which finds an entry
+ * or none: a conflict's stages are no tree's, so a name a merge left in conflict
+ * holds none. The mode is compared as the index holds it — as a tree spelled
+ * it, where the index was read from one (index.c read_tree_cb) — so a blob a
+ * hand's tree spells 100664 is not the entry a put of 100644 gives.
+ *
+ * Reader: stage_put_entry, before its add.
+ */
+static bool stage_holds_entry(git_index *index, const git_index_entry *entry) {
+    const git_index_entry *held = git_index_get_bypath(index, entry->path, 0);
+
+    return held && held->mode == entry->mode && git_oid_equal(&held->id, &entry->id);
+}
+
+/**
  * Put an entry into `index`: the mode, the shape, the two collisions, then
- * libgit2's add
+ * libgit2's add — none where the index already holds the entry as given
  *
  * Every entry enters an index here — the stage's, and an admission's — and the
  * order is the header's first rule: git_index_add REPLACES on a file/directory
@@ -437,7 +456,18 @@ static error_t stage_put_entry(git_index *index, const git_index_entry *entry) {
         );
     }
 
-    /* The same path already an entry: replaced — the upsert every writer wants. */
+    /* The entry the index already holds as given is left standing, and the tree
+     * cache above it with it (the header): libgit2's add replaces an entry with
+     * its twin as with any other and invalidates every subtree on its path (index.c
+     * git_index_add), which the commit's tree write would then rebuild, where
+     * Git's own add leaves an unchanged entry as it stands (lib/git/read-cache.c
+     * add_to_index, "Nothing changed, really"). Asked past every refusal, so
+     * the put answers alike whatever the index holds at the name; and libgit2's
+     * path rule, which the add asks, already admitted the entry standing there,
+     * every way into an index asking it (index.c index_entry_create). */
+    if (stage_holds_entry(index, entry)) return NULL;
+
+    /* Any other entry at the path is replaced — the upsert every writer wants. */
     int rc = git_index_add(index, entry);
     if (rc == 0) return NULL;
 

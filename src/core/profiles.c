@@ -36,10 +36,11 @@
  * reads the commit's blob once, its stamp's source and a reseal's where its name
  * moved, asks the base the same, puts its entry — at its id, or as the bytes
  * the stage writes at its commit — and writes the commit's claim whole, and its
- * way where the profile does not pass through it, into the copy; dotta's own
- * file is put beside the claims. A merge composes its tree first — each name
- * Git could not compose settled by a rule, or for the run's side — then its claims,
- * one pass a kind over the three sides' sheets in step, each claim a side moved
+ * way where the profile does not pass through it, into the copy, a directory's
+ * asking the tree the commit would record for room first; dotta's own file is
+ * put beside the claims. A merge composes its tree first — each name Git could
+ * not compose settled by a rule, or for the run's side — then its claims, one
+ * pass a kind over the three sides' sheets in step, each claim a side moved
  * composed from the three sides' words, each read over its own tree, and standing
  * where the merged tree leaves it room. The change test holds each document against
  * the one the draft opened, and the changes merge what each says moved into the
@@ -1829,27 +1830,32 @@ error_t profile_derive_ancestors(
 }
 
 /**
- * The way a restored file stood on at the commit it came from
+ * The way a restored claim stood on at the commit it came from
  *
  * Each rung of `storage_path` — a separator of its label's tail, the word and
  * the leaf excluded, as the climbs cut them (profile_capture_ancestors) — paired
  * from the leaf with a rung of `from_storage_path`: both names place one path,
  * so their tails end alike, and the pairing ends where either runs out. Each
  * rung is decided alone, since the base may hold a rung by a sheet claim with
- * nothing above it. A rung the profile passes through is the base's word on that
- * directory, kept as it stands — the rule a capture keeps from the disk; at one
- * it does not, `from`'s directory claim at the pair is written, derived. No disk
- * read: the commit is the source.
+ * nothing above it, by the climbs' rules with the commit for the disk:
+ *   - a tracked claim the copy holds at the rung is the walk's own word on the
+ *     directory — the base's, or one a restore wrote into this draft — left exactly
+ *     as it is (profile_look_rung's first rule), so a tracked claim a writer
+ *     restores at a rung stands whether the claims beneath it are restored before
+ *     it or after;
+ *   - a rung the profile passes through is the base's word on that directory,
+ *     kept as it stands — the rule a capture keeps from the disk;
+ *   - at any other, `from`'s directory claim at the pair is written, derived.
+ *     No disk read: the commit is the source.
  *
- * Asked after the put, of the base, which the restore edited at the leaf alone:
- * the put admitted, no blob stands at or above any rung, so every claim at a
- * rung stands, and a claim written there replaces none the base contradicts.
+ * Asked once the claim is admitted: no blob stands at or above any rung in the
+ * tree the commit would record, so every claim the way writes stands there.
  *
- * Reader: profile_restore_file.
+ * Readers: profile_restore_file and profile_restore_directory.
  *
  * @param draft The draft
  * @param from The profile at the commit
- * @param from_storage_path The commit's name for the file
+ * @param from_storage_path The commit's name for the claim
  * @param storage_path The name the restore writes
  * @return Error or NULL on success: a subtree that will not load, in either tree
  */
@@ -1873,6 +1879,15 @@ static error_t profile_restore_ancestors(
         *rung_cut = '\0';
         *pair_cut = '\0';
 
+        /* A tracked claim the copy holds at the rung is the walk's own word about
+         * a directory the profile tracks, and nothing derived refreshes or retires
+         * it — the climbs' first rule (profile_look_rung) — one a restore wrote
+         * into this draft as surely as the base's */
+        const metadata_item_t *held = metadata_find_item(
+            draft->sheet, PATH_KIND_DIRECTORY, rung
+        );
+        if (held && held->tracked) continue;
+
         /* A rung the profile passes through — anything the base holds at it, a
          * directory it tracks beneath it — is the base's, by the question each
          * writer of the way asks there (profile_passes) */
@@ -1883,7 +1898,7 @@ static error_t profile_restore_ancestors(
 
         /* The commit's claim at the pair, as its walk shows it — none where the
          * commit claimed none there — restored derived: the restore brings a
-         * file's way, never a directory's tracking. A FILE item no blob backs
+         * claim's way, never a directory's tracking. A FILE item no blob backs
          * at the rung is the other kind's, and stays beside it */
         const profile_claim_t *claim = NULL;
         err = profile_find(
@@ -1973,6 +1988,65 @@ error_t profile_restore_file(
         .owner     = claim->owner,
         .group     = claim->group,
         .encrypted = kind != CONTENT_PLAINTEXT,
+    };
+    metadata_write_item(draft->sheet, &item);
+
+    return NULL;
+}
+
+error_t profile_restore_directory(
+    profile_draft_t *draft, const char *storage_path, const profile_claim_t *claim,
+    profile_t *from
+) {
+    CHECK_NULL(draft);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(claim);
+    CHECK_NULL(from);
+
+    /* The tree's half of the admission, asked of the tree the commit would record
+     * — the removals the writer made so far counted, as no admission counts them
+     * (sys/stage.h stage_admission_t) — in the stage's own sentences: an entry
+     * at a rung above the name, a blob or a gitlink a hand left, leaves the name
+     * inside a file; the scratch is cut at each separator in turn and put back */
+    char *rung = arena_strdup(draft->arena, storage_path);
+    for (char *slash = strchr(rung, '/'); slash; slash = strchr(slash + 1, '/')) {
+        *slash = '\0';
+        const stage_held_t above = stage_holds(draft->stage, rung);
+        *slash = '/';
+        if (above.type != GIT_OBJECT_INVALID) {
+            return error_create(
+                ERR_CONFLICT, "Cannot stage '%s': '%.*s' is a %s in this tree",
+                storage_path, (int) (slash - rung), storage_path,
+                above.type == GIT_OBJECT_COMMIT ? "submodule" : "file"
+            );
+        }
+    }
+
+    /* And one at the name itself, where the directory would stand */
+    const stage_held_t at = stage_holds(draft->stage, storage_path);
+    if (at.type != GIT_OBJECT_INVALID) {
+        return error_create(
+            ERR_CONFLICT, "Cannot stage '%s': it is a %s in this tree", storage_path,
+            at.type == GIT_OBJECT_COMMIT ? "submodule" : "file"
+        );
+    }
+
+    /* The way the commit stood the claim on */
+    error_t err = profile_restore_ancestors(draft, from, claim->storage_path, storage_path);
+    if (err) return err;
+
+    /* The commit's claim whole at its own kind — tracked or derived, its attributes
+     * — over the directory claim at the name whatever it said; a FILE item there
+     * is the other kind's, and rides. A derivation nothing tracked stands beneath
+     * goes with the commit's prune, as every derivation does
+     * (profile_prune_ancestors) */
+    const metadata_item_t item = {
+        .kind    = PATH_KIND_DIRECTORY,
+        .key     = storage_path,
+        .mode    = claim->mode,
+        .owner   = claim->owner,
+        .group   = claim->group,
+        .tracked = claim->tracked,
     };
     metadata_write_item(draft->sheet, &item);
 

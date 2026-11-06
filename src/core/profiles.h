@@ -72,9 +72,9 @@
  * it was asked. No reader says the profile again. A removal a profile's draft
  * cannot make is refused in its own document's words (profile_remove), a name,
  * a capture or a restore it cannot admit under "Cannot stage '%s'" (profile_admit,
- * profile_capture_file, profile_restore_file), and a merge whose conflicts no
- * side settles under "Merging profile '%s' met %zu conflict%s"
- * (profile_draft_merge).
+ * profile_capture_file, profile_restore_file, profile_restore_directory), and a
+ * merge whose conflicts no side settles under "Merging profile '%s' met %zu
+ * conflict%s" (profile_draft_merge).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -730,19 +730,19 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
  * rung of a way it writes — the two climbs' and a restore's — where whatever
  * the base holds keeps the rung, as a directory it tracks beneath does
- * (profile_capture_ancestors, profile_derive_ancestors, profile_restore_file);
- * and a merge, at a merge-base directory claim a side lacks, where whatever that
- * side holds is its removal (profile_merge_directory) — the four through
- * profile_passes. A reader not on this list is a bug. Four neighbours ask
- * profile_entry instead, the tree alone: revert's read of the head at the name
- * it writes (cmds/revert.c cmd_revert), and of each holder's head in its search
- * (revert_select_profile, at the holder's own name for the argument), where a
- * directory claim is never refused — it gives way to the write where it stands,
- * and rides it where the head's blob contradicts it; the seal a capture keeps
- * (profile_sealed), which a blob alone holds; a profile's changes, whether a
- * blob stands at a name the tree did not move (profile_changes); and a merge,
- * whose rules and words read each side's node, never its sheet (profile_merge_name,
- * profile_merge_file).
+ * (profile_capture_ancestors, profile_derive_ancestors, profile_restore_file,
+ * profile_restore_directory); and a merge, at a merge-base directory claim a
+ * side lacks, where whatever that side holds is its removal
+ * (profile_merge_directory) — the four through profile_passes. A reader not on
+ * this list is a bug. Four neighbours ask profile_entry instead, the tree alone:
+ * revert's read of the head at the name it writes (cmds/revert.c cmd_revert),
+ * and of each holder's head in its search (revert_select_profile, at the holder's
+ * own name for the argument), where a directory claim is never refused — it gives
+ * way to the write where it stands, and rides it where the head's blob contradicts
+ * it; the seal a capture keeps (profile_sealed), which a blob alone holds; a
+ * profile's changes, whether a blob stands at a name the tree did not move
+ * (profile_changes); and a merge, whose rules and words read each side's node,
+ * never its sheet (profile_merge_name, profile_merge_file).
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -780,7 +780,7 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  * revert_target_claim (a file claim, STRICT: the claim the commit holds, which
  * the restore writes), and a profile's draft at each rung of the way a restore
  * brings back (a directory claim, STRICT, of the commit's profile:
- * profile_restore_file).
+ * profile_restore_file, profile_restore_directory).
  *
  * @param profile Handle (must not be NULL)
  * @param read The sheet's policy for this question
@@ -939,6 +939,8 @@ void profile_departures(
  *     what stands beneath it refuses on its own, and the prune takes where nothing
  *     does. A directory admitted is a claim the commit carries from its admission,
  *     so a blob chosen above it later meets it as it meets one the base holds.
+ *     A directory a restore writes is asked the tree's half, of the tree the
+ *     commit would record, the removals so far counted (profile_restore_directory).
  *     A merge chooses no name and asks neither: its claims stand where its merged
  *     tree leaves them room, by the decode's rule (profile_draft_merge);
  *   - the ancestors: a derived claim stands only where something tracked stands
@@ -950,18 +952,20 @@ void profile_departures(
  *     from the disk at each rung a run's paths select (profile_derive_ancestors)
  *     — both retiring every derived claim the profile holds at a place the disk
  *     answers another kind for, each rung where its own name resolves; the way
- *     a restored file stood on at its commit, brought back at each rung the profile
- *     does not pass through, with no disk read (profile_restore_file); a directory
- *     claim's removal, which takes its tracking and leaves the claim the way to
- *     whatever stands beneath it, the attributes it claimed kept (profile_remove);
- *     and the prune, at the commit, of every derived claim nothing tracked stands
- *     beneath any longer (core/profiles.c profile_prune_ancestors), counted for
- *     a writer that asks — but a claim the base tracked, whose removal the writer
- *     names itself; the record of every rung it took is the next load's to decide,
- *     as of every claim a commit lets go (core/workspace.c
- *     workspace_analyze_orphans). A merge composes the two sides' ways, each
- *     side's absence of a merge-base directory claim read through its own tree,
- *     and the prune runs at its commit as at every commit;
+ *     a restored claim stood on at its commit, brought back at each rung the
+ *     profile does not pass through, a tracked claim the copy holds there left
+ *     as it is, with no disk read (profile_restore_file,
+ *     profile_restore_directory); a directory claim's removal, which takes its
+ *     tracking and leaves the claim the way to whatever stands beneath it, the
+ *     attributes it claimed kept (profile_remove); and the prune, at the commit,
+ *     of every derived claim nothing tracked stands beneath any longer
+ *     (core/profiles.c profile_prune_ancestors), counted for a writer that asks
+ *     — but a claim the base tracked, whose removal the writer names itself;
+ *     the record of every rung it took is the next load's to decide, as of every
+ *     claim a commit lets go (core/workspace.c workspace_analyze_orphans). A
+ *     merge composes the two sides' ways, each side's absence of a merge-base
+ *     directory claim read through its own tree, and the prune runs at its commit
+ *     as at every commit;
  *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
@@ -1529,6 +1533,42 @@ error_t profile_restore_file(
     const profile_claim_t *claim,
     profile_t *from,
     keymgr *keymgr
+);
+
+/**
+ * A directory claim a commit held — tracked, or derived — restored at
+ * `storage_path`, with the way the commit stood it on
+ *
+ * The claim is the commit's, whole: its class, its mode, owner and group as it
+ * claimed them, over the directory claim at the name whatever it said; a FILE
+ * item there is the other kind's, and rides. A derivation nothing tracked stands
+ * beneath at the commit goes with its prune, as every derivation does
+ * (profile_draft_t, the ancestors). In order, each refusal before anything moves:
+ *   - the tree's half of the admission, asked of the tree the commit would record,
+ *     the removals the writer made so far counted: an entry at a rung above the
+ *     name, or at the name, a blob or a gitlink, ERR_CONFLICT in the stage's
+ *     own sentences for an entry in a name's way — "Cannot stage '%s': '%s' is
+ *     a file in this tree", "Cannot stage '%s': it is a file in this tree"
+ *     (sys/stage.h stage_holds). Nothing beneath the name refuses it: a directory's
+ *     entries are what stands there;
+ *   - the way, as profile_restore_file brings a file's, paired from the claim's
+ *     own name;
+ *   - the claim at its own kind, written (core/metadata.h metadata_write_item).
+ *
+ * @param draft The draft (must not be NULL)
+ * @param storage_path The name the restore writes: the claim's own, or the one
+ *                     the profile holds the place by (must not be NULL)
+ * @param claim The directory claim the commit holds, as its walk decodes it (must
+ *              not be NULL; borrowed for the call)
+ * @param from The profile at the commit the claim came from (must not be NULL;
+ *             its sheet read strictly)
+ * @return Error or NULL on success
+ */
+error_t profile_restore_directory(
+    profile_draft_t *draft,
+    const char *storage_path,
+    const profile_claim_t *claim,
+    profile_t *from
 );
 
 /**

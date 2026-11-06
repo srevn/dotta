@@ -74,7 +74,11 @@
  * a capture or a restore it cannot admit under "Cannot stage '%s'" (profile_admit,
  * profile_capture_file, profile_restore_file, profile_restore_directory), and a
  * merge whose conflicts no side settles under "Merging profile '%s' met %zu
- * conflict%s" (profile_draft_merge).
+ * conflict%s" (profile_draft_merge). A restore's own two name the claim alone,
+ * by the commit's name for it — "in profile" would read as the head's, which
+ * the writer names — a blob the store will not read under "Cannot restore '%s'",
+ * and a seal that will not move to another name under "Cannot restore '%s' as
+ * '%s'" (profile_restore_file).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -980,9 +984,10 @@ void profile_departures(
  *
  * Memory: a handle's own — an arena made at the open, holding the struct, the
  * sheet the commit carries — the copy of the base's with every claim an edit
- * writes into it, or the claims a merge composed — the names the climbs, the
- * way and the prune spell, and the commit's message with the changes it names —
- * released by profile_draft_free with the admission, the base and the stage;
+ * writes into it, a commit's whole sheet copied in its place
+ * (profile_restore_tree), or the claims a merge composed — the names the climbs,
+ * the way and the prune spell, and the commit's message with the changes it names
+ * — released by profile_draft_free with the admission, the base and the stage;
  * the base borrows the stage's tree, and goes before it. What a capture answers
  * is the caller's (profile_claim_t), so the claim outlives the draft that wrote it.
  */

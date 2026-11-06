@@ -849,23 +849,11 @@ static error_t list_file_history(
     /* The profile at the head's tree, held beside it */
     profile_t *profile = profile_open(name, tree);
 
-    /* A profile named: the two keys, and each names its own read. A name the
-     * user typed is Git's key already, so the pre-check below is what decides
-     * whether the profile holds it; a path is the profile's to name. */
+    /* A profile named: the name it gives the argument at that head (core/scope.h
+     * scope_resolve_name) — a name as typed, which the pre-check below decides
+     * the profile holds, and a path its own view's */
     if (opts->profile) {
-        if (arg.key == PATH_KEY_STORAGE) {
-            storage_path = arg.storage_path;
-        } else {
-            /* The profile's own view of that head, strict about its sheet, names
-             * the path: the claim it holds there, else the name one would take */
-            manifest_t *view = NULL;
-            err = manifest_build_profile(profile, mounts, ctx->arena, &view);
-            if (!err) {
-                storage_path = manifest_claim_name(
-                    ctx->arena, view, name, arg.filesystem_path
-                );
-            }
-        }
+        err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
     }
 
     /* What the head holds at the name, asked of the profile's two documents at

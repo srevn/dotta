@@ -322,15 +322,17 @@ void profile_free(profile_t *profile);
  * Whose claims these are: the name the handle was opened under
  *
  * Readers: core/manifest.c manifest_contribute, which names a contribution's
- * rows by it, and the helpers that hold a profile and ask its view by name or
- * word a refusal under it (cmds/export.c export_collect_profile,
- * export_collect_storage and export_collect_filesystem, cmds/revert.c
- * revert_claim_held, revert_refuse_second_name and revert_target_claim);
- * cmds/show.c show_file, whose bytes the profile's key opens and whose warning
- * names it; remove's universe, whose custom/ claims it places under the profile's
- * binding, and its directory offer, which describes each claim by it (cmds/remove.c
- * remove_list_claims, remove_offer_directory); and update's capture, whose seal
- * the profile's key makes (cmds/update.c update_capture).
+ * rows by it; the name a profile gives a file argument, its own view asked by
+ * it (core/scope.c scope_resolve_name); and the helpers that hold a profile and
+ * ask its view by name or word a refusal under it (cmds/export.c
+ * export_collect_profile, export_collect_storage and export_collect_filesystem,
+ * cmds/revert.c revert_claim_held, revert_refuse_second_name and
+ * revert_target_claim); cmds/show.c show_file, whose bytes the profile's key
+ * opens and whose warning names it; remove's universe, whose custom/ claims it
+ * places under the profile's binding, and its directory offer, which describes
+ * each claim by it (cmds/remove.c remove_list_claims, remove_offer_directory);
+ * and update's capture, whose seal the profile's key makes (cmds/update.c
+ * update_capture).
  *
  * @param profile Handle (must not be NULL)
  * @return The handle's copy; valid until profile_free

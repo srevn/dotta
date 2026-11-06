@@ -198,8 +198,8 @@ bool path_input_announces_rule(const char *input);
  *     the profile claims at and beneath it, a filesystem path the profile's rows
  *     there.
  *   - show, list and revert (cmds/) take either: a name the user typed is Git's
- *     key already, and a filesystem path is the profile's to name (core/manifest.h
- *     manifest_claim_name, cmds/revert.c revert_claim_held). Without a profile,
+ *     key already, and a filesystem path is the profile's to name (core/scope.h
+ *     scope_resolve_name, cmds/revert.c revert_claim_held). Without a profile,
  *     show and list hand either to the enabled set's view (core/scope.h
  *     scope_resolve_claim): a path is the row standing there, a name its one
  *     holder.

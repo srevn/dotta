@@ -365,6 +365,39 @@ error_t scope_resolve_claim(
     );
 }
 
+error_t scope_resolve_name(
+    profile_t *profile, const mount_table_t *mounts, const path_input_t *arg,
+    arena_t *arena, const char **out_name
+) {
+    CHECK_NULL(profile);
+    CHECK_NULL(mounts);
+    CHECK_NULL(arg);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_name);
+
+    /* Asked in the key the argument names: a name is Git's key as typed, and a
+     * path the profile's own view names — the claim it holds there, else the
+     * name a claim there would take, naming being total */
+    error_t err = NULL;
+    manifest_t *view = NULL;
+    switch (arg->key) {
+        case PATH_KEY_FILESYSTEM:
+            err = manifest_build_profile(profile, mounts, arena, &view);
+            if (!err) {
+                *out_name = manifest_claim_name(
+                    arena, view, profile_name(profile), arg->filesystem_path
+                );
+            }
+            break;
+
+        case PATH_KEY_STORAGE:
+            *out_name = arg->storage_path;
+            break;
+    }
+
+    return err;
+}
+
 /* -------------------------------------------------------------------- */
 /* Definitional accessors                                               */
 /* -------------------------------------------------------------------- */

@@ -16,7 +16,9 @@
  * set earns (scope_require_enabled) and which of the set holds a commit
  * (scope_resolve_commit, scope_resolve_range) take the set as a value, and the
  * claim a file argument names (scope_resolve_claim) takes the set's view,
- * precedence resolved. The commands that build no scope would give one nothing
+ * precedence resolved. Where the argument names its profile, no set is asked:
+ * the name that profile gives it (scope_resolve_name) takes the profile, at the
+ * tree its reader selected. The commands that build no scope would give one nothing
  * but the set to carry: sync narrows a set of its own, every enabled row whether
  * its branch is here or not, by the same filter (scope_filter), and every other
  * one's -p names any local profile, enabled or not, and never reads the set.
@@ -94,13 +96,16 @@
 #include "infra/path.h"
 #include "infra/pathspec.h"
 
-/* Forward decls: the view's and the state's full APIs live in core/manifest.h
- * and core/state.h. scope reads the view — its set, and its row for an argument
- * — and the state's enabled rows alone, so the header names the three types and
- * stays free of both dependencies. C11 §6.7p3 permits typedef-name
- * redeclaration. */
+/* Forward decls: the view's, the profile's, the table's and the state's full
+ * APIs live in core/manifest.h, core/profiles.h, infra/mount.h and core/state.h.
+ * scope reads the view — its set, and its row for an argument — a named profile's
+ * own view of an argument, placed by the table, and the state's enabled rows
+ * alone, so the header names the five types and stays free of those dependencies.
+ * C11 §6.7p3 permits typedef-name redeclaration. */
 typedef struct manifest manifest_t;
 typedef struct manifest_row manifest_row_t;
+typedef struct mount_table mount_table_t;
+typedef struct profile profile_t;
 typedef struct state state_t;
 
 /**
@@ -390,8 +395,7 @@ error_t scope_resolve_range(
  * an empty enabled set in their own words before they ask.
  *
  * Readers: cmds/show.c cmd_show and cmds/list.c list_file_history, each without
- * a profile. With one, the profile names the argument itself (core/manifest.h
- * manifest_claim_name).
+ * a profile. With one, the profile names the argument (scope_resolve_name).
  *
  * @param view The enabled set's view (must not be NULL)
  * @param arg The argument, read (must not be NULL; infra/path.h path_input_resolve)
@@ -405,6 +409,44 @@ error_t scope_resolve_claim(
     const path_input_t *arg,
     arena_t *arena,
     const manifest_row_t **out_row
+);
+
+/**
+ * The name a profile gives a file argument
+ *
+ * scope_resolve_claim's twin, for a verb whose argument names its profile: no
+ * set is read and no precedence asked, so the profile need not be enabled. In
+ * the key the argument names (infra/path.h): a name is Git's key already and is
+ * the answer as typed — whether the profile holds it is the reader's own question
+ * (core/profiles.h profile_holds), so nothing is built and no sheet is read; a
+ * path is the profile's to name, asked of its own view at the tree the handle
+ * is open at (core/manifest.h manifest_build_profile, strict about its sheet):
+ * the claim it holds there, else the name a claim there would take
+ * (manifest_claim_name). So a name that changed since a commit is found as of
+ * that commit, where the reader opened the profile there.
+ *
+ * A path costs that view — one tree walk, and the sheet loaded at its first
+ * question — and is refused where the sheet will not load, where a name proceeds.
+ *
+ * Readers: cmds/show.c cmd_show and cmds/list.c list_file_history, each with a
+ * profile named.
+ *
+ * @param profile The profile, at the tree its reader selected (must not be NULL;
+ *                for a path, its sheet is read through it)
+ * @param mounts This machine's table, which places the profile's claims (must
+ *               not be NULL)
+ * @param arg The argument, read (must not be NULL; infra/path.h path_input_resolve)
+ * @param arena Arena a path's view and its name live in (must not be NULL)
+ * @param out_name The name: the argument's own for a name, the arena's for a
+ *                 path (must not be NULL; left as it was on a failure)
+ * @return Error or NULL on success
+ */
+error_t scope_resolve_name(
+    profile_t *profile,
+    const mount_table_t *mounts,
+    const path_input_t *arg,
+    arena_t *arena,
+    const char **out_name
 );
 
 /* -------------------------------------------------------------------- */

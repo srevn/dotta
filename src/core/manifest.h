@@ -465,10 +465,10 @@ error_t manifest_build(
  * (cmds/export.c export_collect_filesystem), which selects the rows one profile
  * places at and beneath a path — the rows, not the Git subtree of whatever name
  * stands there, which is what manifest_lookup_claim's own note is about; the
- * path argument of `show -p` and `list -p`, named over whatever tree the verb
- * selected (cmds/show.c cmd_show, cmds/list.c list_file_history, which ask it
- * manifest_claim_name); revert's two questions of a tree, the claim held at a
- * path and the second-name admission (cmds/revert.c revert_claim_held,
+ * name a profile gives a path argument, over whatever tree its reader selected
+ * (core/scope.c scope_resolve_name, which asks it manifest_claim_name for the
+ * -p arms of show and list); revert's two questions of a tree, the claim held
+ * at a path and the second-name admission (cmds/revert.c revert_claim_held,
  * revert_refuse_second_name); add, which builds one over its draft's base
  * (core/profiles.h profile_draft_base) and asks it every naming question for
  * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
@@ -1364,19 +1364,19 @@ const char *manifest_name(
  * The path keys against the rows by strcmp (infra/mount.h). The answer is the
  * caller's arena's whichever arm produced it, as manifest_name's is.
  *
- * Its readers build the view for it, one profile's (manifest_build_profile) over
- * the tree the verb selected, and that build is the whole of what a path costs:
- * one tree walk, and the sheet loaded at the profile's first question
+ * Its reader builds the view for it, one profile's (manifest_build_profile) over
+ * the tree its own reader selected, and that build is the whole of what a path
+ * costs: one tree walk, and the sheet loaded at the profile's first question
  * (core/profiles.h). Its other face: a profile whose sheet will not load refuses
  * a path where the name its caller answers unaided proceeds — the view is strict,
  * a verb's own read is not. A ref or a tree that will not load refuses both.
  *
- * Readers: `show -p` and `list -p`, over the view of the tree the verb selected
- * (the head, or the commit the user named, so a name that changed since is found
- * as of then: cmds/show.c cmd_show, cmds/list.c list_file_history). `export`
- * selects rows instead, `remove` matches its own claims, `revert` reads the claim
- * held in the tree it edits (cmds/revert.c revert_claim_held), and `ignore --test`
- * asks manifest_name itself.
+ * Reader: the name a profile gives a file argument (core/scope.c
+ * scope_resolve_name), over the view of the tree its reader selected — for the
+ * -p arms of show and list the head, or the commit the user named, so a name
+ * that changed since is found as of then. `export` selects rows instead, `remove`
+ * matches its own claims, `revert` reads the claim held in the tree it edits
+ * (cmds/revert.c revert_claim_held), and `ignore --test` asks manifest_name itself.
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

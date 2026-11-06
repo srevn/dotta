@@ -641,8 +641,8 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         /* The profile named must be here before its tree is opened. Then the
          * tree the profile selected — its head, or the commit's — which is both
          * where the claim is looked for and what its bytes come from, so a name
-         * that changed since the commit is found as of then (core/manifest.h
-         * manifest_claim_name). */
+         * that changed since the commit is found as of then (core/scope.h
+         * scope_resolve_name). */
         err = profile_require(repo, opts->profile);
         if (err) goto cleanup;
 
@@ -652,23 +652,11 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         /* The profile at that tree, held beside it */
         profile = profile_open(opts->profile, tree);
 
-        /* The two keys, and each names its own read. A name the user typed is
-         * Git's key already, so show_file's own question of the profile
-         * (core/profiles.h profile_holds) is what decides whether the profile
-         * holds it; a path is the profile's to name. */
-        if (arg.key == PATH_KEY_STORAGE) {
-            storage_path = arg.storage_path;
-        } else {
-            /* The profile's own view of that tree, strict about its sheet, names
-             * the path: the claim it holds there, else the name one would take */
-            manifest_t *view = NULL;
-            err = manifest_build_profile(profile, mounts, ctx->arena, &view);
-            if (err) goto cleanup;
-
-            storage_path = manifest_claim_name(
-                ctx->arena, view, opts->profile, arg.filesystem_path
-            );
-        }
+        /* The name the profile gives the argument at that tree (core/scope.h
+         * scope_resolve_name): a name as typed, which show_file's own question
+         * of the profile decides it holds, and a path its own view's */
+        err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
+        if (err) goto cleanup;
 
         /* The argument is answered, so the commit it was read from can caption
          * the answer. A head named none and captions nothing. */

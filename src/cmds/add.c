@@ -2519,13 +2519,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* A new profile's .dottaignore: the template, beside the claims — the one
      * blob this commit carries that no capture wrote. Here rather than at the
      * orphan's open, where the add has decided nothing yet: the put writes the
-     * blob to the object database at once (core/profiles.h profile_put_machinery),
-     * so a refusal between the two — a path that is not there, an argument the
-     * rules exclude, an unreadable file — would leave it there for a profile
-     * that was never created. */
+     * blob to the object database at once (core/profiles.h
+     * profile_put_internal_file), so a refusal between the two — a path that is
+     * not there, an argument the rules exclude, an unreadable file — would leave
+     * it there for a profile that was never created. */
     if (!profile_exists) {
         const char *template = ignore_profile_template();
-        err = profile_put_machinery(draft, IGNORE_FILE_NAME, template, strlen(template));
+        err = profile_put_internal_file(draft, IGNORE_FILE_NAME, template, strlen(template));
         if (err) {
             err = error_wrap(
                 err, "Failed to initialize .dottaignore for profile '%s'",

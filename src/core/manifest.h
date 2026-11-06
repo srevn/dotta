@@ -429,9 +429,9 @@ error_t manifest_build(
  *
  * One profile's view: a manifest_row_t row for every claim the profile's walk
  * shows that stands (core/profiles.h profile_walk) — every blob its tree exposes
- * (machinery aside: every name outside the label grammar, dotta's own files among
- * them — core/profiles.h, the decode) and every DIRECTORY item its own sheet
- * carries that the tree does not contradict — the same per-profile step
+ * (its internal files aside: every name outside the label grammar, dotta's own
+ * among them — core/profiles.h, the decode) and every DIRECTORY item its own
+ * sheet carries that the tree does not contradict — the same per-profile step
  * manifest_build runs, applied once, sheet included (the Builders note above:
  * the walk reads it, strictly, so one rule reads it). Readers that want files
  * only test row->type.

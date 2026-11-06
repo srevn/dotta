@@ -348,8 +348,8 @@ static sync_disagreements_t sync_disagreements(
         const git_diff_delta *delta = git_diff_get_delta(diff, i);
         if (delta->status != GIT_DELTA_DELETED) continue;
 
-        /* Machinery stands under no label: passed in silence, and before the
-         * shape rule, so it is never read as corruption */
+        /* An internal file stands under no label: passed in silence, and before
+         * the shape rule, so it is never read as corruption */
         const char *name = delta->old_file.path;
         if (!label_prefixes(name)) continue;
 
@@ -1400,7 +1400,7 @@ static void sync_print_epoch_damaged(output_t *out, const char *remote_name) {
  * that would not read and a census that could not finish, are verdicts to print,
  * not a run to fail.
  *
- * The epoch is machinery, so it says as little as it can get away with. Four of
+ * The epoch is internal, so it says as little as it can get away with. Four of
  * the six verdicts are a verbose line or nothing at all: dotta either did the
  * right thing or had nothing to do, and neither is the user's business at NORMAL.
  * What speaks up is what the user has to act on — a divergence over ciphertext,

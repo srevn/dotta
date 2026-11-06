@@ -559,7 +559,7 @@ typedef struct {
  *             valid for the call only)
  * @param entry Git tree entry (borrowed — valid for the call only)
  * @param payload The walk (profile_walk_t)
- * @param next Set to SKIP past machinery, and to STOP where the visitor failed
+ * @param next Set to SKIP past internal files, and to STOP where the visitor failed
  * @return NULL, or the tree's failure that ends the walk: a name outside the
  *         grammar
  */
@@ -572,13 +572,13 @@ static error_t profile_step(
     /* The content gate, asked of the name the entry stands at (infra/label.h
      * label_prefixes): a managed path is a name in the grammar — beneath a label,
      * or the label's word alone, the namespace's own directory, which holds what
-     * a directory holds. Everything else the branch carries is machinery: dotta's
+     * a directory holds. Everything else the branch carries is internal: dotta's
      * own files (.dottaignore, .bootstrap, .dotta/) and whatever else a hand or
      * a tool left beside them — a README, a LICENSE, a docs/ tree — and no walk
      * of content sees it. Asked of every entry's whole name, a tree's included,
-     * so a tree of machinery is skipped with everything beneath it; beneath a
-     * label it is always passed. Skipped in silence, and before the shape rule,
-     * so machinery is never read as corruption. */
+     * so a tree of internal files is skipped with everything beneath it; beneath
+     * a label it is always passed. Skipped in silence, and before the shape rule,
+     * so an internal file is never read as corruption. */
     if (!label_prefixes(path)) {
         *next = GITOPS_NEXT_SKIP;
         return NULL;
@@ -1945,7 +1945,7 @@ error_t profile_restore_file(
     return NULL;
 }
 
-error_t profile_put_machinery(
+error_t profile_put_internal_file(
     profile_draft_t *draft, const char *name, const void *bytes, size_t size
 ) {
     CHECK_NULL(draft);
@@ -1956,7 +1956,7 @@ error_t profile_put_machinery(
      * and the sheet's directory is the commit's own to write, at its save */
     CHECK_ARG(
         !label_prefixes(name),
-        "a name in the grammar is a claim's, never machinery"
+        "a name in the grammar is a claim's, never an internal file's"
     );
     CHECK_ARG(
         strcmp(name, METADATA_DIR) != 0 && !str_starts_with(name, METADATA_DIR "/"),
@@ -2089,8 +2089,8 @@ static bool profile_merge_removed(
  * One name Git's merge left in conflict: composed by a rule, or noted as the
  * content conflict it is
  *
- * What each side's tree holds at the name decides (profile_entry), machinery's
- * names among them, which a tree answers alike. In order:
+ * What each side's tree holds at the name decides (profile_entry), the names of
+ * internal files among them, which a tree answers alike. In order:
  *   - a removal beside a change of the executable bit alone is the removal, at
  *     any name (profile_merge_removed): the name settled from the side holding
  *     no regular file there;

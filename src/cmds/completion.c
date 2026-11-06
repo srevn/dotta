@@ -241,7 +241,8 @@ typedef struct {
  * The content gate every walk over a branch asks (infra/label.h label_prefixes),
  * of every entry's whole name: a name in the grammar is content, and whatever
  * else a branch holds — a top-level blob under no label, .dotta/, whatever a
- * hand left beside them — is its machinery, pruned with its subtree and no token.
+ * hand left beside them — is one of its internal files, pruned with its subtree
+ * and no token.
  */
 static error_t refspec_emit(
     const char *path, const git_tree_entry *entry, void *payload,

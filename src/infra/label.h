@@ -146,11 +146,11 @@ label_split_t label_split(const char *s);
  *
  * It is the content gate every walk over a profile tree asks of the name an entry
  * stands at. A managed path is a name in the grammar, so a blob beneath a tree
- * no label names, or one at the branch root under no word, is the branch's own
- * machinery: dotta's files (.dottaignore, .bootstrap, .dotta/) and whatever else
- * a hand or a tool left beside them. Nothing else distinguishes them, and nothing
- * needs to: a branch may hold what it likes next to the labels, and no walk of
- * content sees it.
+ * no label names, or one at the branch root under no word, is one of the branch's
+ * internal files: dotta's own (.dottaignore, .bootstrap, .dotta/) and whatever
+ * else a hand or a tool left beside them. Nothing else distinguishes them, and
+ * nothing needs to: a branch may hold what it likes next to the labels, and no
+ * walk of content sees it.
  *
  * The question reads no further than the name's first component, so a tree and
  * every name beneath it answer alike: a walk asks it of each entry's whole name,
@@ -160,10 +160,10 @@ label_split_t label_split(const char *s);
  * And it is the shape dispatch on an argument, which reads a storage shape before
  * the filesystem shapes.
  *
- * Readers: the profile's walk (core/profiles.c profile_step), the put of dotta's
- * own file onto a profile's draft, which no name in the grammar passes
- * (core/profiles.c profile_put_machinery), and the changes a draft's commit names,
- * which pass dotta's own files by (profile_changes); the refspec completion
+ * Readers: the profile's walk (core/profiles.c profile_step), the put of an
+ * internal file onto a profile's draft, which no name in the grammar passes
+ * (core/profiles.c profile_put_internal_file), and the changes a draft's commit
+ * names, which pass dotta's own files by (profile_changes); the refspec completion
  * (cmds/completion.c refspec_emit), diff's delta selection (cmds/diff.c
  * diff_select_delta_cb) and sync's of a tree diff's deletions (cmds/sync.c
  * sync_disagreements), the rule compiler (infra/pathspec.c compile_rule), the

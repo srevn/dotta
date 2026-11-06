@@ -68,18 +68,18 @@
  * profile_step), whether an arm copies the walk's claims or the view's rows placed
  * from them, and a directory claim's key at the sheet's own loader
  * (core/metadata.c). A name is read whole, every rung it is reached through among
- * it, the branch root's included, and what prunes machinery there is the content
- * gate every walk asks of a name (infra/label.h label_prefixes). A tree is no
- * claim, so one whose name breaks the grammar creates nothing — a blob beneath
- * it fails the walk at its joined name, and one holding no blob leads nowhere —
- * since every directory the copy creates is its root, a claim, or a rung between
- * the two (complete_directories), each a prefix of a validated name. So every
- * entry carries a validated storage path — the metadata key and the associated
- * data both. A link's target is the link's own business, copied verbatim, and
- * is not a path of this copy. The remaining escape vector — a pre-existing symlink
- * at a content-dictated path below the root — is refused in phase 1, which can
- * see every such path because the entry list is completed first: every directory
- * the copy needs is an entry of it.
+ * it, the branch root's included, and what prunes the profile's internal files
+ * there is the content gate every walk asks of a name (infra/label.h
+ * label_prefixes). A tree is no claim, so one whose name breaks the grammar creates
+ * nothing — a blob beneath it fails the walk at its joined name, and one holding
+ * no blob leads nowhere — since every directory the copy creates is its root, a
+ * claim, or a rung between the two (complete_directories), each a prefix of a
+ * validated name. So every entry carries a validated storage path — the metadata
+ * key and the associated data both. A link's target is the link's own business,
+ * copied verbatim, and is not a path of this copy. The remaining escape vector
+ * — a pre-existing symlink at a content-dictated path below the root — is refused
+ * in phase 1, which can see every such path because the entry list is completed
+ * first: every directory the copy needs is an entry of it.
  */
 
 #include "cmds/export.h"
@@ -398,9 +398,9 @@ static error_t export_collect_claim(const profile_claim_t *claim, void *payload)
  * The root is the destination and no path of the profile names it (dest/home/...,
  * dest/root/...), so the list opens with a root claiming nothing, and every claim
  * the profile's walk shows follows it at its own name: each blob past the content
- * gate that prunes the machinery beside the labels, then each directory claim,
- * those with nothing beneath them among them. Read tolerantly, as the file header
- * says.
+ * gate that prunes the internal files beside the labels, then each directory
+ * claim, those with nothing beneath them among them. Read tolerantly, as the
+ * file header says.
  *
  * Emptiness is asked here, at the arm's own source: a profile holding nothing
  * but its root has no content to copy — unless the sheet that could have said
@@ -1609,8 +1609,8 @@ const args_command_t spec_export = {
         "Copy content out of a profile branch without deploying it:\n"
         "nothing registers in state, ownership is never applied, and\n"
         "dotta makes no ongoing claim over the destination. Content is\n"
-        "decrypted, stored permission modes are applied, and profile\n"
-        "machinery (.dotta/, .bootstrap, ...) never lands in an export.\n",
+        "decrypted, stored permission modes are applied, and internal\n"
+        "files (.dotta/, .bootstrap, ...) never land in an export.\n",
     .notes       =
         "Semantics:\n"
         "  An export copies ONE profile branch verbatim — layers are\n"

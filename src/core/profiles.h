@@ -38,8 +38,8 @@
  * — so the claim profile_find answers at a name is the one the walk shows there,
  * and the stamp profile_sealed reads the one the walk's claim carries:
  * - a name in the grammar is content and nothing else is: dotta's own files and
- *   whatever a hand left beside the labels are machinery, skipped, a tree of it
- *   with everything beneath (infra/label.h label_prefixes)
+ *   whatever a hand left beside the labels are the profile's internal files,
+ *   skipped, a tree of them with everything beneath (infra/label.h label_prefixes)
  * - a blob of any filemode is a claim, its type the filemode's; a tree is the
  *   way to what lies beneath it; a gitlink is nothing — dotta writes none, and
  *   it places nothing on disk
@@ -684,8 +684,8 @@ typedef struct {
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path, or a name Git's merge left in
- *                     conflict, machinery's among them, which the tree answers
- *                     alike (must not be NULL)
+ *                     conflict, an internal file's among them, which the tree
+ *                     answers alike (must not be NULL)
  * @param out The answer (must not be NULL; written on success alone)
  * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
  *         '%s'"
@@ -1518,12 +1518,12 @@ error_t profile_restore_file(
  * One of dotta's own files, beside the claims
  *
  * A name outside the grammar (infra/label.h label_prefixes), which the decode
- * reads as machinery and no walk of content sees, and never the sheet's directory,
- * which the commit writes at its save: a regular blob of `bytes`, written to
- * the object database at once (sys/stage.h stage_put), so a writer puts it once
- * nothing of its run can still refuse. Either other name is a caller's bug and
- * dies — a claim put here would pass the admission and the put rule by, and a
- * put at the sheet's name would race the commit's own save.
+ * reads as an internal file and no walk of content sees, and never the sheet's
+ * directory, which the commit writes at its save: a regular blob of `bytes`,
+ * written to the object database at once (sys/stage.h stage_put), so a writer
+ * puts it once nothing of its run can still refuse. Either other name is a caller's
+ * bug and dies — a claim put here would pass the admission and the put rule by,
+ * and a put at the sheet's name would race the commit's own save.
  *
  * Reader: cmds/add.c cmd_add, the ignore template of a profile its commit creates
  * (core/ignore.h ignore_profile_template).
@@ -1535,7 +1535,7 @@ error_t profile_restore_file(
  * @param size Byte count
  * @return Error or NULL on success: the put's own (sys/stage.h stage_put)
  */
-error_t profile_put_machinery(
+error_t profile_put_internal_file(
     profile_draft_t *draft,
     const char *name,
     const void *bytes,
@@ -1584,7 +1584,7 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  * dotta's own file. Nothing is written, so a dry run may ask it. A commit whose
  * explicit claims all stand moved only the way: every writer's edit moves an
  * explicit claim or the way to one, dotta's own file riding a capture
- * (profile_put_machinery).
+ * (profile_put_internal_file).
  *
  * Reader: profile_commit, the names its message gives (infra/commit.h
  * commit_message). A reader not on this list is a bug.

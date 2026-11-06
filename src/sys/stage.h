@@ -117,7 +117,7 @@
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, its object
  * writer, its ref writer and its merge base, nothing of mounts, content or dotta's
  * vocabulary: a commit's action is the word its writer hands, carried as it is.
- * Called by the commands that write a branch's machinery (bootstrap, ignore),
+ * Called by the commands that write a branch's internal files (bootstrap, ignore),
  * by a profile's draft — every claim writer's: add's, remove's, revert's and
  * update's (core/profiles.h profile_draft_t), and a profile's merge
  * (profile_draft_merge) — by core/metadata's sheet writer, by core/ignore — a
@@ -384,7 +384,7 @@ void stage_admission_free(stage_admission_t *adm);
  * (core/profiles.c profile_capture_file), whose claim carries the id to add's
  * and update's records — the id is their evidence of what the commit holds at
  * the name, where the branch, read after it, is another writer's to move — and
- * its machinery put (profile_put_machinery), which asks for none.
+ * its put of an internal file (profile_put_internal_file), which asks for none.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

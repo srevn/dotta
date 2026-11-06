@@ -472,10 +472,11 @@ error_t manifest_build(
  * admission (cmds/revert.c revert_claim_held, revert_refuse_second_name); add,
  * which builds one over its draft's base (core/profiles.h profile_draft_base)
  * and asks it every naming question for the length of the command (cmds/add.c
- * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); and the
- * two cross-profile searches, which build one per local profile (cmds/revert.c
+ * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); the two
+ * cross-profile searches, which build one per local profile (cmds/revert.c
  * revert_select_profile, through revert_claim_held, and cmds/remove.c
- * remove_overlaps).
+ * remove_overlaps); and a restore's two, at its draft's base and at the commit
+ * it restores from (core/restore.c restore_path).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -656,12 +657,14 @@ error_t manifest_mount_table(
  * this machine. Recorded, never dropped in silence — the health consumers surface
  * these (cmds/status.c status_print_profiles, cmds/apply.c cmd_apply, cmds/sync.c
  * cmd_sync); export reads the count alone, for the reason its refusal gives
- * (cmds/export.c export_collect_filesystem); and an enable that names an enabled
- * profile holding them says so (cmds/profile.c profile_enable). The repair is
- * one command (`profile enable <p> --target /path`), the untracking another
- * (`remove`). The screen says **no target** or **needs a target**, never "unbound":
- * the header's word is what the build could not do, the screen's is what the
- * user must give. Strings are the build arena's, same lifetime as the rows.
+ * (cmds/export.c export_collect_filesystem); a restore writes the commit's beneath
+ * a name the argument places nowhere, each under its own (core/restore.c
+ * restore_path); and an enable that names an enabled profile holding them says
+ * so (cmds/profile.c profile_enable). The repair is one command (`profile enable
+ * <p> --target /path`), the untracking another (`remove`). The screen says **no
+ * target** or **needs a target**, never "unbound": the header's word is what
+ * the build could not do, the screen's is what the user must give. Strings are
+ * the build arena's, same lifetime as the rows.
  */
 typedef struct {
     const char *profile;
@@ -1027,28 +1030,30 @@ error_t manifest_holder(
  * the profile never held; revert's two questions of a tree, the claim held at a
  * path and the second-name admission (cmds/revert.c revert_claim_held,
  * revert_refuse_second_name), the first asked of every local profile by its search
- * (revert_select_profile); remove's search, what every other local profile claims
- * where a removal takes a claim, each asked of its own view (cmds/remove.c
- * remove_overlaps); add's three questions of a path it names or walks (cmds/add.c
- * cmd_add and add_collect): which rules reach it — a claim meets the -e layer
- * alone, no rule of discovery (add_verdict) — whether the profile's own claim
- * agrees with what stands there now — the one reading that sees an explicit claim
- * with nothing beneath it for either of the profile's documents to find, and a
- * derived row included, since a profile holding a subtree beneath a path is a
- * statement a path that became a file contradicts — and whether the add captures
- * it, a claim being left as it stands but under --force (add_list); every claim
- * an enabled profile holds at a link above a capture, the capturing profile's
- * off its own view and every other's off the enabled one (cmds/add.c
- * add_refuse_ancestry); whether a row a transition left no row at is its profile's
- * claim there still, standing nowhere, which counts it overridden rather than
- * departed (manifest_diff); whether any profile holds an explicit claim where
- * the user's node squats above a named update's leaf, a lost blob's place no
- * re-derivation frees (cmds/update.c cmd_update); the claim that takes a path's
- * place where update deletes the claim standing there, the highest other profile's
- * (cmds/update.c update_print_preview); whether the untracked scan's owner holds
- * a blob at a child no row of its own stands at (core/workspace.c workspace_scan);
- * and `ignore --test`'s clause on a verdict that excludes a path its asker holds,
- * which the rules never reach (cmds/ignore.c ignore_test).
+ * (revert_select_profile); the name a restore writes a commit's claim at, the
+ * head's at the claim's place (core/restore.c restore_select); remove's search,
+ * what every other local profile claims where a removal takes a claim, each asked
+ * of its own view (cmds/remove.c remove_overlaps); add's three questions of a
+ * path it names or walks (cmds/add.c cmd_add and add_collect): which rules reach
+ * it — a claim meets the -e layer alone, no rule of discovery (add_verdict) —
+ * whether the profile's own claim agrees with what stands there now — the one
+ * reading that sees an explicit claim with nothing beneath it for either of the
+ * profile's documents to find, and a derived row included, since a profile holding
+ * a subtree beneath a path is a statement a path that became a file contradicts
+ * — and whether the add captures it, a claim being left as it stands but under
+ * --force (add_list); every claim an enabled profile holds at a link above a
+ * capture, the capturing profile's off its own view and every other's off the
+ * enabled one (cmds/add.c add_refuse_ancestry); whether a row a transition left
+ * no row at is its profile's claim there still, standing nowhere, which counts
+ * it overridden rather than departed (manifest_diff); whether any profile holds
+ * an explicit claim where the user's node squats above a named update's leaf, a
+ * lost blob's place no re-derivation frees (cmds/update.c cmd_update); the claim
+ * that takes a path's place where update deletes the claim standing there, the
+ * highest other profile's (cmds/update.c update_print_preview); whether the
+ * untracked scan's owner holds a blob at a child no row of its own stands at
+ * (core/workspace.c workspace_scan); and `ignore --test`'s clause on a verdict
+ * that excludes a path its asker holds, which the rules never reach (cmds/ignore.c
+ * ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
@@ -1176,9 +1181,10 @@ bool manifest_holds_name(
  * — its own blob, lost to its own claims beneath, whose place its derived claim
  * fills.
  *
- * Readers: the name's holders, a rung holding no name (manifest_holder), and
- * export's directory claims, a rung being none to count (cmds/export.c
- * export_collect_filesystem, export_entry_from_row).
+ * Readers: the name's holders, a rung holding no name (manifest_holder); export's
+ * directory claims, a rung being none to count (cmds/export.c
+ * export_collect_filesystem, export_entry_from_row); and the commit's claims a
+ * restore writes, a rung being none to restore (core/restore.c restore_path).
  *
  * @param manifest Manifest (NULL answers false)
  * @param row A row of this view (NULL answers false)

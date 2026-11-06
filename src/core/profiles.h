@@ -333,9 +333,10 @@ void profile_free(profile_t *profile);
  * ask its view by name or word a refusal under it (cmds/export.c
  * export_collect_profile, export_collect_storage and export_collect_filesystem,
  * cmds/revert.c revert_claim_held, revert_refuse_second_name and
- * revert_target_claim); cmds/show.c show_file, whose bytes the profile's key
- * opens and whose warning names it; remove's universe, whose custom/ claims it
- * places under the profile's binding, and its directory offer, which describes
+ * revert_target_claim); a restore, its two views' asker and each claim's placer
+ * (core/restore.c restore_path); cmds/show.c show_file, whose bytes the profile's
+ * key opens and whose warning names it; remove's universe, whose custom/ claims
+ * it places under the profile's binding, and its directory offer, which describes
  * each claim by it (cmds/remove.c remove_list_claims, remove_offer_directory);
  * and update's capture, whose seal the profile's key makes (cmds/update.c
  * update_capture).
@@ -427,7 +428,9 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * through one visitor — the universe a removal's arguments are matched against,
  * read STRICT, and every claim a deletion takes, read TOLERANT (cmds/remove.c
  * remove_list_claims, through remove_collect_claim, for remove_resolve and
- * remove_profile).
+ * remove_profile); and every claim of a draft's base a restore may take, before
+ * profile_contradicted's, read STRICT (core/restore.c restore_path, through
+ * restore_take).
  *
  * @param profile Handle (must not be NULL); its sheet is read by the first question
  *                that needs it, a walk or profile_load_sheet
@@ -469,9 +472,11 @@ error_t profile_walk(
  * (cmds/remove.c remove_list_claims, through remove_collect_claim, for
  * remove_resolve and remove_profile); the directory claims remove's completion
  * offers as names, read STRICT after the walk (cmds/remove.c remove_complete,
- * through remove_offer_directory); and the tracked claims the view's health names,
+ * through remove_offer_directory); the tracked claims the view's health names,
  * each with its blob, read STRICT after the walk (core/manifest.c
- * manifest_contribute, through manifest_note_claim).
+ * manifest_contribute, through manifest_note_claim); and every claim of a draft's
+ * base a restore may take, read STRICT after the walk, through the walk's visitor
+ * (core/restore.c restore_path, through restore_take).
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param read The sheet's policy for this question
@@ -782,9 +787,11 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  * cmds/export.c export_collect_storage (a file claim and a directory claim, both
  * TOLERANT: the single-file copy, or the copy's root), cmds/revert.c
  * revert_target_claim (a file claim, STRICT: the claim the commit holds, which
- * the restore writes), and a profile's draft at each rung of the way a restore
- * brings back (a directory claim, STRICT, of the commit's profile:
- * profile_restore_file, profile_restore_directory).
+ * the restore writes), each claim of either kind a restore writes, its commit's
+ * view standing it where the argument reaches (STRICT: core/restore.c
+ * restore_select), and a profile's draft at each rung of the way a restore brings
+ * back (a directory claim, STRICT, of the commit's profile: profile_restore_file,
+ * profile_restore_directory).
  *
  * @param profile Handle (must not be NULL)
  * @param read The sheet's policy for this question
@@ -1185,9 +1192,10 @@ error_t profile_draft_merge(
  * encryption prior; cmds/remove.c remove_paths, for the claims its arguments
  * are matched against (remove_resolve); cmds/revert.c cmd_revert, for every
  * question of the branch as it stands — the claim held at a path, a second name,
- * and what the tree holds where the restore writes; and cmds/update.c
- * update_profile, for a capture's prior and the name its seal is keyed by
- * (update_capture).
+ * and what the tree holds where the restore writes; core/restore.c restore_path,
+ * for the head a restore reads — its view, which names each write, and its walk,
+ * every claim it may take; and cmds/update.c update_profile, for a capture's
+ * prior and the name its seal is keyed by (update_capture).
  *
  * @param draft The draft (must not be NULL)
  * @return The base; never NULL
@@ -1257,8 +1265,9 @@ error_t profile_admit(profile_draft_t *draft, path_kind_t kind, const char *stor
  * Readers: cmds/add.c cmd_add, the tracked claim its profile's own blob contradicts
  * at a name it captures a file at — the remedy that keeps the file, where the
  * put rule carries the claim; cmds/remove.c remove_paths, each claim its arguments
- * took; and cmds/update.c update_profile, each deletion it commits, by the item's
- * kind.
+ * took; core/restore.c restore_take, each of the head's claims a restore reaches
+ * that no write of its takes; and cmds/update.c update_profile, each deletion
+ * it commits, by the item's kind.
  *
  * @param draft The draft (must not be NULL)
  * @param kind A file's claim or a directory's
@@ -1521,7 +1530,8 @@ error_t profile_derive_ancestors(
  *     — the retire of the FILE item standing there.
  * A failure past the put leaves a draft its writer abandons (sys/stage.h).
  *
- * Reader: cmds/revert.c cmd_revert.
+ * Readers: cmds/revert.c cmd_revert; core/restore.c restore_path, each file claim
+ * it writes.
  *
  * @param draft The draft (must not be NULL)
  * @param storage_path The name the restore writes: the claim's own, or the one
@@ -1561,6 +1571,8 @@ error_t profile_restore_file(
  *   - the way, as profile_restore_file brings a file's, paired from the claim's
  *     own name;
  *   - the claim at its own kind, written (core/metadata.h metadata_write_item).
+ *
+ * Reader: core/restore.c restore_path, each directory claim it writes.
  *
  * @param draft The draft (must not be NULL)
  * @param storage_path The name the restore writes: the claim's own, or the one

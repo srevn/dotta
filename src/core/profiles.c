@@ -2741,6 +2741,7 @@ error_t profile_changes(
     string_array_init(&changes.added, arena, 0);
     string_array_init(&changes.updated, arena, 0);
     string_array_init(&changes.removed, arena, 0);
+    string_array_init(&changes.internal, arena, 0);
 
     for (size_t e = 0, f = 0, d = 0;;) {
         /* The byte-least name the three lists hold next, read where it falls,
@@ -2766,8 +2767,17 @@ error_t profile_changes(
         const bool dir_moved = d < dirs.count && strcmp(dirs.entries[d], name) == 0;
         if (dir_moved) d++;
 
-        /* dotta's own files claim nothing (infra/label.h label_prefixes) */
-        if (!label_prefixes(name)) continue;
+        /* An internal file claims nothing (infra/label.h label_prefixes), and
+         * is named apart wherever the tree moved at its name — the tree's is
+         * the one list that holds such a name, every sheet key being one in the
+         * grammar (core/metadata.h metadata_from_json) — but the sheet, the claims'
+         * own document, whose moves the claims' lists and the way say */
+        if (!label_prefixes(name)) {
+            if (strcmp(name, METADATA_FILE_PATH) != 0) {
+                string_array_push(&changes.internal, name);
+            }
+            continue;
+        }
 
         /* The tracked claim at the name on each side, as each sheet holds it,
          * and whether it moved: a derived claim's move is the way's, never named,

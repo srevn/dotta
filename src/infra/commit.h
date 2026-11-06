@@ -8,8 +8,9 @@
  * else. The writer says what it did and how its message reads (commit_words_t):
  * the command that made the commit, the configuration's two templates, the message
  * the user wrote where -m gave one, a revert's target. The draft says what the
- * commit changes of its profile's explicit claims (commit_changes_t), and renders
- * the message from both under its profile's name (core/profiles.h profile_commit).
+ * commit changes of its profile — its explicit claims, and its internal files
+ * (commit_changes_t) — and renders the message from both under its profile's
+ * name (core/profiles.h profile_commit).
  *
  * Layer: infra/. It reads base/ and sys/identity, for the invoker's name, and
  * no configuration — the templates are the writer's to hand by name — so core,
@@ -32,13 +33,13 @@
  * and revert's removals delete the files they take, and every other action's
  * keep them. Two read it, the copies' fate from a profile's history
  * (core/profiles.c profile_departures) and the heading a message stands its
- * removals under, Deleted or Removed (commit_message's {paths}). An action with
- * another effect is another word: a remove that deleted files would write its
- * own, never "remove". A hand's commit names none, and keeps — save git's amend
- * in a worktree of the store, which carries every extra header but a signature
- * onto the commit it writes (lib/git/builtin/commit.c cmd_commit,
- * read_commit_extra_headers): its removals read as the action the amended commit
- * named (stated).
+ * removals under, Deleted or Removed (infra/commit.c commit_action_removals,
+ * commit_message's {paths}). An action with another effect is another word: a
+ * remove that deleted files would write its own, never "remove". A hand's commit
+ * names none, and keeps — save git's amend in a worktree of the store, which
+ * carries every extra header but a signature onto the commit it writes
+ * (lib/git/builtin/commit.c cmd_commit, read_commit_extra_headers): its removals
+ * read as the action the amended commit named (stated).
  *
  * The words on screen are the files', since a directory goes by what is left in
  * it whatever took its claim (core/workspace.c workspace_analyze_orphans): update
@@ -112,21 +113,24 @@ typedef struct commit_words {
 } commit_words_t;
 
 /**
- * What a commit changes of its profile's explicit claims: each name in one list
- * at most, each list in byte order
+ * What a commit changes of its profile — its explicit claims, and its internal
+ * files: each name in one list at most, each list in byte order
  *
  * The commit, never its writer's arguments: each name whose explicit claim the
  * commit adds, updates or removes — the blob at the name with the item that rides
- * it, the directory the profile tracks there — as the draft answers it
- * (core/profiles.h profile_changes). A derived claim is the way to the claims
- * and never one, so no list names it. A name is the profile's spelling of it:
- * the storage path, the key the tree and the sheet hold and `remove` takes back.
- * The lists are borrowed for the call, and a zeroed one names nothing.
+ * it, the directory the profile tracks there — and each internal file it adds,
+ * changes or removes, as the draft answers it (core/profiles.h profile_changes).
+ * A derived claim is the way to the claims and never one, so no list names it;
+ * nor the sheet, the claims' own document, whose moves are the claims' and the
+ * way's. A name is the profile's spelling of it: the storage path, the key the
+ * tree and the sheet hold and `remove` takes back — an internal file's, its name
+ * in the tree. The lists are borrowed for the call, and a zeroed one names nothing.
  */
 typedef struct commit_changes {
-    string_array_t added;     /* Names the profile claimed nothing at, and the commit does */
-    string_array_t updated;   /* Names claimed on both sides, saying another thing */
-    string_array_t removed;   /* Names the profile claimed, and the commit nothing at */
+    string_array_t added;      /* Names the profile claimed nothing at, and the commit does */
+    string_array_t updated;    /* Names claimed on both sides, saying another thing */
+    string_array_t removed;    /* Names the profile claimed, and the commit nothing at */
+    string_array_t internal;   /* Names outside the grammar the commit changes, the sheet aside */
 } commit_changes_t;
 
 /**
@@ -148,14 +152,16 @@ typedef struct commit_changes {
  *   {date}          - Local date (YYYY-MM-DD)
  *   {datetime}      - Local timestamp with timezone (ISO 8601)
  *   {paths}         - Each change under its heading (Added, Updated, Removed;
- *                     an update's and a revert's removals Deleted), at most five
- *                     names a heading; one line where none
+ *                     an update's and a revert's removals Deleted), then the
+ *                     internal files the commit changes under Internal, at most
+ *                     five names a heading; one line where none
  *   {target_commit} - The commit a revert restores from; empty otherwise, so a
  *                     body line whose only variable it is shows on a revert alone
  *
  * {paths} names the changes, and a commit that moved only the way to the claims
- * says so in one line where the headings would stand. {count} is the three lists'
- * summed length, the one number {paths} cannot disagree with.
+ * says so in one line where the headings would stand. {count} is the summed length
+ * of the claims' three lists, the one number their headings cannot disagree with:
+ * an internal file claims nothing, and counts nowhere.
  *
  * A brace closes at the next `}` on its line: one its line leaves open is a
  * character like any other. A variable the table has no row for is left as the
@@ -178,8 +184,8 @@ typedef struct commit_changes {
  *              of the four the templates render — any other is a caller's bug,
  *              and dies
  * @param profile The profile's name (must not be NULL)
- * @param changes What the commit changes of the profile's explicit claims (must
- *                not be NULL)
+ * @param changes What the commit changes of the profile's explicit claims and
+ *                its internal files (must not be NULL)
  * @return The message, the arena's; never NULL
  */
 const char *commit_message(

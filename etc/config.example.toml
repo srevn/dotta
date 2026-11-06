@@ -213,16 +213,20 @@ color = "auto"
 #   {date}          - Local date (YYYY-MM-DD)
 #   {datetime}      - Local timestamp with timezone (ISO 8601 format)
 #   {paths}         - Each change under its heading (Added, Updated, Removed;
-#                     an update's and a revert's removals Deleted), at most
-#                     five names a heading; one line where none
+#                     an update's and a revert's removals Deleted), then
+#                     the internal files under Internal, at most five names
+#                     a heading; one line where none
 #   {target_commit} - The commit a revert restores from; empty otherwise, so a
 #                     body line whose only variable it is shows on a revert alone
 #
 # A commit names what it changed: each file, and each directory the profile
 # tracks, whose claim it adds, updates or removes, under its change's heading,
 # as storage paths (home/.bashrc, root/etc/hosts, custom/…) — and {count}
-# counts them. The directories dotta derives above them are never named: a
-# commit that changed only those says so in one line in the headings' place.
+# counts them. Beneath them, under Internal, stand the internal files the
+# commit changed, such as the .dottaignore a profile's first commit creates;
+# {count} leaves them out. The directories dotta derives above them are never
+# named: a commit that changed only those says so in one line in the headings'
+# place.
 #
 # A body line holding variables, every one of which renders empty, is left out
 # with its newline, so the default body's Target line shows on a revert alone.

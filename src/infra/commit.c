@@ -133,6 +133,31 @@ static const char *commit_action_name_past(commit_action_t action) {
 }
 
 /**
+ * The heading an action's removals stand under, as {paths} renders them
+ *
+ * Update's and revert's removals delete the files they take, and every other
+ * action's keep them (commit_action_t): the heading's reading of the rule, the
+ * departure's being the other. Every action, and no default arm, as its two
+ * siblings: the day an action lands, -Wswitch has its author say here whether
+ * its removals delete, where a condition would read every new one as keeping.
+ */
+static const char *commit_action_removals(commit_action_t action) {
+    switch (action) {
+        case COMMIT_ACTION_ADD:    return "Removed:";
+        case COMMIT_ACTION_UPDATE: return "Deleted:";
+        case COMMIT_ACTION_REMOVE: return "Removed:";
+        case COMMIT_ACTION_REVERT: return "Deleted:";
+        case COMMIT_ACTION_IGNORE:
+        case COMMIT_ACTION_BOOTSTRAP:
+        case COMMIT_ACTION_SYNC:
+        case COMMIT_ACTION_INIT:
+        case COMMIT_ACTION_CLONE:
+            CHECK_ARG(false, "an action the template never renders");
+    }
+    CHECK_ARG(false, "a commit action no enumerator names");
+}
+
+/**
  * A name as display text, into the arena — or the name itself where nothing in
  * it needs spelling
  *
@@ -152,15 +177,17 @@ static const char *commit_spelled(arena_t *arena, const char *name) {
 
 /**
  * {paths}: each change under its heading — Added, Updated, then the removals,
- * Deleted under update and revert and Removed under every other action, in that
- * order — or, where the commit changes no explicit claim, the one line that says so
+ * Deleted under update and revert and Removed under every other action, then
+ * the internal files under Internal, in that order — or, where the commit changes
+ * neither an explicit claim nor an internal file, the one line that says so
  *
  * A heading stands over a list that names something, and nowhere else. A removal
  * is the one change the action words: the lists are the draft's, one edit to a
  * claim whatever becomes of its files (core/profiles.h profile_changes), and
- * what becomes of them is the action's, the commit's one fact (commit_action_t).
- * Each name is spelled where it enters (commit_spelled); the headings, the bullets
- * and the newlines between them are the rendering's own.
+ * what becomes of them is the action's, the commit's one fact
+ * (commit_action_removals). An internal file claims nothing, so its heading stands
+ * beneath the claims'. Each name is spelled where it enters (commit_spelled);
+ * the headings, the bullets and the newlines between them are the rendering's own.
  *
  * @param arena The arena a spelled name lives in (must not be NULL)
  * @param action The action that made the commit, its removals' heading
@@ -175,13 +202,10 @@ static void commit_paths(
         const char *heading;
         const string_array_t *names;
     } lists[] = {
-        { "Added:",   &changes->added   },
-        { "Updated:", &changes->updated },
-        {
-            action == COMMIT_ACTION_UPDATE || action == COMMIT_ACTION_REVERT
-                ? "Deleted:" : "Removed:",
-            &changes->removed
-        },
+        { "Added:",                       &changes->added    },
+        { "Updated:",                     &changes->updated  },
+        { commit_action_removals(action), &changes->removed  },
+        { "Internal:",                    &changes->internal },
     };
 
     *out = (buffer_t){ 0 };
@@ -209,10 +233,10 @@ static void commit_paths(
         }
     }
 
-    /* No heading stood: the commit changes no explicit claim, so its edits moved
-     * only the way to the claims — every writer's edit moves a claim or its way
-     * (core/profiles.h profile_changes) — and the line in the headings' place
-     * says so */
+    /* No heading stood: the commit changes no explicit claim and no internal
+     * file, so its edits moved only the way to the claims — every writer's edit
+     * moves a claim, its way or an internal file (core/profiles.h profile_changes)
+     * — and the line in the headings' place says so */
     if (out->size == 0) buffer_append_string(out, "Only ancestor claims changed");
 }
 
@@ -320,7 +344,8 @@ const char *commit_message(
     /* The values this message is made of, resolved once for both templates: the
      * clock read once, so every time the message names is one instant's. The
      * count is rendered here and not in the reader, which is what keeps it the
-     * three lists' summed length under any template that names it beside them. */
+     * claims' three lists' summed length — an internal file claims nothing —
+     * under any template that names it beside them. */
     const time_t now = time(NULL);
     char hostname[MAX_HOSTNAME], date[16], datetime[64], count[32];
     commit_hostname(hostname, sizeof(hostname));

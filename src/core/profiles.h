@@ -1566,7 +1566,8 @@ error_t profile_put_internal_file(
 error_t profile_changed(const profile_draft_t *draft, bool *out);
 
 /**
- * What the commit changes of the profile's explicit claims, name by name
+ * What the commit changes of the profile's explicit claims and of its internal
+ * files, name by name
  *
  * A name's explicit claim is what the two documents say of it, compared whole:
  * the blob at the name — its id and filemode — with the FILE item that rides
@@ -1575,16 +1576,18 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  * never one, so none of their moves is named. A blob is one of any mode its tree
  * spells, as the walk reads it. Compared as the documents spell it: a claim the
  * tree contradicts is compared as the sheet holds it, and whether a walk shows
- * it is the decode's. dotta's own files claim nothing (infra/label.h
- * label_prefixes).
+ * it is the decode's. An internal file claims nothing (infra/label.h
+ * label_prefixes), and is named apart wherever the tree moved at its name — but
+ * the sheet, the claims' own document, whose moves the claims' lists and the
+ * way say.
  *
  * Asked once every edit is in, and the commit's answer whenever it is asked:
  * the commit asks it past its prune and its save (profile_commit), and neither
- * moves an explicit claim — the prune takes derived claims alone, the save writes
- * dotta's own file. Nothing is written, so a dry run may ask it. A commit whose
- * explicit claims all stand moved only the way: every writer's edit moves an
- * explicit claim or the way to one, dotta's own file riding a capture
- * (profile_put_internal_file).
+ * moves a name the lists hold — the prune takes derived claims alone, the save
+ * writes or takes the sheet. Nothing is written, so a dry run may ask it. A commit
+ * whose lists name nothing moved only the way: every writer's edit moves an
+ * explicit claim, the way to one, or an internal file — dotta's own riding a
+ * profile's first capture (profile_put_internal_file).
  *
  * Reader: profile_commit, the names its message gives (infra/commit.h
  * commit_message). A reader not on this list is a bug.
@@ -1612,20 +1615,21 @@ error_t profile_changes(
  * claim the base tracked, whose removal the writer names; the sheet saved where
  * its claims are no longer the base's, and none where it claims nothing; the
  * message, the writer's words over what the commit changes of the profile's
- * explicit claims (profile_changes, infra/commit.h commit_message) — never the
- * writer's own lists, which hold what it touched, a re-capture of what the profile
- * holds among them; then one commit, naming the writer's action (sys/stage.h
- * stage_commit: a tree equal to the opened one is none, a head another writer
- * moved since the open is refused ERR_CONFLICT, and one deleted since in Git's
- * words). One commit a draft, answered as sys/stage answers it: Git's null id
- * where the gate stops it, and past the gate the tree write's own answer — the
- * commit made where an edit the gate saw stands past the prune, since it moved
- * a content entry or a claim and a sheet whose claims moved spells other bytes,
- * and the null id where the prune took back the only edits the gate saw: a climb's
- * rungs nothing tracked stands beneath, authored and pruned in one draft, whose
- * message no commit carries. A merge's draft always commits: its gate passes
- * (profile_changed), and its message is its writer's whole words (infra/commit.h
- * commit_words_t.custom_msg), Git's line for a merge.
+ * explicit claims and internal files (profile_changes, infra/commit.h
+ * commit_message) — never the writer's own lists, which hold what it touched, a
+ * re-capture of what the profile holds among them; then one commit, naming the
+ * writer's action (sys/stage.h stage_commit: a tree equal to the opened one is
+ * none, a head another writer moved since the open is refused ERR_CONFLICT, and
+ * one deleted since in Git's words). One commit a draft, answered as sys/stage
+ * answers it: Git's null id where the gate stops it, and past the gate the tree
+ * write's own answer — the commit made where an edit the gate saw stands past
+ * the prune, since it moved a content entry or a claim and a sheet whose claims
+ * moved spells other bytes or none, and the null id where the prune took back
+ * the only edits the gate saw: a climb's rungs nothing tracked stands beneath,
+ * authored and pruned in one draft, whose message no commit carries. A merge's
+ * draft always commits: its gate passes (profile_changed), and its message is
+ * its writer's whole words (infra/commit.h commit_words_t.custom_msg), Git's
+ * line for a merge.
  *
  * Readers: cmds/add.c cmd_add and cmds/update.c update_profile, which count the
  * prune and read whether the commit landed, so a capture that put back what the

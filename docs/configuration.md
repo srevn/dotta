@@ -92,8 +92,10 @@ A commit names what it changed: each file, and each directory the profile
 tracks, whose claim it adds, updates or removes, under its change's heading
 (`Added:`, `Updated:`, `Removed:`, or `Deleted:` for an update's or a revert's
 removals), as storage paths (`home/.bashrc`, `root/etc/hosts`) — and `{count}`
-counts them. A commit that changed only the directories dotta derives above them
-says so in one line.
+counts them. Beneath them, under `Internal:`, stand the internal files the commit
+changed, such as the `.dottaignore` a profile's first commit creates; `{count}`
+leaves them out. A commit that changed only the directories dotta derives above
+them says so in one line.
 
 A body line holding variables, every one of which renders empty, is left out
 with its newline, so `Target: {target_commit}` shows on a revert alone.

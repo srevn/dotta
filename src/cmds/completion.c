@@ -124,8 +124,8 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
 }
 
 /**
- * The view's files, narrowed to the winners named — and, when asked, its directory
- * claims, slash-marked
+ * The view's files and its directory claims, slash-marked, narrowed to the winners
+ * named
  *
  * Directory claims are offered whichever class they are: an ancestor claim is
  * an active path, and the update remedy ('dotta update <dir>') names exactly
@@ -135,8 +135,7 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
  * manifest_holds_row).
  */
 void completion_files(
-    const dotta_ctx_t *ctx, FILE *out,
-    char *const *winners, size_t winner_count, bool directories
+    const dotta_ctx_t *ctx, FILE *out, char *const *winners, size_t winner_count
 ) {
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
@@ -157,9 +156,6 @@ void completion_files(
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
 
-        if (row->type == PATH_TYPE_DIRECTORY && !directories) {
-            continue;
-        }
         /* Winner filter, applied here rather than at the build: one view, one
          * loop. */
         if (winner_count > 0) {

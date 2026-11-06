@@ -202,12 +202,13 @@ dotta list --remote              # Include sync status
 dotta list global
 dotta list global -v             # With sizes and per-file commits
 
-# Level 3: File commit history
+# Level 3: A path's commit history
 dotta list global home/.bashrc
 dotta list global home/.bashrc -v  # Each commit's full id, date and title
+dotta list global ~/.config/nvim   # A directory: each commit that changed anything beneath it
 ```
 
-Through a merge, a file's history — and its last commit at level 2 — follows the side the merge took the file from, as `git log -- <file>` does: the merge is listed only where it composed the file anew, and a side whose version the merge discarded is no part of it.
+Through a merge, a path's history — and a file's last commit at level 2 — follows the side the merge took the path from, as `git log -- <path>` does: the merge is listed only where it composed the path anew, and a side whose version the merge discarded is no part of it.
 
 ## Showing File Content
 

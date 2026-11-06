@@ -4,7 +4,8 @@
  * Hierarchical listing interface with three levels:
  * 1. Profiles (default) - Show every profile here, and every enabled one
  * 2. Files (with -p) - Show files in a profile
- * 3. File History (with -p <file>) - Show commits affecting a file
+ * 3. A path's history (with -p <path>) - Show the commits that changed a file,
+ *    or anything beneath a directory
  */
 
 #include "cmds/list.h"
@@ -448,9 +449,8 @@ typedef struct {
 static error_t list_collect_file(const profile_claim_t *claim, void *payload) {
     list_walk_t *walk = payload;
 
-    /* A directory claim is no row: it has no size and no history of its own,
-     * and what else the profile holds is the count's to say (the no-files arm,
-     * and level 1's line) */
+    /* A directory claim is no row: it has no size of its own, and what else the
+     * profile holds is the count's to say (the no-files arm, and level 1's line) */
     if (claim->type == PATH_TYPE_DIRECTORY) return NULL;
 
     /* The row: the name copied out of the walk's loan, the blob and the stamp
@@ -533,7 +533,7 @@ static error_t list_files(
     if (err) goto cleanup;
 
     if (walk.file_count == 0) {
-        /* Directory claims are not listed — no size, no history — but the count
+        /* Directory claims are not listed — no size of their own — but the count
          * of them keeps "nothing" honest for a profile whose whole content is
          * its claims. It is what the profile holds less the files, so it comes
          * from the one producer of that number (core/profiles.h profile_counts),
@@ -758,18 +758,18 @@ cleanup:
 }
 
 /**
- * List file history - Level 3
+ * List a path's history - Level 3
  *
  * Default: Oneline format (hash, summary, time) Verbose: Full commit format.
  * Both close on the total: the commits listed.
  */
-static error_t list_file_history(
+static error_t list_path_history(
     const dotta_ctx_t *ctx,
     const cmd_list_options_t *opts
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(opts->file_path);
+    CHECK_NULL(opts->path);
 
     git_repository *repo = ctx->run.repo;
     const state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
@@ -779,7 +779,7 @@ static error_t list_file_history(
     bool verbose = output_is_verbose(out);
 
     /* The claim to list: the profile and the storage path, from the argument.
-     * The file need not exist on disk. */
+     * The path need not exist on disk. */
     const char *name = opts->profile;
     const char *storage_path = NULL;
     error_t err = NULL;
@@ -790,7 +790,7 @@ static error_t list_file_history(
      * for both arms, which differ in where each key's answer comes from and not
      * in which keys they take. */
     path_input_t arg;
-    err = path_input_resolve(opts->file_path, ctx->arena, &arg);
+    err = path_input_resolve(opts->path, ctx->arena, &arg);
     if (err) return err;
 
     if (opts->profile) {
@@ -857,11 +857,13 @@ static error_t list_file_history(
     }
 
     /* What the head holds at the name, asked of the profile's two documents at
-     * once (core/profiles.h profile_holds), and only a file has a history to
-     * list: a directory is refused as one whichever document holds it, a submodule
-     * as one, and a name neither holds is a deleted file — given its word before
-     * the walk of its lines, which is the search's own. The profile reads its
-     * sheet only where the head is silent, strictly, and a path's view above
+     * once (core/profiles.h profile_holds): a file and a directory have a history
+     * to list, whichever document holds the directory — one the sheet alone holds
+     * walks to what its subtree once held, or to none (sys/stats.h
+     * stats_path_history); a submodule is refused as one, a gitlink being no
+     * claim; and a name neither holds is a path the head lacks — given its word
+     * before the walk of its lines, which is the search's own. The profile reads
+     * its sheet only where the head is silent, strictly, and a path's view above
      * has already read it. The history is one name's — a path's former names
      * under another contract are the user's to type, a prospective name proving
      * nothing about what the profile once held there. */
@@ -873,26 +875,31 @@ static error_t list_file_history(
 
     switch (held.kind) {
         case PROFILE_HELD_FILE:
+        case PROFILE_HELD_DIRECTORY:
             break;
 
-        case PROFILE_HELD_DIRECTORY:
         case PROFILE_HELD_SUBMODULE:
             return error_create(
-                ERR_INVALID_ARG, "'%s' is %s; list shows one file's history",
-                storage_path,
-                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule"
+                ERR_INVALID_ARG,
+                "'%s' is a submodule; list shows a file's or a directory's history",
+                storage_path
             );
 
         case PROFILE_HELD_NOTHING:
-            output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
+            output_info(
+                out, OUTPUT_NORMAL,
+                "'%s' is not in the current tree; searching its history...",
+                storage_path
+            );
             break;
     }
 
     /* The history, from the head the name was asked of. None is a name the head
      * does not hold that no commit on its lines held either — the search announced
-     * above, which found nothing. */
-    file_history_t history;
-    err = stats_file_history(repo, &head_oid, storage_path, ctx->arena, &history);
+     * above, which found nothing — or a directory the sheet alone holds, whose
+     * subtree no commit held. */
+    path_history_t history;
+    err = stats_path_history(repo, &head_oid, storage_path, ctx->arena, &history);
     if (err) {
         return error_wrap(
             err, "Failed to get history for '%s' in profile '%s'",
@@ -1001,7 +1008,7 @@ error_t cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     switch (opts->mode) {
         case LIST_PROFILES:     return list_profiles(ctx, opts);
         case LIST_FILES:        return list_files(ctx, opts);
-        case LIST_FILE_HISTORY: return list_file_history(ctx, opts);
+        case LIST_PATH_HISTORY: return list_path_history(ctx, opts);
     }
 
     CHECK_ARG(false, "a list mode no enumerator names");
@@ -1012,26 +1019,26 @@ error_t cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Derive `mode`, `profile`, and `file_path` from the -p flag and the raw positional
+ * Derive `mode`, `profile`, and `path` from the -p flag and the raw positional
  * bucket.
  *
  * -p <profile> is the leading positional forced to a profile: it names the profile
- * unambiguously, so every positional is then a file. It is the escape hatch for
+ * unambiguously, so every positional is then a path. It is the escape hatch for
  * profiles whose names would trip the path heuristic, and it mirrors add/remove's
  * flag-vs-first-positional split.
  *
  *   Flag form (-p given):
  *     0 positionals -> LIST_FILES        (profile = flag)
- *     1 positional  -> LIST_FILE_HISTORY (profile = flag, file = pos[0])
- *     2 positionals -> error: only one file may accompany -p
+ *     1 positional  -> LIST_PATH_HISTORY (profile = flag, path = pos[0])
+ *     2 positionals -> error: only one path may accompany -p
  *
- *   Inference form (no -p): the leading positional is a profile or a file,
+ *   Inference form (no -p): the leading positional is a profile or a path,
  *   disambiguated by whether it announces a path (infra/path.h
  *   path_input_announces_path).
  *     0 positionals -> LIST_PROFILES
- *     1 positional  -> path? LIST_FILE_HISTORY (profile inferred)
+ *     1 positional  -> path? LIST_PATH_HISTORY (profile inferred)
  *                      name? LIST_FILES
- *     2 positionals -> LIST_FILE_HISTORY (profile = pos[0], file = pos[1])
+ *     2 positionals -> LIST_PATH_HISTORY (profile = pos[0], path = pos[1])
  */
 static error_t list_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1044,10 +1051,10 @@ static error_t list_post_parse(
         if (o->positional_count == 0) {
             o->mode = LIST_FILES;
         } else if (o->positional_count == 1) {
-            o->mode = LIST_FILE_HISTORY;
-            o->file_path = o->positional_args[0];
+            o->mode = LIST_PATH_HISTORY;
+            o->path = o->positional_args[0];
         } else {
-            return error_create(ERR_INVALID_ARG, "Only one file may accompany -p/--profile");
+            return error_create(ERR_INVALID_ARG, "Only one path may accompany -p/--profile");
         }
         return NULL;
     }
@@ -1060,8 +1067,8 @@ static error_t list_post_parse(
     if (o->positional_count == 1) {
         const char *arg = o->positional_args[0];
         if (path_input_announces_path(arg)) {
-            o->mode = LIST_FILE_HISTORY;
-            o->file_path = arg;
+            o->mode = LIST_PATH_HISTORY;
+            o->path = arg;
         } else {
             o->mode = LIST_FILES;
             o->profile = arg;
@@ -1070,9 +1077,9 @@ static error_t list_post_parse(
     }
 
     if (o->positional_count == 2) {
-        o->mode = LIST_FILE_HISTORY;
+        o->mode = LIST_PATH_HISTORY;
         o->profile = o->positional_args[0];
-        o->file_path = o->positional_args[1];
+        o->path = o->positional_args[1];
         return NULL;
     }
 
@@ -1082,9 +1089,10 @@ static error_t list_post_parse(
 
 /**
  * What can stand at the cursor, by the rule list_post_parse routes with: under
- * -p, a file of that profile as the one positional; without, a local profile or
- * a file of the view first, then — under a profile — a file of its own, standing
- * or not. A path in the first slot was the file: nothing follows it.
+ * -p, a path of that profile as the one positional — a file, or a directory it
+ * claims; without, a local profile or a path of the view first, then — under a
+ * profile — a path of its own, standing or not. A path in the first slot was
+ * the path: nothing follows it.
  */
 static args_want_t list_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1100,15 +1108,17 @@ static args_want_t list_complete(
     if (o->profile != NULL) {
         if (o->positional_count == 0) {
             completion_refspecs(ctx, out, o->profile);
+            completion_directories(ctx, out, o->profile);
         }
         return ARGS_WANT_NONE;
     }
     if (o->positional_count == 0) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        completion_files(ctx, out, NULL, 0, false);
+        completion_files(ctx, out, NULL, 0);
     } else if (o->positional_count == 1 &&
         !path_input_announces_path(o->positional_args[0])) {
         completion_refspecs(ctx, out, o->positional_args[0]);
+        completion_directories(ctx, out, o->positional_args[0]);
     }
     return ARGS_WANT_NONE;
 }
@@ -1148,14 +1158,17 @@ const args_command_t spec_list = {
     .usage       =
         "%s list [options]\n"
         "   or: %s list [options] <profile>\n"
-        "   or: %s list [options] <file>\n"
-        "   or: %s list [options] <profile> <file>",
+        "   or: %s list [options] <path>\n"
+        "   or: %s list [options] <profile> <path>",
     .description =
         "Mode Inference:\n"
         "  No positional              Level 1: all profiles.\n"
-        "  1 arg, looks like a path   Level 3: file history, profile inferred.\n"
+        "  1 arg, looks like a path   Level 3: a path's history, profile inferred.\n"
         "  1 arg, looks like a name   Level 2: files in that profile.\n"
-        "  2 args                     Level 3: file history in profile.\n",
+        "  2 args                     Level 3: a path's history in profile.\n"
+        "\n"
+        "A path's history is the commits that changed it: a file, or anything\n"
+        "beneath a directory.\n",
     .notes       =
         "Verbose Mode Details:\n"
         "  Level 1    File count, total size, and last commit per profile.\n"
@@ -1169,6 +1182,7 @@ const args_command_t spec_list = {
         "  %s list global                    # L2 files: paths only\n"
         "  %s list global -v                 # L2 files: sizes + commits\n"
         "  %s list home/.bashrc              # L3 history: oneline commits\n"
+        "  %s list global ~/.config/nvim     # L3 history: a directory's commits\n"
         "  %s list global home/.bashrc -v    # L3 history: full commit messages\n",
     .epilogue    =
         "See also:\n"

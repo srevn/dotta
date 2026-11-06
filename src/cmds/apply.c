@@ -3461,7 +3461,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     );
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_APPLY,
-        .profile    = string_array_join(ctx->arena, scope_profiles(scope), " "),
+        .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
         .paths      = hook_paths.entries,
         .path_count = hook_paths.count,
         .dry_run    = opts->dry_run,
@@ -3764,7 +3764,7 @@ static args_want_t apply_complete(
     }
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);
-    completion_files(ctx, out, o->profiles, o->profile_count, true);
+    completion_files(ctx, out, o->profiles, o->profile_count);
     return ARGS_WANT_FILES;
 }
 

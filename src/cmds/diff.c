@@ -2097,7 +2097,7 @@ static args_want_t diff_complete(
     }
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);
-    completion_files(ctx, out, o->profiles, o->profile_count, true);
+    completion_files(ctx, out, o->profiles, o->profile_count);
     completion_commits(ctx, out, o->profiles, o->profile_count);
     return ARGS_WANT_FILES;
 }

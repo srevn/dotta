@@ -2012,7 +2012,7 @@ static args_want_t update_complete(
             winner_count = 1;
         }
     }
-    completion_files(ctx, out, winners, winner_count, true);
+    completion_files(ctx, out, winners, winner_count);
     return ARGS_WANT_FILES;
 }
 

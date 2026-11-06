@@ -188,8 +188,8 @@ error_t scope_build(
  * cmd_bootstrap, cmds/ignore.c ignore_test, for either key it takes, and cmds/key.c
  * key_status, the profiles whose encrypted files it counts. A command that holds
  * the view reads the same set off it (core/manifest.h manifest_profiles): the
- * scope it builds borrows it (scope_build), and show's and list's file arms ask
- * it there.
+ * scope it builds borrows it (scope_build), and show's file arm and list's history
+ * arm ask it there.
  *
  * Asks every enabled branch at once whether it is here (sys/gitops.h
  * gitops_branches_exist), as the view's build does, and loads no tree.
@@ -255,7 +255,7 @@ error_t scope_filter(
  * is enabled, and so earns the first fact alone.
  *
  * Readers: cmds/update.c cmd_update, cmds/show.c cmd_show — its commit search
- * and its file search — and cmds/list.c list_file_history refuse with it, each
+ * and its file search — and cmds/list.c list_path_history refuse with it, each
  * the set it searches or acts on, and cmds/sync.c cmd_sync over every enabled
  * row, its branch here or not; cmds/diff.c cmd_diff, cmds/bootstrap.c cmd_bootstrap
  * and cmds/ignore.c ignore_test warn it and go on.
@@ -394,7 +394,7 @@ error_t scope_resolve_range(
  * profile's own claims. An empty set is that same absence; both readers refuse
  * an empty enabled set in their own words before they ask.
  *
- * Readers: cmds/show.c cmd_show and cmds/list.c list_file_history, each without
+ * Readers: cmds/show.c cmd_show and cmds/list.c list_path_history, each without
  * a profile. With one, the profile names the argument (scope_resolve_name).
  *
  * @param view The enabled set's view (must not be NULL)
@@ -428,7 +428,7 @@ error_t scope_resolve_claim(
  * A path costs that view — one tree walk, and the sheet loaded at its first
  * question — and is refused where the sheet will not load, where a name proceeds.
  *
- * Readers: cmds/show.c cmd_show and cmds/list.c list_file_history, each with a
+ * Readers: cmds/show.c cmd_show and cmds/list.c list_path_history, each with a
  * profile named.
  *
  * @param profile The profile, at the tree its reader selected (must not be NULL;

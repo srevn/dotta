@@ -53,7 +53,7 @@ error_t gitops_init(void) {
      * reaches a commit late; its holdings' walks, which ask each commit's tree
      * at the path of every entry not yet found, each directory on the way once
      * an entry; sys/stats.c's walks of a path's lines (stats_last_changes,
-     * stats_file_history), which ask each parent's tree at the path of every
+     * stats_path_history), which ask each parent's tree at the path of every
      * line waiting at its child, each directory on the way once a line; and
      * core/profiles.c per directory item of a sheet (profile_blob_above, asked
      * by the walk and profile_contradicted at each item, and by the point

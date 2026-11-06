@@ -23,11 +23,11 @@
 #include "base/heap.h"
 
 /**
- * A path's entry in a tree, as its history reads it: a blob, by its id and its
- * filemode, or none
+ * A path's entry in a tree, as its history reads it: a blob, a subtree or a
+ * gitlink, by its id and its filemode, or none
  */
 typedef struct {
-    git_oid blob;               /* Git's null id: none */
+    git_oid id;                 /* Git's null id: none */
     git_filemode_t mode;        /* Its filemode; none's is 0 */
 } stats_entry_t;
 
@@ -41,7 +41,7 @@ typedef struct {
 } stats_line_t;
 
 /**
- * One file's lines not yet read, each commit queued once
+ * One path's lines not yet read, each commit queued once
  */
 typedef struct {
     arena_t *frame;             /* The walk's own: the lines and the set */
@@ -108,8 +108,10 @@ error_t stats_blob_size_with_odb(git_odb *odb, const git_oid *blob_oid, size_t *
 /**
  * The entry `tree` holds at `path`
  *
- * A blob of any filemode; none where a component is missing, or the name or one
- * above it is no tree's (git_tree_entry_bypath answers GIT_ENOTFOUND for both).
+ * Of any type, as the tree records it at the name: a blob of any filemode, a
+ * subtree, a gitlink. None where a component is missing, or one above the name
+ * is no tree's (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath answers
+ * GIT_ENOTFOUND for both).
  *
  * @param tree The tree (must not be NULL)
  * @param path A storage path (must not be NULL)
@@ -125,12 +127,10 @@ static error_t stats_entry(const git_tree *tree, const char *path, stats_entry_t
     if (rc == GIT_ENOTFOUND) return NULL;
     if (rc < 0) return error_git(rc, "Cannot read '%s' in the history", path);
 
-    if (git_tree_entry_type(entry) == GIT_OBJECT_BLOB) {
-        *out = (stats_entry_t){
-            .blob = *git_tree_entry_id(entry),
-            .mode = git_tree_entry_filemode(entry),
-        };
-    }
+    *out = (stats_entry_t){
+        .id = *git_tree_entry_id(entry),
+        .mode = git_tree_entry_filemode(entry),
+    };
     git_tree_entry_free(entry);
 
     return NULL;
@@ -238,7 +238,7 @@ error_t stats_last_changes(
 
                 stats_entry_t held;
                 err = stats_entry(tree, paths[p], &held);
-                if (!err && git_oid_equal(&held.blob, &lines[p].entry.blob) &&
+                if (!err && git_oid_equal(&held.id, &lines[p].entry.id) &&
                     held.mode == lines[p].entry.mode) {
                     lines[p].reached = *git_commit_id(parent);
                     lines[p].time = git_commit_time(parent);
@@ -258,7 +258,7 @@ error_t stats_last_changes(
             for (size_t p = 0; p < count; p++) {
                 if (!git_oid_equal(&lines[p].reached, &reached)) continue;
 
-                if (parent_count > 0 || !git_oid_is_zero(&lines[p].entry.blob)) {
+                if (parent_count > 0 || !git_oid_is_zero(&lines[p].entry.id)) {
                     changes[p] = info;
                 }
                 lines[p].reached = (git_oid){ 0 };
@@ -276,14 +276,14 @@ error_t stats_last_changes(
 }
 
 /**
- * A line of one file's history reaches a commit
+ * A line of one path's history reaches a commit
  *
  * Queued by the commit's time where no line reached it before — past every line
  * older, before every line as new, so of two of one age the one queued first is
  * read first — and never again: git's own queue (lib/git/revision.c
  * process_parents, its SEEN).
  *
- * @param queue The file's lines (must not be NULL)
+ * @param queue The path's lines (must not be NULL)
  * @param commit The commit (must not be NULL)
  * @param entry What the commit holds at the path (must not be NULL)
  */
@@ -310,15 +310,15 @@ static void stats_arrive(
 }
 
 /**
- * One file's every change
+ * One path's every change
  */
-error_t stats_file_history(
-    git_repository *repo, const git_oid *head_oid, const char *file_path,
-    arena_t *arena, file_history_t *out
+error_t stats_path_history(
+    git_repository *repo, const git_oid *head_oid, const char *path,
+    arena_t *arena, path_history_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(head_oid);
-    CHECK_NULL(file_path);
+    CHECK_NULL(path);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -326,7 +326,7 @@ error_t stats_file_history(
      * grows in the caller's arena, abandoning each spine it outgrows */
     stats_queue_t queue = { .frame = arena_create(0) };
     queue.seen = hashmap_create(queue.frame, 0);
-    file_history_t history = { 0 };
+    path_history_t history = { 0 };
     size_t capacity = 0;
     error_t err = NULL;
 
@@ -337,7 +337,7 @@ error_t stats_file_history(
     int rc = git_commit_lookup(&head, repo, head_oid);
     if (rc == 0) rc = git_commit_tree(&head_tree, head);
     if (rc < 0) err = error_git(rc, "Cannot read a commit in the history");
-    if (!err) err = stats_entry(head_tree, file_path, &entry);
+    if (!err) err = stats_entry(head_tree, path, &entry);
     if (!err) stats_arrive(&queue, head, &entry);
     git_tree_free(head_tree);
     git_commit_free(head);
@@ -363,8 +363,8 @@ error_t stats_file_history(
             err = stats_parent(commit, i, &parent, &tree);
 
             stats_entry_t held;
-            if (!err) err = stats_entry(tree, file_path, &held);
-            if (!err && git_oid_equal(&held.blob, &line.entry.blob) &&
+            if (!err) err = stats_entry(tree, path, &held);
+            if (!err && git_oid_equal(&held.id, &line.entry.id) &&
                 held.mode == line.entry.mode) {
                 stats_arrive(&queue, parent, &held);
                 waiting--;
@@ -378,7 +378,7 @@ error_t stats_file_history(
          * holds it, its parent Git's empty tree — and the line goes on through
          * every parent, each carrying what it holds there */
         if (!err && waiting > 0) {
-            if (parent_count > 0 || !git_oid_is_zero(&line.entry.blob)) {
+            if (parent_count > 0 || !git_oid_is_zero(&line.entry.id)) {
                 history.commits = arena_grow(
                     arena, history.commits, &capacity, history.count + 1,
                     sizeof(*history.commits)
@@ -392,7 +392,7 @@ error_t stats_file_history(
                 err = stats_parent(commit, i, &parent, &tree);
 
                 stats_entry_t held;
-                if (!err) err = stats_entry(tree, file_path, &held);
+                if (!err) err = stats_entry(tree, path, &held);
                 if (!err) stats_arrive(&queue, parent, &held);
 
                 git_tree_free(tree);

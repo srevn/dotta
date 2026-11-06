@@ -4,9 +4,10 @@
  * Hierarchical listing interface:
  * - Level 1: Profiles (default)
  * - Level 2: Files (with -p flag)
- * - Level 3: File history (with -p flag + file path) — one file's: a directory
- *   is refused as one whichever of the profile's two documents holds it, a
- *   submodule as one, and a name neither holds is searched for through the history
+ * - Level 3: A path's history (with -p flag + path) — a file's, or a directory's
+ *   whichever of the profile's two documents holds it: every commit that changed
+ *   anything beneath it; a submodule is refused as one, and a name neither holds
+ *   is searched for through the history
  *
  * The --verbose flag adds detail at each level.
  */
@@ -24,20 +25,20 @@
 typedef enum {
     LIST_PROFILES,           /* List all profiles */
     LIST_FILES,              /* List files in profile */
-    LIST_FILE_HISTORY        /* Show history of specific file */
+    LIST_PATH_HISTORY        /* Show history of a path: a file or a directory */
 } list_mode_t;
 
 /**
  * Command options
  *
- * `mode`, `profile`, and `file_path` are derived by `list_post_parse` from the
- * raw positional bucket. Consumers read only the user-facing fields.
+ * `mode`, `profile`, and `path` are derived by `list_post_parse` from the raw
+ * positional bucket. Consumers read only the user-facing fields.
  */
 typedef struct {
     /* User-facing (read by cmd_list). */
     list_mode_t mode;        /* What to list (auto-determined) */
-    const char *profile;     /* Profile name (for LIST_FILES or LIST_FILE_HISTORY) */
-    const char *file_path;   /* File path (for LIST_FILE_HISTORY) */
+    const char *profile;     /* Profile name (for LIST_FILES or LIST_PATH_HISTORY) */
+    const char *path;        /* The path whose history is listed (for LIST_PATH_HISTORY) */
     int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool remote;             /* Show remote sync status */
 

@@ -63,31 +63,30 @@ void completion_profiles(
 );
 
 /**
- * The view's files, and its directory claims where asked: one row per active
- * path, the winning profile beside it.
+ * The view's files and its directory claims: one row per active path, the winning
+ * profile beside it.
  *
  * A winner filter keeps the rows those profiles win — exactly the rows a workspace
  * verb with that filter acts on; a path a filtered profile holds but does not
  * win is not offered because the verb would skip it. Directory rows ride along
- * slash-marked when asked for — a directory claim is a subtree filter with prefix
- * semantics for the verbs that act on it (apply, update, diff); the file-only
- * form serves the slots with nothing to show for one (list's history).
+ * slash-marked: a directory claim is a subtree filter with prefix semantics for
+ * the verbs that act on it (apply, update, diff), and a path whose history list
+ * shows, its every change beneath.
  *
- * @param winners     Optional winner filter (NULL/0 for every row)
- * @param directories Offer the view's directory claims too, slash-marked
+ * @param winners Optional winner filter (NULL/0 for every row)
  */
 void completion_files(
-    const dotta_ctx_t *ctx, FILE *out,
-    char *const *winners, size_t winner_count, bool directories
+    const dotta_ctx_t *ctx, FILE *out, char *const *winners, size_t winner_count
 );
 
 /**
  * A profile's directory claims, as its walk decodes them rather than as the view
  * places them — the companion of completion_refspecs' pinned form for export,
- * which materializes a profile's claims: bare slash-marked paths, the profile
- * as description. An empty tracked directory (no tree entry) is exactly as
- * offerable as the rest; a claim a blob contradicts at its own name or above it
- * is none (core/profiles.h profile_walk), and is not offered.
+ * which materializes a profile's claims, and for list, which shows a path's
+ * history: bare slash-marked paths, the profile as description. An empty tracked
+ * directory (no tree entry) is exactly as offerable as the rest; a claim a blob
+ * contradicts at its own name or above it is none (core/profiles.h profile_walk),
+ * and is not offered.
  */
 void completion_directories(
     const dotta_ctx_t *ctx, FILE *out, const char *pinned

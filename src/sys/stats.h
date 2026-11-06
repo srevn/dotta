@@ -9,23 +9,28 @@
  * itself (cmds/list.c list_size_claim, list_files).
  *
  * A path's history is read along its lines. A commit changed a path where its
- * entry there — a blob, by its id and its filemode, or none: nothing at the name,
- * a subtree, a gitlink, or a blob or a gitlink above it — is no parent's own, a
- * root's parent being Git's empty tree, so a root changed what it holds. From a
- * commit that did not change the path, its line goes back through the first parent
- * whose entry is the commit's own, and through that one alone; from a commit
- * that changed it, through every parent. So a merge that took the path as one
- * side held it hands the line to that side, and what the side it discarded did
- * there is no part of the path's history, where a merge that composed the path
- * anew changed it. The rule is git's default simplification (lib/git/revision.c
- * try_to_simplify_commit), asked of one name: git's pathspec matches beneath a
- * directory of that name too, and a directory is no entry here.
+ * entry there — a blob, a subtree or a gitlink, by its id and its filemode, or
+ * none: nothing at the name, or a blob or a gitlink above it — is no parent's
+ * own, a root's parent being Git's empty tree, so a root changed what it holds.
+ * From a commit that did not change the path, its line goes back through the
+ * first parent whose entry is the commit's own, and through that one alone; from
+ * a commit that changed it, through every parent. So a merge that took the path
+ * as one side held it hands the line to that side, and what the side it discarded
+ * did there is no part of the path's history, where a merge that composed the
+ * path anew changed it. The rule is git's default simplification
+ * (lib/git/revision.c try_to_simplify_commit), asked of one name. For a directory
+ * it is git's own answer for a directory's pathspec: git compares the two trees
+ * beneath the name (rev_compare_tree), and a subtree's id is the parent's own
+ * exactly where nothing beneath it moved, so a commit is TREESAME there exactly
+ * where its subtree is.
  *
  * Two questions of the lines, each its own walk back from a head the caller read
  * once: each of a set of paths' last change, the first change its line meets —
- * no line parts before it (stats_last_changes); and one file's every change,
- * newest first (stats_file_history). A walk reads the commits on the lines and
- * no other, each asking the path of a parent's tree by name: a path the head
+ * no line parts before it (stats_last_changes); and one path's every change,
+ * newest first (stats_path_history). A walk reads the commits on the lines and
+ * no other, each asking the path of a parent's tree by name, and a subtree's
+ * entry is read off the tree above it, never opened (lib/libgit2/src/libgit2/tree.c
+ * git_tree_entry_bypath), so a directory costs what a file does: a path the head
  * changed costs the head, however long the history behind it.
  */
 
@@ -48,14 +53,14 @@ typedef struct {
 } commit_info_t;
 
 /**
- * File history
+ * A path's history
  *
- * The commits that changed one file along its lines, newest first.
+ * The commits that changed one path along its lines, newest first.
  */
 typedef struct {
     commit_info_t *commits;  /* The commits, the arena's */
     size_t count;            /* Number of commits */
-} file_history_t;
+} path_history_t;
 
 /**
  * A commit's info, its summary copied into `arena`
@@ -65,7 +70,7 @@ typedef struct {
  * every change the history walks answer, each branch head a verbose profile row
  * prints (cmds/list.c list_profiles), each head beneath a verbose remote row
  * (cmds/status.c status_print_remote), and each commit a completion offers
- * (cmds/completion.c commits_walk), so a row's commit, a file's and a candidate's
+ * (cmds/completion.c commits_walk), so a row's commit, a path's and a candidate's
  * read alike.
  *
  * @param arena Arena the summary lives in (required)
@@ -116,14 +121,14 @@ error_t stats_blob_size_with_odb(
  * Each of a set of paths' last change
  *
  * Per path, parallel to `paths`: the first change its line meets back from
- * `head_oid` — the commit that made the entry the head holds, or where the head
- * holds none, the one that took the path away — or, where no commit on its line
- * held the path, none: the info zeroed. The names are the caller's: which of a
- * tree's blobs a screen reads is knowledge this layer does not have (the header),
- * so the reader hands in the listing it prints (cmds/list.c list_files). So is
- * the head: the commit the names were listed at, read once by the caller, so
- * the answers and the listing are one snapshot's whatever the branch says by
- * the time they are read — no branch is read here.
+ * `head_oid` — the commit that made the entry the head holds, of whatever type
+ * (the header), or where the head holds none, the one that took the path away —
+ * or, where no commit on its line held the path, none: the info zeroed. The names
+ * are the caller's: which of a tree's blobs a screen reads is knowledge this
+ * layer does not have (the header), so the reader hands in the listing it prints
+ * (cmds/list.c list_files). So is the head: the commit the names were listed
+ * at, read once by the caller, so the answers and the listing are one snapshot's
+ * whatever the branch says by the time they are read — no branch is read here.
  *
  * One walk answers every path. Each path's line carries the entry the head holds
  * there, and waits at the commit it has reached; the newest such commit is read
@@ -156,32 +161,38 @@ error_t stats_last_changes(
 );
 
 /**
- * One file's every change
+ * One path's every change
  *
- * The commits that changed `file_path` along its lines back from `head_oid`,
- * newest first by commit time, each read once however many lines reach it, and
- * none before the child its line came from. None is an answer — `out->count` 0
- * — whose words are the caller's (cmds/list.c list_file_history): a name no commit
- * on its lines held. The head is the caller's, read once, as stats_last_changes'
- * is.
+ * The commits that changed `path` along its lines back from `head_oid`, newest
+ * first by commit time, each read once however many lines reach it, and none
+ * before the child its line came from: a file's changes, or a directory's — each
+ * commit that changed anything beneath it (the header). None is an answer —
+ * `out->count` 0 — whose words are the caller's (cmds/list.c list_path_history):
+ * a name no commit on its lines held. The head is the caller's, read once, as
+ * stats_last_changes' is.
  *
- * Reader: cmds/list.c list_file_history.
+ * The walk reads trees and nothing beside them, so a move only a profile's sheet
+ * records is no change here (core/metadata.h): a claim's mode, its entry unmoved,
+ * and a directory the profile tracks with nothing beneath it, which is no tree's
+ * entry — its history is what its subtree once held, or none.
+ *
+ * Reader: cmds/list.c list_path_history.
  *
  * @param repo Repository (required)
  * @param head_oid The head the history is read back from, read once by the caller
  *                (required)
- * @param file_path File path within tree (required)
+ * @param path A storage path within the tree (required)
  * @param arena Arena the commits and their summaries live in (required)
- * @param out File history (required; left as it was on a failure)
+ * @param out The history (required; left as it was on a failure)
  * @return Error or NULL on success: a commit or a tree its lines need that will
  *         not read fails the history, in Git's words naming the object
  */
-error_t stats_file_history(
+error_t stats_path_history(
     git_repository *repo,
     const git_oid *head_oid,
-    const char *file_path,
+    const char *path,
     arena_t *arena,
-    file_history_t *out
+    path_history_t *out
 );
 
 #endif /* DOTTA_STATS_H */

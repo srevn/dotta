@@ -523,18 +523,18 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * with one list.
  *
  * Readers: the scope, which borrows it as its enabled set and lends it on
- * (core/scope.c scope_build, core/scope.h scope_enabled); show's and list's file
- * arms, which refuse the set they search when it is empty (cmds/show.c cmd_show,
- * cmds/list.c list_file_history); the untracked scan's registration
- * (core/workspace.c workspace_analyze_untracked), where a later profile's tracked
- * directory takes a directory an earlier one stands at, the index's own rule
- * read from the same order; add's ancestry refusal, which asks every profile
- * but the capturing one for its claim at a link (cmds/add.c add_refuse_ancestry);
- * update's named derivation, which asks every profile for an explicit claim where
- * the user's node squats above a leaf (cmds/update.c cmd_update); and update's
- * preview, which asks every profile but the deleting one, the highest first,
- * for its claim where a deletion leaves a path (cmds/update.c
- * update_print_preview).
+ * (core/scope.c scope_build, core/scope.h scope_enabled); show's file arm and
+ * list's history arm, which refuse the set they search when it is empty
+ * (cmds/show.c cmd_show, cmds/list.c list_path_history); the untracked scan's
+ * registration (core/workspace.c workspace_analyze_untracked), where a later
+ * profile's tracked directory takes a directory an earlier one stands at, the
+ * index's own rule read from the same order; add's ancestry refusal, which asks
+ * every profile but the capturing one for its claim at a link (cmds/add.c
+ * add_refuse_ancestry); update's named derivation, which asks every profile for
+ * an explicit claim where the user's node squats above a leaf (cmds/update.c
+ * cmd_update); and update's preview, which asks every profile but the deleting
+ * one, the highest first, for its claim where a deletion leaves a path
+ * (cmds/update.c update_print_preview).
  *
  * Pure value return — no allocation, no error path. The set and its names are
  * the arena's, each name the same pointer its rows carry, valid for the arena's

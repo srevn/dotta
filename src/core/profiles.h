@@ -176,7 +176,7 @@ void profile_order(string_array_t *names);
  *
  * Readers: cmds/ignore.c ignore_test and cmd_ignore (the edit), cmds/bootstrap.c
  * cmd_bootstrap (the names its selection reads), cmds/show.c cmd_show,
- * cmds/export.c cmd_export, cmds/list.c list_files and list_file_history (an
+ * cmds/export.c cmd_export, cmds/list.c list_files and list_path_history (an
  * explicit profile's), cmds/revert.c revert_select_profile (the -p arm), and
  * core/scope.c scope_build, on its filter's refusal path. A verb that acts on
  * both answers — add (open or create), enable's skip, remove's --force arm, the
@@ -266,7 +266,7 @@ typedef struct profile profile_t;
  * Readers: core/manifest.c manifest_build (the tree of each enabled head
  * gitops_branch_commit found), cmds/revert.c cmd_revert (its target commit's),
  * cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c cmd_export,
- * cmds/show.c cmd_show and cmds/list.c list_file_history (the tree the verb
+ * cmds/show.c cmd_show and cmds/list.c list_path_history (the tree the verb
  * selected), cmds/list.c list_profiles and list_files (the tree of the head each
  * listing read, so what each prints is that commit's), cmds/remove.c remove_profile
  * (the tree of the head its deletion is from: every claim for its hooks, the
@@ -624,11 +624,13 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target);
  * export_collect_filesystem, which adds why where some of the profile's claims
  * stand nowhere here), and an argument as typed that reaches no claim of the
  * profile's (cmds/remove.c remove_resolve). The other answers are each verb's
- * own: show, revert and list, which act on one file, refuse a DIRECTORY or a
- * SUBMODULE by its noun, and list reads NOTHING as a deleted file whose history
- * it searches (cmds/list.c list_file_history). A merge's content conflict names
- * each side's answer where the two differ in what they are — a file, a symlink,
- * a directory, a submodule, and none for NOTHING (cmds/sync.c sync_entry_noun).
+ * own: show and revert, which act on one file, refuse a DIRECTORY or a SUBMODULE
+ * by its noun; list, which shows a path's history, walks a DIRECTORY as it does
+ * a FILE, refuses a SUBMODULE by its noun, and reads NOTHING as a path the head
+ * lacks, whose history it searches (cmds/list.c list_path_history). A merge's
+ * content conflict names each side's answer where the two differ in what they
+ * are — a file, a symlink, a directory, a submodule, and none for NOTHING
+ * (cmds/sync.c sync_entry_noun).
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */
@@ -717,7 +719,7 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * that wants the entry asks profile_entry. `out` is written on success alone.
  *
  * Readers: the verbs that act on one name — cmds/show.c show_file, cmds/list.c
- * list_file_history (the history's pre-check), cmds/revert.c revert_target_claim
+ * list_path_history (the history's pre-check), cmds/revert.c revert_target_claim
  * — the search by name across the local profiles (cmds/revert.c
  * revert_select_profile), export's name arm, which words a copy with nothing in
  * it by what stands at the name (cmds/export.c export_collect_storage), and

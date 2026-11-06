@@ -31,7 +31,9 @@
  *   3. Exclude patterns   — CLI -e <patterns>            (optional)
  *
  * Constructed once per command via scope_build; consulted many times via predicates
- * that replace the per-iteration triplet of `continue` guards at filter sites.
+ * that replace the per-iteration triplet of `continue` guards at filter sites;
+ * and asked, entry by entry, what its path filter reached among the subjects a
+ * verb hands it (scope_coverage_t).
  *
  * Vocabulary
  * ----------
@@ -48,15 +50,15 @@
  *              matcher over the two keys a managed path has: its filesystem path
  *              and its storage path (infra/pathspec). Exposed for diff, which
  *              selects a commit range delta by delta, compares a commit's view
- *              under it, and answers the filter's coverage over the view each
- *              arm compares (pathspec_entry_at, pathspec_entry_matches_at), for
- *              apply's count line (pathspec_count), and for update's named
- *              re-derivation, which asks it of each rung of the chains it climbs
- *              (core/profiles.h profile_derive_ancestors); none of them has a
- *              profile or exclude semantics to honor — the rungs above a leaf
- *              the scope accepted are in no -e's way, an excluded directory
- *              excluding everything beneath it. In-workspace sites should prefer
- *              scope_accepts_path.
+ *              under it, and counts its entries against the coverage's misses,
+ *              for apply's count line — both through pathspec_count — and for
+ *              update's named re-derivation, which asks it of each rung of the
+ *              chains it climbs (core/profiles.h profile_derive_ancestors); none
+ *              of them has a profile or exclude semantics to honor — the rungs
+ *              above a leaf the scope accepted are in no -e's way, an excluded
+ *              directory excluding everything beneath it. In-workspace sites
+ *              should prefer scope_accepts_path, and what each entry reached is
+ *              the coverage's to answer, -p read beside it (scope_coverage_t).
  *
  * The CRITICAL invariant — load the enabled set, never the filter — is enforced
  * by construction: the workspace never takes a profile list — the view it joins
@@ -438,16 +440,17 @@ const string_array_t *scope_profiles(const scope_t *s);
  * Raw path filter (NULL when no positional path args were given).
  *
  * Consumers that read the filter itself — diff (a commit range selected delta
- * by delta, a commit's view compared under it, the coverage answers over the
- * compiled entries: cmds/diff.c diff_select_delta_cb, diff_print_view,
- * diff_validate_filter) and apply's count line (cmds/apply.c cmd_apply) — use
- * this with the pathspec accessors (pathspec_count / pathspec_entry_at /
- * pathspec_entry_matches_at); update's named re-derivation hands it to the draft,
- * which asks it of each rung of the chains it climbs (cmds/update.c cmd_update,
- * core/profiles.h profile_derive_ancestors); and update's partition asks it of
- * a place the scan could not look, whether a path it may select lies beneath
- * (cmds/update.c update_partition, infra/pathspec.h pathspec_matches_beneath).
- * Per-iteration checks of a path itself should use scope_accepts_path instead.
+ * by delta, a commit's view compared under it, the entries counted against the
+ * coverage's misses: cmds/diff.c diff_select_delta_cb, diff_print_view,
+ * diff_write_view, diff_print_coverage) and apply's count line (cmds/apply.c
+ * cmd_apply), the last two through pathspec_count; update's named re-derivation
+ * hands it to the draft, which asks it of each rung of the chains it climbs
+ * (cmds/update.c cmd_update, core/profiles.h profile_derive_ancestors); and
+ * update's partition asks it of a place the scan could not look, whether a path
+ * it may select lies beneath (cmds/update.c update_partition, infra/pathspec.h
+ * pathspec_matches_beneath). Per-iteration checks of a path itself should use
+ * scope_accepts_path instead, and what each entry reached is the coverage's to
+ * answer (scope_coverage_t).
  *
  * Borrowed from the scope.
  */
@@ -546,5 +549,94 @@ bool scope_accepts_entry(
     const char *storage_path,
     path_kind_t kind
 );
+
+/* -------------------------------------------------------------------- */
+/* The path filter's coverage                                           */
+/* -------------------------------------------------------------------- */
+
+/**
+ * A path filter's coverage: what each of its entries reached among the subjects
+ * a verb hands it
+ *
+ * One question per entry: did it reach a subject of the verb's universe? Each
+ * entry is asked alone — an exact one by equality or ancestry, a rule at any
+ * rung, either polarity (infra/pathspec.h pathspec_entry_matches) — so no entry's
+ * negation folds into another's answer, and a negation that left a subject out
+ * has reached it. A subject of the run's profiles (scope_accepts_profile) answers
+ * the entry; one of a profile -p leaves out answers nothing, and the first such
+ * an entry reached is kept, so an entry whose subjects were all hidden says whose
+ * the first was. -e plays no part: what a flag withholds counts as reached.
+ *
+ * Each verb names its universe, hands its subjects in one at a time, in the one
+ * shape every subject has whatever the verb holds it as — a profile, two names
+ * and a kind (scope_coverage_add) — and words the misses itself. Readers:
+ * cmds/diff.c diff_validate_filter, over a view's rows. A reader not on this
+ * list is a bug.
+ *
+ * A value of the arena it was made in, the misses with it; nothing frees one.
+ */
+typedef struct scope_coverage scope_coverage_t;
+
+/**
+ * An entry no subject of the run's profiles reached
+ */
+typedef struct {
+    pathspec_entry_t entry;          /* The entry, as typed */
+    const char *hidden;              /* The profile -p left out whose subject it reached first; NULL: none reached */
+} scope_miss_t;
+
+/**
+ * The misses, in the path filter's order
+ */
+typedef struct {
+    const scope_miss_t *entries;
+    size_t count;
+} scope_misses_t;
+
+/**
+ * A coverage of the scope's path filter, no entry reached yet
+ *
+ * Under no path filter there is nothing to reach: scope_coverage_add answers
+ * false at once, and the misses are none.
+ *
+ * @param s     The scope whose filters every subject is asked under (must not
+ *              be NULL; borrowed for the coverage's life)
+ * @param arena Arena the coverage and its misses live in (must not be NULL)
+ * @return The coverage; never NULL
+ */
+scope_coverage_t *scope_coverage_create(const scope_t *s, arena_t *arena);
+
+/**
+ * Hand the coverage one subject of the verb's universe
+ *
+ * The subject in the shape scope_accepts_entry reads one: each entry no subject
+ * of the run's profiles reached yet is asked of its names and kind, and one that
+ * matches is reached where the profile is the run's, else keeps the profile where
+ * it kept none before.
+ *
+ * @param c               The coverage (must not be NULL)
+ * @param profile         The subject's profile (borrowed: a miss lends it on)
+ * @param filesystem_path Where the subject stands (NULL: no filesystem entry
+ *                        reads it)
+ * @param storage_path    The subject's name (NULL: no storage entry reads it)
+ * @param kind            What the subject is, as scope_accepts_path reads it
+ * @return Whether an entry is left to reach — false once every one is, and at
+ *         once under no filter, so a verb may stop handing subjects in
+ */
+bool scope_coverage_add(
+    scope_coverage_t *c,
+    const char *profile,
+    const char *filesystem_path,
+    const char *storage_path,
+    path_kind_t kind
+);
+
+/**
+ * The entries no subject of the run's profiles reached, in the path filter's order
+ *
+ * @param c The coverage (must not be NULL)
+ * @return The misses, in the coverage's arena; none under no filter
+ */
+scope_misses_t scope_coverage_misses(const scope_coverage_t *c);
 
 #endif /* DOTTA_SCOPE_H */

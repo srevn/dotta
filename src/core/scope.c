@@ -429,3 +429,83 @@ bool scope_accepts_entry(
            && scope_accepts_path(s, filesystem_path, storage_path, kind)
            && !scope_is_excluded(s, storage_path, kind);
 }
+
+/* -------------------------------------------------------------------- */
+/* The path filter's coverage                                           */
+/* -------------------------------------------------------------------- */
+
+/**
+ * Internal coverage representation.
+ *
+ * Two answers per entry of the path filter, in its order — two arrays as long
+ * as the filter is, none under no filter: whether a subject of the run's profiles
+ * reached the entry, and else the profile -p left out whose subject it reached
+ * first. A value of the arena it was made in, the misses made there too.
+ */
+struct scope_coverage {
+    const scope_t *scope;               /* The filters every subject is asked under */
+    arena_t *arena;                     /* Where the misses are made */
+    bool *reached;                      /* Per entry: a subject of the run's profiles reached it */
+    const char **hidden;                /* Per entry: else the profile -p left out whose subject it reached first */
+    size_t count;                       /* How many entries: the path filter's */
+    size_t remaining;                   /* How many no subject of the run's profiles reached yet */
+};
+
+scope_coverage_t *scope_coverage_create(const scope_t *s, arena_t *arena) {
+    CHECK_NULL(s);
+    CHECK_NULL(arena);
+
+    scope_coverage_t *c = arena_calloc(arena, 1, sizeof(*c));
+    c->scope = s;
+    c->arena = arena;
+    c->count = pathspec_count(s->paths);
+    c->remaining = c->count;
+    c->reached = arena_calloc(arena, c->count, sizeof(*c->reached));
+    c->hidden = arena_calloc(arena, c->count, sizeof(*c->hidden));
+
+    return c;
+}
+
+bool scope_coverage_add(
+    scope_coverage_t *c, const char *profile, const char *filesystem_path,
+    const char *storage_path, path_kind_t kind
+) {
+    CHECK_NULL(c);
+
+    /* Each entry alone, and only one no subject of the run's profiles reached
+     * yet: a match is the entry's work whatever the subject's profile, and -p
+     * decides whether it answers the entry or only names whose subject it
+     * reached */
+    for (size_t i = 0; i < c->count; i++) {
+        if (c->reached[i] || !pathspec_entry_matches(
+            c->scope->paths, i, filesystem_path, storage_path, kind
+            )) {
+            continue;
+        }
+
+        if (scope_accepts_profile(c->scope, profile)) {
+            c->reached[i] = true;
+            c->remaining--;
+        } else if (!c->hidden[i]) {
+            c->hidden[i] = profile;
+        }
+    }
+
+    return c->remaining > 0;
+}
+
+scope_misses_t scope_coverage_misses(const scope_coverage_t *c) {
+    CHECK_NULL(c);
+
+    /* Each entry left unreached, as typed and with the profile kept for it */
+    scope_miss_t *misses = arena_calloc(c->arena, c->remaining, sizeof(*misses));
+    size_t count = 0;
+    for (size_t i = 0; i < c->count; i++) {
+        if (c->reached[i]) continue;
+        misses[count++] = (scope_miss_t){
+            .entry = pathspec_entry(c->scope->paths, i), .hidden = c->hidden[i]
+        };
+    }
+
+    return (scope_misses_t){ .entries = misses, .count = count };
+}

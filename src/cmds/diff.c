@@ -988,8 +988,8 @@ static bool diff_vouched(
     const manifest_row_t *row, const state_record_t *record, const struct stat *st
 ) {
     return workspace_base(record) &&
-        workspace_compare_confirmed(row, record) == CMP_EQUAL &&
-        state_stat_matches(record, st);
+           workspace_compare_confirmed(row, record) == CMP_EQUAL &&
+           state_stat_matches(record, st);
 }
 
 /**
@@ -1296,89 +1296,100 @@ static error_t diff_write_view(
 }
 
 /**
- * Validate path filter entries against a view
+ * Say what the path filter's entries missed, and whether any reached a path
  *
- * Asks each filter entry alone — an exact path by equality or ancestry, a pattern
- * by whether it matches at any rung, either polarity — against the view's rows,
- * each by both its names (the entry reads the one in its own vocabulary) and by
- * its own kind, read off its type. An entry that reaches a row has something to
- * compare, a directory row as a file row, and is not answered. One that reaches
- * nothing — which likely indicates a typo — is warned in the words of what the
- * view's paths are: the enabled view's are active paths, a commit's are the
- * commit's, and a miss in one says nothing of the other.
+ * One block, its boundary asked by its first line: each entry no path of the
+ * arm's own reached (core/scope.h scope_coverage_misses) — which likely indicates
+ * a typo — warned in the words of what the arm's paths are: the enabled view's
+ * are active paths, a commit's are the commit's, and a miss in one says nothing
+ * of the other. An entry that reached only paths of a profile -p leaves out names
+ * the first one's profile.
  *
- * Per-entry attribution matters here: the combined program folds one pattern's
- * negation into another's verdict and would under-count coverage on overlap;
- * and a negation that excluded something has done its work, so it is not called
- * "matches nothing" (pathspec_entry_matches_at).
+ * @param out Output context for the answers
+ * @param scope The run's scope, whose path filter's entries the misses are counted
+ *              against (must not be NULL)
+ * @param coverage The arm's coverage, its paths handed in (must not be NULL)
+ * @param what What the arm's paths are on the screen (must not be NULL)
+ * @return false where no entry reached a path — nothing under the filter can
+ *         diff, and the answers are the whole report; true otherwise, and always
+ *         under no filter
+ */
+static bool diff_print_coverage(
+    output_t *out, const scope_t *scope, const scope_coverage_t *coverage, const char *what
+) {
+    scope_misses_t misses = scope_coverage_misses(coverage);
+    if (misses.count > 0) output_gap(out, OUTPUT_NORMAL);
+
+    for (size_t i = 0; i < misses.count; i++) {
+        const scope_miss_t *miss = &misses.entries[i];
+        if (miss->hidden) {
+            output_warning(
+                out, OUTPUT_NORMAL, "No %s matches %s'%s' (%s's, hidden by the profile filter)",
+                what, miss->entry.rule ? "pattern " : "", miss->entry.text, miss->hidden
+            );
+        } else {
+            output_warning(
+                out, OUTPUT_NORMAL, "No %s matches %s'%s'", what,
+                miss->entry.rule ? "pattern " : "", miss->entry.text
+            );
+        }
+    }
+
+    return misses.count == 0 || misses.count < pathspec_count(scope_paths(scope));
+}
+
+/**
+ * Answer the path filter's coverage over a view
+ *
+ * Every row of the view handed to the scope's coverage (core/scope.h
+ * scope_coverage_add) — by both its names, each entry reading the one in its
+ * own vocabulary, and by its own kind, read off its type — until every entry
+ * has reached one; then the misses said (diff_print_coverage). An entry that
+ * reaches a row has something to compare, a directory row as a file row, and is
+ * not answered.
  *
  * One implementation serves both arms that compare against a view: the commit
  * arm's is the one manifest_build_profile computes from the profile at the commit,
- * the workspace arm's the one the dispatcher built and the workspace joins.
- * Coverage is a question about the view alone — nothing here takes a look — so
- * each arm asks it before anything is compared: an entry is answered beside a
- * diff as well as in place of one, and the answer is the same under --name-only.
- * The commit arm compares a file row's content and kind alone (diff_print_view),
- * so an entry reaching only directory rows finds no difference in scope there,
- * their claims uncompared as every claim is in that arm (stated).
+ * a profile -p names where it names any, so no row of it is hidden; the workspace
+ * arm's the one the dispatcher built and the workspace joins, whose rows of a
+ * profile -p leaves out answer nothing. Coverage is a question about the view
+ * alone — nothing here takes a look — so each arm asks it before anything is
+ * compared or printed: an entry is answered beside a diff as well as in place
+ * of one, and the answer is the same under --name-only. The commit arm compares
+ * a file row's content and kind alone (diff_print_view), so an entry reaching
+ * only directory rows finds no difference in scope there, their claims uncompared
+ * as every claim is in that arm (stated).
  *
- * @param path_filter Path filter to validate (NULL = no filter, nothing to answer)
+ * @param scope The run's scope: its path filter, and -p beside it (must not be
+ *              NULL)
  * @param view The view the arm compares against (must not be NULL)
  * @param what What the view's paths are on the screen: "active path" for the
  *             enabled view, "path of the commit" for one commit's (must not be
  *             NULL)
+ * @param arena Arena the coverage lives in: the command's (must not be NULL)
  * @param out Output context for the answers
  * @return false where no entry reaches a row — nothing under the filter can diff,
  *         and the answers are the whole report; true otherwise, and always under
  *         no filter
  */
 static bool diff_validate_filter(
-    const pathspec_t *path_filter, const manifest_t *view, const char *what,
+    const scope_t *scope, const manifest_t *view, const char *what, arena_t *arena,
     output_t *out
 ) {
-    if (!path_filter) return true;
-
-    /* The answers are one block, whichever entries earn one: one boundary above
-     * them all, paid by the first to print */
-    output_gap(out, OUTPUT_NORMAL);
+    scope_coverage_t *coverage = scope_coverage_create(scope, arena);
 
     manifest_rows_t rows = manifest_rows(view);
-    size_t covered = 0;     /* Entries reaching a row; each of the rest is warned */
-
-    for (size_t e = 0; e < pathspec_count(path_filter); e++) {
-        /* The row the entry reaches, of either kind: the first ends the search */
-        const manifest_row_t *reached = NULL;
-        for (size_t i = 0; i < rows.count; i++) {
-            const manifest_row_t *row = rows.entries[i];
-            if (pathspec_entry_matches_at(
-                path_filter, e, row->filesystem_path, row->storage_path,
-                path_type_kind(row->type)
-                )) {
-                reached = row;
-                break;
-            }
-        }
-
-        /* Something to compare, and nothing to say */
-        if (reached) {
-            covered++;
-            continue;
-        }
-
-        /* No row at all is warned */
-        pathspec_entry_t entry = pathspec_entry_at(path_filter, e);
-        if (entry.rule) {
-            output_warning(
-                out, OUTPUT_NORMAL, "No %s matches pattern '%s'", what, entry.text
-            );
-        } else {
-            output_warning(
-                out, OUTPUT_NORMAL, "No %s matches '%s'", what, entry.text
-            );
+    for (size_t i = 0; i < rows.count; i++) {
+        const manifest_row_t *row = rows.entries[i];
+        if (!scope_coverage_add(
+            coverage, row->profile, row->filesystem_path, row->storage_path,
+            path_type_kind(row->type)
+            )) {
+            break;
         }
     }
 
-    return covered > 0;
+    return diff_print_coverage(out, scope, coverage, what);
 }
 
 /**
@@ -1392,7 +1403,10 @@ static bool diff_validate_filter(
  * where it names any (core/scope.h scope_resolve_commit): -p is how a spelling
  * every profile holds — HEAD, HEAD~N — names the profile it means, as `show -p`
  * names it, and a commit of a profile -p left out is not found. The path filter
- * is derived from scope_paths (raw CLI positional args, never narrowed).
+ * is derived from scope_paths (raw CLI positional args, never narrowed), and
+ * its coverage over the commit's view is answered before anything else is printed,
+ * a filter under which nothing can diff ending the diff at its answers
+ * (diff_validate_filter).
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, and the borrowed command arena that backs
@@ -1474,25 +1488,29 @@ static error_t diff_commit_to_workspace(
     if (err) goto cleanup;
 
     /* Step 5: What the run prints, chosen once its facts are in hand, so a commit
-     * whose tree or sheet will not read is refused with nothing above it. Each
-     * form answers the filter's coverage over the commit's view before anything
-     * is compared, as the workspace arm answers it over its own: where no entry
-     * reaches a row, nothing can diff, and the answers are the whole report. */
+     * whose tree or sheet will not read is refused with nothing above it. First
+     * the filter's coverage over the commit's view, before anything is compared,
+     * as the workspace arm answers it over its own: where no entry reaches a
+     * row, nothing can diff, and the answers are the whole report. */
+    if (!diff_validate_filter(scope, historical, "path of the commit", arena, out)) {
+        goto cleanup;
+    }
+
     switch ((diff_form_t) opts->form) {
         case DIFF_FORM_RAW:
             /* libgit2's patches alone, for a program */
-            if (diff_validate_filter(path_filter, historical, "path of the commit", out)) {
-                err = diff_write_view(
-                    historical, path_filter, cache, records, record_count, out
-                );
-            }
+            err = diff_write_view(
+                historical, path_filter, cache, records, record_count, out
+            );
             break;
 
         case DIFF_FORM_NAMES:
         case DIFF_FORM_PATCH:
             /* Warn when more than one profile was searched: only the profile
-             * containing the commit is compared against the filesystem. */
+             * containing the commit is compared against the filesystem. A block
+             * of its own, beneath the coverage's answers where any stand. */
             if (searched->count > 1) {
+                output_gap(out, OUTPUT_NORMAL);
                 output_info(
                     out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
                     "(commit-to-workspace compares one profile at a time)", name
@@ -1508,11 +1526,9 @@ static error_t diff_commit_to_workspace(
             diff_print_commit(out, commit, name);
 
             /* The comparison saying its own empty line */
-            if (diff_validate_filter(path_filter, historical, "path of the commit", out)) {
-                err = diff_print_view(
-                    historical, path_filter, opts, cache, records, record_count, out
-                );
-            }
+            err = diff_print_view(
+                historical, path_filter, opts, cache, records, record_count, out
+            );
             break;
     }
 
@@ -1668,7 +1684,7 @@ static error_t diff_commits(
      * selection is borrowed for the call: libgit2 reads the payload only while
      * generating. */
     diff_selection_t selection = {
-        .filter = path_filter, .mounts = mounts, .profile = profile, .arena  = arena
+        .filter = path_filter, .mounts = mounts, .profile = profile, .arena = arena
     };
     git_diff_options diff_opts;
     git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
@@ -1781,9 +1797,10 @@ static error_t diff_workspace(
     output_t *out = ctx->out;
 
     /* Step 1: The filter's coverage over the view — the one the workspace joins,
-     * and all the question needs. Where no entry reaches a row, nothing can diff,
-     * the answers are the whole report, and no workspace is loaded. */
-    if (!diff_validate_filter(scope_paths(scope), manifest, "active path", out)) {
+     * and all the question needs, a row of a profile -p leaves out reaching no
+     * entry. Where no entry reaches a row, nothing can diff, the answers are
+     * the whole report, and no workspace is loaded. */
+    if (!diff_validate_filter(scope, manifest, "active path", arena, out)) {
         return NULL;
     }
 
@@ -1859,8 +1876,10 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
      *   scope_profiles — the profiles that search asks: -p's where it names any
      *                    (scope_filters_profiles), else the enabled set.
      *   scope_paths    — CLI positional path filter (the range arm's delta
-     *                    selection, the commit arm's comparison, and the coverage
-     *                    answers both arms with a view give).
+     *                    selection, the commit arm's comparison).
+     *   the coverage   — each entry of that filter answered alone over the view
+     *                    an arm compares, -p read beside it (scope_coverage_t,
+     *                    diff_validate_filter).
      *   the predicates — the workspace arm's presentation (scope_accepts_path,
      *                    scope_accepts_profile) and what its empty line claims
      *                    (scope_filters_profiles, scope_filters_paths).

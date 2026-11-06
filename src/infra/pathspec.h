@@ -27,8 +27,8 @@
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *
  * The pathspec is opaque. The compiled entries are read in insertion order by
- * the coverage answers (cmds/diff.c diff_validate_filter), which ask each entry
- * alone whether it matches a subject (pathspec_entry_matches_at).
+ * the scope's coverage (core/scope.h scope_coverage_t), which asks each entry
+ * alone whether it matches a subject (pathspec_entry_matches).
  */
 
 #ifndef DOTTA_PATHSPEC_H
@@ -41,10 +41,10 @@
 typedef struct pathspec pathspec_t;
 
 /**
- * One compiled input, as the coverage answers read it: the input as typed, and
- * whether it is a rule. The input is the one honest echo — a filesystem rule is
- * an anchor and a tail and has no one compiled string — and it is what the user
- * wrote. Borrowed; lives with the pathspec.
+ * One compiled input, as the coverage reads it: the input as typed, and whether
+ * it is a rule. The input is the one honest echo — a filesystem rule is an anchor
+ * and a tail and has no one compiled string — and it is what the user wrote.
+ * Borrowed; lives with the pathspec.
  */
 typedef struct {
     const char *text;
@@ -203,20 +203,20 @@ size_t pathspec_count(const pathspec_t *spec);
  * exact duplicates collapsed into the first. `i` MUST be < pathspec_count(spec);
  * an `i` out of bounds is a caller's bug, and the run dies of it (CHECK_ARG).
  */
-pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i);
+pathspec_entry_t pathspec_entry(const pathspec_t *spec, size_t i);
 
 /**
- * The entry alone, for coverage attribution (cmds/diff.c diff_validate_filter):
- * an exact entry by equality or ancestry in its vocabulary; a rule by whether
- * it matches the subject of its vocabulary at any rung, by its pattern or its
- * own spelling — either polarity, so a negation that excluded something is not
- * reported as matching nothing. `kind` as for pathspec_matches; a subject the
- * caller has no name for is NULL, and an entry of that vocabulary answers false.
+ * The entry alone, for the coverage (core/scope.h scope_coverage_add): an exact
+ * entry by equality or ancestry in its vocabulary; a rule by whether it matches
+ * the subject of its vocabulary at any rung, by its pattern or its own spelling
+ * — either polarity, so a negation that excluded something is not reported as
+ * matching nothing. `kind` as for pathspec_matches; a subject the caller has no
+ * name for is NULL, and an entry of that vocabulary answers false.
  *
  * Returns false for a NULL pathspec. `i` MUST be < pathspec_count(spec); an `i`
  * out of bounds is a caller's bug, and the run dies of it (CHECK_ARG).
  */
-bool pathspec_entry_matches_at(
+bool pathspec_entry_matches(
     const pathspec_t *spec,
     size_t i,
     const char *filesystem_path,

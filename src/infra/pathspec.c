@@ -441,14 +441,14 @@ size_t pathspec_count(const pathspec_t *spec) {
     return spec ? spec->count : 0;
 }
 
-pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i) {
+pathspec_entry_t pathspec_entry(const pathspec_t *spec, size_t i) {
     CHECK_NULL(spec);
     CHECK_ARG(i < spec->count, "i is past the pathspec's entries");
     const entry_t *e = &spec->entries[i];
     return (pathspec_entry_t){ .text = e->text, .rule = e->rule != NULL };
 }
 
-bool pathspec_entry_matches_at(
+bool pathspec_entry_matches(
     const pathspec_t *spec,
     size_t i,
     const char *filesystem_path,

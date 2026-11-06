@@ -106,12 +106,12 @@
  *
  * An orphan whose own note displaces orphans the run does not reach — out of
  * scope, or spared by -e — waits for a run that reaches them all (`displacing`):
- * counted for a path filter's match, said at -v alone (stated), never touched.
- * The note lasts only as long as the orphan's record, so released alone that
- * record would take with it what keeps a later load from looking through its
- * node at them, and pruning there (core/workspace.h workspace_displaced_orphans).
- * Asked after -e and --keep-orphans, each of which leaves it alone already; a
- * run that reaches them all settles it with them.
+ * said at -v alone (stated), never touched. The note lasts only as long as the
+ * orphan's record, so released alone that record would take with it what keeps
+ * a later load from looking through its node at them, and pruning there
+ * (core/workspace.h workspace_displaced_orphans). Asked after -e and
+ * --keep-orphans, each of which leaves it alone already; a run that reaches them
+ * all settles it with them.
  *
  * A landing's orphan is no orphan cleanup settles: dotta's node above a row
  * (WORKSPACE_STATE_OBSTRUCTING), whose place the landing of the rows beneath it
@@ -173,23 +173,6 @@ cleanup_plan_t *cleanup_plan_build(
  */
 static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
     return plan->files.count == 0 && plan->directories.count == 0;
-}
-
-/**
- * How many items the plan classified — both kinds, every bucket
- *
- * Distinct from cleanup_plan_is_empty, which counts only *work*: a plan of nothing
- * but spared, kept or waiting items is empty there and non-zero here. Apply reads
- * this beside deploy_plan_item_count — which counts the landing's orphans — to
- * tell a path filter that named nothing dotta manages from one whose paths are
- * all spared, kept or waiting: an orphan the filter found is a match, whatever
- * its verdict and whatever leaves it alone.
- *
- * The bucket set lives here so a consumer never has to enumerate it.
- */
-static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
-    return plan->files.count + plan->directories.count + plan->excluded.count +
-           plan->kept.count + plan->displacing.count;
 }
 
 /* ── Verdicts ─────────────────────────────────────────────────────── */

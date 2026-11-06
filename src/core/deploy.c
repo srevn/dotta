@@ -452,8 +452,7 @@ deploy_plan_t *deploy_plan_build(
     /* Each orphan's place, once every row has asked for it: one no row of the
      * run reaches, outside its own scope too, is invisible, as every out-of-scope
      * item is. The rest go where the user's word spares them; else, unreached,
-     * to wait for a run that reaches them — counted for the path filter's match
-     * either way (deploy_plan_item_count); else, reached, dotta's node to the
+     * to wait for a run that reaches them; else, reached, dotta's node to the
      * nodes the run's rows replace, and a copy to no bucket: its row's clearance
      * decides it at preflight, or the row's own skip keeps it standing */
     for (size_t i = 0; i < node_count; i++) {

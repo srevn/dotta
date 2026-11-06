@@ -2491,8 +2491,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *   scope_profiles — operation face (the verbose listing, hook context).
      *
      *   scope_filters_profiles / scope_filters_paths / scope_paths — the build's
-     *                    shape, for the wording of the no-match warning and the
-     *                    nothing-to-do exit.
+     *                    shape, for the verbose path count and the nothing-to-do
+     *                    exit.
+     *   the coverage   — each path argument answered alone over the managed
+     *                    paths, -p read beside it (scope_coverage_t).
      *
      * The per-iteration predicates are the two planners' (deploy_plan_build,
      * cleanup_plan_build): apply reads the scope through the plans and applies
@@ -2876,9 +2878,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Whatever the filter, an orphan whose own note displaces orphans the filter
      * leaves out waits with them (core/cleanup.h cleanup_plan_t).
      *
-     * --keep-orphans keeps every orphan in scope -e does not spare: counted for
-     * the filter's match and reported, decided by no stage. The plan's kept bucket
-     * is what every later stage reads, so none re-encodes the flag. */
+     * --keep-orphans keeps every orphan in scope -e does not spare: reported,
+     * decided by no stage. The plan's kept bucket is what every later stage reads,
+     * so none re-encodes the flag. */
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning cleanup...\n");
 
@@ -2921,15 +2923,54 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Warn if a path filter was given but matched no managed path at all (what
-     * a flag withholds counts as matched — the filter found it). Asked after
-     * both planners: a path can name an orphan as well as an active row, and
-     * finding either is a match. */
-    if (scope_filters_paths(scope) && deploy_plan_item_count(deploy_plan) == 0 &&
-        cleanup_plan_item_count(cleanup_plan) == 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "No matching paths found in enabled profiles"
-        );
+    /* Each path argument answered alone, over apply's universe, the managed paths:
+     * the workspace's items, active and orphaned, whatever bucket a plan holds
+     * each in — so what a flag withholds counts as reached, and an entry that
+     * reached only what -p leaves out names the first one's profile (core/scope.h
+     * scope_coverage_t). One block, its boundary asked by its first line. */
+    {
+        scope_coverage_t *coverage = scope_coverage_create(scope, ctx->arena);
+
+        workspace_items_t active = workspace_active(ws);
+        for (size_t i = 0; i < active.count; i++) {
+            const workspace_item_t *item = active.entries[i];
+            if (!scope_coverage_add(
+                coverage, item->profile, item->filesystem_path, item->storage_path,
+                item->item_kind
+                )) {
+                break;
+            }
+        }
+
+        workspace_items_t orphans = workspace_orphans(ws);
+        for (size_t i = 0; i < orphans.count; i++) {
+            const workspace_item_t *item = orphans.entries[i];
+            if (!scope_coverage_add(
+                coverage, item->profile, item->filesystem_path, item->storage_path,
+                item->item_kind
+                )) {
+                break;
+            }
+        }
+
+        scope_misses_t misses = scope_coverage_misses(coverage);
+        if (misses.count > 0) output_gap(out, OUTPUT_NORMAL);
+
+        for (size_t i = 0; i < misses.count; i++) {
+            const scope_miss_t *miss = &misses.entries[i];
+            if (miss->hidden) {
+                output_warning(
+                    out, OUTPUT_NORMAL,
+                    "No managed path matches %s'%s' (%s's, hidden by the profile filter)",
+                    miss->entry.rule ? "pattern " : "", miss->entry.text, miss->hidden
+                );
+            } else {
+                output_warning(
+                    out, OUTPUT_NORMAL, "No managed path matches %s'%s'",
+                    miss->entry.rule ? "pattern " : "", miss->entry.text
+                );
+            }
+        }
     }
 
     /* The profile reassignments the run acknowledges, named by the writers that

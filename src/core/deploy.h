@@ -742,12 +742,11 @@ typedef struct {
 /**
  * The landing's orphans in scope that no landing of this run removes, by why
  *
- * Dotta's nodes above rows and the copies beneath blob rows alike. Counted for
- * a path filter's match (deploy_plan_item_count), reported where a flag of the
- * user's spared one (cmds/apply.c apply_print_withheld), never touched. One a
- * flag spares keeps the row in its way from landing (deploy_partition_t's
- * skipped_kept), and the rest of that row's way waits with it; one no row of
- * the run reaches waits for a run that lands one.
+ * Dotta's nodes above rows and the copies beneath blob rows alike. Reported where
+ * a flag of the user's spared one (cmds/apply.c apply_print_withheld), never
+ * touched. One a flag spares keeps the row in its way from landing
+ * (deploy_partition_t's skipped_kept), and the rest of that row's way waits with
+ * it; one no row of the run reaches waits for a run that lands one.
  */
 typedef struct {
     workspace_items_t excluded;    /* -e names it */
@@ -1029,11 +1028,10 @@ typedef struct {
  * a blob row is that row's landing's, whoever's copy it is. A node a row reaches
  * is the plan's to replace (nodes); a copy a row reaches is no bucket's, that
  * row's clearance deciding it at preflight, or the row's own skip keeping it.
- * One in scope that no row reaches waits for a run that lands one (unreached),
- * counted for a path filter's match. The user's word spares one, and with it
- * the row in its way that would otherwise be work (SKIP_KEPT): -e naming the
- * orphan, the named path first, else --keep-orphans. A spared one is reported,
- * never touched (deploy_ceded_t).
+ * One in scope that no row reaches waits for a run that lands one (unreached).
+ * The user's word spares one, and with it the row in its way that would otherwise
+ * be work (SKIP_KEPT): -e naming the orphan, the named path first, else
+ * --keep-orphans. A spared one is reported, never touched (deploy_ceded_t).
  *
  * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace with divergence analysis (must not be NULL)
@@ -1066,38 +1064,6 @@ deploy_plan_t *deploy_plan_build(
  */
 static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
     return plan->files.pending.count == 0 && plan->directories.pending.count == 0;
-}
-
-/**
- * How many items the plan classified — both kinds and the landing's orphans,
- * every bucket
- *
- * Distinct from deploy_plan_is_empty, which counts only *work*: a plan of nothing
- * but clean items is empty there and non-zero here. Apply reads this to tell a
- * path filter that named nothing dotta manages from one whose paths are all
- * converged or skipped already — or name a landing's orphan, which waits for a
- * run that lands the row in its way.
- *
- * The bucket set lives here so a consumer never has to enumerate it. An item
- * that is both clean and excluded lands in no bucket at all, nor does an ancestor
- * claim (see deploy_partition_t), so a scope of only such items counts zero;
- * nor does a copy a row of the run reaches, the row counted in its own bucket.
- */
-static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
-    const deploy_partition_t *kinds[] = { &plan->files, &plan->directories };
-    size_t total = plan->nodes.count + plan->ceded.excluded.count +
-        plan->ceded.kept.count + plan->ceded.unreached.count;
-
-    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
-        const deploy_partition_t *part = kinds[i];
-
-        total += part->pending.count;
-        total += part->clean.count;
-        total += part->excluded.count;
-        total += part->skipped_existing.count;
-        total += part->skipped_kept.count;
-    }
-    return total;
 }
 
 /**

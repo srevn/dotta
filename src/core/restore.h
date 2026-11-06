@@ -37,14 +37,15 @@ typedef struct profile_draft profile_draft_t;
  * names it; a name this machine places nowhere — a custom/ name with no target
  * here — reaches every claim either side holds at or beneath that name. Of those:
  *   - the commit's, as its view stands them (core/manifest.h
- *     manifest_build_profile), each restored whole by the draft's verb of its
- *     kind (core/profiles.h profile_restore_file, profile_restore_directory) —
- *     a derived one with its attributes, as the commit had them — under the name
- *     the head gives its place, its claim there, explicit else derived
- *     (manifest_lookup_claim), else under its own: a name is where a claim lands
- *     on every machine, and the profile's stays. A claim the commit held that
- *     stood nowhere in its view — a second name for one path, a claim its own
- *     claims contradict — is not restored; one placed nowhere keeps its own name;
+ *     manifest_build_profile), one a place, the view standing one row a path,
+ *     each restored whole by the draft's verb of its kind (core/profiles.h
+ *     profile_restore_file, profile_restore_directory) — a derived one with its
+ *     attributes, as the commit had them — under the name the head gives its
+ *     place, its claim there, explicit else derived (manifest_lookup_claim),
+ *     else under its own: a name is where a claim lands on every machine, and
+ *     the profile's stays. A claim the commit held that stood nowhere in its
+ *     view — a second name for one path, a claim its own claims contradict — is
+ *     not restored; one placed nowhere keeps its own name;
  *   - the head's, every claim it holds, standing or not (core/profiles.h
  *     profile_walk, profile_contradicted), each taken from the draft
  *     (profile_remove) where no restore writes its name in its kind. A derived

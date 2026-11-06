@@ -694,7 +694,9 @@ static error_t revert_write_record(
     /* A place a claim was restored at: this profile's record retires, whatever
      * row stands there */
     for (size_t i = 0; i < restored.count; i++) {
-        if (!revert_reclaims(records, record_count, profile, restored.entries[i])) continue;
+        if (!revert_reclaims(records, record_count, profile, restored.entries[i])) {
+            continue;
+        }
 
         err = state_retire(state, restored.entries[i]);
         if (err) goto cleanup;
@@ -705,7 +707,9 @@ static error_t revert_write_record(
      * record and read for each */
     manifest_t *after = NULL;
     for (size_t i = 0; i < removed.count; i++) {
-        if (!revert_reclaims(records, record_count, profile, removed.entries[i])) continue;
+        if (!revert_reclaims(records, record_count, profile, removed.entries[i])) {
+            continue;
+        }
 
         if (!after) {
             err = manifest_build(ctx->run.repo, state, ctx->arena, &after);
@@ -901,13 +905,17 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* One file's restore is said whole where the path reaches one claim — the
      * commit's file, standing at the argument's own place — and the commit's
-     * one change writes it: under the one name the commit adds or updates, the
-     * name the restore wrote it at, the head's for the place or else its own
-     * (core/restore.h restore_path), read off the commit and never named again
-     * here. The commit's claim there is read off its one-profile view, built
-     * again (stated), the layer's rung being no claim of the profile's, and the
-     * head's entry off its tree at that name (core/profiles.h profile_entry). A
-     * name this machine places nowhere has no place, and lists its changes. */
+     * one change is that file's restore: a name it adds or updates that the table
+     * places at the argument's own place, as the record phase reads a place a
+     * claim was restored at (revert_write_record). The restore writes one claim
+     * a place, under the head's name for it or else its own (core/restore.h
+     * restore_path), and a name places at one path (infra/mount.h mount_resolve),
+     * so the name moved there is that write, read off the commit and never named
+     * again here; a change the table places anywhere else lists the changes.
+     * The commit's claim is read off its one-profile view, built again (stated),
+     * the layer's rung being no claim of the profile's, and the head's entry
+     * off its tree at the name (core/profiles.h profile_entry). A name this machine
+     * places nowhere has no place, and lists its changes. */
     const manifest_row_t *target = NULL;
     profile_held_t held = { .kind = PROFILE_HELD_NOTHING };
     const char *file = NULL;
@@ -915,9 +923,12 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         const char *place = arg.key == PATH_KEY_FILESYSTEM
             ? arg.filesystem_path
             : mount_resolve(ctx->arena, mounts, profile, arg.storage_path);
+        const char *name = changes.added.count > 0
+            ? changes.added.entries[0]
+            : changes.updated.entries[0];
 
         manifest_t *historical = NULL;
-        if (place) {
+        if (place && str_equal(place, mount_resolve(ctx->arena, mounts, profile, name))) {
             err = manifest_build_profile(target_profile, mounts, ctx->arena, &historical);
             if (err) goto cleanup;
         }
@@ -925,7 +936,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         const manifest_row_t *row = manifest_lookup(historical, place);
         if (manifest_holds_row(historical, row) && row->type != PATH_TYPE_DIRECTORY) {
             target = row;
-            file = changes.added.count > 0 ? changes.added.entries[0] : changes.updated.entries[0];
+            file = name;
 
             err = profile_entry(profile_draft_base(draft), file, &held);
             if (err) goto cleanup;
@@ -1005,8 +1016,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             if (err) {
                 output_gap(out, OUTPUT_NORMAL);
                 output_warning(
-                    out, OUTPUT_NORMAL, "Could not show diff preview: %s",
-                    error_line(err)
+                    out, OUTPUT_NORMAL, "Could not show diff preview: %s", error_line(err)
                 );
                 err = NULL;
             }

@@ -872,10 +872,11 @@ typedef struct profile_departure {
  *
  * Readers: core/workspace.c workspace_ask_departures (each owned file orphan,
  * at the head the view read for an enabled profile, at its branch's head now
- * for a disabled one); cmds/sync.c sync_departure_counts (each file the acts'
- * view lost, at its profile's head as the view after read it) and
- * sync_disagreements (each name a merge's local side took since its merge base,
- * at the remote's head and the local one).
+ * for a disabled one — but one whose deletion the record keeps at that head,
+ * core/state.h state_record_t's head); cmds/sync.c sync_departure_counts (each
+ * file the acts' view lost, at its profile's head as the view after read it)
+ * and sync_disagreements (each name a merge's local side took since its merge
+ * base, at the remote's head and the local one).
  *
  * @param repo The repository the history is read from (must not be NULL)
  * @param head The head's id, or NULL where the branch is gone (borrowed)

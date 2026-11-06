@@ -52,7 +52,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "33"
+#define STATE_SCHEMA_VERSION "34"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -394,10 +394,14 @@ static error_t state_initialize(sqlite3 *db) {
          *   - a directory has no content confirmation (base_oid IS NULL)
          *   - bytes no base proves are kept as a pair, only where no blob is
          *     confirmed, never on a directory or an owned record: disk's entry
-         *     and the head it was asked at are set together — (disk_oid IS NULL)
-         *     = (head IS NULL), never NULL, as the link's rule below is — and
-         *     only beside no base_oid, on a file or a link, which the ownership
-         *     rule below then holds to one dotta never owned
+         *     never without the head it was asked at (disk_oid IS NULL OR head
+         *     IS NOT NULL), and only beside no base_oid, on a file or a link,
+         *     which the ownership rule below then holds to one dotta never owned
+         *   - a head without disk's entry is a departure kept, on dotta's own
+         *     file or link alone (head IS NULL OR disk_oid IS NOT NULL OR
+         *     (deployed_at > 0 AND kind != 'directory')): beside the base the
+         *     ownership rule below holds it to, never on a directory, nor on a
+         *     record dotta never owned, whose head is its entry's
          *   - a stored id is a real OID — the base, disk's entry, the head: 20
          *     bytes, never zeroblob
          *   - a link claims no mode and every other node does: (kind = 'symlink')
@@ -451,7 +455,9 @@ static error_t state_initialize(sqlite3 *db) {
         "    deployed_at INTEGER NOT NULL DEFAULT 0 CHECK(deployed_at >= 0),"
         "    "
         "    CHECK (kind != 'directory' OR base_oid IS NULL),"
-        "    CHECK ((disk_oid IS NULL) = (head IS NULL)),"
+        "    CHECK (disk_oid IS NULL OR head IS NOT NULL),"
+        "    CHECK (head IS NULL OR disk_oid IS NOT NULL"
+        "        OR (deployed_at > 0 AND kind != 'directory')),"
         "    CHECK (disk_oid IS NULL OR (base_oid IS NULL AND kind != 'directory')),"
         "    CHECK ((kind = 'symlink') = (mode IS NULL)),"
         "    CHECK (deployed_at = 0 OR kind = 'directory' OR base_oid IS NOT NULL)"

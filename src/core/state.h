@@ -14,9 +14,10 @@
  * dotta did or saw at the path — the binding, the kind, the base it found disk
  * at, the claim, the stamp — is its own and never derivable: a verdict reads
  * each, and a column of this kind removed is a verdict changed. What a load derived
- * there, kept with the key that fixes it — the stat triple behind the content,
- * and for bytes no base proves disk's entry with the head its history was asked
- * to (state_stat_t, state_record_t's content group) — is derivable again at a
+ * there, kept with the key that fixes it — the stat triple behind the content;
+ * for bytes no base proves, disk's entry with the head its history was asked
+ * to; for dotta's own copy its profile deleted, the head that answer was asked
+ * at (state_stat_t, state_record_t's content group) — is derivable again at a
  * read's or a walk's price, and is read only where it spares that read or that
  * walk: a column of this kind removed is that price paid at every load where
  * the read can be made, and a verdict moved where it cannot — a sealed row with
@@ -243,7 +244,9 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  * workspace_flush), apply's ownership events from the row and the claim axes
  * each landed (core/workspace.h workspace_anchor), add's and update's from what
  * their capture committed (cmds/add.c add_path_t, cmds/update.c update_commit_t),
- * a learning from the record the load read (core/workspace.c workspace_learning).
+ * a learning from the record the load read (core/workspace.c workspace_learning),
+ * and a departure kept, the record the load read with the head its answer stands
+ * at (core/workspace.c workspace_flush).
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation — a gone node's record's replacement among them —
@@ -265,27 +268,36 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     the binding's name, and the head of the binding's branch whose history
  *     held none of them there up to it, with the stat of that read — bytes no
  *     base proves, kept so a load reads them again only once disk, the binding
- *     or the head moves. The first observation writes the node alone, the row's;
- *     the blob and the stat advance only after disk-matches-blob verification —
- *     an ownership event, which writes the node, the blob and the stat from what
- *     it established (apply's from the row it deployed or found standing, a
- *     capture's from what it read and committed: the one blob the stage wrote,
- *     never a later head's), and a learning of the content (the slow-path
- *     CMP_EQUAL; the base fast path's, which writes the record's own pair back
- *     beside the row's binding; and the bases' ask, which confirms a blob the
- *     row's own branch held at its name or keeps the bytes unconfirmed at the
- *     view's head: core/workspace.c workspace_ask_bases), which keeps the node:
- *     it is made only onto a record of the row's kind, since a record of another
- *     node, the look having found the row's in its place, gives way to the row's
- *     first observation, where its claim can be spelled, before anything is learned
- *     onto it, and has nothing learned onto it otherwise (core/workspace.c
- *     workspace_flush) — a whole write, never a learning onto the gone node's
- *     record. No node is executable: the bit is the claim's mode, and Git's
- *     filemode the row's alone. Zero base_oid is no content confirmation — a
- *     directory, whose whole confirmed-disk record is that it was observed (a
- *     directory has no content confirmation, schema-enforced), or a file this
- *     record holds no confirmation of: one whose bytes it keeps unconfirmed, or
- *     one it only observed.
+ *     or the head moves. The head is the head of the binding's branch a history
+ *     answer was taken at, and the column beside it says which: beside disk's
+ *     entry, none of its bytes stood at the name up to it; beside the base of a
+ *     file or a link dotta owns whose profile no longer holds its name, every
+ *     commit up to it that took the name deleted it (core/profiles.h
+ *     profile_departures: DELETED) — the copy's departure, kept so a load walks
+ *     that history again only once the head moves, and written by the load's
+ *     flush onto the record it read, every other column kept (core/workspace.c
+ *     workspace_flush). Kept as profile_departures reads a removal's action, so
+ *     a table that deleted less would owe every kept head a reset. The first
+ *     observation writes the node alone, the row's; the blob and the stat advance
+ *     only after disk-matches-blob verification — an ownership event, which writes
+ *     the node, the blob and the stat from what it established (apply's from
+ *     the row it deployed or found standing, a capture's from what it read and
+ *     committed: the one blob the stage wrote, never a later head's), and a
+ *     learning of the content (the slow-path CMP_EQUAL; the base fast path's,
+ *     which writes the record's own pair back beside the row's binding; and the
+ *     bases' ask, which confirms a blob the row's own branch held at its name
+ *     or keeps the bytes unconfirmed at the view's head: core/workspace.c
+ *     workspace_ask_bases), which keeps the node: it is made only onto a record
+ *     of the row's kind, since a record of another node, the look having found
+ *     the row's in its place, gives way to the row's first observation, where
+ *     its claim can be spelled, before anything is learned onto it, and has nothing
+ *     learned onto it otherwise (core/workspace.c workspace_flush) — a whole
+ *     write, never a learning onto the gone node's record. No node is executable:
+ *     the bit is the claim's mode, and Git's filemode the row's alone. Zero
+ *     base_oid is no content confirmation — a directory, whose whole confirmed-disk
+ *     record is that it was observed (a directory has no content confirmation,
+ *     schema-enforced), or a file this record holds no confirmation of: one whose
+ *     bytes it keeps unconfirmed, or one it only observed.
  *   - the claim (mode, owner, group): the claim dotta last saw the path stand
  *     on or put there, and so the base a difference on a claim axis is read from
  *     — disk off it the user's move, the row off it Git's claim still to bring
@@ -311,9 +323,12 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *   - base_oid is non-zero iff this record holds a confirmation that disk content
  *     matched that blob. Zero is none: a directory, or a file the record never
  *     confirmed — a release forgets a confirmation with the record.
- *   - disk_oid and head are set together, only where base_oid is zero, on a file
- *     or a link dotta never owned (schema-enforced): a finding about the record's
+ *   - disk_oid is set only beside a head, where base_oid is zero, on a file or
+ *     a link dotta never owned (schema-enforced): a finding about the record's
  *     own binding at that head, whose bytes the triple stands behind.
+ *   - a head with no disk_oid is set only beside the base of a file or a link
+ *     dotta owns (schema-enforced): that copy's departure, a deletion, kept at
+ *     the head of the binding's branch it was asked at.
  *   - a stat matching a live look of the record's kind proves, on the fast path,
  *     that disk still holds what the content names: the base, or the bytes kept
  *     unconfirmed (state_stat_matches).
@@ -365,7 +380,7 @@ typedef struct state_record {
     fs_occupant_t kind;       /* The node: REGULAR, SYMLINK or DIRECTORY */
     git_oid base_oid;         /* The base: a blob both sides held, which disk was found at (zero = none) */
     git_oid disk_oid;         /* Where none stands: the entry a read found the node's bytes to be (zero = none kept) */
-    git_oid head;             /* Beside it: the head of the binding's branch, holding none of them at the name up to it */
+    git_oid head;             /* Beside it: its branch's head, none of them there; beside an owned base: a deletion's */
     state_stat_t stat;        /* The triple behind base_oid, or behind disk_oid (all-zero = unusable) */
 
     /* The claim */

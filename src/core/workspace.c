@@ -19,11 +19,12 @@
  * own write: the claim its write landed, save the mode of a directory a run could
  * not narrow back (core/deploy.h deploy_working_mode, stated) — and, of bytes
  * no base proves, the row's own branch's beside it: whether its history held
- * them at the row's name. Each writes a record whole and publishes it: the item
- * at the path holds the record the store holds, and the one it held before is
- * never written. A record whose path the view lacks is an orphan, and the orphan
- * analysis asks its profile's history — the only authority that knows — why it
- * is one.
+ * them at the row's name; of dotta's own orphan, its profile's: whether every
+ * commit that took its name deleted it. Each writes a record whole and publishes
+ * it: the item at the path holds the record the store holds, and the one it held
+ * before is never written. A record whose path the view lacks is an orphan, and
+ * the orphan analysis asks its profile's history — the only authority that knows
+ * — why it is one, a deletion's answer kept under the head it was asked at.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with
@@ -104,13 +105,14 @@ struct workspace {
     /* The orphan items: the records whose path the view lacks, in the snapshot's
      * strcmp order, which the join's walk, the release's walk back over them
      * (workspace_analyze_orphans) and their searches (workspace_find_item,
-     * workspace_items_beneath) rest on. Read-only — no row names an orphan's
-     * path, so no writer ever reaches one; the orphan analysis asks each one's
-     * profile's history why it is here. Each is looked at by the join on every
-     * load (workspace_load), and no reader is lent one the load did not analyze:
-     * the diverged items list, and a path finds, the analyzed prefix and no other,
-     * which is every orphan or none (workspace_list, workspace_find). Never NULL
-     * (workspace_partition). */
+     * workspace_items_beneath) rest on. No row names an orphan's path, so neither
+     * an ownership event nor a learning reaches one: the orphan analysis asks
+     * each one's profile's history why it is here, and the one write an orphan
+     * takes is the head that answer stands at (workspace_flush). Each is looked
+     * at by the join on every load (workspace_load), and no reader is lent one
+     * the load did not analyze: the diverged items list, and a path finds, the
+     * analyzed prefix and no other, which is every orphan or none (workspace_list,
+     * workspace_find). Never NULL (workspace_partition). */
     workspace_item_t **orphans;                  /* Arena; singles, never moved */
     size_t orphan_count;                         /* Number of orphans */
     size_t analyzed_count;                       /* orphans[0 .. analyzed_count): the ones the load analyzed */
@@ -2325,14 +2327,17 @@ static void workspace_ask_bases(workspace_t *ws) {
  * found its branch gone; a disabled one's, its branch's head read by name now
  * (sys/gitops.h gitops_branch_commit), none where the branch is proven gone —
  * every disabled profile's at once (gitops_branches_exist). No head answers every
- * name GONE, and a head every name of the run, by one walk of the history behind
- * it (core/profiles.h profile_departures). Each answer is the workspace's arena's,
- * borrowed by its item (workspace_item_t's departure); a directory is asked
- * nothing. A disabled profile's head that will not read answers no name of its
- * profile — each keeps no departure, for the second loop to read as UNVERIFIED
- * — and its error is dropped, one a profile, as a presence that will not answer
- * answers none of theirs, one a load: the bound of what a load keeps (base/error.h
- * "Lifetime"). The next load reads afresh.
+ * name GONE, and a head every name of the run: off the record where it keeps
+ * the name's deletion at that very head (core/state.h state_record_t's head),
+ * every other by one walk of the history behind it (core/profiles.h
+ * profile_departures), none where the record keeps them all. Each answer is the
+ * workspace's arena's, borrowed by its item (workspace_item_t's departure), a
+ * deletion's head beside it for the flush to keep (workspace_flush); a directory
+ * is asked nothing. A disabled profile's head that will not read answers no name
+ * of its profile — each keeps no departure, for the second loop to read as
+ * UNVERIFIED — and its error is dropped, one a profile, as a presence that will
+ * not answer answers none of theirs, one a load: the bound of what a load keeps
+ * (base/error.h "Lifetime"). The next load reads afresh.
  *
  * @param ws Workspace (must not be NULL)
  * @param owned The owned orphans the first loop passed, either kind
@@ -2350,10 +2355,10 @@ static void workspace_ask_departures(
     }
     qsort(files, file_count, sizeof(*files), workspace_profile_order);
 
-    /* Their names, the frame's, beside their answers, the workspace's */
+    /* The names a walk is asked, the frame's, beside their answers, the
+     * workspace's: each written where its run puts it to the walk (below) */
     const char **paths = arena_calloc(frame, file_count, sizeof(*paths));
     profile_departure_t *departures = arena_calloc(ws->arena, file_count, sizeof(*departures));
-    for (size_t i = 0; i < file_count; i++) paths[i] = files[i]->storage_path;
 
     /* The disabled profiles, one a run, every one's branch asked at once whether
      * it stands (sys/gitops.h gitops_branches_exist): however many are gone,
@@ -2396,8 +2401,38 @@ static void workspace_ask_departures(
             d++;
         }
         if (!err) {
-            profile_departures(ws->repo, head, paths + start, end - start, departures + start);
-            for (size_t k = start; k < end; k++) files[k]->departure = &departures[k];
+            /* The asked first, each beside its name, the kept after — a run's
+             * order is nobody's (workspace_profile_order): a name whose deletion
+             * the record keeps at this very head is read off the record, an owned
+             * copy's head being its departure's alone (core/state.h). Stated,
+             * as the bytes' answer is (workspace_ask_bases): a store that loses
+             * an object of that history once the answer is kept still reads the
+             * answer the whole store gave, where a walk would leave the name
+             * UNVERIFIED — the answer is the head's only where the store keeps
+             * Git's connectivity. */
+            size_t asked_end = start;
+            for (size_t k = start; k < end; k++) {
+                workspace_item_t *item = files[k];
+                if (head && git_oid_equal(&item->record->head, head)) continue;
+
+                files[k] = files[asked_end];
+                files[asked_end] = item;
+                paths[asked_end++] = item->storage_path;
+            }
+
+            /* One walk answers the asked; the kept are DELETED, no removal kept */
+            profile_departures(
+                ws->repo, head, paths + start, asked_end - start, departures + start
+            );
+            for (size_t k = asked_end; k < end; k++) {
+                departures[k] = (profile_departure_t){ .kind = PROFILE_DEPARTURE_DELETED };
+            }
+
+            /* Each answer borrowed by its item, and a deletion's head beside it */
+            for (size_t k = start; k < end; k++) {
+                files[k]->departure = &departures[k];
+                if (departures[k].kind == PROFILE_DEPARTURE_DELETED) files[k]->head = *head;
+            }
         }
         git_commit_free(commit);
 
@@ -3766,12 +3801,12 @@ static state_record_t workspace_learning(
 /**
  * The flush: write what the load owes the record, the load's last step
  *
- * The rule is the header's (workspace_load). Here: one walk over the active items
- * — the paths the view holds, where every debt stands; not the orphans, since
- * the path back in the view is exactly the case with no orphan — building the
- * record each owed item's write makes; then the writes, in whichever transaction
- * is the writes'; then the publication, once the store holds them. Across paths
- * the order is free, every statement keyed by its own path and reading no other.
+ * The rule is the header's (workspace_load). Here: two walks building the record
+ * each owed item's write makes — the active items, where every debt of the view's
+ * paths stands, then the analyzed orphans, whose one debt is the head a departure
+ * stands at; then the writes, in whichever transaction is the writes'; then the
+ * publication, once the store holds them. Across paths the order is free, every
+ * statement keyed by its own path and reading no other.
  *
  * @param ws The load's workspace, every verdict in (must not be NULL); written
  *           through the state handle the load borrowed
@@ -3790,12 +3825,14 @@ static error_t workspace_flush(workspace_t *ws) {
     const bool scoped = !state_locked(ws->state);
     error_t err = NULL;
 
-    /* 1. What the load owes: the record each owed item's write makes — a learning
-     *    — held beside the item by its place among the active items, NULL where
-     *    it owes nothing, and built before any statement: the writes take the
-     *    lock only once something is owed (below). The table is taken at the
-     *    first owed item, so a load that owes nothing allocates nothing. */
-    const state_record_t **learnings = NULL;
+    /* 1. What the load owes: each owed item beside the record its write makes —
+     *    a learning — built before any statement: the writes take the lock only
+     *    once something is owed (below). Grown from the first owed item, so a
+     *    load that owes nothing allocates nothing, and addressed only once whole:
+     *    a growth abandons the array it outgrew (base/arena.h arena_grow). */
+    struct { workspace_item_t *item; state_record_t record; } *learnings = NULL;
+    size_t learning_count = 0;
+    size_t learning_capacity = 0;
 
     /* The (label, owner, group) a first observation's capture found no name for,
      * each asked once a flush (the observation, below) — a handful at most, scanned
@@ -3913,16 +3950,33 @@ static error_t workspace_flush(workspace_t *ws) {
             continue;
         }
 
-        if (!learnings) {
-            learnings = arena_calloc(ws->arena, active_count, sizeof(*learnings));
-        }
-        state_record_t *learning = arena_alloc(ws->arena, sizeof(*learning));
-        *learning = workspace_learning(onto, item, item->confirmation);
-        learnings[i] = learning;
+        learnings = arena_grow(
+            ws->arena, learnings, &learning_capacity, learning_count + 1, sizeof(*learnings)
+        );
+        learnings[learning_count].item = item;
+        learnings[learning_count].record = workspace_learning(onto, item, item->confirmation);
+        learning_count++;
+    }
+
+    /* The departures: an analyzed orphan whose history this load asked owes the
+     * record the head its answer stands at, where the record holds another — a
+     * deletion asked anew, or an answer that turned, whose head is none — onto
+     * the record the load read, nothing else moved (workspace_load) */
+    for (size_t i = 0; i < ws->analyzed_count; i++) {
+        workspace_item_t *item = ws->orphans[i];
+        if (!item->departure || git_oid_equal(&item->head, &item->record->head)) continue;
+
+        learnings = arena_grow(
+            ws->arena, learnings, &learning_capacity, learning_count + 1, sizeof(*learnings)
+        );
+        learnings[learning_count].item = item;
+        learnings[learning_count].record = *item->record;
+        learnings[learning_count].record.head = item->head;
+        learning_count++;
     }
 
     /* A load that owes nothing, the common one, takes no lock and writes nothing */
-    if (!learnings) return NULL;
+    if (learning_count == 0) return NULL;
 
     /* 2. The writes, each the record whole (state_write): into the caller's
      *    transaction, or one taken only where the store still stands as the
@@ -3937,9 +3991,8 @@ static error_t workspace_flush(workspace_t *ws) {
         err = state_resume(ws->state);
         if (err) goto rollback;
     }
-    for (size_t i = 0; i < active_count; i++) {
-        if (!learnings[i]) continue;
-        err = state_write(ws->state, learnings[i]);
+    for (size_t i = 0; i < learning_count; i++) {
+        err = state_write(ws->state, &learnings[i].record);
         if (err) goto rollback;
     }
     if (scoped) {
@@ -3950,10 +4003,9 @@ static error_t workspace_flush(workspace_t *ws) {
     /* 3. Published, now that the store holds them — the flush's commit, or the
      *    caller's transaction, whose failure ends the run: each owed item holds
      *    the record its write made, and owes nothing more */
-    for (size_t i = 0; i < active_count; i++) {
-        if (!learnings[i]) continue;
-        ws->active[i]->record = learnings[i];
-        ws->active[i]->confirmation = DIVERGENCE_NONE;
+    for (size_t i = 0; i < learning_count; i++) {
+        learnings[i].item->record = &learnings[i].record;
+        learnings[i].item->confirmation = DIVERGENCE_NONE;
     }
 
     return NULL;

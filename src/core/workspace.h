@@ -635,15 +635,16 @@ workspace_fault_t workspace_code_fault(error_code_t code);
  * blob the row's own branch held at its name (workspace.c workspace_ask_bases),
  * under the triple distilled beside its read; bytes no base proves where that
  * ask found the branch holding none of them, its history read whole, at the view's
- * head. Zero and UNSET on every other item. The row's content is on disk whatever
- * the record says, so its pair is set whatever the record. Two writers carry
- * them into the record: the flush's learning of the content, which writes all
- * four whole (workspace.c workspace_learning), and apply's ownership events over
- * the clean rows (cmds/apply.c cmd_apply), which write the stat beside the row's
- * blob, the item's own on a clean row, and so also reach a record the load could
- * confirm nothing onto — one dotta owns, bound to another row. The content is
- * named beside the stat, so the stat means one thing, what stands behind the
- * content beside it, and never which content that is.
+ * head. Zero and UNSET on every other item, save an owned file orphan's `head`
+ * (`departure` below). The row's content is on disk whatever the record says,
+ * so its pair is set whatever the record. Two writers carry them into the record:
+ * the flush's learning of the content, which writes all four whole (workspace.c
+ * workspace_learning), and apply's ownership events over the clean rows
+ * (cmds/apply.c cmd_apply), which write the stat beside the row's blob, the item's
+ * own on a clean row, and so also reach a record the load could confirm nothing
+ * onto — one dotta owns, bound to another row. The content is named beside the
+ * stat, so the stat means one thing, what stands behind the content beside it,
+ * and never which content that is.
  *
  * The confirmation is the load's own: what the analyses established that the
  * record lacks, by axis, for the load's flush to write (workspace_load) and nothing
@@ -688,13 +689,20 @@ workspace_fault_t workspace_code_fault(error_code_t code);
  * `departure` is what an owned file orphan's profile's history says of its name
  * (core/profiles.h profile_departure_t): the reason its verdict is what it is,
  * asked once a profile between the orphan analysis's two loops (workspace.c
- * workspace_ask_departures) and borrowed, as `row` and `record` are. NULL on
- * every other item, and on an owned file orphan whose disabled profile's head
- * would not read: no history answered it. Readers: the orphan analysis's second
- * loop, which decides the verdict by it (workspace.c workspace_analyze_orphans),
- * the line that says it (workspace_item_line's metadata), and apply's prune split,
- * which counts the deletions (cmds/apply.c apply_print_cleanup_preview). A reader
- * not on this list is a bug.
+ * workspace_ask_departures) and borrowed, as `row` and `record` are — or, where
+ * the record keeps the name's deletion at the head this load stands on, read
+ * off it, DELETED with no removal kept: no reader of an item's departure reads
+ * one. NULL on every other item, and on an owned file orphan whose disabled
+ * profile's head would not read: no history answered it. Beside it, `head` is
+ * the head a DELETED answer stands at, kept or walked, for the flush to keep in
+ * the record, and zero beside every other answer, so a head the record kept for
+ * a deletion the history no longer gives is cleared. Readers: the orphan analysis's
+ * second loop, which decides the verdict by it (workspace.c
+ * workspace_analyze_orphans), the line that says it (workspace_item_line's
+ * metadata), apply's prune split, which counts the deletions (cmds/apply.c
+ * apply_print_cleanup_preview), and the flush, which owes the record the head
+ * of an answer this load asked (workspace.c workspace_flush). A reader not on
+ * this list is a bug.
  *
  * `blob_above` is the view's blob row standing above an overridden copy
  * (core/manifest.h manifest_blob_above): the answer the orphan analysis decides
@@ -733,7 +741,7 @@ typedef struct {
     const manifest_row_t *blob_above;    /* The blob an overridden copy stands beneath, or NULL */
     git_oid base_oid;                    /* The base the verdict found disk at: the row's, or a blob its branch held */
     git_oid disk_oid;                    /* Or the entry disk's bytes are, where no base stands … */
-    git_oid head;                        /* … and the view's head its history held none of them up to */
+    git_oid head;                        /* … and the view's head its history held none of them up to; or a deletion's */
     state_stat_t stat;                   /* The triple behind whichever is set; UNSET elsewhere */
 
     /* The confirmation — its kind's analysis's; the flush clears it once the store holds it */
@@ -1064,9 +1072,11 @@ static inline const state_record_t *workspace_base(const state_record_t *record)
  * branch would give again, in a store that keeps Git's connectivity
  * (core/workspace.c workspace_ask_bases). Whether disk still holds those bytes
  * is the look's to say, off the record's triple. A value and not a verdict, as
- * workspace_base above, whose twin it is: the two never stand on one record
- * (core/state.h, schema-enforced). A view that holds no head for the profile
- * holds no answer kept at one.
+ * workspace_base above, whose twin it is: disk's entry and a base never stand
+ * on one record (core/state.h, schema-enforced). The entry is the answer, and
+ * the head only its key: a head with no entry is dotta's own copy's departure,
+ * never bytes. A view that holds no head for the profile holds no answer kept
+ * at one.
  *
  * Readers: core/workspace.c workspace_analyze_file (its second fast path). A
  * reader not on this list is a bug.
@@ -1074,8 +1084,8 @@ static inline const state_record_t *workspace_base(const state_record_t *record)
 static inline const state_record_t *workspace_unconfirmed(
     const manifest_t *view, const manifest_row_t *row, const state_record_t *record
 ) {
-    /* Kept, and of this row: its kind, under its binding */
-    if (!record || git_oid_is_zero(&record->head) ||
+    /* Kept, an entry beside its head, and of this row: its kind, under its binding */
+    if (!record || git_oid_is_zero(&record->disk_oid) ||
         record->kind != workspace_type_occupant(row->type) ||
         !manifest_is_claim(row, record->profile, record->storage_path)) {
         return NULL;
@@ -1556,14 +1566,15 @@ typedef struct workspace workspace_t;
  *   landing needs its place — a row of the view beneath it, or a blob above it
  *   — and a file's departure, one ask per profile with present, owned file orphans,
  *   at the head the view read for an enabled profile and at one head read for a
- *   disabled one, and one walk of its history, every commit on the lines back
- *   to the commits that took their names read once, the head's tree alone where
- *   it holds every name — and what is left in a directory, at one readdir per
- *   directory the ladder leaves a scope exit's. Read by core/cleanup.c
- *   cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
- *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies
- *   it clears) and cmds/status.c status_partition (Orphaned paths, Released paths
- *   and Overridden copies).
+ *   disabled one, and one walk of its history past the names whose deletion the
+ *   record keeps at that head, every commit on the lines back to the commits
+ *   that took the others' names read once, the head's tree alone where it holds
+ *   every one, and nothing where the record keeps them all — and what is left
+ *   in a directory, at one readdir per directory the ladder leaves a scope exit's.
+ *   Read by core/cleanup.c cleanup_plan_build (the settle, apply's cleanup),
+ *   core/deploy.c deploy_plan_build (the landing's orphans: the nodes it replaces,
+ *   the copies it clears) and cmds/status.c status_partition (Orphaned paths,
+ *   Released paths and Overridden copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
@@ -1651,8 +1662,8 @@ typedef struct {
  * keep alive beside it.
  *
  * The flush, the load's last step, once every verdict is in, writes what the
- * load owes the record: one write per owed active item — its record whole, as
- * the load learned it (core/state.h state_write) — made of two things the load
+ * load owes the record: one write per owed item — its record whole, as the load
+ * learned it (core/state.h state_write) — made of three things the load
  * established:
  *
  *   The observation — a path whose look found its row's own kind standing, either
@@ -1718,6 +1729,16 @@ typedef struct {
  *   row's the record is, since a claim opens nothing: onto that record or the
  *   observation, never onto a gone node's. The record follows every agreement,
  *   so the user's next move on that axis reads as the user's.
+ *
+ *   The departure — of an owned file orphan whose profile's history this load
+ *   asked (workspace_item_t's departure): the head a deletion stands at, onto
+ *   the record the load read, beside its base and every other column as read
+ *   (core/state.h state_record_t), so each later load at that head reads the
+ *   deletion off the record, walking nothing, and a move of the head asks again;
+ *   none beside any other answer, so a head kept for a deletion the history no
+ *   longer gives is cleared. Owed where the record's head is not the answer's:
+ *   a deletion asked anew, or an answer that turned. An orphan the ladder decides
+ *   before its history is asked owes nothing, and keeps the head it holds.
  *
  * Nothing is owed from beneath a squatter, because nothing there is looked at
  * (workspace_displaced_t): a confirmation taken through one would advance the

@@ -31,15 +31,17 @@
  * a tag and a branch name are refused here whatever the repository holds — and
  * so is a word that merely begins with a commit's letters, `HEADER` being a profile
  * name like any other. A verb that means to accept a tag takes its commit by
- * position instead of asking (cmds/revert.c's three-positional form), and that
- * is the whole reason the two forms differ.
+ * position instead of asking — revert, every word past its path's — and asks
+ * only where a word could be a commit or something else: revert's second word
+ * beside a profile's, the whole profile's commit or its path (cmds/revert.c
+ * revert_post_parse).
  *
  * Readers: the parse below, for its '@' gate; show's one- and two-positional
- * forms, export's second positional and revert's, each deciding by this alone
- * whether a token is its commit slot's; and diff's classifier, which asks this
- * first — a token shaped like a commit is never read as a path, and the two shapes
- * meet only in a revision whose pattern holds a glob's bytes (infra/path.h
- * path_input_announces_path).
+ * forms, export's second positional, and revert's second word beside a profile's,
+ * each deciding by this alone whether a token is its commit slot's; and diff's
+ * classifier, which asks this first — a token shaped like a commit is never read
+ * as a path, and the two shapes meet only in a revision whose pattern holds a
+ * glob's bytes (infra/path.h path_input_announces_path).
  *
  * @param token The token to read (may be NULL, which looks like nothing)
  * @return true iff the token has a commit reference's shape

@@ -117,8 +117,8 @@ typedef struct {
  *
  * Readers: list's inference form and its completion, diff's and apply's positional
  * classifiers, update's first-positional rule and its completion, and revert's
- * first word, read alone or beside its commit, and its completion's search for
- * the profile holding a path (cmds/revert.c revert_post_parse, revert_holder).
+ * first word, in every form, and its completion's search for the profile holding
+ * a path (cmds/revert.c revert_post_parse, revert_holder).
  *
  * @param input The positional (may be NULL, which announces nothing)
  * @return true iff the input announces a path, or a pattern that selects one

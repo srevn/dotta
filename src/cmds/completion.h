@@ -156,9 +156,9 @@ void completion_history(
  * the line does not know, keeps the profile's list or the enabled histories
  * (completion_history). A word the grammar refuses, or one that names its commit
  * already, leaves no commit slot and offers nothing; so does a name that is no
- * branch, an argument that will not read, or a walk that fails. The three-word
- * forms of show and revert read the path word as typed, never as a refspec: the
- * two readings part only on a line those commands refuse.
+ * branch, an argument that will not read, or a walk that fails. Show's three-word
+ * form reads the path word as typed, never as a refspec: the two readings part
+ * only on a line show refuses.
  *
  * @param pinned The profile the line names for the word, or NULL
  * @param token  The word naming the path

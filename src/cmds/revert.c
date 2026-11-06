@@ -1187,31 +1187,31 @@ cleanup:
 /**
  * The 1-3 raw positionals read by the forms into `profile`, `path` and `commit`
  *
- * By position, each slot's word read as a refspec where it can carry a profile
- * or a commit of its own (base/refspec.h refspec_parse), and the shape rule where
- * a slot could hold a profile or a path — a word that announces a path is one
- * (infra/path.h path_input_announces_path), any other is a profile, as list reads
- * its first word:
+ * One reading, left to right, each word that can carry a profile or a commit of
+ * its own read as a refspec (base/refspec.h refspec_parse). The first word is
+ * the path's where it names its own profile, under -p whatever its shape, or
+ * where it announces a path (infra/path.h path_input_announces_path), and the
+ * profile's otherwise — the shape rule, as list reads its first word, and -p
+ * making it the path's slot (cmds/list.c list_post_parse), so `-p q w@C` reads
+ * the path w, which the resolver refuses as a bare word. A profile's word names
+ * the profile whole where it holds its commit, stands alone, or stands beside a
+ * second and last word with a commit's shape (refspec_looks_like_commit); else
+ * the next word is the path's, its own profile over the first. Every word left
+ * is the commit, by position — a tag or a branch among them — and one past a
+ * commit already read is a commit given twice:
  *
  *   typed               profile                path                  commit
  *   p@C, p C            p                      none: the whole one   C
  *   p:X@C, p:X C        p                      X                     C
  *   X@C, X C            found, or -p's         X                     C
- *   p X, p X@C          p, X's own over it     X                     C
- *   p X C               p                      X                     C
+ *   p X@C, p X C        p, X's own over it     X                     C
  *
- * where X announces a path and p does not. The first word is read alone, or beside
- * a second that has a commit's shape (refspec_looks_like_commit); under -p it
- * is the path's whatever its shape (cmds/list.c list_post_parse), so `-p q w@C`
- * reads the path w, which the resolver refuses as a bare word. Two words whose
- * second has no commit's shape are a profile and a path, the first word's profile
- * over -p's — by position. The three-word form takes its commit by position, so
- * a tag or a branch reaches revert there alone, and a whole profile never at
- * one (stated): `p C` reads its commit by its shape, and `p@v1.0` is one word,
- * the profile p@v1.0 that no branch is. A profile whose own name announces a
- * path — one named under a label's word — has no whole-profile form (stated). A
- * commit inside the first word beside a commit-shaped second is a commit given
- * twice; none at all is refused, and so is `p:@C`, a refspec that names no path.
+ * where X announces a path, or follows -p, and p does not. A whole profile is
+ * never at a tag (stated): `p C` reads its second word's shape to tell a commit
+ * from a path, and `p@v1.0` is one word, the profile p@v1.0 that no branch is.
+ * A profile whose own name announces a path — one named under a label's word —
+ * has no whole-profile form (stated). No commit at all is refused, and so is
+ * `p:@C`, a refspec that names no path.
  *
  * Allocation model: refspec substrings are arena-allocated; pure positional
  * pointers borrow argv. cmd_revert does not free any of these pointers — the
@@ -1223,52 +1223,50 @@ static error_t revert_post_parse(
     (void) cmd;
     cmd_revert_options_t *o = opts_v;
     char **args = o->positional_args;
+    const size_t count = o->positional_count;
 
-    if (o->positional_count == 0) {
+    if (count == 0) {
         return error_create(ERR_INVALID_ARG, "A path or a profile is required");
     }
 
-    if (o->positional_count == 3) {
-        /* <profile> <path> <commit>, each by position */
-        o->profile = args[0];
-        o->path = args[1];
-        o->commit = args[2];
-    } else if (o->positional_count == 2 && !refspec_looks_like_commit(args[1])) {
-        /* <profile> <path>[@commit]: the first word the profile, over -p, and
-         * the second's own over it */
-        refspec_t rs = { 0 };
-        error_t err = refspec_parse(arena, args[1], &rs);
-        if (err != NULL) {
-            return error_wrap(err, "Failed to parse file specification");
-        }
-        o->profile = rs.profile ? rs.profile : args[0];
-        o->path = rs.file;
-        if (rs.commit != NULL) o->commit = rs.commit;
-    } else {
-        /* The first word, alone or beside its commit: its own profile, over -p;
-         * else, under -p, the path; else a path where it announces one and the
-         * whole profile it names where it does not */
-        refspec_t rs = { 0 };
-        error_t err = refspec_parse(arena, args[0], &rs);
-        if (err != NULL) {
-            return error_wrap(err, "Failed to parse file specification");
-        }
+    size_t next = 0;
+    refspec_t rs = { 0 };
+    error_t err = refspec_parse(arena, args[next++], &rs);
+    if (err != NULL) {
+        return error_wrap(err, "Failed to parse file specification");
+    }
 
-        if (o->positional_count == 2 && rs.commit != NULL) {
+    if (rs.profile != NULL || o->profile != NULL || path_input_announces_path(rs.file)) {
+        /* The path's word: its own profile, over -p's */
+        if (rs.profile != NULL) o->profile = rs.profile;
+        o->path = rs.file;
+        o->commit = rs.commit;
+    } else if (rs.commit != NULL || next == count ||
+        (count == 2 && refspec_looks_like_commit(args[next]))) {
+        /* The profile's word, naming it whole: its commit inside it, no word
+         * beside it, or the one beside it with a commit's shape */
+        o->profile = rs.file;
+        o->commit = rs.commit;
+    } else {
+        /* The profile's word, then the path's: its own profile over the first */
+        o->profile = rs.file;
+        err = refspec_parse(arena, args[next++], &rs);
+        if (err != NULL) {
+            return error_wrap(err, "Failed to parse file specification");
+        }
+        if (rs.profile != NULL) o->profile = rs.profile;
+        o->path = rs.file;
+        o->commit = rs.commit;
+    }
+
+    /* Every word left is the commit, by position */
+    for (; next < count; next++) {
+        if (o->commit != NULL) {
             return error_create(
-                ERR_INVALID_ARG, "Commit given twice: '%s' and '%s'", rs.commit, args[1]
+                ERR_INVALID_ARG, "Commit given twice: '%s' and '%s'", o->commit, args[next]
             );
         }
-        o->commit = o->positional_count == 2 ? args[1] : rs.commit;
-
-        if (rs.profile != NULL) {
-            o->profile = rs.profile;
-            o->path = rs.file;
-        } else if (o->profile != NULL || path_input_announces_path(rs.file)) {
-            o->path = rs.file;
-        } else {
-            o->profile = rs.file;
-        }
+        o->commit = args[next];
     }
 
     if (o->commit == NULL) {

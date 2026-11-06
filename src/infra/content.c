@@ -359,41 +359,55 @@ error_t content_get_from_blob_oid(
 }
 
 error_t content_rebind(
-    const uint8_t *data, size_t size,
+    git_repository *repo,
+    const git_oid *blob,
+    git_filemode_t mode,
     const char *from_storage_path,
     const char *to_storage_path,
     const char *profile,
     keymgr *keymgr,
-    buffer_t *out_bytes
+    buffer_t *out_bytes,
+    bool *out_encrypted
 ) {
+    CHECK_NULL(repo);
+    CHECK_NULL(blob);
     CHECK_NULL(from_storage_path);
     CHECK_NULL(to_storage_path);
     CHECK_NULL(profile);
     CHECK_NULL(out_bytes);
+    CHECK_NULL(out_encrypted);
 
     *out_bytes = (buffer_t){ 0 };
 
-    /* Bytes are authoritative here as everywhere: only a sealed blob has a name
-     * bound into it, and only it has anything to move — the domain the caller
-     * read for its own claim (the header). A seal has bytes, so the domain's
-     * check is the NULL one too. */
-    CHECK_ARG(
-        content_classify_bytes(data, size) != CONTENT_PLAINTEXT,
-        "content_rebind was handed unbound content"
-    );
+    /* The one read: loaded whatever the mode, the load is the proof the store
+     * holds the object, refused in the store's own words, which name it */
+    gitops_blob_view_t view;
+    error_t err = gitops_blob_view_open(repo, blob, &view);
+    if (err) return err;
 
-    /* A content entry by the domain (the header): a link never reaches here. It
-     * is opened into the caller's buffer and sealed there under the new name,
-     * so only the seal is ever left in it: a refused read leaves it empty
-     * (content_plaintext), and so does a refused seal (content_encrypt). */
-    error_t err = content_plaintext(
-        data, size, GIT_FILEMODE_BLOB, from_storage_path, profile, keymgr, out_bytes
+    /* Bytes are authoritative here as everywhere, as the entry they stand in: a
+     * link's are its target, never a seal (content_classify_entry). Only a seal
+     * has a name bound into it, and only one bound to another has anything to
+     * move: it is opened into the caller's buffer and sealed there under the
+     * new name, so only the seal is ever left in it — a refused read leaves it
+     * empty (content_plaintext), and so does a refused seal (content_encrypt) */
+    const content_kind_t kind = content_classify_entry(
+        (const uint8_t *) view.data, view.size, mode
     );
-    if (err) {
-        return err;              /* the read ladder's own words, unwrapped */
+    if (kind != CONTENT_PLAINTEXT && strcmp(from_storage_path, to_storage_path) != 0) {
+        err = content_plaintext(
+            view.data, view.size, mode, from_storage_path, profile, keymgr, out_bytes
+        );
+        if (!err) err = content_encrypt(keymgr, profile, to_storage_path, out_bytes);
     }
+    gitops_blob_view_close(&view);
+    if (err) return err;     /* the read ladder's own words, or the seal's */
 
-    return content_encrypt(keymgr, profile, to_storage_path, out_bytes);
+    /* The stamp, as the captures collapse it: a version this build cannot read
+     * still carries encryption intent */
+    *out_encrypted = kind != CONTENT_PLAINTEXT;
+
+    return NULL;
 }
 
 content_cache_t *content_cache_create(

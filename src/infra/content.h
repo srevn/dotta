@@ -4,7 +4,7 @@
  * One module for both directions of the seal, keyed by the claim the cipher binds
  * (the profile, the storage path). The read side answers a blob's plaintext,
  * classifies an entry by its bytes and compares one against disk; the write side
- * answers what a path on disk — or a sealed blob under another name — becomes
+ * answers what a path on disk — or a blob a commit holds, at a name — becomes
  * as an entry. Either way the encryption complexity stops here: higher layers
  * work in plaintext and name no cipher.
  *
@@ -50,16 +50,17 @@
  * keeps the tree's one blob writer (sys/stage.h stage_put).
  *
  * Three functions make an entry: content_capture_file and content_capture_link,
- * a path on disk as the entry it becomes; content_rebind, a sealed blob's content
- * under a second name — and content_capture_oid answers the id a copy's bytes
- * have as the entry at a name, making none, with the look they were read at.
- * That is the first two's entry, save for a plaintext whose first bytes read as
- * a seal: the file capture refuses it for the stamp a commit writes beside it,
- * and the id takes it as it stands, so an id refuses no bytes. A link's capture
- * holds no crypto at all and is here for content's own rule — a link's bytes
- * are its target and never a seal, whatever they begin with — the same rule the
- * classifier and the cache's key spell on the read side; a capture's `encrypted`
- * false for a link is that rule stated as a value.
+ * a path on disk as the entry it becomes; content_rebind, a blob a commit holds
+ * as the entry at a name, resealed where its seal binds another — and
+ * content_capture_oid answers the id a copy's bytes have as the entry at a name,
+ * making none, with the look they were read at. That is the first two's entry,
+ * save for a plaintext whose first bytes read as a seal: the file capture refuses
+ * it for the stamp a commit writes beside it, and the id takes it as it stands,
+ * so an id refuses no bytes. A link's capture holds no crypto at all and is here
+ * for content's own rule — a link's bytes are its target and never a seal, whatever
+ * they begin with — the same rule the classifier and the cache's key spell on
+ * the read side; a capture's `encrypted` false for a link is that rule stated
+ * as a value.
  *
  * The plaintext a seal consumes never leaves this module: the seal runs inside
  * it, one for the capture and the rebind alike, and the plaintext is wiped there,
@@ -121,9 +122,9 @@ typedef enum {
  * Pure computation; no I/O. Use when callers already have the bytes in hand (a
  * file just read from disk, an in-memory buffer from another layer) and want to
  * avoid a Git ODB round-trip. Readers: this module's own judgements of bytes it
- * holds (content_classify_entry, content_capture_file's refusal of a plaintext
- * that reads as a seal, content_rebind's domain), and core/profiles.c
- * profile_restore_file, the stamp of a blob the restore read once.
+ * holds — content_classify_entry, an entry's, which every read and the rebind
+ * judge through, and content_capture_file's refusal of a plaintext that reads
+ * as a seal.
  *
  * NULL-safe: data == NULL OR size < CIPHER_DETECT_BYTES → PLAINTEXT.
  *
@@ -151,9 +152,9 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * Every reader is outside this module, and that is the shape rather than an
  * accident: content's own functions judge bytes they already hold
  * (content_classify_bytes on a view, content_classify_entry inside a read), so
- * none of them pays a load to ask — nor does a restore, which reads the blob it
- * stamps once and judges the bytes in hand (core/profiles.c profile_restore_file).
- * A reader not on this list is a bug.
+ * none of them pays a load to ask — content_rebind, a restore's, among them:
+ * its one read is the stamp of the blob it may reseal. A reader not on this list
+ * is a bug.
  *
  * The price, measured rather than read off the docs: the blob is loaded whole
  * to reach six bytes, libgit2 offering no partial read of a packed object — and
@@ -297,33 +298,32 @@ error_t content_get_from_blob_oid(
 );
 
 /**
- * The bytes a blob's content takes under another name
+ * A blob a commit holds, as the entry it becomes at a name: its stamp, and the
+ * bytes it takes there where its seal binds another
+ *
+ * The write side's answer for a blob already in the store, as the captures are
+ * a path's on disk: one read — the load is the proof the repository holds the
+ * object, whatever the mode, so a blob the store lost is this call failing —
+ * whose bytes are judged as the entry `mode` says they stand in, a link's its
+ * target and never a seal (content_classify's rule). The judgement is the stamp,
+ * `out_encrypted`: true for a seal this build opens and for one it cannot, as
+ * the captures collapse it (content_capture_t).
  *
  * Encrypted bytes carry their storage path in the seal (crypto/cipher.h "Path
- * binding"), so a claim that changes name cannot carry its blob's id: no read
- * under the new name could open it. This opens the content under `from` and seals
- * it under `to` — the same plaintext, the same encryption intent, a different
- * object — and the caller stores what it gets. The bytes are the blob's, in the
- * caller's hand: the read that proves the store holds the blob and stamps its
- * claim is the caller's, so the blob is read once.
- *
- * Domain: bytes that carry a binding. Bytes content_classify_bytes calls PLAINTEXT
- * are a caller's bug and die (base/error.h CHECK_ARG) rather than being copied
- * — an unbound blob's id travels unchanged, and the caller that reads the kind
- * for its own claim already knows which it holds. UNSUPPORTED_VERSION is refused
- * in content_plaintext's own words: this build cannot open the bytes, so it cannot
+ * binding"), so a seal made under `from` cannot stand at `to` by its id: no read
+ * under `to` could open it. Where the two names part, this opens the content
+ * under `from` and seals it under `to` — the same plaintext, the same encryption
+ * intent, a different object — and answers the bytes, for the caller to store.
+ * Bytes that carry no binding, or carry `to`'s, stand at `to` as the blob they
+ * are: none are answered, and the entry is the blob's own id. So a key is asked
+ * only where a seal moves, and UNSUPPORTED_VERSION is refused only there, in
+ * content_plaintext's own words: this build cannot open the bytes, so it cannot
  * seal them under another name, and entering them under one would leave a claim
  * no key will ever read.
  *
- * A link is not content and never reaches here: its bytes are a target path,
- * and Git's filemode is the authority on that at every boundary
- * (content_capture_link, every read here — each takes the entry's filemode —
- * core/profiles.c profile_decode_blob's link rule, and a restored claim's type,
- * profile_restore_file's).
- *
  * The write-boundary invariant content_capture_file states holds here too: what
- * is answered classifies ENCRYPTED, as the source did, so a caller stamping
- * metadata.encrypted from the source blob describes what it stores.
+ * the caller stores — the blob's own bytes, or the reseal — classifies as
+ * `out_encrypted` says, so a claim stamped from it describes what it stores.
  *
  * The epoch does not move either, and that is the seal's doing rather than this
  * function's: the open refuses a fingerprint that is not the handle's own before
@@ -335,35 +335,41 @@ error_t content_get_from_blob_oid(
  * is opened into `out_bytes` and sealed there under `to`, so only the seal is
  * ever left in it.
  *
- * @param data The blob's bytes, as the store holds them (in the domain: never NULL)
- * @param size Byte count
- * @param from_storage_path The name the bytes were sealed under (must not be
- *          NULL; the AAD they are opened with)
- * @param to_storage_path The name they are sealed under (must not be NULL)
+ * @param repo Repository the blob is read from (must not be NULL)
+ * @param blob The blob's id (must not be NULL)
+ * @param mode The entry's filemode, as the commit's tree records it
+ * @param from_storage_path The name the blob stands at in its commit: the AAD a
+ *          seal is opened with (must not be NULL)
+ * @param to_storage_path The name the entry will stand at (must not be NULL)
  * @param profile Profile name, for key derivation (must not be NULL)
- * @param keymgr Key manager (ERR_LOCKED without one — every blob in the domain
- *          is sealed)
- * @param out_bytes Output buffer (CALLER OWNS - must free with buffer_deinit)
+ * @param keymgr Key manager (can be NULL: a seal that moves is then refused,
+ *          ERR_LOCKED)
+ * @param out_bytes The reseal where a seal moves, empty otherwise and on a refusal
+ *          (must not be NULL; cleared once the arguments are accepted; CALLER
+ *          OWNS - must free with buffer_deinit)
+ * @param out_encrypted The stamp (must not be NULL; written on success alone)
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_LOCKED / ERR_CRYPTO: the read's own ladder, unwrapped (see
+ * - ERR_GIT: the blob could not be loaded, in the store's own words
+ * - ERR_LOCKED / ERR_CRYPTO: a moving seal's read ladder, unwrapped (see
  *   content_get_from_blob_oid)
  * - ERR_INVALID_ARG: a name past the cipher's bound, the seal's refusal under
  *   "Cannot encrypt '<to>'" — the read left the master held, so the seal asks
  *   no key
  *
- * Reader: core/profiles.c profile_restore_file, a seal restored under another
- * name than it was made under.
+ * Reader: core/profiles.c profile_restore_file, each file claim a restore writes.
  */
 error_t content_rebind(
-    const uint8_t *data,
-    size_t size,
+    git_repository *repo,
+    const git_oid *blob,
+    git_filemode_t mode,
     const char *from_storage_path,
     const char *to_storage_path,
     const char *profile,
     keymgr *keymgr,
-    buffer_t *out_bytes
+    buffer_t *out_bytes,
+    bool *out_encrypted
 );
 
 /**

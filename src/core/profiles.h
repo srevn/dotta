@@ -74,11 +74,10 @@
  * a capture or a restore it cannot admit under "Cannot stage '%s'" (profile_admit,
  * profile_capture_file, profile_restore_file, profile_restore_directory), and a
  * merge whose conflicts no side settles under "Merging profile '%s' met %zu
- * conflict%s" (profile_draft_merge). A restore's own two name the claim alone,
- * by the commit's name for it — "in profile" would read as the head's, which
- * the writer names — a blob the store will not read under "Cannot restore '%s'",
- * and a seal that will not move to another name under "Cannot restore '%s' as
- * '%s'" (profile_restore_file).
+ * conflict%s" (profile_draft_merge). A restore's own refusal names the claim by
+ * the commit's name for it — "in profile" would read as the head's, which the
+ * writer names — beside the name it writes where the two part: "Cannot restore
+ * '%s'", "Cannot restore '%s' as '%s'" (profile_restore_file).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -117,9 +116,9 @@
 
 /* A profile's draft renders its commit's message from a writer's words over what
  * the commit changes (infra/commit.h), takes a capture of a file (infra/content.h),
- * reseals a restored file under its key manager (crypto/keymgr.h), climbs through
- * a mount table (infra/mount.h) and asks a run's path filter (infra/pathspec.h),
- * each by pointer; each is named here and defined there. */
+ * has a restored file resealed under its key manager (crypto/keymgr.h), climbs
+ * through a mount table (infra/mount.h) and asks a run's path filter
+ * (infra/pathspec.h), each by pointer; each is named here and defined there. */
 typedef struct commit_changes commit_changes_t;
 typedef struct commit_words commit_words_t;
 typedef struct content_capture content_capture_t;
@@ -1491,18 +1490,19 @@ error_t profile_derive_ancestors(
  * The claim is the commit's, whole: its mode, owner and group as it claimed them,
  * and none where it claimed none, its absence read as the floor wherever a mode
  * is placed (profile_claim_mode), so the sheet stays as sparse as the commit's.
- * Its blob is read once, through the repository `from`'s tree was read from:
- * the read is the proof the store holds it, for every filemode, and its bytes
- * decide the stamp — a regular file's, the write boundary's own reading
- * (core/policy.h), never the commit's stamp — and, where they are sealed and
- * `storage_path` is not the claim's own name, are opened under that name and
- * sealed under `storage_path` (crypto/cipher.h "Path binding"), put as bytes
- * the stage writes at its commit (sys/stage.h stage_put_unwritten). A blob that
- * carries no binding — plaintext, or a link's target — enters at its id under
- * either name. In order, each refusal before anything moves:
- *   - the read, under "Cannot restore '%s'", the claim's own name;
- *   - the reseal, under "Cannot restore '%s' as '%s'": ERR_LOCKED without a key,
- *     the read's own ladder (infra/content.h content_rebind);
+ * Its blob is content's to read, once, through the repository `from`'s tree was
+ * read from (infra/content.h content_rebind): the read is the proof the store
+ * holds it, for every filemode; its bytes are the stamp — the write boundary's
+ * own reading (core/policy.h), never the commit's stamp; and a seal made under
+ * the claim's own name is sealed again under `storage_path` where the two part
+ * (crypto/cipher.h "Path binding"), put as bytes the stage writes at its commit
+ * (sys/stage.h stage_put_unwritten). A blob that carries no binding (plaintext,
+ * or a link's target), or this name's, enters at its id. In order, each refusal
+ * before anything moves:
+ *   - content's, under "Cannot restore '%s'", the claim's own name, or "Cannot
+ *     restore '%s' as '%s'" where `storage_path` is another: a blob the store
+ *     will not read, and a seal that will not move — ERR_LOCKED without a key,
+ *     the read's own ladder;
  *   - the admission (profile_draft_t): the sheet's half, ERR_CONFLICT "Cannot
  *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
  *     the byte-least such claim; then the tree's, the put's own (sys/stage.h

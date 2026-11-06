@@ -1488,16 +1488,20 @@ void output_list_render(output_list_t *list) {
     output_put(&line);
 
     /* The rows: the tags in the row's colour, padded, then the content and its
-     * metadata dimmed */
+     * metadata dimmed — where no row carries a tag, the content at the margin,
+     * there being no column to pad */
     for (size_t i = 0; i < list->count; i++) {
         const item_t *item = &list->items[i];
 
         output_start(&line, ctx, ctx->stream);
         output_bytes(&line, "  ", 2);
-        output_style(&line, item->color);
-        output_appendf(&line, "%-*s", (int) width, item->tags);
-        output_style(&line, OUTPUT_COLOR_RESET);
-        output_appendf(&line, " %s", item->content);
+        if (width > 0) {
+            output_style(&line, item->color);
+            output_appendf(&line, "%-*s", (int) width, item->tags);
+            output_style(&line, OUTPUT_COLOR_RESET);
+            output_bytes(&line, " ", 1);
+        }
+        output_appendf(&line, "%s", item->content);
         if (item->metadata) output_appendf(&line, " {dim}(%s){reset}", item->metadata);
         output_bytes(&line, "\n", 1);
         output_put(&line);

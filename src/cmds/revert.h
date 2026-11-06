@@ -1,8 +1,16 @@
 /**
- * revert.h - Revert file to previous commit state
+ * revert.h - A path or a whole profile made as a past commit held it
  *
- * Restores a file in a profile to its state at a specific commit, in one commit
- * on that profile; nothing on disk changes, the next apply's to bring.
+ * A profile's claims at and beneath a path made exactly a commit's of its history,
+ * or the profile's next commit that commit's own tree, in one commit on the
+ * profile's head. At a path, what the commit's view stands there comes back,
+ * each claim under the name the profile holds its place by, else the commit's
+ * own; and every claim the profile holds there that the commit did not is removed
+ * (core/restore.h restore_path). A whole profile takes the commit's tree whole,
+ * its own names and dotta's own files with them (core/profiles.h
+ * profile_restore_tree). Nothing on disk changes: every machine's next apply
+ * brings its files in line, deleting the unchanged copies of the files a revert
+ * removed (infra/commit.h commit_action_t).
  */
 
 #ifndef DOTTA_CMD_REVERT_H
@@ -16,14 +24,14 @@
  * Revert command options
  *
  * The trailing `positional_args` / `positional_count` pair is a raw bucket
- * populated by the spec engine; `revert_post_parse` reads it and assigns the
- * user-facing `profile`/`file_path`/`commit` fields based on how many positionals
- * the user provided. Consumers of cmd_revert read only the user-facing fields.
+ * populated by the spec engine; `revert_post_parse` reads it by the forms and
+ * assigns the user-facing `profile`/`path`/`commit` fields. Consumers of cmd_revert
+ * read only the user-facing fields.
  */
 typedef struct {
     /* User-facing (read by cmd_revert). */
-    const char *profile;        /* Profile name (NULL = search every local profile) */
-    const char *file_path;      /* File path within profile (required) */
+    const char *profile;        /* Profile name (NULL = the one holding the path, searched) */
+    const char *path;           /* The path, a file or a directory (NULL = the whole profile) */
     const char *commit;         /* Commit reference (required) */
     const char *message;        /* Commit message (NULL = auto-generate) */
     bool force;                 /* Skip confirmation */
@@ -38,74 +46,60 @@ typedef struct {
 /**
  * Execute revert command
  *
- * Reverts a file in a profile to its state at the specified commit. This command
- * modifies the Git repository, and the record only where the restored place's
- * node is gone — its reclaim, so the restored claim reads as undeployed and never
- * as the user's deletion again; deployed files remain unchanged until 'dotta
- * apply' is run. Its hook pair brackets the commit: pre-revert over the decided
- * revert, a dry run's too, and post-revert last, once the revert has said what
- * it did.
+ * The forms (revert_post_parse): `p@C` and `p C` the whole profile p; `p:X@C`,
+ * `p X C`, `X@C` and `X C` the path X, in p or in the one profile holding it. A
+ * word that announces a path is one, and any other is a profile (infra/path.h
+ * path_input_announces_path): `src/config@C` is the profile src/config, and
+ * `./src/config@C` the path. A typed name is a path like any other: the place
+ * this machine puts it at — or, where it places it nowhere, the name itself
+ * (core/restore.h) — so the revert writes the name the profile holds and authors
+ * none.
  *
- * Everything the revert writes is decided before any of it is shown, and shown
- * before it is asked: a dry run and a real run reach the same verdict on the
- * same argument — the same admission, semantic and structural, the draft's own
- * refusals included — and the pre-revert hook and the prompt are the only gates
- * between the preview and the commit. What no preview can foresee is what is
- * left: a ref another writer moved between the preview and the commit — a
- * pre-revert hook's commit among them — a repository that will not write.
+ * The operation, in order:
+ * 1. The profile, named — a refspec's, -p's, the whole profile's own word — or
+ *    the one local profile holding the path (revert_select_profile)
+ * 2. The commit, resolved in the profile's history
+ * 3. The revert made on the profile's draft at its head, nothing written: the
+ *    path's claims, or the commit's whole tree; a path neither side holds anything
+ *    at is refused, naming both
+ * 4. "Nothing to revert" where the draft moved neither the tree nor the sheet
+ * 5. Off a terminal, a confirmation it owes refused (unless --force)
+ * 6. The preview: the profile, the file or the path, the commit; then one file's
+ *    restore whole — restored, its contents unchanged, or its diff — or what
+ *    the commit changes of the profile, in the commit's words
+ * 7. The pre-revert hook, every path a changed claim stands at; a dry run ends
+ * 8. The question (unless --force)
+ * 9. One commit on the head the preview showed, a reseal's bytes written with
+ *    its tree (sys/stage.h stage_put_unwritten); one the prune leaves equal to
+ *    the head is no commit, and says nothing to revert
+ * 10. The receipt, naming a profile this machine has not enabled
+ * 11. The record phase (below)
+ * 12. The post-revert hook, last
  *
- * The two names. A revert restores what the commit held into the name the profile
- * holds at its head, and the key the user named is the key both trees are asked
- * in. A filesystem path asks each tree what claim it holds there; a name asks
- * each tree for that name. Only a name a tree holds in neither of its two documents
- * falls back to that tree's claim at its path — never the reverse, because a
- * path is always answerable and a name may simply not exist:
+ * Everything the revert writes is decided before any of it is shown: a dry run
+ * and a real run reach the same verdict on the same argument — the restore's
+ * refusals included, a sealed file restored under another name without its key
+ * among them — and the hook and the question are the only gates between the preview
+ * and the commit. A ref another writer moved between the preview and the commit
+ * refuses the commit, --force or not.
  *
- *              the write's name (the head)      the read's name (the commit)
- *   LOCATION   the claim held at L,             the claim held at L
- *              else the read's own name
- *   STORAGE    the name as typed                that name in either document,
- *                                               else the claim at L
+ * The record phase: a revert changes Git and nothing on disk, and owes the record
+ * one write, the reclaim — this profile's record retired at a place the commit
+ * changed a claim at, where its node is gone — by one of two rules:
+ *   - a place the commit restored a claim at, whatever row stands there: the
+ *     record is the restored claim's own history, which would read its absence
+ *     as the user's deletion again wherever the claim comes to stand;
+ *   - a place only its removals reached, where no row stands there after the
+ *     commit, as remove's: a record kept under another profile's row is that
+ *     row's reassignment (core/workspace.h workspace_reassigned), which the screens
+ *     say.
+ * A node standing there is the copy the record describes, apply's to bring: the
+ * next load reads a restored file there as [stale].
  *
- * Reading across names is safe: a name the commit held is a fact, and following
- * it is how a revert survives a contract change. Writing across them is not — a
- * name is where a claim lands on every machine — so where the head holds nothing
- * the restore takes the name the commit held it by, never one composed from today's
- * roots, and a typed name is refused where authoring it would give the profile
- * a second name for one path — a name the profile already holds there is a
- * re-capture and authors nothing, whether or not the settle kept it
- * (core/manifest.h manifest_holds_name). Encrypted bytes are sealed under their
- * own name (crypto/cipher.h), so a cross-name restore reseals them: the same
- * plaintext, a different object, and a key where a same-name restore needed none.
- *
- * The operation:
- * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
- * 2. Resolves commit reference in profile branch history
- * 3. Opens the profile's draft at its head (core/profiles.h profile_draft_t),
- *    and reads the claim the commit holds — a blob's, decoded — and what the
- *    head's tree holds at the name the write uses, which may be nothing
- * 4. Refuses a typed name that would be the profile's second for one path
- * 5. Restores the commit's claim, whole, onto the profile's draft — its blob
- *    read once, the proof the store holds it and its stamp's source, and resealed
- *    where its name moved; then the write's own admission, made here so that a
- *    commit that cannot hold it refuses before the preview and not after the
- *    prompt: the sheet first, since a directory the profile claims and nothing
- *    fills has no entry for the index to find and a blob above one leaves it
- *    nowhere to stand, then the tree. The entry is put and no object is written,
- *    a reseal's bytes the stage's to write at the commit; the claim goes beside
- *    it, and the directory claims the file stood on at the commit wherever the
- *    profile does not pass through them at the head (core/profiles.h
- *    profile_restore_file)
- * 6. Answers "nothing to do" when the restore moved neither document
- * 7. Refuses, off a terminal, a confirmation it owes (unless --force)
- * 8. Shows the preview (restored / diff / mode and ownership only), naming the
- *    commit's own name for the file wherever it differs
- * 9. Fires the pre-revert hook, under --dry-run too, where a dry run ends
- * 10. Prompts for confirmation (unless --force)
- * 11. Creates one commit: the restored blob, its claim and its way, and says
- *     so, naming a profile this machine has not enabled on its line
- * 12. Retires this profile's record at the restored place, where its node is gone
- * 13. Fires the post-revert hook last
+ * Costs, a verb's, paid when typed: at a path, the restore's two one-profile
+ * views and its walk of the profile (core/restore.h), and the preview's two views
+ * of the same trees, built again; without a profile named, a one-profile view
+ * per local profile (revert_select_profile).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

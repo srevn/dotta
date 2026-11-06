@@ -62,7 +62,11 @@ typedef struct profile_draft profile_draft_t;
  * profile, beside the two views' builds.
  *
  * What moved is the draft's to say (profile_changed, profile_changes); the one
- * thing no draft holds is whether the argument reaches a claim at all.
+ * thing no draft holds is how many claims the argument reaches.
+ *
+ * Reader: cmds/revert.c cmd_revert, a revert at a path: it refuses an argument
+ * that reaches no claim, and says one file's restore whole where the argument
+ * reaches one, the commit's file at its own place.
  *
  * @param draft The profile's next commit, opened at its head (must not be NULL)
  * @param mounts This machine's table, which places both sides (must not be NULL)

@@ -45,11 +45,12 @@
  * it whatever took its claim (core/workspace.c workspace_analyze_orphans): update
  * and revert delete — status's [deleted] legend line, a local deletion being
  * update's to commit (cmds/status.c status_print_workspace), update's Deleted
- * paths header and help (cmds/update.c update_print_preview, spec_update), apply's
- * help, "files deleted from their profiles" (cmds/apply.c spec_apply) — and every
- * other action keeps, "no file is deleted from disk, on any machine" in remove's
- * help (cmds/remove.c spec_remove), a profile's deletion among them, no history
- * answering for a branch that is gone (cmds/remove.h cmd_remove).
+ * paths header and help (cmds/update.c update_print_preview, spec_update), revert's
+ * Deleted section and help (cmds/revert.c revert_print_changes, spec_revert),
+ * apply's help, "files deleted from their profiles" (cmds/apply.c spec_apply) —
+ * and every other action keeps, "no file is deleted from disk, on any machine"
+ * in remove's help (cmds/remove.c spec_remove), a profile's deletion among them,
+ * no history answering for a branch that is gone (cmds/remove.h cmd_remove).
  */
 typedef enum {
     COMMIT_ACTION_ADD,         /* cmds/add.c */

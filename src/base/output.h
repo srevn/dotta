@@ -458,18 +458,16 @@ void output_hint(
  *
  * The format as it is written, its leading whitespace included, ended and dimmed
  * whole. A remedy is one line of its own (output_hint); this one is a legend
- * beneath a block that is no list (cmds/status.c status_print_profiles' repairs),
- * or the cause a warning gives beneath it (cmds/revert.c cmd_revert's
- * "Reconstructed from the commit …"). A list's legend is the list's own
- * (output_list_legend).
+ * beneath a block that is no list (cmds/status.c status_print_profiles' repairs).
+ * A list's legend is the list's own (output_list_legend).
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
  * @param fmt Printf-style format string
  *
  * Example:
- *   output_hintline(out, OUTPUT_NORMAL, "Reconstructed (mode=%04o)", mode);
- *   → "Reconstructed (mode=0644)" (dimmed)
+ *   output_hintline(out, OUTPUT_NORMAL, "  unused paths  - run '%s'", remedy);
+ *   → "  unused paths  - run 'dotta remove …'" (dimmed)
  */
 void output_hintline(
     output_t *ctx,
@@ -703,9 +701,11 @@ void output_format_kinds(
  * both binders' line for a target spelled another way), and the sentences that
  * name a path beside its names — status's unused-path listing, where the path
  * is the shared term of three paths on one line and the absolute spelling would
- * be the longest of them, and add's and revert's refusals that say which name a
- * path has. A screen listing managed paths one to a line prints them absolute
- * and does not come here. PATH_MAX bytes hold any path the table validated.
+ * be the longest of them, and add's refusals that say which name a path has;
+ * and what a revert of a path is said of, where it is no file (cmds/revert.c
+ * cmd_revert: its preview, its receipt, its refusals). A screen listing managed
+ * paths one to a line prints them absolute and does not come here. PATH_MAX bytes
+ * hold any path the table validated.
  *
  * @param path Path to spell, absolute or as a user typed it — only one beneath
  *        `home` changes (must not be NULL)
@@ -827,7 +827,8 @@ output_list_t *output_list_create(
  * the caller keeps its inputs.
  *
  * @param list List builder (must not be NULL)
- * @param tags The row's tags, as it shows them (NULL treated as empty)
+ * @param tags The row's tags, as it shows them (NULL treated as empty; where no
+ *             row of the list carries one, each row's content stands at the margin)
  * @param color Color for the tags
  * @param content Main content text (NULL treated as empty)
  * @param metadata Optional metadata shown dimmed in parentheses (NULL if none)

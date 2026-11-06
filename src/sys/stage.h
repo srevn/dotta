@@ -225,10 +225,10 @@ error_t stage_merge(
  * brings is measured from it.
  *
  * Readers: the base of a profile's draft (core/profiles.c profile_draft_seed),
- * whose claims remove's arguments are matched against, of which revert asks the
- * branch as it stood — the claim at a path, the entry at a name, a second name
- * — update a capture's prior, and add its view and its prior; the file an edit
- * session opens on (cmds/ignore.c ignore_edit, ignore_modify, cmds/bootstrap.c
+ * whose claims remove's arguments are matched against, of which a restore and
+ * revert's preview read the branch as it stood — its view, and every claim it
+ * holds — update a capture's prior, and add its view and its prior; the file an
+ * edit session opens on (cmds/ignore.c ignore_edit, ignore_modify, cmds/bootstrap.c
  * bootstrap_edit), read from the tree the session commits on; and the tree a
  * merge settles a name from for ours — its sheet's own name and a content conflict
  * the run settles for ours (core/profiles.c profile_merge_tree), and a removal

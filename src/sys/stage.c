@@ -309,8 +309,7 @@ static git_object_t stage_mode_type(uint32_t mode) {
 /**
  * What a refusal calls an entry in a name's way: a gitlink a submodule, as Git's
  * own add names one with a path inside it (lib/git/submodule.c
- * die_path_inside_submodule) and revert one at its name (cmds/revert.c cmd_revert),
- * and every blob a file
+ * die_path_inside_submodule), and every blob a file
  *
  * Readers: stage_admit_path, an entry above the name; stage_admit_subtree, one
  * at it.

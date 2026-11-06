@@ -237,20 +237,26 @@ A merge's header names its parents, as `git show` does, and its diff is against 
 ## Reverting Files
 
 ```bash
-# See file history first
-dotta list global home/.bashrc
+# See a path's history first
+dotta list global ~/.bashrc
 
-# Revert to a specific commit
-dotta revert home/.bashrc@HEAD~1
-dotta revert darwin home/.bashrc a4f2c8e
+# Revert a file to a past commit
+dotta revert ~/.bashrc@HEAD~1
+dotta revert darwin ~/.bashrc a4f2c8e
+
+# A directory, or a whole profile
+dotta revert ~/.config/nvim@HEAD~3
+dotta revert darwin@a4f2c8e
 
 # Preview the revert
-dotta revert --dry-run home/.bashrc@HEAD~3
+dotta revert --dry-run ~/.config/nvim@HEAD~3
 
-# Revert commits the restore to its profile; nothing on disk changes
+# Revert commits to its profile; nothing on disk changes
 # Run apply to deploy the reverted version
 dotta apply
 ```
+
+A revert makes the path, or the whole profile, exactly as the commit held it: what the commit held comes back, and a file it did not hold is removed from the profile — every machine's next apply deletes its unchanged copy. A word that names no path is a profile: `dotta revert src/config@a4f2c8e` reverts the profile `src/config`, and `dotta revert ./src/config@a4f2c8e` the path.
 
 ## Syncing with Remote
 

@@ -143,8 +143,9 @@ void completion_history(
  *
  * The word read as the commands read it (base/refspec.h), `[profile:]<path>`:
  * its profile the word's own, else `pinned` — the one the line names for it, -p
- * or the profile word before it — as a refspec's profile wins over -p in each
- * command's grammar. The path is the profile's name for it at its head
+ * or the profile word before it, or for a path revert's own search finds holding
+ * it (cmds/revert.c revert_complete) — as a refspec's profile wins over -p in
+ * each command's grammar. The path is the profile's name for it at its head
  * (core/scope.h scope_resolve_name), and its changes are the walk's from that
  * head (sys/stats.h stats_path_history): a file's, or each commit that changed
  * anything beneath a directory, newest first, each a commit as completion_history
@@ -175,8 +176,8 @@ bool completion_path_history(
  * no path (infra/path.h path_input_announces_path) is a profile alone: the
  * reference forms, then its history alone, never the enabled histories in its
  * place, so a name that is no branch offers nothing. A path no profile names
- * offers nothing: show refuses a file at a commit with no profile, and revert's
- * own search for one is no TAB's.
+ * offers nothing: show refuses a file at a commit with no profile, and revert
+ * finds one by its own search first (cmds/revert.c revert_complete).
  *
  * @param pinned The profile the line names for the token, or NULL
  * @return true when `current` carried an `@` and was answered; false when it

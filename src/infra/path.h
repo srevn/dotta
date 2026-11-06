@@ -80,16 +80,16 @@ typedef struct {
  * Does the positional announce a path, or is it a name?
  *
  * The grammars' question, asked of a token whose slot is still undecided: the
- * leading positional of list, diff, apply and update may be a profile or a path,
- * and this tells the two apart with no repository in hand. A path announces itself
- * — absolute (`/x`), tilde (`~/x`), dot-relative (`./x`, `../x`, `.rc`), under
- * a storage label (infra/label.h label_prefixes), or a pattern that selects one.
- * A name announces nothing, and neither does a name with a separator in it: the
- * layering convention spells profiles `<os>/<variant>` and
+ * leading positional of list, diff, apply, update and revert may be a profile
+ * or a path, and this tells the two apart with no repository in hand. A path
+ * announces itself — absolute (`/x`), tilde (`~/x`), dot-relative (`./x`, `../x`,
+ * `.rc`), under a storage label (infra/label.h label_prefixes), or a pattern
+ * that selects one. A name announces nothing, and neither does a name with a
+ * separator in it: the layering convention spells profiles `<os>/<variant>` and
  * `hosts/<host>/<variant>`, so `darwin/work` and `src/config` are one shape and
  * only the profile reading has no other spelling — `./src/config` is the path's.
  * A profile whose own name announces a path is named with -p, which is what each
- * of the four calls that flag at its own slot.
+ * of them calls that flag at its own slot.
  *
  * A pattern is what the filter compiles as a rule (path_input_announces_rule),
  * so a token answered here as one never lands in a bucket that cannot read it.
@@ -116,7 +116,9 @@ typedef struct {
  * in a revision whose pattern holds a glob's bytes, which is never a path.
  *
  * Readers: list's inference form and its completion, diff's and apply's positional
- * classifiers, update's first-positional rule and its completion.
+ * classifiers, update's first-positional rule and its completion, and revert's
+ * first word, read alone or beside its commit, and its completion's search for
+ * the profile holding a path (cmds/revert.c revert_post_parse, revert_holder).
  *
  * @param input The positional (may be NULL, which announces nothing)
  * @return true iff the input announces a path, or a pattern that selects one
@@ -201,12 +203,15 @@ bool path_input_announces_rule(const char *input);
  *     path is one, and a name the place this machine puts it at — every claim
  *     there, whichever label names it — while a name it places nowhere reaches
  *     the claims named beneath it.
- *   - show, list and revert (cmds/) take either: a name the user typed is Git's
- *     key already, and a filesystem path is the profile's to name (core/scope.h
- *     scope_resolve_name, cmds/revert.c revert_claim_held). Without a profile,
- *     show and list hand either to the enabled set's view (core/scope.h
- *     scope_resolve_claim): a path is the row standing there, a name its one
- *     holder.
+ *   - revert (cmds/revert.c) hands either to the restore, and with no profile
+ *     named finds the one holding it in the key it named (revert_select_profile):
+ *     a filesystem path by the rows each profile's view stands at or beneath
+ *     it, a name by either of its documents holding it.
+ *   - show and list (cmds/) take either: a name the user typed is Git's key
+ *     already, and a filesystem path is the profile's to name (core/scope.h
+ *     scope_resolve_name). Without a profile, they hand either to the enabled
+ *     set's view (core/scope.h scope_resolve_claim): a path is the row standing
+ *     there, a name its one holder.
  *   - completion's commit slot after a path (cmds/completion.c changes_emit)
  *     takes either, as show and list do with a profile named: the profile names
  *     the argument (core/scope.h scope_resolve_name), and one the resolver refuses

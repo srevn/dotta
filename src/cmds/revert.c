@@ -1,5 +1,5 @@
 /**
- * revert.c - Revert file to previous commit state
+ * revert.c - A path or a whole profile made as a past commit held it
  */
 
 #include "cmds/revert.h"
@@ -17,11 +17,14 @@
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/hashmap.h"
 #include "base/output.h"
 #include "base/refspec.h"
+#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
+#include "core/restore.h"
 #include "core/state.h"
 #include "infra/commit.h"
 #include "infra/content.h"
@@ -34,134 +37,56 @@
 #include "utils/hooks.h"
 
 /**
- * The claim `profile` holds at `filesystem_path`, or NULL where it holds none
+ * The one local profile holding the path, where no profile is named
  *
- * One contribution of the profile, asked for the row at the path (core/manifest.h
- * manifest_build_profile, manifest_lookup_claim). The row is the arena's, as
- * the view is, so the answer survives this call.
+ * Every local profile, enabled or not, is asked at its head what it holds at
+ * the argument, in the key the argument named. A path: the rows its one-profile
+ * view stands at or beneath it — a file's, or a directory's whole — as export
+ * selects them (cmds/export.c export_collect_filesystem), named by the profile's
+ * own name for the path (core/manifest.h manifest_claim_name: the claim held
+ * there, else the name one would take). The view is placed by this machine's
+ * table, which is the enabled set's (core/manifest.h manifest_mount_table): a
+ * profile nothing has enabled is bound nowhere, so no path reaches its custom/
+ * claims, and their names find them. A name: a file or a directory either of
+ * the profile's two documents holds at it (core/profiles.h profile_holds) — the
+ * tree first, so a name the tree holds is answered without the sheet — named as
+ * typed.
  *
- * The row and not its name, because this file asks it three ways: the search
- * takes any claim, for whether a profile holds the path at all; the read takes
- * any claim; and the write's name takes the claim held there whatever it is called.
- * A verb answering a string would have to pick one of them for all three, which
- * is also why revert no longer asks core/manifest.h manifest_claim_name: over a
- * past tree a name today's roots would compose is one that tree never held, and
- * for a verb that writes, composing a name would choose a deployment contract.
- * A fourth question — may this name be authored at all — is the admission's,
- * and it reads more of one view than a row (revert_refuse_second_name).
+ * Every holder counts. The one is the answer; several are refused, each listed
+ * beside its own name for the argument, the way through the clause; none is refused
+ * as an absence, whose way through is -p: a profile that deleted the path is
+ * the case a revert exists for, and a profile named is not asked what its head
+ * holds. A profile holding the path only by a name its view did not keep, or by
+ * a claim its own claims contradict, stands no row there and is not found by
+ * path; -p reaches it (stated).
  *
- * Strict, like every view: a profile whose sheet will not load refuses the question
- * rather than answering from the tree alone. cmd_revert reads both sheets strictly
- * before it asks — the head's at its draft's open, the commit's at its step 6 —
- * and the search is complete or an error (revert_select_profile), so no policy
- * is added here.
+ * Complete or an error: a profile the search cannot read stops it whichever profile
+ * it is, since a list short by one is a falsely unique answer, and the refusal's
+ * clause names the flag that reads one profile instead of all of them. Each view
+ * is built in a frame of its own, a view built to read one answer
+ * (include/runtime.h "Memory"), the holder's name copied out: the search visits
+ * every local profile, at a one-profile view each.
  *
- * @param ctx Dispatch context (must not be NULL)
- * @param profile The profile the claim is looked for in — at the head's tree or
- *                the target commit's (must not be NULL)
- * @param filesystem_path Where to ask (must not be NULL)
- * @param out_row The claim, or NULL where it holds none and after an error (must
- *                not be NULL; the command arena's, borrowed)
+ * Readers: cmd_revert, the profile the revert acts on where none is named; and
+ * revert_holder, the profile a path's commit slot offers the changes of.
+ *
+ * @param ctx Dispatch context: the repository, the table and the arena the answer
+ *            lives in (must not be NULL)
+ * @param arg The argument, in the key it named (must not be NULL)
+ * @param out_profile The one holder, as the listing spells it in ctx->arena (must
+ *                    not be NULL; NULL after an error)
  * @return Error or NULL on success
  */
-static error_t revert_claim_held(
-    const dotta_ctx_t *ctx,
-    profile_t *profile,
-    const char *filesystem_path,
-    const manifest_row_t **out_row
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(profile);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(out_row);
-
-    *out_row = NULL;
-
-    manifest_t *view = NULL;
-    error_t err = manifest_build_profile(profile, ctx->run.mounts, ctx->arena, &view);
-    if (err) return err;
-
-    /* The profile's own contribution: the row is the arena's */
-    *out_row = manifest_lookup_claim(view, profile_name(profile), filesystem_path);
-
-    return NULL;
-}
-
-/**
- * Whether a head's tree leaves a name room for the one file a revert restores
- *
- * Git's one-entry rule at the name the write uses, asked of the kind of entry
- * the tree alone holds there (core/profiles.h profile_entry): a blob, or nothing,
- * leaves the name room; a subtree or a gitlink holds no file there, whatever
- * the commit holds. Never profile_holds' kind, which the sheet may answer
- * DIRECTORY: a directory claim the sheet alone holds never stands in the way —
- * the restore takes its place where it stands, and carries it where the head's
- * blob contradicts it (cmd_revert step 12).
- *
- * Readers: revert_select_profile, of each profile holding the argument — those
- * a file can be restored into decide the search; cmd_revert step 10, of the profile
- * the revert acts on. A reader not on this list is a bug.
- */
-static bool revert_restorable(profile_held_kind_t kind) {
-    switch (kind) {
-        case PROFILE_HELD_NOTHING:
-        case PROFILE_HELD_FILE:      return true;
-        case PROFILE_HELD_DIRECTORY:
-        case PROFILE_HELD_SUBMODULE: return false;
-    }
-
-    CHECK_ARG(false, "a held kind no enumerator names");
-}
-
-/**
- * Which profile the revert acts on
- *
- * The profile question, and only that. What that profile calls the argument is
- * read afterwards, and twice: from the commit's tree for the bytes to restore
- * and from the tree the revert edits for the name to write them under (cmd_revert
- * steps 8 and 9). A branch's head is its stage's tree, so the search below and
- * the naming there read one source and cannot disagree about a name.
- *
- * With `opts->profile`: the user's word, required to be here. Whether the profile
- * holds the argument at its head is not asked — a revert restores what the *commit*
- * holds, and a path the profile deleted is the case a revert exists for.
- *
- * Without: the search. Every local profile, enabled or not, is asked what it
- * holds at the argument, in the key the argument named, and each that holds it
- * whether a file can be restored into it there (revert_restorable). Those that
- * can decide: the one is the answer, and several are refused as ambiguous, each
- * listed beside its own name for the argument. Where none can — every holder's
- * head holds a directory or a gitlink at its name — the first holder is the answer,
- * and its read refuses it by its noun as it would refuse any of them (cmd_revert
- * steps 8 and 10): no -p could make another the revert's. That read resolves
- * the commit first, so a revision the first holder lacks is refused before the
- * noun is read (stated). None holding it is refused as an absence, whose way
- * through is -p. Complete or an error: a profile the search cannot read stops
- * it whichever profile it is, since a list short by one is a falsely unique answer,
- * and the refusal's clause names the flag that reads one profile instead of all
- * of them.
- */
 static error_t revert_select_profile(
-    const dotta_ctx_t *ctx,
-    const cmd_revert_options_t *opts,
-    const path_input_t *arg,
-    const char **out_profile
+    const dotta_ctx_t *ctx, const path_input_t *arg, const char **out_profile
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(opts);
     CHECK_NULL(arg);
     CHECK_NULL(out_profile);
 
     git_repository *repo = ctx->run.repo;
 
     *out_profile = NULL;
-
-    if (opts->profile) {
-        error_t err = profile_require(repo, opts->profile);
-        if (err) return err;
-        *out_profile = opts->profile;
-        return NULL;
-    }
 
     /* The argument in the key it named — one of two — which every refusal below
      * names it by. */
@@ -175,17 +100,12 @@ static error_t revert_select_profile(
     string_array_t profiles;
     error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
 
-    /* Each profile loaded once and asked in the key the argument named, and each
-     * that holds it what its head's tree holds at its own name for it — the entry
-     * the read meets there (cmd_revert step 10). The question is every local
-     * profile's, not the enabled set's, whose claim the view answers (core/scope.h
-     * scope_resolve_claim: show, list). A profile names a path once and holds a
-     * name once, so each answers once at most. Two are kept as themselves — the
-     * first holder, and the first a file can be restored into — and each that
-     * can is spelled as found, beside its own name for the argument, which is
-     * all the refusal for several reads. */
+    /* Each profile loaded once and asked in the key the argument named: a profile
+     * names a path once and holds a name once, so each answers once at most.
+     * The first holder is kept as itself, and every holder is spelled as found
+     * beside its own name for the argument, which is all the refusal for several
+     * reads. */
     const char *holder = NULL;
-    const char *restorable = NULL;
     string_array_t holders;
     string_array_init(&holders, ctx->arena, 0);
     for (size_t i = 0; !err && i < profiles.count; i++) {
@@ -193,40 +113,39 @@ static error_t revert_select_profile(
         err = profile_load(repo, profiles.entries[i], &profile);
         if (err) break;
 
-        const char *storage_path = NULL;
+        const char *name = NULL;
         if (arg->key == PATH_KEY_FILESYSTEM) {
-            /* A path: the claim the profile's view holds there, a derived one
-             * included, under the name the profile holds it by — a binding's,
-             * or one from before the binding, never one this machine composes.
-             * The view is placed by this machine's table, which is the enabled
-             * set's (core/manifest.h manifest_mount_table): a profile nothing
-             * has enabled is bound nowhere, so no path reaches its custom/ claims,
-             * and their names find them as always. */
-            const manifest_row_t *row = NULL;
-            err = revert_claim_held(ctx, profile, arg->filesystem_path, &row);
-            if (row) storage_path = row->storage_path;
+            /* A path: any row at or beneath it, the profile's name for the path
+             * itself said, in the command's arena, of the view the frame holds */
+            arena_t *frame = arena_create(0);
+            manifest_t *view = NULL;
+            err = manifest_build_profile(profile, ctx->run.mounts, frame, &view);
+
+            const manifest_rows_t rows = manifest_rows(view);
+            const size_t len = strlen(arg->filesystem_path);
+            for (size_t r = 0; !err && r < rows.count; r++) {
+                if (str_path_under(rows.entries[r]->filesystem_path, arg->filesystem_path, len)) {
+                    name = manifest_claim_name(
+                        ctx->arena, view, profile_name(profile), arg->filesystem_path
+                    );
+                    break;
+                }
+            }
+            arena_free(frame);
         } else {
-            /* A name, as typed: held by either of the profile's two documents
-             * (core/profiles.h profile_holds) — the tree first, a subtree counting
-             * as a name has always counted, so a name the tree holds is answered
-             * without the sheet; the sheet where the tree is silent, for a
-             * directory claim with nothing beneath it. */
+            /* A name: a file or a directory at it, as typed — a gitlink there
+             * is no claim, as the view holds none */
             profile_held_t held;
             err = profile_holds(profile, arg->storage_path, &held);
-            if (!err && held.kind != PROFILE_HELD_NOTHING) storage_path = arg->storage_path;
+            if (!err && (held.kind == PROFILE_HELD_FILE || held.kind == PROFILE_HELD_DIRECTORY)) {
+                name = arg->storage_path;
+            }
         }
-
-        profile_held_t entry;
-        if (storage_path) err = profile_entry(profile, storage_path, &entry);
         profile_free(profile);
-        if (err) break;
-        if (!storage_path) continue;
+        if (err || !name) continue;
 
         if (!holder) holder = profiles.entries[i];
-        if (!revert_restorable(entry.kind)) continue;
-
-        if (!restorable) restorable = profiles.entries[i];
-        string_array_pushf(&holders, "%s (%s)", profiles.entries[i], storage_path);
+        string_array_pushf(&holders, "%s (%s)", profiles.entries[i], name);
     }
     if (err) {
         /* The search crosses every local profile, so one this command has nothing
@@ -241,217 +160,27 @@ static error_t revert_select_profile(
         );
     }
 
-    if (!holder) {
-        /* Held at no head, every profile having answered: a file deleted from
-         * its profile is the case a revert exists for, and naming the profile
-         * is what reaches it — a profile named is not asked what its head holds
-         * (the -p arm above). */
+    /* Held at no head, every profile having answered: naming the profile is what
+     * reaches a path it deleted — a profile named is not asked what its head
+     * holds */
+    if (holders.count == 0) {
         return error_create(
             ERR_NOT_FOUND, "'%s' is not held by any profile; -p restores it into a "
             "profile that deleted it", subject
         );
     }
 
-    /* One a file can be restored into: the profile the revert acts on. None:
-     * every holder's head holds a directory or a gitlink at its name, and the
-     * first answers — its read refuses it by its noun, as it would refuse each,
-     * where the refusal for several would send the user to a -p that refuses
-     * again. */
-    if (holders.count <= 1) {
-        *out_profile = restorable ? restorable : holder;
-        return NULL;
-    }
-
     /* Several: the way through is the clause, because no key tells them apart
-     * here — a path asks every profile again, and each answers as before. The
-     * count and the list are the choices -p has, so a holder no file can be
-     * restored into is not among them. */
-    return error_create(
-        ERR_INVALID_ARG,
-        "'%s' is held by %zu profiles: %s; -p names one", subject,
-        holders.count, string_array_join(ctx->arena, &holders, ", ")
-    );
-}
-
-/**
- * Refuse a typed name that would give the profile a second name for one path
- *
- * The head's own contribution, asked two questions: the claim held where the
- * name resolves, and whether the profile holds the typed name at all
- * (core/manifest.h manifest_holds_name). Both readings are the contribution's,
- * so they are asked of one build rather than of a row alone — the second reads
- * the names the settle recorded against the kept one, which no row carries.
- *
- * A name the profile already holds is a re-capture and authors nothing, whether
- * it is the name kept at the path or one the settle did not keep. Only a name
- * new to the profile at a path it already names is a second name, and that is
- * what this refuses — naming the first, and not skippable by --force: a refusal
- * is not a confirmation.
- *
- * A derived claim names nothing (manifest_is_derived), so it is not a first name
- * and does not block one — explicit outranks derived within a profile as across
- * them.
- *
- * @param ctx Dispatch context (must not be NULL)
- * @param profile The profile at its head, whose claims the name would join (must
- *                not be NULL)
- * @param filesystem_path Where the typed name resolves (must not be NULL)
- * @param name The typed name (must not be NULL)
- * @return The refusal, or NULL when the name may be authored
- */
-static error_t revert_refuse_second_name(
-    const dotta_ctx_t *ctx,
-    profile_t *profile,
-    const char *filesystem_path,
-    const char *name
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(profile);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(name);
-
-    manifest_t *view = NULL;
-    error_t err = manifest_build_profile(profile, ctx->run.mounts, ctx->arena, &view);
-    if (err) return err;
-
-    const manifest_row_t *row = manifest_lookup_claim(view, profile_name(profile), filesystem_path);
-    if (row && !manifest_is_derived(row) &&
-        !manifest_holds_name(view, profile_name(profile), filesystem_path, name)) {
-        /* The path is the shared term of three paths in one sentence, and the
-         * one path here the user never typed — so it is spelled the way the shell
-         * spells it, as the screen that reports the pair this refuses already
-         * spells it (cmds/status.c's unused-path listing, base/output.h
-         * output_format_path). */
-        char shown[PATH_MAX];
-        output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
-
-        /* No clause: the way through is in the fact. The name the profile has
-         * reverts the file as its path does — a name the commit did not hold
-         * falls through to the path (revert_target_claim) — and giving that name
-         * up is remove's, the verb the fact implies. */
+     * here — a path asks every profile again, and each answers as before */
+    if (holders.count > 1) {
         return error_create(
-            ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and '%s' would be a "
-            "second name for it", profile_name(profile), shown, row->storage_path, name
+            ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s; -p names one", subject,
+            holders.count, string_array_join(ctx->arena, &holders, ", ")
         );
     }
 
+    *out_profile = holder;
     return NULL;
-}
-
-/**
- * The file claim the target commit holds for this argument, decoded
- *
- * Its name is the commit's, its blob and type the commit's entry, and its
- * attributes the commit's FILE item over it, read as the walk reads one
- * (core/profiles.h profile_find): the claim a restore writes, whole, under the
- * name its caller chooses. Asked in the key the user named (cmds/revert.h, the
- * two names), and it never sees the head: the read's name is the commit's alone.
- *
- *   a FILESYSTEM — the claim held at the path, whatever it is called; the commit's
- *                  two documents then say whether that claim is one file.
- *   a STORAGE    — the name as typed, because a name is Git's key and does not
- *                  move. Only a name the commit holds neither in its tree nor
- *                  in its sheet is a contract change to find, and then the path
- *                  is the key.
- *
- * A name is answered by both documents at once (core/profiles.h profile_holds),
- * and that is what keeps the fallback honest: a DIRECTORY claim held at the typed
- * name with no tree entry — a tracked directory with nothing inside it, an ancestor
- * chain the tree no longer has — answers as the directory it is, where reading
- * the tree's silence as permission to search the path would answer with a
- * *different* claim's blob under the name the user typed.
- *
- * Refuses rather than answering nothing, so the caller holds a claim or an error
- * and no third state: a directory or a submodule by its own noun — under the
- * fallback's name where the fallback found it, that name not being the one the
- * user typed, and the difference being the information — and an absence worded
- * from the key the user named, a path the commit held nothing at included, whether
- * or not a root of the profile stands there: a root is a directory the profile
- * may hold a claim at like any other, so what the commit held is the whole question
- * and where the place stands is none of it.
- *
- * @param ctx Dispatch context (must not be NULL)
- * @param target_profile The profile at the target commit's tree, which reads
- *                       the commit's sheet strictly where its tree is silent
- *                       (must not be NULL)
- * @param arg The argument, in the key it named (must not be NULL)
- * @param filesystem_path Where both trees may be asked about, or NULL for a custom/
- *        name this machine cannot place
- * @param commit Abbreviated target commit oid, for the refusals (must not be NULL)
- * @param out The claim, lent by the target's profile for its life (must not be
- *            NULL; NULL after an error)
- * @return Error or NULL on success
- */
-static error_t revert_target_claim(
-    const dotta_ctx_t *ctx,
-    profile_t *target_profile,
-    const path_input_t *arg,
-    const char *filesystem_path,
-    const char *commit,
-    const profile_claim_t **out
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(target_profile);
-    CHECK_NULL(arg);
-    CHECK_NULL(commit);
-    CHECK_NULL(out);
-
-    *out = NULL;
-
-    /* A typed name is asked first, as typed; a path has no name until the claim
-     * held there gives it one. The commit's two documents answer a name through
-     * the profile at its tree (core/profiles.h profile_holds), which reads the
-     * commit's sheet where the tree is silent. */
-    const char *name = arg->key == PATH_KEY_STORAGE ? arg->storage_path : NULL;
-    profile_held_t held = { .kind = PROFILE_HELD_NOTHING };
-
-    error_t err = name ? profile_holds(target_profile, name, &held) : NULL;
-    if (err) return err;
-
-    /* Only a name the commit holds in neither document falls back to the claim
-     * held at the path, and a path argument starts here. The claim is asked by
-     * its own name, which the commit holds in one document or the other by
-     * construction: the row came from them. */
-    if (held.kind == PROFILE_HELD_NOTHING && filesystem_path) {
-        const manifest_row_t *row = NULL;
-        err = revert_claim_held(ctx, target_profile, filesystem_path, &row);
-        if (err) return err;
-
-        if (row) {
-            name = row->storage_path;
-            err = profile_holds(target_profile, name, &held);
-            if (err) return err;
-        }
-    }
-
-    switch (held.kind) {
-        case PROFILE_HELD_FILE:
-            /* The file claim the commit makes there, decoded as its walk shows
-             * it: a blob stands at the name, so the claim is there to find */
-            return profile_find(target_profile, PROFILE_READ_STRICT, PATH_KIND_FILE, name, out);
-
-        case PROFILE_HELD_DIRECTORY:
-        case PROFILE_HELD_SUBMODULE:
-            return error_create(
-                ERR_INVALID_ARG, "'%s' is %s at commit %s; revert restores one file",
-                name,
-                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule",
-                commit
-            );
-
-        case PROFILE_HELD_NOTHING:
-            break;
-    }
-
-    /* Nothing, in the key the user named, in the one sentence every verb says
-     * of what a profile holds nothing at (core/profiles.h profile_held_kind_t).
-     * A row found above is held in one document or the other and cannot reach
-     * here; if it ever did, this sentence is honest for it too. */
-    return error_create(
-        ERR_NOT_FOUND, "'%s' not found in profile '%s' at commit %s",
-        arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path,
-        profile_name(target_profile), commit
-    );
 }
 
 /**
@@ -535,10 +264,10 @@ static int revert_print_line_cb(
  * made from the plaintexts, says so where the ids cannot: its delta unmodified,
  * the preview says the sentence that arm says.
  *
- * That arm is also why the caller hands the restored claim's name in here: the
- * head's entry is looked up at the name the revert writes, so wherever there is
- * an entry to diff against, the write's name is the head's binding and the two
- * words name one string.
+ * That arm is also why the caller hands the head's name in as the label: the
+ * head's claim is read at the file's place, and its name is the one the revert
+ * writes there (core/restore.h), so wherever there is a blob to diff against,
+ * the write's name is the head's binding and the two words name one string.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param profile Profile name, for key derivation (must not be NULL)
@@ -671,99 +400,317 @@ static error_t revert_print_diff(
 }
 
 /**
- * Whether the record at the restored place is this profile's — the one a revert's
- * reclaim retires
+ * Print what a revert changes of the profile: a section a change, in the words
+ * its commit will carry
  *
- * Asked of the read before the lock, whether to take it, and of the one under
- * it, which decides (revert_write_record). The storage name is not asked: another
- * of the profile's names at the place is the same profile's node.
+ * The names the commit adds, updates, removes and changes of dotta's own files
+ * (core/profiles.h profile_changes), each list a section titled in the message's
+ * headings (infra/commit.c commit_paths) and every name listed, where the message
+ * names five a heading. The preview spells its titles and never reads the removal
+ * rule (infra/commit.h commit_action_t): the Deleted section's hint is the one
+ * effect another machine feels, every machine's unchanged copy deleted at its
+ * next apply, in update's words for its own (cmds/update.c update_print_preview).
+ * A revert whose lists name nothing moves only the way to the claims — a derived
+ * directory's attributes, or a sheet saying the head's claims in other bytes —
+ * and says so in the message's own line, tensed for a preview.
+ *
+ * Reader: cmd_revert, every revert but one file's restore.
+ *
+ * @param out Output context (must not be NULL)
+ * @param changes What the commit changes (must not be NULL)
+ */
+static void revert_print_changes(output_t *out, const commit_changes_t *changes) {
+    CHECK_NULL(out);
+    CHECK_NULL(changes);
+
+    /* No list names anything: the way to the claims moved alone */
+    if (changes->added.count + changes->updated.count + changes->removed.count +
+        changes->internal.count == 0) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_print(out, OUTPUT_NORMAL, "Only ancestor claims will change\n");
+        return;
+    }
+
+    /* The names the profile claims nothing at now, and the commit does */
+    if (changes->added.count > 0) {
+        output_list_t *list = output_list_create(out, "Added", NULL);
+        for (size_t i = 0; i < changes->added.count; i++) {
+            output_list_add(list, NULL, OUTPUT_COLOR_RESET, changes->added.entries[i], NULL);
+        }
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* The names claimed on both sides, saying another thing */
+    if (changes->updated.count > 0) {
+        output_list_t *list = output_list_create(out, "Updated", NULL);
+        for (size_t i = 0; i < changes->updated.count; i++) {
+            output_list_add(list, NULL, OUTPUT_COLOR_RESET, changes->updated.entries[i], NULL);
+        }
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* The names the profile claims and the commit nothing at: a file's removal
+     * deletes every machine's unchanged copy at its next apply, the one effect
+     * the revert has past the profile */
+    if (changes->removed.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Deleted",
+            "will be deleted from the profile, with every machine's unchanged copy"
+        );
+        for (size_t i = 0; i < changes->removed.count; i++) {
+            output_list_add(list, NULL, OUTPUT_COLOR_RESET, changes->removed.entries[i], NULL);
+        }
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Dotta's own files the commit changes, a whole profile's alone */
+    if (changes->internal.count > 0) {
+        output_list_t *list = output_list_create(out, "Internal", NULL);
+        for (size_t i = 0; i < changes->internal.count; i++) {
+            output_list_add(list, NULL, OUTPUT_COLOR_RESET, changes->internal.entries[i], NULL);
+        }
+        output_list_render(list);
+        output_list_free(list);
+    }
+}
+
+/**
+ * What a revert hands its hooks: the path each claim its commit changes stands
+ * at, once
+ *
+ * The claims the commit adds, updates and removes (core/profiles.h
+ * profile_changes), each at the path this machine puts it; one placed nowhere
+ * hands its name, the shape remove hands a hook its claims in (cmds/remove.c
+ * remove_hook_paths). A path two names stand at — the head's unused name a revert
+ * takes beside the one it writes — is one entry: a hook is told the paths the
+ * revert reaches. An internal file stands nowhere and hands nothing, and is never
+ * placed: the table places a name under a label alone (infra/mount.h
+ * mount_resolve).
+ *
+ * Reader: cmd_revert, both hooks.
+ *
+ * @param arena The list's arena, its seen-set's and the places' (must not be NULL)
+ * @param changes What the commit changes (must not be NULL)
+ * @param mounts This machine's table (must not be NULL)
+ * @param profile The reverted profile, whose binding places its custom/ names
+ *                (must not be NULL)
+ * @return The paths, copies in `arena`
+ */
+static string_array_t revert_hook_paths(
+    arena_t *arena, const commit_changes_t *changes, const mount_table_t *mounts,
+    const char *profile
+) {
+    string_array_t paths;
+    string_array_init(&paths, arena, 0);
+
+    /* Each path once, by a seen-set's one probe (base/hashmap.h hashmap_add);
+     * the list keeps copies, the shape the hook contract's char *const * takes
+     * as it stands */
+    const string_array_t *const lists[] = {
+        &changes->added, &changes->updated, &changes->removed,
+    };
+    hashmap_t *handed = hashmap_borrow(arena, 0);
+    for (size_t l = 0; l < sizeof(lists) / sizeof(lists[0]); l++) {
+        for (size_t i = 0; i < lists[l]->count; i++) {
+            const char *name = lists[l]->entries[i];
+            const char *place = mount_resolve(arena, mounts, profile, name);
+            const char *path = place ? place : name;
+            if (hashmap_add(handed, path, NULL)) string_array_push(&paths, path);
+        }
+    }
+
+    return paths;
+}
+
+/**
+ * Whether the record at a place the commit changed a claim at is this profile's
+ * — the one a revert's reclaim retires
+ *
+ * Asked of the read before the lock, whether to take it (revert_owes), and of
+ * the one under it, which decides (revert_write_record). The storage name is
+ * not asked: another of the profile's names at the place is the same profile's
+ * node.
  *
  * @param records The record, as a read gave it (NULL when record_count is 0)
  * @param record_count Records in it
  * @param profile The reverted profile (must not be NULL)
- * @param filesystem_path The restored claim's place (must not be NULL)
+ * @param filesystem_path The place (must not be NULL)
  * @return Whether the record there names the profile
  */
 static bool revert_reclaims(
     const state_record_t *records, size_t record_count, const char *profile,
     const char *filesystem_path
 ) {
-    const state_record_t *record = state_find_record(records, record_count, filesystem_path);
+    const state_record_t *record = state_find_record(
+        records, record_count, filesystem_path
+    );
 
     return record && strcmp(record->profile, profile) == 0;
 }
 
 /**
- * Write the record a revert owes: the reclaim of the restored place, where its
- * node is gone
+ * Whether the record phase owes a write, as the record stands before the lock:
+ * this profile's record at one of the places, each a place the commit changed a
+ * claim at whose node is gone (revert_write_record)
  *
- * A revert changes Git and nothing on disk, and the next load reads the restored
- * claim against the record at its place: [stale] over a copy that stands, apply's
- * to bring. Over a node already gone that record is the history of a node the
- * user removed — under an earlier removal of the claim, or Git's — and where it
- * confirmed the bytes the revert restores, as a revert undoing that removal finds
- * it, would read the restored claim's absence as the user's deletion again
- * (core/workspace.c classify_absent), every screen sending the user to undo the
- * revert. So it retires, the commit having reconciled the claim with the node's
- * absence, and the claim starts from its first look, apply's to land (core/state.h
- * state_retire). This profile's record alone, whatever its kind, the enabled
- * set or no, and whatever row stands there now: it is the restored claim's own
- * history, which would misread its absence wherever that claim comes to stand —
- * beneath a higher profile's row, once that row leaves before an apply.
+ * No place owes nothing, and reads no record. Else the record is read on the
+ * READ handle, empty where the database does not exist, which grows none. A read
+ * that fails owes the lock: the read here decides only whether to take it, and
+ * the read under the lock says why where it fails again, so this one's error is
+ * dropped — as remove's (cmds/remove.c remove_owes).
  *
- * The look first: a node standing there — every revert of a deployed file — reads
- * no record and takes no lock. Then whether this profile's record stands there,
- * before the lock, so a revert that owes nothing takes none and a store with no
- * database grows none — a read that fails owes the lock, as remove's does
- * (cmds/remove.c remove_owes) — and again under it, which decides (core/state.h
- * state_begin).
+ * @param ctx Dispatch context: the store, and the arena the read lands in
+ * @param profile The reverted profile (must not be NULL)
+ * @param restored The places the commit restored a claim at
+ * @param removed The places only its removals reached
+ * @return Whether to take the lock
+ */
+static bool revert_owes(
+    const dotta_ctx_t *ctx, const char *profile, const string_array_t *restored,
+    const string_array_t *removed
+) {
+    if (restored->count + removed->count == 0) return false;
+
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    if (state_records(ctx->run.state, ctx->arena, &records, &record_count)) return true;
+
+    for (size_t i = 0; i < restored->count; i++) {
+        if (revert_reclaims(records, record_count, profile, restored->entries[i])) {
+            return true;
+        }
+    }
+    for (size_t i = 0; i < removed->count; i++) {
+        if (revert_reclaims(records, record_count, profile, removed->entries[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Write the record a revert owes: the reclaim of each place its commit changed
+ * a claim at, where the node is gone
  *
- * Refused, the record stands, and the reclaim is what no later load re-derives:
- * the restored claim's absence reads as that record says — [undeployed] [stale],
+ * A revert changes Git and nothing on disk, and the next load reads each claim
+ * it restored against the record at its place: [stale] over a copy that stands,
+ * apply's to bring. Over a node already gone that record is the history of a
+ * node the user removed — under an earlier removal of the claim, or Git's — and
+ * where it confirmed the bytes the revert restores, as a revert undoing that
+ * removal finds it, would read the restored claim's absence as the user's deletion
+ * again (core/workspace.c classify_absent), every screen sending the user to
+ * undo the revert. So this profile's record there retires, the commit having
+ * reconciled the claim with the node's absence, and the claim starts from its
+ * first look, apply's to land (core/state.h state_retire) — by one of two rules
+ * (cmds/revert.h):
+ *   - a place the commit restored a claim at, whatever row stands there now:
+ *     the record is the restored claim's own history, which would misread its
+ *     absence wherever that claim comes to stand — beneath a higher profile's
+ *     row, once that row leaves before an apply;
+ *   - a place only its removals reached, where no row stands there after the
+ *     commit, as remove's (cmds/remove.c remove_write_record): a record kept
+ *     under another profile's row is that row's reassignment (core/workspace.h
+ *     workspace_reassigned), which the screens say.
+ * This profile's record alone, whatever its kind, the enabled set or no. A name
+ * this machine places nowhere is no place, and an internal file none.
+ *
+ * The look first: a node standing at every place — every revert of deployed files
+ * — reads no record and takes no lock. Then whether this profile's record stands
+ * at one of the places whose node is gone, before the lock, so a revert that
+ * owes nothing takes none and a store with no database grows none (revert_owes),
+ * and again under it, which decides (core/state.h state_begin); the enabled view
+ * the commit leaves is built there only where a place only removals reached owes.
+ *
+ * Refused, the records stand, and the reclaim is what no later load re-derives:
+ * a restored claim's absence reads as its record says — [undeployed] [stale],
  * apply's, where it confirmed other bytes than the restored ones, and the user's
  * deletion, which an update would commit, where it confirmed the very bytes
- * restored (stated, cmd_revert's step 21) — and in a disabled profile the record
- * is an orphan, which the next apply reclaims.
+ * restored (stated, cmd_revert) — and in a disabled profile the record is an
+ * orphan, which the next apply reclaims.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param profile The reverted profile (must not be NULL)
- * @param filesystem_path The restored claim's place here, or NULL where this
- *        machine places it nowhere (nothing to do)
+ * @param changes What the commit changed (must not be NULL)
  * @return Error or NULL on success; the transaction is ended either way
  */
 static error_t revert_write_record(
-    const dotta_ctx_t *ctx, const char *profile, const char *filesystem_path
+    const dotta_ctx_t *ctx, const char *profile, const commit_changes_t *changes
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
+    CHECK_NULL(changes);
 
-    /* A node standing there is the copy the record describes, apply's to bring:
-     * no record is read and no lock taken. The look decides for the lock below,
-     * taken an instant after it */
-    if (!filesystem_path || fs_lstat_occupant(filesystem_path, NULL) != FS_OCCUPANT_NONE) {
-        return NULL;
-    }
-
-    /* Before the lock, whether this profile's record stands there. A read that
-     * fails owes the lock: the read under it asks again, and says why where it
-     * fails again, so this one's error is dropped */
+    const mount_table_t *mounts = ctx->run.mounts;
     state_t *state = ctx->run.state;
-    state_record_t *records = NULL;
-    size_t record_count = 0;
-    if (!state_records(state, ctx->arena, &records, &record_count) &&
-        !revert_reclaims(records, record_count, profile, filesystem_path)) {
-        return NULL;
+
+    /* The places whose node is gone, each once, by the rule its record goes by:
+     * a place a claim was restored at, added or updated, then one only removals
+     * reached — read after, so a place both reached is the restored claim's. A
+     * node standing there is the copy the record describes, apply's to bring */
+    hashmap_t *places = hashmap_borrow(ctx->arena, 0);
+    string_array_t restored;
+    string_array_t removed;
+    string_array_init(&restored, ctx->arena, 0);
+    string_array_init(&removed, ctx->arena, 0);
+
+    const string_array_t *const lists[] = { &changes->added, &changes->updated };
+    for (size_t l = 0; l < sizeof(lists) / sizeof(lists[0]); l++) {
+        for (size_t i = 0; i < lists[l]->count; i++) {
+            const char *name = lists[l]->entries[i];
+            const char *place = mount_resolve(ctx->arena, mounts, profile, name);
+            if (place && hashmap_add(places, place, NULL) &&
+                fs_lstat_occupant(place, NULL) == FS_OCCUPANT_NONE) {
+                string_array_push(&restored, place);
+            }
+        }
+    }
+    for (size_t i = 0; i < changes->removed.count; i++) {
+        const char *name = changes->removed.entries[i];
+        const char *place = mount_resolve(ctx->arena, mounts, profile, name);
+        if (place && hashmap_add(places, place, NULL) &&
+            fs_lstat_occupant(place, NULL) == FS_OCCUPANT_NONE) {
+            string_array_push(&removed, place);
+        }
     }
 
-    /* And under it, which decides */
+    if (!revert_owes(ctx, profile, &restored, &removed)) return NULL;
+
+    /* The lock, and every decision below made under it */
     error_t err = state_begin(state);
     if (err) return err;
 
+    state_record_t *records = NULL;
+    size_t record_count = 0;
     err = state_records(state, ctx->arena, &records, &record_count);
     if (err) goto cleanup;
 
-    if (revert_reclaims(records, record_count, profile, filesystem_path)) {
-        err = state_retire(state, filesystem_path);
+    /* A place a claim was restored at: this profile's record retires, whatever
+     * row stands there */
+    for (size_t i = 0; i < restored.count; i++) {
+        if (!revert_reclaims(records, record_count, profile, restored.entries[i])) continue;
+
+        err = state_retire(state, restored.entries[i]);
+        if (err) goto cleanup;
+    }
+
+    /* A place only removals reached: this profile's record retires where no row
+     * stands there after the commit, the view it leaves built at the first such
+     * record and read for each */
+    manifest_t *after = NULL;
+    for (size_t i = 0; i < removed.count; i++) {
+        if (!revert_reclaims(records, record_count, profile, removed.entries[i])) continue;
+
+        if (!after) {
+            err = manifest_build(ctx->run.repo, state, ctx->arena, &after);
+            if (err) goto cleanup;
+        }
+        if (manifest_lookup(after, removed.entries[i])) continue;
+
+        err = state_retire(state, removed.entries[i]);
         if (err) goto cleanup;
     }
 
@@ -783,8 +730,8 @@ cleanup:
 error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(opts->file_path);
     CHECK_NULL(opts->commit);
+    CHECK_ARG(opts->path || opts->profile, "a whole profile is named by its own word");
 
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
@@ -792,61 +739,57 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* Three columns, each one value, and no local needs a comment to say which
-     * it is in: `target` is the claim the commit holds — what is read, and what
-     * the restore writes whole — `head` what the head's tree holds where the
-     * write lands, and `restored` the name the restore writes the claim under,
-     * which is neither of them. The handles keep the column as a prefix — the
-     * commit, its tree and the profile at it; the head's profile, the draft's
-     * base. A restore lands on the claim held at the path, so the head side has
-     * no name of its own here: wherever the head holds anything, its name is
-     * the write's, and where it holds nothing there is no name to have. */
+    /* The handles keep their column as a prefix — the commit reverted to, its
+     * tree and the profile at it — beside the profile's draft at its head */
     error_t err = NULL;
-    const char *profile = NULL;
     git_commit *target_commit = NULL;
     profile_draft_t *draft = NULL;
     git_tree *target_tree = NULL;
     profile_t *target_profile = NULL;
 
-    /* Step 2: the argument in the key the user named — a path or a storage path,
-     * neither manufactured from the other (infra/path.h) — and the profile the
-     * revert acts on. */
-    path_input_t arg;
-    err = path_input_resolve(opts->file_path, ctx->arena, &arg);
+    /* The path, where one is given, in the key the user named — a path or a storage
+     * path, neither manufactured from the other (infra/path.h) — and the profile
+     * the revert acts on: the one named — a refspec's, -p's, a whole profile's
+     * own word — required to be here, and never asked what its head holds, a
+     * path it deleted being the case a revert exists for; else the one local
+     * profile holding the path (revert_select_profile). */
+    path_input_t arg = { 0 };
+    if (opts->path) {
+        err = path_input_resolve(opts->path, ctx->arena, &arg);
+        if (err) goto cleanup;
+    }
+
+    const char *profile = opts->profile;
+    err = profile ? profile_require(repo, profile) : revert_select_profile(ctx, &arg, &profile);
     if (err) goto cleanup;
 
-    err = revert_select_profile(ctx, opts, &arg, &profile);
-    if (err) goto cleanup;
-
-    /* Step 3: Resolve target commit */
-    output_print(
-        out, OUTPUT_VERBOSE, "Resolving target commit '%s'...\n",
-        opts->commit
-    );
-
+    /* The commit, in the profile's history */
+    output_print(out, OUTPUT_VERBOSE, "Resolving target commit '%s'...\n", opts->commit);
     err = revision_load(repo, profile, opts->commit, &target_commit);
     if (err) goto cleanup;
 
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(target_commit));
 
-    /* Step 4: the profile's draft, opened at its head (core/profiles.h
-     * profile_draft_t). The head is the current state the preview compares against
-     * and the parent the revert's commit will have, so a branch that moves between
-     * the preview and the commit is refused at the commit, --force or not: what
-     * the user confirmed is what is reverted. Its base is the profile as the
-     * head holds it, the tree the profile's own name for the place is read from
-     * (steps 9 to 11) and the one the restore edits, so the name and the write
-     * cannot disagree. Its sheet is read now, strictly: a corrupt destination
-     * sheet would discard claims for unrelated paths when the write saved its
+    /* The profile's draft, opened at its head (core/profiles.h profile_draft_t).
+     * The head is what the preview compares against and the parent the revert's
+     * commit will have, so a branch that moves between the preview and the commit
+     * is refused at the commit, --force or not: what the user confirmed is what
+     * is reverted. Its sheet is read now, strictly: a corrupt destination sheet
+     * would discard claims for unrelated paths when the commit saved its
      * replacement, so one that will not load is refused before the preview, in
      * the loader's words, as every writer refuses it. */
     err = profile_draft_open(repo, profile, &draft);
     if (err) goto cleanup;
-    profile_t *head_profile = profile_draft_base(draft);
 
-    /* Step 5: the target commit's tree, opened once and lent to everything below
-     * that reads the commit, and the profile at it. */
+    /* The commit's tree, opened once and lent to everything below that reads
+     * the commit, and the profile at it, whose sheet is read once, strictly,
+     * and said as the commit's: every later read of the commit — its claims at
+     * a path, the way a restore brings back, the whole tree — reads it through
+     * the profile at the commit's tree, so a sheet that will not load is refused
+     * here, naming the commit, whichever read would have met it first. A corrupt
+     * source sheet would invent attributes while claiming to restore them. A
+     * commit without a sheet loads as an empty one (the tree loader's contract). */
     int rc = git_commit_tree(&target_tree, target_commit);
     if (rc < 0) {
         err = error_git(rc, "Cannot read the tree of commit '%s'", opts->commit);
@@ -854,166 +797,149 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     }
     target_profile = profile_open(profile, target_tree);
 
-    /* Step 6: the commit's sheet, read once and said as the commit's. Every later
-     * read of the commit — the claim at a path, the claim at a name, the way
-     * the restore brings back — reads it through the profile at the commit's
-     * tree, so a sheet that will not load is refused here, naming the commit,
-     * whichever read the argument would have made first. Read strictly, as every
-     * reader of a sheet is unless it argues otherwise (core/metadata.h): a corrupt
-     * source sheet would invent attributes while claiming to restore them. A
-     * commit without a sheet loads as an empty one (the tree loader's contract),
-     * so a revert to a state before any claim was written retires what the head
-     * holds. */
     err = profile_load_sheet(target_profile);
     if (err) {
         err = error_wrap(err, "Failed to load metadata from target commit %s", oid_str);
         goto cleanup;
     }
 
-    /* Step 7: the place both trees may be asked about. A path argument is one
-     * already; a typed name resolves to one through the profile's own binding.
+    /* The revert, onto the draft, and nothing written to the repository: the
+     * path's claims made the commit's — every claim the commit's view stands at
+     * and beneath it, under the name the head holds its place by, and every claim
+     * the head holds there that the commit did not, removed (core/restore.h
+     * restore_path) — or the commit's whole tree (core/profiles.h
+     * profile_restore_tree). Every refusal comes here, before the preview promises
+     * anything: a stage collision, a lost blob, a seal that moves to another
+     * name with no key. A reseal's bytes wait in the stage until its commit, so
+     * a dry run, a refusing hook or a declined question leaves the object database
+     * as it found it (sys/stage.h stage_put_unwritten).
      *
-     * NULL is a custom/ name this machine cannot place. Then the name is the
-     * only key there is: the commit is asked for it alone, nothing can be shown
-     * to collide with it, and two such names are both manifest_unbound — the
-     * namespace's own hole, and not a revert-shaped one. */
-    const char *filesystem_path = arg.key == PATH_KEY_FILESYSTEM
-        ? arg.filesystem_path
-        : mount_resolve(ctx->arena, mounts, profile, arg.storage_path);
-
-    /* Step 8: the claim the commit holds, decoded — asked in the key the user
-     * named, of the commit alone. It is the whole authority on whether there is
-     * a revert to make: a claim with bytes at the commit the user typed is one,
-     * and everything else is refused there by its own noun. (A walk of the branch's
-     * history used to stand in for this question and answered a weaker one — a
-     * name held at some *other* commit passed it — while a commit object anywhere
-     * in the branch could refuse a revert that needed none of it.) */
-    const profile_claim_t *target = NULL;
-    err = revert_target_claim(ctx, target_profile, &arg, filesystem_path, oid_str, &target);
-    if (err) goto cleanup;
-
-    /* Step 9: the name the revert writes the commit's claim under. A typed name
-     * is the user's own choice of contract and is written as typed (cmds/add.c's
-     * storage arm is the other place that choice is made). A path is answered
-     * by the claim the head holds there, whatever its name and whatever its kind
-     * — home/jail/etc/x under a binding at ~/jail is found by ~/jail/etc/x, and
-     * a chain the profile names nothing by is answered as the claim it is, so
-     * the head's own tree refuses a file where it holds a subtree (step 10).
-     * Where it holds none, the commit's own name is what comes back: a revert
-     * restores, and a name composed from today's roots would choose a deployment
-     * contract the user did not. */
-    const char *restored = target->storage_path;
-    if (arg.key == PATH_KEY_FILESYSTEM) {
-        const manifest_row_t *row = NULL;
-        err = revert_claim_held(ctx, head_profile, filesystem_path, &row);
-        if (err) goto cleanup;
-
-        if (row) restored = row->storage_path;
+     * The restore answers how many claims the path reaches at the head and at
+     * the commit together. None is no revert to make — usually a typo — and refused
+     * as an absence on both sides, in the key the user named: "nothing to revert"
+     * is the change test's, for a path a side holds. */
+    size_t found = 0;
+    if (opts->path) {
+        err = restore_path(draft, mounts, &arg, target_profile, ctx->run.keymgr, &found);
+        if (!err && found == 0) {
+            err = error_create(
+                ERR_NOT_FOUND,
+                "'%s' not found in profile '%s', at its head or at commit %s",
+                arg.key == PATH_KEY_FILESYSTEM ? arg.filesystem_path : arg.storage_path,
+                profile, oid_str
+            );
+        }
     } else {
-        restored = arg.storage_path;
+        err = profile_restore_tree(draft, target_profile);
     }
-
-    output_print(
-        out, OUTPUT_VERBOSE, "Resolved to '%s' in profile '%s'\n", restored, profile
-    );
-
-    /* Step 10: what the head holds at that name. It may be nothing — a path the
-     * profile deleted is exactly what a revert brings back — and where it holds
-     * anything it is a blob, because a revert restores one file's bytes: the
-     * question the search asked of every holder (revert_restorable). The tree
-     * alone, on purpose, so a directory claim the sheet holds never stands in
-     * its way, and by value (core/profiles.h profile_entry): the entry's identity
-     * is what the preview diffs. */
-    profile_held_t head;
-    err = profile_entry(head_profile, restored, &head);
     if (err) goto cleanup;
 
-    if (!revert_restorable(head.kind)) {
-        err = error_create(
-            ERR_INVALID_ARG, "'%s' is %s in profile '%s'; revert restores one file",
-            restored, head.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule",
-            profile
-        );
-        goto cleanup;
+    /* What the revert is said of, at a path: what it leaves at the argument's
+     * own place — its path, or where the table puts the name it typed; a name
+     * placed nowhere has none — each side read as the restore reads it
+     * (core/restore.c restore_path), in two one-profile views of the same trees
+     * built here again (stated): the commit's claim its view stands there, the
+     * layer's rung being no claim of the profile's, and the head's claim there,
+     * explicit else derived. The command's arena holds them: the subject is said
+     * past the commit.
+     *
+     * A file is said by its name — the claim the revert leaves there, or, where
+     * the commit held none, the head's it takes — and its name the head's for
+     * the place, else the claim's own (as core/restore.c restore_select names
+     * each write). Anything else is said by the argument as the shell spells it
+     * (base/output.h output_format_path), a name as typed. A whole profile is
+     * said by its own word. */
+    const manifest_row_t *target = NULL;    /* the commit's claim at the place */
+    const manifest_row_t *held = NULL;      /* the head's claim there */
+    const char *file = NULL;                /* the file it is said of, where it is one */
+    const char *subject = NULL;             /* what it is said of; NULL: the whole profile */
+    char spelled[PATH_MAX];
+    if (opts->path) {
+        const char *place = arg.key == PATH_KEY_FILESYSTEM
+            ? arg.filesystem_path
+            : mount_resolve(ctx->arena, mounts, profile, arg.storage_path);
+
+        if (place) {
+            manifest_t *head = NULL;
+            manifest_t *historical = NULL;
+            err = manifest_build_profile(profile_draft_base(draft), mounts, ctx->arena, &head);
+            if (!err) {
+                err = manifest_build_profile(target_profile, mounts, ctx->arena, &historical);
+            }
+            if (err) goto cleanup;
+
+            const manifest_row_t *row = manifest_lookup(historical, place);
+            if (manifest_holds_row(historical, row)) target = row;
+            held = manifest_lookup_claim(head, profile, place);
+        }
+
+        const manifest_row_t *claim = target ? target : held;
+        if (claim && claim->type != PATH_TYPE_DIRECTORY) {
+            file = held ? held->storage_path : claim->storage_path;
+            subject = file;
+        } else if (arg.key == PATH_KEY_FILESYSTEM) {
+            output_format_path(arg.filesystem_path, identity()->home, spelled, sizeof(spelled));
+            subject = spelled;
+        } else {
+            subject = arg.storage_path;
+        }
     }
 
-    /* Step 11: the admission. A typed name the head's tree does not hold is a
-     * name this command would author, and a profile names a path once
-     * (infra/mount.h, core/manifest.h): if the profile already names where this
-     * name resolves and does not hold this name for it, authoring it would give
-     * the profile a second name for one place — the pair the health channel calls
-     * an unused path, and only `remove` can undo (revert_refuse_second_name).
-     *
-     * The entry test is the authoring question and not a cost guard: a name the
-     * tree already holds is not authored, and whether one it lacks is a second
-     * name is the contribution's to answer. A path argument is answered *by*
-     * the claim held there and can never be a second name, so this arm is the
-     * typed one's alone. */
-    if (arg.key == PATH_KEY_STORAGE &&
-        head.kind == PROFILE_HELD_NOTHING && filesystem_path) {
-        err = revert_refuse_second_name(ctx, head_profile, filesystem_path, restored);
-        if (err) goto cleanup;
-    }
-
-    /* Step 12: the restore, onto the profile's draft (core/profiles.h
-     * profile_restore_file) — the commit's claim whole, its blob read once for
-     * the stamp and, where a seal moves to another name, resealed under it with
-     * the run's key; the admission's two halves, the put rule at the name, the
-     * way the commit stood the file on, and the claim — the last thing about
-     * this revert that can be refused, and refused before the preview promises
-     * it. The read is the proof the store holds the blob for every filemode: a
-     * link whose blob was gone used to pass the dry run and fail at the tree
-     * write. The sheet's half finds what the tree cannot, a directory the profile
-     * claims beneath the name; the tree's, a destination beneath a blob the head
-     * holds, which used to pass the dry run and fail after the prompt, with what
-     * the dry run should have said. A cross-name restore of a sealed file needs
-     * the key even where the whole write turns out to stand already: no id compares
-     * until the reseal has made one.
-     *
-     * Nothing is written to the repository: the entry is at an id the commit
-     * already holds, or at a reseal's the stage keeps the bytes of until its
-     * commit (sys/stage.h stage_put_unwritten), so a dry run, a refusing hook
-     * or a declined prompt frees the draft and leaves the object database as it
-     * found it. The draft's base is still the head, so every read below is the
-     * head's. */
-    err = profile_restore_file(draft, restored, target, target_profile, ctx->run.keymgr);
-    if (err) goto cleanup;
-
-    /* Step 13: nothing to do — the restore moved neither document. A revert
-     * restores bytes, the entry's mode, the sheet's mode and ownership, and the
-     * way, so the whole write is weighed and never the blob alone: the draft
-     * holds each document against the one it opened (core/profiles.h
-     * profile_changed). A directory claim at the name the head's blob contradicts
-     * rides the write whatever it is, and moves nothing. Said as every command
-     * says it has nothing to do, naming the file, its profile and the commit
-     * the argument resolved to. */
+    /* Nothing to do: the revert moved neither the tree nor the sheet, each held
+     * against the one the draft opened (core/profiles.h profile_changed) — every
+     * claim the path reaches held alike, the way to them too, or the commit's
+     * tree the head's own. Said as every command says it has nothing to do, naming
+     * what the revert is said of, its profile and the commit. */
     bool changed = false;
     err = profile_changed(draft, &changed);
     if (err) goto cleanup;
     if (!changed) {
-        output_summary(
-            out, OUTPUT_NORMAL,
-            "Nothing to revert: %s in profile '%s' is already as at commit %s",
-            restored, profile, oid_str
-        );
+        if (subject) {
+            output_summary(
+                out, OUTPUT_NORMAL, "Nothing to revert: %s in profile '%s' is already "
+                "as at commit %s", subject, profile, oid_str
+            );
+        } else {
+            output_summary(
+                out, OUTPUT_NORMAL, "Nothing to revert: profile '%s' is already as at "
+                "commit %s", profile, oid_str
+            );
+        }
         goto cleanup;  /* Not an error, just nothing to do */
     }
 
-    /* Step 14: the consent the revert owes — none under --force, where the
-     * configuration asks none, or in a dry run — is a person's at a terminal
-     * (base/output.h output_ask_destructive): off one it is refused here, at
-     * the decision, before the preview and the hook. A revert with nothing to
-     * do owes none, ended above. */
+    /* The consent the revert owes — none under --force, where the configuration
+     * asks none, or in a dry run — is a person's at a terminal (base/output.h
+     * output_ask_destructive): off one it is refused here, at the decision, before
+     * the preview and the hook. A revert with nothing to do owes none, ended
+     * above. */
     const bool asks = !opts->force && config->confirm_destructive && !opts->dry_run;
     if (asks && !isatty(STDIN_FILENO)) {
-        err = error_create(
-            ERR_VALIDATION, "Cannot revert '%s' without a confirmation, which only "
-            "a terminal gives; --force reverts without asking", restored
-        );
+        if (subject) {
+            err = error_create(
+                ERR_VALIDATION, "Cannot revert '%s' without a confirmation, which only "
+                "a terminal gives; --force reverts without asking", subject
+            );
+        } else {
+            err = error_create(
+                ERR_VALIDATION, "Cannot revert profile '%s' without a confirmation, "
+                "which only a terminal gives; --force reverts without asking", profile
+            );
+        }
         goto cleanup;
     }
 
-    /* Step 15: Show preview (always, including dry-run) */
+    /* What the commit changes of the profile, name by name (core/profiles.h
+     * profile_changes): the preview's sections, the paths the hooks are handed,
+     * the places the record phase reads — the commit's own answer, asked before
+     * it, its prune and its save moving no name the lists hold. */
+    commit_changes_t changes;
+    err = profile_changes(draft, ctx->arena, &changes);
+    if (err) goto cleanup;
+
+    /* The preview (always, a dry run's too): the header — the profile, the file
+     * or the path the revert is said of, the commit and, where the file's name
+     * moved since, the name the commit held its bytes under — then the body */
     output_section(out, OUTPUT_NORMAL, "Revert preview");
 
     const git_signature *author = git_commit_author(target_commit);
@@ -1031,137 +957,144 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * where there are two, the commit's — which is how a name is marked wherever
      * one is printed beside other words (cmds/list.c's history header prints
      * two in one line). The commit line is an oid and a time and carries none. */
-    output_print(
-        out, OUTPUT_NORMAL, "  Profile: {cyan}%s{reset}\n",
-        profile
-    );
-    output_print(
-        out, OUTPUT_NORMAL, "  File: {cyan}%s{reset}\n",
-        restored
-    );
-    output_print(
-        out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n",
-        oid_str, time_buf
-    );
-
-    /* The other name, said once and only where there is one: the write lands on
-     * the claim the profile holds now, and this is where the bytes come from. */
-    if (strcmp(target->storage_path, restored) != 0) {
+    output_print(out, OUTPUT_NORMAL, "  Profile: {cyan}%s{reset}\n", profile);
+    if (subject) {
+        output_print(
+            out, OUTPUT_NORMAL, "  %s: {cyan}%s{reset}\n", file ? "File" : "Path", subject
+        );
+    }
+    output_print(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
+    if (file && target && strcmp(target->storage_path, file) != 0) {
         output_print(
             out, OUTPUT_NORMAL, "  Named at the commit: {cyan}%s{reset}\n",
             target->storage_path
         );
     }
 
-    /* The three ways the write differs from what the head holds: the file comes
-     * back, everything but its bytes moves — the one thing no diff can show —
-     * or its bytes do. The middle arm is *the blob is the same and the change
-     * test said something differs*, and what is left to differ is the entry's
-     * filemode and the four fields of the claim beside it, so the sentence names
-     * those rather than two of them. Its proof here is the ids, which needs no
-     * byte read, so a cold key keeps the preview; two ids that hold one plaintext
-     * are its twin, which only a read can prove, and revert_print_diff says the
-     * same sentence off the two plaintexts — among them a seal the restore made
-     * again under the name the head holds it by, since the id compared is the
-     * commit's own blob, never the one a reseal's bytes will be written as. */
-    if (head.kind == PROFILE_HELD_NOTHING) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_print(
-            out, OUTPUT_NORMAL, "{green}Restoring a deleted file{reset}\n"
-        );
-    } else if (git_oid_equal(&head.oid, &target->blob_oid)) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_print(
-            out, OUTPUT_NORMAL,
-            "{green}Contents unchanged; restoring the commit's mode, ownership "
-            "and stamp{reset}\n"
-        );
-    } else {
-        /* Detailed diff preview with decryption support. The content layer
-         * classifies each blob by its own bytes, as the entry its filemode says
-         * it is, so the "current vs target may differ in encryption state" case
-         * is handled inside revert_print_diff without caller-side metadata
-         * gymnastics. */
-        err = revert_print_diff(
-            ctx, profile, restored, &head.oid, head.filemode,
-            target->storage_path, &target->blob_oid, gitops_type_filemode(target->type)
-        );
-        if (err) {
-            /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
-             * Show warning and continue to confirmation — user decides. The warning
-             * stands in for the changes, a block of its own. */
+    /* The body. One file's restore is said whole — the path reaches one claim,
+     * the commit's file at the argument's own place, and the revert moves it —
+     * by the three ways a file differs from what the head holds: it comes back,
+     * everything but its bytes moves — the one thing no diff can show — or its
+     * bytes do. The middle arm is *the blob is the same and the change test said
+     * something differs*, and what is left to differ is the entry's filemode
+     * and the claim beside it, so the sentence names those. Its proof is the
+     * ids, which needs no byte read, so a cold key keeps the preview; two ids
+     * that hold one plaintext are its twin, which only a read can prove, and
+     * revert_print_diff says the same sentence off the two plaintexts — among
+     * them a seal the restore made again under the name the head holds it by,
+     * since the id compared is the commit's own blob, never the one a reseal's
+     * bytes will be written as.
+     *
+     * Every other revert — a directory, a file it removes, a file beside another
+     * claim the path reaches, a claim the head holds at the file's own name among
+     * them, a whole profile, a name placed nowhere — lists what its commit changes,
+     * in the commit's words (revert_print_changes). */
+    if (found == 1 && target && target->type != PATH_TYPE_DIRECTORY &&
+        changes.added.count + changes.updated.count == 1) {
+        if (!held || held->type == PATH_TYPE_DIRECTORY) {
             output_gap(out, OUTPUT_NORMAL);
-            output_warning(
-                out, OUTPUT_NORMAL, "Could not show diff preview: %s",
-                error_line(err)
+            output_print(out, OUTPUT_NORMAL, "{green}Restoring a deleted file{reset}\n");
+        } else if (git_oid_equal(&held->blob_oid, &target->blob_oid)) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_print(
+                out, OUTPUT_NORMAL,
+                "{green}Contents unchanged; restoring the commit's mode, ownership "
+                "and stamp{reset}\n"
             );
-            err = NULL;
+        } else {
+            /* The diff, both blobs decrypted where sealed — each classified by
+             * its own bytes, as the entry its filemode says it is. Non-fatal:
+             * the revert itself needs no decryption, a restore putting an id or
+             * a reseal's bytes, so a warning stands in for the changes, a block
+             * of its own, and the user decides at the question. */
+            err = revert_print_diff(
+                ctx, profile, held->storage_path, &held->blob_oid,
+                gitops_type_filemode(held->type), target->storage_path,
+                &target->blob_oid, gitops_type_filemode(target->type)
+            );
+            if (err) {
+                output_gap(out, OUTPUT_NORMAL);
+                output_warning(
+                    out, OUTPUT_NORMAL, "Could not show diff preview: %s",
+                    error_line(err)
+                );
+                err = NULL;
+            }
         }
+    } else {
+        revert_print_changes(out, &changes);
     }
 
-    /* Step 16: the pre-revert hook, over the decided revert — a dry run's too,
-     * told so (DOTTA_DRY_RUN=1) — told the profile and the argument as given,
-     * as add and update are: a copy in the run's arena, the type every producer
-     * of the invocation holds (utils/hooks.h hook_invocation_t). The draft opened
-     * at step 4, so a commit the hook makes to the branch refuses this revert's,
-     * and a branch it deletes comes back with it (sys/stage.h). */
-    char *const hook_paths[] = { arena_strdup(ctx->arena, opts->file_path) };
+    /* The pre-revert hook, over the decided revert — a dry run's too, told so
+     * (DOTTA_DRY_RUN=1) — handed every path a claim the commit changes stands
+     * at (revert_hook_paths). The draft opened before it, so a commit the hook
+     * makes to the branch refuses this revert's, and a branch it deletes comes
+     * back with it (sys/stage.h). */
+    const string_array_t hook_paths = revert_hook_paths(ctx->arena, &changes, mounts, profile);
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REVERT,
         .profile    = profile,
-        .paths      = hook_paths,
-        .path_count = 1,
+        .paths      = hook_paths.entries,
+        .path_count = hook_paths.count,
         .dry_run    = opts->dry_run,
     };
 
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
-    /* Step 17: a dry run ends here, its preview shown and nothing committed */
+    /* A dry run ends here, its preview shown and nothing committed */
     if (opts->dry_run) {
         output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;
     }
 
-    /* Step 18: the confirmation, after the hook, where one is owed (step 14).
-     * Declined is the user's word, and no failure; unanswered — the terminal's
-     * input ended — nobody declined, and the run did not do what it was asked:
-     * its refusal, naming the flag that answers in advance. */
+    /* The confirmation, after the hook, where one is owed. Declined is the user's
+     * word, and no failure; unanswered — the terminal's input ended — nobody
+     * declined, and the run did not do what it was asked: its refusal, naming
+     * the flag that answers in advance. */
     if (asks) {
-        switch (output_ask_destructive(out, "Revert file?")) {
+        switch (output_ask_destructive(out, "Continue?")) {
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
                 output_summary(out, OUTPUT_NORMAL, "Cancelled");
                 goto cleanup;  /* err is NULL here: a cancel is not a failure */
             case OUTPUT_ANSWER_NONE:
-                err = error_create(
-                    ERR_VALIDATION, "Cannot revert '%s' without a confirmation, and "
-                    "none was read; --force reverts without asking", restored
-                );
+                if (subject) {
+                    err = error_create(
+                        ERR_VALIDATION, "Cannot revert '%s' without a confirmation, and "
+                        "none was read; --force reverts without asking", subject
+                    );
+                } else {
+                    err = error_create(
+                        ERR_VALIDATION, "Cannot revert profile '%s' without a "
+                        "confirmation, and none was read; --force reverts "
+                        "without asking", profile
+                    );
+                }
                 goto cleanup;
         }
     }
 
     output_gap(out, OUTPUT_VERBOSE);
-    output_print(out, OUTPUT_VERBOSE, "Reverting file...\n");
+    output_print(out, OUTPUT_VERBOSE, "Reverting...\n");
 
-    /* Step 19: the write — the restore step 12 staged, in one commit on the head
-     * the preview showed. A branch another writer moved since is refused by the
-     * commit itself rather than by a second look at the head. A reseal's bytes
-     * are written only now, by the stage, with the commit's tree (sys/stage.h
-     * stage_put_unwritten): materialised earlier they would leave a loose object
-     * behind every dry run.
+    /* The write — what the revert staged, in one commit on the head the preview
+     * showed. A branch another writer moved since is refused by the commit itself
+     * rather than by a second look at the head. A reseal's bytes are written
+     * only now, by the stage, with the commit's tree (sys/stage.h
+     * stage_put_unwritten).
      *
      * The commit, its message the draft's as every writer's is (core/profiles.h
      * profile_commit): the user's own where one was given, else the template's
-     * over what the restore changes of the profile's claims — the file at the
-     * name it wrote, never the way it stood on — and the commit restored from,
-     * whole. It prunes a derived claim nothing stands beneath any longer — imported
-     * redundancy alone, since a restore makes no claim redundant, so the revert
-     * counts none — and the record of a rung it pruned is the next load's to
-     * decide, as of every claim a commit lets go (core/profiles.h
-     * profile_draft_t). */
+     * over what the commit changes of the profile's claims and its internal files,
+     * and the commit restored from, whole. Its prune takes a derivation nothing
+     * stands beneath any longer, and the record of a rung it pruned is the next
+     * load's to decide, as of every claim a commit lets go. Where the prune takes
+     * back the only edit — a derivation the commit held with nothing beneath
+     * it, all else held alike — the tree is the head's and no commit lands: nothing
+     * to revert after all, and no receipt, record or post-revert hook follows,
+     * as none follows a cancel. */
     char target_hex[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(target_hex, sizeof(target_hex), git_commit_id(target_commit));
     const commit_words_t words = {
@@ -1171,49 +1104,64 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         .custom_msg    = opts->message,
         .target_commit = target_hex,
     };
-    err = profile_commit(draft, &words, NULL, NULL);
+    git_oid commit = GIT_OID_SHA1_ZERO;
+    err = profile_commit(draft, &words, &commit, NULL);
     if (err) goto cleanup;
 
-    /* Step 20: the receipt, once the commit lands and before the record phase,
-     * which may wait on the store's lock (core/state.h state_begin). A block of
-     * its own, beneath the preview's patch, the question or the trace. A profile
-     * this machine has not enabled is said on its line: the commit restored content
-     * no apply here deploys, as add says of a capture into one (cmds/add.c
-     * cmd_add). */
-    if (!state_enabled(state, profile)) {
+    if (git_oid_is_zero(&commit)) {
+        if (subject) {
+            output_summary(
+                out, OUTPUT_NORMAL, "Nothing to revert: %s in profile '%s' is already "
+                "as at commit %s", subject, profile, oid_str
+            );
+        } else {
+            output_summary(
+                out, OUTPUT_NORMAL, "Nothing to revert: profile '%s' is already as at "
+                "commit %s", profile, oid_str
+            );
+        }
+        goto cleanup;
+    }
+
+    /* The receipt, once the commit lands and before the record phase, which may
+     * wait on the store's lock (core/state.h state_begin). A block of its own,
+     * beneath the preview, the question or the trace. A profile this machine
+     * has not enabled is said on its line: the commit restored content no apply
+     * here deploys, as add says of a capture into one (cmds/add.c cmd_add). */
+    if (subject) {
         output_success(
-            out, OUTPUT_NORMAL, "Reverted %s in profile '%s' (not enabled here)",
-            restored, profile
+            out, OUTPUT_NORMAL, "Reverted %s in profile '%s'%s", subject, profile,
+            state_enabled(state, profile) ? "" : " (not enabled here)"
         );
     } else {
         output_success(
-            out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", restored,
-            profile
+            out, OUTPUT_NORMAL, "Reverted profile '%s' to commit %s%s", profile,
+            oid_str, state_enabled(state, profile) ? "" : " (not enabled here)"
         );
     }
 
-    /* Step 21: the record phase, at the place step 7 resolved — the restored
-     * claim's (revert_write_record). Non-fatal: the commit stands, so the store's
-     * refusal is warned in its own words, a block beneath the receipt. What it
-     * loses, no later load re-derives: the reclaim, so the gone node's record
-     * stays, and the restored claim's absence reads as that record says
-     * (core/workspace.c classify_absent) — apply's to land, [stale] beside it,
-     * where it confirmed other bytes than the restored ones; and the user's
+    /* The record phase: the reclaim at each place the commit changed a claim at
+     * whose node is gone (revert_write_record). Non-fatal: the commit stands,
+     * so the store's refusal is warned in its own words, a block beneath the
+     * receipt. What it loses, no later load re-derives: the reclaim, so a gone
+     * node's record stays, and a restored claim's absence reads as that record
+     * says (core/workspace.c classify_absent) — apply's to land, [stale] beside
+     * it, where it confirmed other bytes than the restored ones; and the user's
      * deletion where it confirmed the very bytes restored, a revert undoing a
      * removal whose copy the user then removed, which an update would commit,
      * undoing the revert (stated): status lists it as deleted, and a plain apply
      * lands it. In a disabled profile the record is an orphan the next apply
      * reclaims, and nothing reads it wrong unless an enable comes first
      * (stated). */
-    error_t record_err = revert_write_record(ctx, profile, filesystem_path);
+    error_t record_err = revert_write_record(ctx, profile, &changes);
     if (record_err) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
     }
 
-    /* Step 22: the post-revert hook, last (utils/hooks.h hook_fire_post): the
-     * commit landed and the record phase's transaction ended, so the hook meets
-     * the store this run leaves */
+    /* The post-revert hook, last (utils/hooks.h hook_fire_post): the commit landed
+     * and the record phase's transaction ended, so the hook meets the store this
+     * run leaves */
     hook_fire_post(config, out, &hook_inv);
 
 cleanup:
@@ -1230,21 +1178,37 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Interpret the 1-3 raw positionals into `profile`, `file_path`, and `commit`.
+ * The 1-3 raw positionals read by the forms into `profile`, `path` and `commit`
  *
- * Forms (POSITIONAL_RAW min=0, max=3; commit is always required):
- *   0 args        → error "File specification is required"
- *   1 arg         → parse [profile:]<file>[@commit] via refspec_parse
- *   2 args        → <file> <commit>         when arg[1] is a git ref;
- *                   <profile> <file[@commit]> otherwise (refspec on 2nd)
- *   3 args        → <profile> <file> <commit>
+ * By position, each slot's word read as a refspec where it can carry a profile
+ * or a commit of its own (base/refspec.h refspec_parse), and the shape rule where
+ * a slot could hold a profile or a path — a word that announces a path is one
+ * (infra/path.h path_input_announces_path), any other is a profile, as list reads
+ * its first word:
+ *
+ *   typed               profile                path                  commit
+ *   p@C, p C            p                      none: the whole one   C
+ *   p:X@C, p:X C        p                      X                     C
+ *   X@C, X C            found, or -p's         X                     C
+ *   p X, p X@C          p, X's own over it     X                     C
+ *   p X C               p                      X                     C
+ *
+ * where X announces a path and p does not. The first word is read alone, or beside
+ * a second that has a commit's shape (refspec_looks_like_commit); under -p it
+ * is the path's whatever its shape (cmds/list.c list_post_parse), so `-p q w@C`
+ * reads the path w, which the resolver refuses as a bare word. Two words whose
+ * second has no commit's shape are a profile and a path, the first word's profile
+ * over -p's — by position. The three-word form takes its commit by position, so
+ * a tag or a branch reaches revert there alone, and a whole profile never at
+ * one (stated): `p C` reads its commit by its shape, and `p@v1.0` is one word,
+ * the profile p@v1.0 that no branch is. A profile whose own name announces a
+ * path — one named under a label's word — has no whole-profile form (stated). A
+ * commit inside the first word beside a commit-shaped second is a commit given
+ * twice; none at all is refused, and so is `p:@C`, a refspec that names no path.
  *
  * Allocation model: refspec substrings are arena-allocated; pure positional
  * pointers borrow argv. cmd_revert does not free any of these pointers — the
  * engine's arena owns their lifetime.
- *
- * A refspec that yields an explicit profile always overrides a previously-set
- * one (from -p or a positional).
  */
 static error_t revert_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1254,82 +1218,104 @@ static error_t revert_post_parse(
     char **args = o->positional_args;
 
     if (o->positional_count == 0) {
-        return error_create(
-            ERR_INVALID_ARG, "File specification is required"
-        );
+        return error_create(ERR_INVALID_ARG, "A path or a profile is required");
     }
 
-    if (o->positional_count == 1) {
-        /* [profile:]<file>[@commit] */
+    if (o->positional_count == 3) {
+        /* <profile> <path> <commit>, each by position */
+        o->profile = args[0];
+        o->path = args[1];
+        o->commit = args[2];
+    } else if (o->positional_count == 2 && !refspec_looks_like_commit(args[1])) {
+        /* <profile> <path>[@commit]: the first word the profile, over -p, and
+         * the second's own over it */
+        refspec_t rs = { 0 };
+        error_t err = refspec_parse(arena, args[1], &rs);
+        if (err != NULL) {
+            return error_wrap(err, "Failed to parse file specification");
+        }
+        o->profile = rs.profile ? rs.profile : args[0];
+        o->path = rs.file;
+        if (rs.commit != NULL) o->commit = rs.commit;
+    } else {
+        /* The first word, alone or beside its commit: its own profile, over -p;
+         * else, under -p, the path; else a path where it announces one and the
+         * whole profile it names where it does not */
         refspec_t rs = { 0 };
         error_t err = refspec_parse(arena, args[0], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
-        if (rs.profile != NULL) o->profile = rs.profile;
-        o->file_path = rs.file;
-        if (rs.commit != NULL) o->commit = rs.commit;
-    } else if (o->positional_count == 2) {
-        if (refspec_looks_like_commit(args[1])) {
-            /* [profile:]<file> <commit> — the file token read as the lone one
-             * is, its profile winning over -p; the commit is the second's, so
-             * one inside the token too is a commit given twice. */
-            refspec_t rs = { 0 };
-            error_t err = refspec_parse(arena, args[0], &rs);
-            if (err != NULL) {
-                return error_wrap(err, "Failed to parse file specification");
-            }
-            if (rs.commit != NULL) {
-                return error_create(
-                    ERR_INVALID_ARG, "Commit given twice: '%s' and '%s'", rs.commit,
-                    args[1]
-                );
-            }
-            if (rs.profile != NULL) o->profile = rs.profile;
-            o->file_path = rs.file;
-            o->commit = args[1];
-        } else {
-            /* <profile> <file[@commit]> — refspec profile wins if present. */
-            o->profile = args[0];
-            refspec_t rs = { 0 };
-            error_t err = refspec_parse(arena, args[1], &rs);
-            if (err != NULL) {
-                return error_wrap(err, "Failed to parse file specification");
-            }
-            if (rs.profile != NULL) o->profile = rs.profile;
-            o->file_path = rs.file;
-            if (rs.commit != NULL) o->commit = rs.commit;
+
+        if (o->positional_count == 2 && rs.commit != NULL) {
+            return error_create(
+                ERR_INVALID_ARG, "Commit given twice: '%s' and '%s'", rs.commit, args[1]
+            );
         }
-    } else if (o->positional_count == 3) {
-        o->profile = args[0];
-        o->file_path = args[1];
-        o->commit = args[2];
-    } else {
-        /* Max=3 is enforced by POSITIONAL_RAW; this branch is unreachable. */
-        CHECK_ARG(false, "POSITIONAL_RAW bounds revert's positionals at three");
+        o->commit = o->positional_count == 2 ? args[1] : rs.commit;
+
+        if (rs.profile != NULL) {
+            o->profile = rs.profile;
+            o->path = rs.file;
+        } else if (o->profile != NULL || path_input_announces_path(rs.file)) {
+            o->path = rs.file;
+        } else {
+            o->profile = rs.file;
+        }
     }
 
-    /* A commit is required by the command; file_path is guaranteed set by
-     * successful refspec parsing or explicit positional assignment. */
     if (o->commit == NULL) {
-        return error_create(
-            ERR_INVALID_ARG, "Commit reference is required"
-        );
+        return error_create(ERR_INVALID_ARG, "Commit reference is required");
     }
     return NULL;
+}
+
+/**
+ * The one profile revert's own search finds holding the path a word names, for
+ * the commit slot after it, where the line names no profile for it
+ *
+ * The word read as the forms read it: a refspec naming no profile of its own,
+ * whose path announces itself (revert_post_parse), then resolved and searched
+ * as the command searches it (revert_select_profile, its refusal dropped). NULL
+ * for a word that names its own profile or no path, or that will not read; for
+ * a path several profiles hold, or none; and for a search that fails — the
+ * completion's caller then keeps its rules for a profile it does not know.
+ *
+ * @param ctx Dispatch context (must not be NULL)
+ * @param word The word naming the path (must not be NULL)
+ * @return The holder, or NULL
+ */
+static const char *revert_holder(const dotta_ctx_t *ctx, const char *word) {
+    if (ctx->run.repo == NULL || ctx->run.mounts == NULL) return NULL;
+
+    refspec_t rs = { 0 };
+    if (refspec_parse(ctx->arena, word, &rs) != NULL || rs.profile != NULL ||
+        !path_input_announces_path(rs.file)) {
+        return NULL;
+    }
+
+    path_input_t arg;
+    const char *holder = NULL;
+    if (path_input_resolve(rs.file, ctx->arena, &arg) != NULL ||
+        revert_select_profile(ctx, &arg, &holder) != NULL) {
+        return NULL;
+    }
+    return holder;
 }
 
 /**
  * What can stand at the cursor, by the shapes revert_post_parse reads — as show,
  * without the bare-commit form: first a file of any profile as `profile:path`,
  * bare once -p pins one. After one positional, a word naming a profile and a
- * path — `profile:path`, or a path once -p pins one — is followed by its commit,
- * the path's own changes (completion_path_history); any other word by the files
- * of the profile it may name or that profile's history, the grammar deciding by
- * the next token, a path no profile names by the enabled histories. After two,
- * the commit: the second word's own changes in the profile the first names. An
- * `@` in the token being typed completes its commit part, its profile the token's
- * own or the line's (completion_commits_at).
+ * path — `profile:path`, or a path once -p pins one, or a path the one profile
+ * holding it pins (revert_holder) — is followed by its commit, the path's own
+ * changes (completion_path_history); any other word by the files of the profile
+ * it may name or that profile's history, the grammar deciding by the next token,
+ * a path several profiles hold or none by the enabled histories. After two, the
+ * commit: the second word's own changes in the profile the first names. An `@`
+ * in the token being typed completes its commit part, its profile the token's
+ * own, the line's, or the one holding the path its part before the `@` names
+ * (completion_commits_at).
  */
 static args_want_t revert_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1345,10 +1331,18 @@ static args_want_t revert_complete(
         return ARGS_WANT_NONE;   /* -m: free text */
     }
 
-    /* The profile the line names before the cursor: -p's, else the first word's */
+    /* The profile the line names before the cursor: -p's, else the first word's;
+     * else, for an `@` in the token being typed, the one holding the path its
+     * part before the `@` names (revert_holder) */
     const char *pinned = o->profile;
     if (pinned == NULL && o->positional_count >= 1) {
         pinned = completion_profile_of(ctx, o->positional_args[0]);
+    }
+    const char *commit_at = strrchr(at->current, '@');
+    if (pinned == NULL && commit_at != NULL) {
+        pinned = revert_holder(
+            ctx, arena_strndup(ctx->arena, at->current, (size_t) (commit_at - at->current))
+        );
     }
     if (completion_commits_at(ctx, out, at->current, pinned)) {
         return ARGS_WANT_NONE;
@@ -1357,7 +1351,11 @@ static args_want_t revert_complete(
     if (o->positional_count == 0) {
         completion_refspecs(ctx, out, pinned);
     } else if (o->positional_count == 1) {
-        if (!completion_path_history(ctx, out, o->profile, o->positional_args[0])) {
+        /* The path's own profile: -p's, else the one holding it, where it names
+         * none of its own (completion_path_history reads a word's own first) */
+        const char *word = o->positional_args[0];
+        const char *holder = o->profile ? o->profile : revert_holder(ctx, word);
+        if (!completion_path_history(ctx, out, holder, word)) {
             completion_refspecs(ctx, out, pinned);
             completion_history(ctx, out, pinned);
         }
@@ -1377,7 +1375,7 @@ static const args_opt_t revert_opts[] = {
     ARGS_STRING(
         "p profile",         "<name>",
         cmd_revert_options_t,profile,
-        "Disambiguate profile when file is ambiguous"
+        "The profile to revert in (default: the one holding the path)"
     ),
     ARGS_STRING(
         "m message",         "<msg>",
@@ -1408,45 +1406,38 @@ static const args_opt_t revert_opts[] = {
 
 const args_command_t spec_revert = {
     .name        = "revert",
-    .summary     = "Revert a file to a previous version",
+    .summary     = "Revert a path or a profile to a past commit",
     .usage       =
-        "%s revert [options] <file@commit>\n"
-        "   or: %s revert [options] <file> <commit>\n"
-        "   or: %s revert [options] <profile>:<file@commit>\n"
-        "   or: %s revert [options] <profile> <file> <commit>",
+        "%s revert [options] <path>@<commit>\n"
+        "   or: %s revert [options] <path> <commit>\n"
+        "   or: %s revert [options] <profile>:<path>@<commit>\n"
+        "   or: %s revert [options] <profile> <path> <commit>\n"
+        "   or: %s revert [options] <profile>@<commit>\n"
+        "   or: %s revert [options] <profile> <commit>",
     .description =
-        "Restore a file's content and metadata to its state at a past\n"
-        "commit, in one commit on its profile. Nothing on disk changes;\n"
-        "the next '%s apply' brings the workspace in line.\n",
+        "Restore a file, a directory or a whole profile to its state at a past\n"
+        "commit, in one commit on its profile: what the commit held comes back,\n"
+        "and what it did not hold is removed. Every machine's next '%s apply'\n"
+        "brings its files in line, deleting the unchanged copies of removed files.\n",
     .notes       =
         "Execution Order:\n"
-        "  1. Find the profile that holds the argument (--profile if ambiguous).\n"
-        "  2. Resolve the commit in that profile's history.\n"
-        "  3. Read what the commit holds and what the branch head holds. A\n"
-        "     file the profile has renamed since is found either way, and comes\n"
-        "     back under the name the profile uses now.\n"
-        "  4. Refuse a storage path that would be the profile's second name\n"
-        "     for one place, naming the first and both ways out. A profile\n"
-        "     names a place once, and --force does not skip a refusal.\n"
-        "  5. Answer 'nothing to do' when that whole state already stands.\n"
-        "  6. Show the preview: the restored file, a diff, or a metadata-only\n"
-        "     change. Off a terminal, a revert that owes a confirmation is\n"
+        "  1. Find the profile holding the path, where none is named.\n"
+        "  2. Show the preview: a file's diff, or what the revert adds, updates\n"
+        "     and deletes. Off a terminal, a revert that owes a confirmation is\n"
         "     refused before it (--force owes none).\n"
-        "  7. Run the pre-revert hook. A dry run stops here, having refused\n"
-        "     what the real run would have refused, the confirmation aside.\n"
-        "  8. Prompt for confirmation (bypassed by --force).\n"
-        "  9. Create one commit with the restored file and its metadata, and the\n"
-        "     directories it stood in, claimed as the commit claimed them where\n"
-        "     the profile no longer does; then run the post-revert hook.\n",
+        "  3. Run the pre-revert hook. A dry run stops here.\n"
+        "  4. Prompt for confirmation (bypassed by --force).\n"
+        "  5. Create one commit, then run the post-revert hook.\n",
     .examples    =
-        "  %s revert home/.bashrc HEAD~3              # Profile inferred\n"
-        "  %s revert darwin home/.bashrc a4f2c8e      # Explicit profile\n"
-        "  %s revert darwin:home/.bashrc@a4f2c8e      # Compact refspec\n"
-        "  %s revert -m \"Fix config\" home/.bashrc HEAD~1   # Custom message\n"
-        "  %s revert -n darwin home/.config/nvim/init.lua HEAD~2  # Preview\n",
+        "  %s revert ~/.bashrc@HEAD~3                # A file, its profile found\n"
+        "  %s revert ./src/config@a4f2c8e            # A path beneath this directory\n"
+        "  %s revert darwin:~/.config/nvim@HEAD~1    # A directory, in profile darwin\n"
+        "  %s revert darwin ~/.config/nvim v1.0      # The commit by tag\n"
+        "  %s revert -n darwin a4f2c8e               # Preview a whole profile's revert\n"
+        "  %s revert darwin@a4f2c8e                  # The whole profile\n",
     .epilogue    =
         "See also:\n"
-        "  %s list <profile> <file>   # Find commit refs for a file\n"
+        "  %s list <profile> <path>   # Find a path's commits\n"
         "  %s apply                   # Deploy the restored content\n",
     .opts_size   = sizeof(cmd_revert_options_t),
     .opts        = revert_opts,

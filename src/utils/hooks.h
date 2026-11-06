@@ -43,17 +43,19 @@ typedef enum {
  *   profile    NULL → no DOTTA_PROFILE env. Single profile name for add,
  *              remove and revert; space-joined profile list for apply/update/sync.
  *   paths      NULL → DOTTA_PATH_COUNT=0 alone. Otherwise borrowed array, each
- *              a file or a directory: add's, update's and revert's arguments as
- *              given (none on an update given none), remove's every path a claim
- *              the removal takes stands at — its name where this machine places
- *              the claim nowhere (cmds/remove.c remove_hook_paths), apply's every
- *              path its decided run changes on disk (cmds/apply.c
- *              apply_hook_paths); sync hands none. Handed in the environment,
- *              one variable a path, as git hands a hook its push options: a list
- *              the system will not carry in an exec's environment — past its
- *              limit on the whole (ARG_MAX), or past Linux's on one string —
- *              refuses the hook at its exec, said as the paths it cannot be handed;
- *              `chmod -x` the hook to run the command without it.
+ *              a file or a directory: add's and update's arguments as given (none
+ *              on an update given none), remove's every path a claim the removal
+ *              takes stands at, revert's every path a claim its commit changes
+ *              stands at — each its name where this machine places the claim
+ *              nowhere (cmds/remove.c remove_hook_paths, cmds/revert.c
+ *              revert_hook_paths) — apply's every path its decided run changes
+ *              on disk (cmds/apply.c apply_hook_paths); sync hands none. Handed
+ *              in the environment, one variable a path, as git hands a hook its
+ *              push options: a list the system will not carry in an exec's
+ *              environment — past its limit on the whole (ARG_MAX), or past Linux's
+ *              on one string — refuses the hook at its exec, said as the paths
+ *              it cannot be handed; `chmod -x` the hook to run the command without
+ *              it.
  *   path_count Number of entries in paths (0 if paths is NULL).
  *   extras     NULL → no extra env vars. Otherwise NULL-terminated
  *              "DOTTA_<KEY>=VALUE" string array, the command's own surface,

@@ -912,12 +912,12 @@ const char *state_target(
  *   - cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
  *     (whose node a link above a capture is), cmds/update.c update_write_record
  *     (whose record a deleted path holds, read under the phase's lock),
- *     cmds/revert.c revert_write_record (whose record the restored place holds,
- *     read before the lock and under it), core/manifest.c manifest_diff (whether
- *     a departed claim leaves an orphan, handed the array by cmds/sync.c
- *     sync_print_manifest), and cmds/diff.c diff_commit_to_workspace (the record
- *     at each row of a commit's view, read once a run): by path, through
- *     state_find_record, which rests on strcmp order
+ *     cmds/revert.c revert_owes and revert_write_record (whose record each place
+ *     its commit changed a claim at holds, read before the lock and under it),
+ *     core/manifest.c manifest_diff (whether a departed claim leaves an orphan,
+ *     handed the array by cmds/sync.c sync_print_manifest), and cmds/diff.c
+ *     diff_commit_to_workspace (the record at each row of a commit's view, read
+ *     once a run): by path, through state_find_record, which rests on strcmp order
  *   - cmds/remove.c remove_owes and remove_write_record (every record, for the
  *     ones the removal reaches at this machine's places, before the lock and
  *     under it): walks, key order unread
@@ -948,9 +948,10 @@ error_t state_records(
  * Readers: cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
  * (whose node a link above a capture is), cmds/update.c update_write_record (a
  * deleted path's record, which its reclaim retires), cmds/revert.c revert_reclaims
- * (the restored place's), core/manifest.c manifest_diff (whether a departed claim
- * leaves an orphan), cmds/diff.c diff_print_view and diff_write_view (the record
- * at a commit's row: whose an absence is, and whether it vouches for the copy).
+ * (each place its commit changed a claim at), core/manifest.c manifest_diff
+ * (whether a departed claim leaves an orphan), cmds/diff.c diff_print_view and
+ * diff_write_view (the record at a commit's row: whose an absence is, and whether
+ * it vouches for the copy).
  *
  * @param records The snapshot (NULL when count is 0)
  * @param count Records in it
@@ -1015,7 +1016,7 @@ error_t state_write(state_t *state, const state_record_t *record);
  * record phase, for every orphan it settles (cmds/apply.c apply_write_record);
  * and the reclaims, each of the record of a node already gone at a claim its
  * commit changed — update's committed deletions, remove's taken claims, revert's
- * restored place (cmds/update.c update_write_record, cmds/remove.c
+ * restored and removed claims (cmds/update.c update_write_record, cmds/remove.c
  * remove_write_record, cmds/revert.c revert_write_record).
  *
  * @param state State (must not be NULL, must have active transaction)

@@ -20,7 +20,7 @@ Commands:
   remove         Remove paths from a profile or delete a profile
   update         Commit filesystem changes back to profiles
   apply          Deploy enabled profiles to the filesystem
-  revert         Revert a file to a previous version
+  revert         Revert a path or a profile to a past commit
   status         Show workspace status and remote sync state
   diff           Show differences between profiles and filesystem
   list           List profiles, files, and commit history

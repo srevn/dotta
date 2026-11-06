@@ -295,12 +295,12 @@ run `dotta status` inside the hook if per-profile detail is needed.
 
 ### `pre-revert`
 
-**When:** Before reverting a file to a past commit: after revert's preview,
-before its question
+**When:** Before reverting a path or a profile to a past commit: after
+revert's preview, before its question
 **Use For:** Guarding a profile's history, checking the version restored
 
 **Example Use Cases:**
-- Refuse a revert of a file other machines rely on
+- Refuse a revert of a path other machines rely on
 - Check the restored version before it is committed
 - Record that a profile's history is being rewound
 
@@ -309,8 +309,9 @@ before its question
 - `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "revert"
 - `DOTTA_PROFILE` - Profile name being reverted
-- `DOTTA_PATH_COUNT` - Always "1"
-- `DOTTA_PATH_0` - The file, as given (a path or a storage path)
+- `DOTTA_PATH_COUNT` - Number of paths: one per path the revert's commit
+  changes a claim at — a file, or a directory the profile tracks — each once
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -319,8 +320,8 @@ before its question
 
 ### `post-revert`
 
-**When:** After reverting a file to a past commit, once revert's report is
-printed
+**When:** After reverting a path or a profile to a past commit, once revert's
+report is printed
 **Use For:** Deploying the restored version, notifications, auditing
 
 **Example Use Cases:**
@@ -333,8 +334,8 @@ printed
 - `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "revert"
 - `DOTTA_PROFILE` - Profile name that was reverted
-- `DOTTA_PATH_COUNT` - Always "1"
-- `DOTTA_PATH_0` - The file, as given (a path or a storage path)
+- `DOTTA_PATH_COUNT` - Number of paths: the ones `pre-revert` was handed
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path (0-indexed)
 - `DOTTA_DRY_RUN` - Always "0" — post-revert does not fire on dry-run
 
 **Exit Behavior:**

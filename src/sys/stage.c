@@ -88,7 +88,7 @@ static error_t stage_empty_tree(const stage_t *st, git_tree **out) {
  * Readers: stage_seed, the index of a stage over one parent or none;
  * stage_admission_create, an admission's.
  */
-static error_t stage_read_tree(const stage_t *st, git_index **out) {
+static error_t stage_tree_index(const stage_t *st, git_index **out) {
     int rc = git_index_new(out);
     if (rc == 0) {
         rc = git_index_read_tree(*out, st->tree);
@@ -196,7 +196,7 @@ static error_t stage_seed(
 
     /* The index: the opened tree read into it, or Git's merge of it and theirs */
     if (!err) {
-        err = theirs ? stage_merge_trees(st, theirs) : stage_read_tree(st, &st->index);
+        err = theirs ? stage_merge_trees(st, theirs) : stage_tree_index(st, &st->index);
     }
     if (err) {
         stage_free(st);
@@ -502,11 +502,11 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out) {
 
     stage_admission_t *adm = heap_calloc(1, sizeof(*adm));
 
-    /* Ownerless, as the stage's own index is (stage_read_tree): the path rule
+    /* Ownerless, as the stage's own index is (stage_tree_index): the path rule
      * runs at every add, and the object check waits for a tree write that never
      * comes. The opened tree, a merge's head's included, and never the stage's
      * index. */
-    error_t err = stage_read_tree(st, &adm->index);
+    error_t err = stage_tree_index(st, &adm->index);
     if (err) {
         stage_admission_free(adm);
         return err;
@@ -773,6 +773,24 @@ error_t stage_settle(stage_t *st, const char *path, const git_tree *tree) {
      * way any more — and its blob the tree's, held already (stage_step) */
     stage_walk_t walk = { .index = st->index, .path = path, .path_len = strlen(path) };
     return gitops_tree_walk(tree, stage_step, &walk);
+}
+
+error_t stage_read_tree(stage_t *st, const git_tree *tree) {
+    CHECK_NULL(st);
+    CHECK_NULL(tree);
+
+    /* The index cleared whole, every entry at every stage, and the tree's read
+     * in, its modes as the tree spells them, then its cache the tree's, so the
+     * write reuses every subtree no later edit touches
+     * (lib/libgit2/src/libgit2/index.c git_index_read_tree, git_index_clear,
+     * read_tree_cb). A kept put the tree does not name at its path is displaced
+     * with the rest, and the commit writes none of its bytes (stage_commit) */
+    int rc = git_index_read_tree(st->index, tree);
+    if (rc < 0) {
+        return error_git(rc, "Failed to read a tree into '%s'", st->refname);
+    }
+
+    return NULL;
 }
 
 error_t stage_unite(stage_t *st, const char *path) {

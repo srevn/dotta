@@ -40,19 +40,20 @@
  *
  * A put never removes another path. libgit2's index REPLACES on a file/directory
  * collision — `git_index_add` of `a/x` over blob `a` drops `a` — so the stage
- * refuses both collisions itself, and no verb but three takes an entry away:
- * stage_remove the one it names, stage_settle a name's at and beneath it, and
- * stage_unite a conflict's, its union in their place. Nor does a put or a removal
- * settle a name a merge left in conflict: libgit2's add replaces only the entry
- * of its own stage, setting the staged one beside the conflict's
- * (lib/libgit2/src/libgit2/index.c index_existing_and_best, index_insert), a
- * removal takes the staged entry alone, and the commit's tree write refuses a
- * conflict standing (tree.c git_tree__write_index). Paths are canonical tree
- * paths (no leading or trailing slash, no empty component): libgit2 refuses `..`,
- * `.` and `.git` components at the put — a verdict about the name, as a collision
- * is, so both are ERR_CONFLICT — and `a//b` at the tree write, but writes `/a`
- * as a tree with an empty-named component, so the stage checks the shape itself,
- * before libgit2 is asked.
+ * refuses both collisions itself, and no verb but four takes an entry away:
+ * stage_remove the one it names, stage_settle a name's at and beneath it,
+ * stage_unite a conflict's, its union in their place, and stage_read_tree every
+ * entry, a tree's in their place. Nor does a put or a removal settle a name a
+ * merge left in conflict: libgit2's add replaces only the entry of its own stage,
+ * setting the staged one beside the conflict's (lib/libgit2/src/libgit2/index.c
+ * index_existing_and_best, index_insert), a removal takes the staged entry alone,
+ * and the commit's tree write refuses a conflict standing (tree.c
+ * git_tree__write_index). Paths are canonical tree paths (no leading or trailing
+ * slash, no empty component): libgit2 refuses `..`, `.` and `.git` components
+ * at the put — a verdict about the name, as a collision is, so both are
+ * ERR_CONFLICT — and `a//b` at the tree write, but writes `/a` as a tree with
+ * an empty-named component, so the stage checks the shape itself, before libgit2
+ * is asked.
  *
  * And a put of what the index already holds — the entry at its path, its id under
  * its mode, the two facts a tree records — is no put: the entry stands as it
@@ -528,6 +529,28 @@ error_t stage_conflicts(const stage_t *st, arena_t *arena, string_array_t *out);
  * @return Error or NULL on success
  */
 error_t stage_settle(stage_t *st, const char *path, const git_tree *tree);
+
+/**
+ * The index the commit's tree is written from becomes `tree`'s: every entry the
+ * tree's, in place of whatever the index held, at every stage — a merge's conflicts
+ * among them — and its cache the tree's
+ *
+ * One read of the whole tree (lib/libgit2/src/libgit2/index.c git_index_read_tree),
+ * never a settle per name, which would put every entry again and leave the tree
+ * write to rebuild each subtree: the write reuses every subtree no later edit
+ * touches, and a commit of the tree untouched records the tree's own id. The
+ * modes are the tree's as it spells them, read unchecked (index.c read_tree_cb):
+ * one Git's tree writer refuses fails the write only where it rebuilds the tree
+ * holding it (tree.c check_entry). The opened tree, the head and the parents
+ * are unchanged, so the commit is measured from the head and made on it; an
+ * unwritten put the tree does not name at its path is displaced, its bytes never
+ * written (stage_put_unwritten). Nothing is written.
+ *
+ * @param st Stage (must not be NULL)
+ * @param tree The tree read (must not be NULL; one the stage's repository holds)
+ * @return Error or NULL on success: a tree that will not read whole
+ */
+error_t stage_read_tree(stage_t *st, const git_tree *tree);
 
 /**
  * A conflicted text united: the union of the lines both sides hold at `path`

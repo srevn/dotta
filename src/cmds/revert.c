@@ -22,6 +22,7 @@
 #include "base/refspec.h"
 #include "base/secure.h"
 #include "base/string.h"
+#include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -937,17 +938,6 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the body */
     output_section(out, OUTPUT_NORMAL, "Revert preview");
 
-    const git_signature *author = git_commit_author(target_commit);
-    time_t commit_time = (time_t) author->when.time;
-    struct tm *tm_info = localtime(&commit_time);
-
-    char time_buf[64];
-    if (tm_info) {
-        strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
-    } else {
-        snprintf(time_buf, sizeof(time_buf), "<invalid time>");
-    }
-
     /* A name is cyan and everything else is not — the profile's, the file's and,
      * where there are two, the commit's — which is how a name is marked wherever
      * one is printed beside other words (cmds/list.c's history header prints
@@ -958,7 +948,19 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     } else if (subject) {
         output_print(out, OUTPUT_NORMAL, "  Path: {cyan}%s{reset}\n", subject);
     }
-    output_print(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
+
+    /* The commit, and its date as Git prints it where a local time places the
+     * author's (base/timeutil.h timeutil_absolute) */
+    const git_signature *author = git_commit_author(target_commit);
+    time_t commit_time = (time_t) author->when.time;
+
+    char time_buf[64];
+    if (timeutil_absolute(commit_time, time_buf, sizeof(time_buf))) {
+        output_print(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
+    } else {
+        output_print(out, OUTPUT_NORMAL, "  Target commit: %s\n", oid_str);
+    }
+
     if (file && strcmp(target->storage_path, file) != 0) {
         output_print(
             out, OUTPUT_NORMAL, "  Named at the commit: {cyan}%s{reset}\n",

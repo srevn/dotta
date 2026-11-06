@@ -47,41 +47,36 @@ typedef struct {
  * Execute revert command
  *
  * The forms (revert_post_parse): `p@C` and `p C` the whole profile p; `p:X@C`,
- * `p X C`, `X@C` and `X C` the path X, in p or in the one profile holding it. A
- * word that announces a path is one, and any other is a profile (infra/path.h
- * path_input_announces_path): `src/config@C` is the profile src/config, and
- * `./src/config@C` the path. A typed name is a path like any other: the place
- * this machine puts it at — or, where it places it nowhere, the name itself
- * (core/restore.h) — so the revert writes the name the profile holds and authors
- * none.
+ * `p X C`, `X@C` and `X C` the path X, in p or in the one profile holding it, a
+ * commit written after its path's word read by position, a tag or a branch among
+ * them. A word that announces a path is one, and any other is a profile
+ * (infra/path.h path_input_announces_path): `src/config@C` is the profile
+ * src/config, and `./src/config@C` the path. A typed name is a path like any
+ * other: the place this machine puts it at — or, where it places it nowhere,
+ * the name itself (core/restore.h) — so the revert writes the name the profile
+ * holds and authors none.
  *
- * The operation, in order:
- * 1. The profile, named — a refspec's, -p's, the whole profile's own word — or
- *    the one local profile holding the path (revert_select_profile)
- * 2. The commit, resolved in the profile's history
- * 3. The revert made on the profile's draft at its head, nothing written: the
- *    path's claims, or the commit's whole tree; a path neither side holds anything
- *    at is refused, naming both
- * 4. "Nothing to revert" where the draft moved neither the tree nor the sheet
- * 5. Off a terminal, a confirmation it owes refused (unless --force)
- * 6. The preview: the profile, the file or the path, the commit; then one file's
- *    restore whole — restored, its contents unchanged, or its diff — or what
- *    the commit changes of the profile, in the commit's words
- * 7. The pre-revert hook, every path a changed claim stands at; a dry run ends
- * 8. The question (unless --force)
- * 9. One commit on the head the preview showed, a reseal's bytes written with
- *    its tree (sys/stage.h stage_put_unwritten); one the prune leaves equal to
- *    the head is no commit, and says nothing to revert
- * 10. The receipt, naming a profile this machine has not enabled
- * 11. The record phase (below)
- * 12. The post-revert hook, last
+ * The profile is the one named — a refspec's, -p's, a whole profile's own word
+ * — or the one local profile holding the path (revert_select_profile). Everything
+ * the revert writes is decided on the profile's draft at its head before any of
+ * it is shown, so a dry run and a real run reach the same verdict on the same
+ * argument — the restore's refusals included, a sealed file restored under another
+ * name without its key among them — and a path neither side holds anything at
+ * is refused, naming both. Off a terminal, a confirmation it owes is refused
+ * before the preview. The pre-revert hook, handed every path a changed claim
+ * stands at, and the question are the only gates between the preview and the
+ * one commit, made on the head the preview showed: a ref another writer moved
+ * since refuses it, --force or not, and a reseal's bytes are written with its
+ * tree (sys/stage.h stage_put_unwritten). A commit the prune leaves equal to
+ * the head is none, and says nothing to revert. The receipt comes before the
+ * record phase, naming a profile this machine has not enabled, and the post-revert
+ * hook last.
  *
- * Everything the revert writes is decided before any of it is shown: a dry run
- * and a real run reach the same verdict on the same argument — the restore's
- * refusals included, a sealed file restored under another name without its key
- * among them — and the hook and the question are the only gates between the preview
- * and the commit. A ref another writer moved between the preview and the commit
- * refuses the commit, --force or not.
+ * What a revert is said of is what was typed — the argument as the shell spells
+ * it, a name as typed — or the profile whole. Its preview shows one file's restore
+ * whole, under the name the commit writes it at, where the path reaches that
+ * one claim: restored, its contents unchanged, or its diff; any other revert
+ * lists what the commit changes of the profile, in the commit's words.
  *
  * The record phase: a revert changes Git and nothing on disk, and owes the record
  * one write, the reclaim — this profile's record retired at a place the commit
@@ -97,9 +92,9 @@ typedef struct {
  * next load reads a restored file there as [stale].
  *
  * Costs, a verb's, paid when typed: at a path, the restore's two one-profile
- * views and its walk of the profile (core/restore.h), and the preview's two views
- * of the same trees, built again; without a profile named, a one-profile view
- * per local profile (revert_select_profile).
+ * views and its walk of the profile (core/restore.h), and where the path reaches
+ * one claim the preview's view of the commit, built again; without a profile
+ * named, a one-profile view per local profile (revert_select_profile).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

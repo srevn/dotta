@@ -630,18 +630,18 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target);
  * names a commit it does not caption — show's, the name it asked, its commit
  * captioned above (cmds/show.c show_file); export's name arm (cmds/export.c
  * export_collect_storage) — and ", at its head or at commit <c>" where both sides
- * hold nothing, revert's in the key the user named (cmds/revert.c cmd_revert).
- * The same absence asked another way is the same sentence: a path the profile's
- * view places nothing at (cmds/export.c export_collect_filesystem, which adds
- * why where some of the profile's claims stand nowhere here), and an argument
- * as typed that reaches no claim of the profile's (cmds/remove.c remove_resolve).
- * The other answers are each verb's own: show, which acts on one file, refuses
- * a DIRECTORY or a SUBMODULE by its noun; list, which shows a path's history,
- * walks a DIRECTORY as it does a FILE, refuses a SUBMODULE by its noun, and reads
- * NOTHING as a path the head lacks, whose history it searches (cmds/list.c
- * list_path_history). A merge's content conflict names each side's answer where
- * the two differ in what they are — a file, a symlink, a directory, a submodule,
- * and none for NOTHING (cmds/sync.c sync_entry_noun).
+ * hold nothing, revert's, what was typed (cmds/revert.c cmd_revert). The same
+ * absence asked another way is the same sentence: a path the profile's view places
+ * nothing at (cmds/export.c export_collect_filesystem, which adds why where some
+ * of the profile's claims stand nowhere here), and an argument as typed that
+ * reaches no claim of the profile's (cmds/remove.c remove_resolve). The other
+ * answers are each verb's own: show, which acts on one file, refuses a DIRECTORY
+ * or a SUBMODULE by its noun; list, which shows a path's history, walks a DIRECTORY
+ * as it does a FILE, refuses a SUBMODULE by its noun, and reads NOTHING as a
+ * path the head lacks, whose history it searches (cmds/list.c list_path_history).
+ * A merge's content conflict names each side's answer where the two differ in
+ * what they are — a file, a symlink, a directory, a submodule, and none for NOTHING
+ * (cmds/sync.c sync_entry_noun).
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */
@@ -683,11 +683,12 @@ typedef struct {
  * profile_find, whose file claim is the blob it answers; profile_sealed, whose
  * seal is that blob's, its stamp or its bytes, and none where no blob stands; a
  * profile's changes, whether a blob stands at a name the sheet moved and the
- * tree did not, where the base's is the commit's (profile_changes); and a merge,
- * what each of its three sides holds at a name Git's merge left in conflict,
- * each side's kept on the content conflict noted there (profile_merge_name),
- * and at a file's claim a side moved, whose words each side's node decides
- * (profile_merge_file).
+ * tree did not, where the base's is the commit's (profile_changes); revert's
+ * preview, at the name it shows one file at in its head, whether the head holds
+ * a blob there and which (cmds/revert.c cmd_revert); and a merge, what each of
+ * its three sides holds at a name Git's merge left in conflict, each side's kept
+ * on the content conflict noted there (profile_merge_name), and at a file's claim
+ * a side moved, whose words each side's node decides (profile_merge_file).
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path, or a name Git's merge left in
@@ -738,11 +739,13 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * profile_restore_file, profile_restore_directory); and a merge, at a merge-base
  * directory claim a side lacks, where whatever that side holds is its removal
  * (profile_merge_directory) — the four through profile_passes. A reader not on
- * this list is a bug. Three neighbours ask profile_entry instead, the tree alone:
- * the seal a capture keeps (profile_sealed), which a blob alone holds; a profile's
- * changes, whether a blob stands at a name the tree did not move (profile_changes);
- * and a merge, whose rules and words read each side's node, never its sheet
- * (profile_merge_name, profile_merge_file).
+ * this list is a bug. Four neighbours ask profile_entry instead, the tree alone:
+ * revert's preview, the head's entry at the name it shows one file at, where a
+ * directory claim is never in question — the path reaches that one claim
+ * (cmds/revert.c cmd_revert); the seal a capture keeps (profile_sealed), which
+ * a blob alone holds; a profile's changes, whether a blob stands at a name the
+ * tree did not move (profile_changes); and a merge, whose rules and words read
+ * each side's node, never its sheet (profile_merge_name, profile_merge_file).
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -1179,12 +1182,12 @@ error_t profile_draft_merge(
  * Readers: cmds/add.c cmd_add, for the view every naming and kind question of
  * the run reads (core/manifest.h manifest_build_profile), and each file's
  * encryption prior; cmds/remove.c remove_paths, for the claims its arguments
- * are matched against (remove_resolve); cmds/revert.c cmd_revert, for the view
- * its preview reads the head's claim at the argument's own place off, whose name
- * the restore writes there; core/restore.c restore_path, for the head a restore
- * reads — its view, which names each write, and its walk, every claim it may
- * take; and cmds/update.c update_profile, for a capture's prior and the name
- * its seal is keyed by (update_capture).
+ * are matched against (remove_resolve); cmds/revert.c cmd_revert, for the entry
+ * its preview reads at the name it shows one file at (profile_entry);
+ * core/restore.c restore_path, for the head a restore reads — its view, which
+ * names each write, and its walk, every claim it may take; and cmds/update.c
+ * update_profile, for a capture's prior and the name its seal is keyed by
+ * (update_capture).
  *
  * @param draft The draft (must not be NULL)
  * @return The base; never NULL
@@ -1692,8 +1695,9 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  *
  * Readers: profile_commit, the names its message gives (infra/commit.h
  * commit_message); and cmds/revert.c cmd_revert, asked before its commit, its
- * answer that commit's — the preview's sections, the paths its hooks are handed
- * and the places its record phase reads. A reader not on this list is a bug.
+ * answer that commit's — the preview's sections and the name it shows one file
+ * at, the paths its hooks are handed and the places its record phase reads. A
+ * reader not on this list is a bug.
  *
  * @param draft The draft, every edit in (must not be NULL)
  * @param arena The arena the lists and their names live in (must not be NULL)

@@ -467,15 +467,15 @@ error_t manifest_build(
  * name a profile gives a path argument, over whatever tree its reader selected
  * (core/scope.c scope_resolve_name, which asks it manifest_claim_name for the
  * -p arms of show and list, and for completion's commit slot after a path);
- * revert's preview, what a revert leaves at its argument's own place, read off
- * one of the head and one of the commit (cmds/revert.c cmd_revert); add, which
- * builds one over its draft's base (core/profiles.h profile_draft_base) and asks
- * it every naming question for the length of the command (cmds/add.c cmd_add);
- * `ignore --test`'s named arm (cmds/ignore.c ignore_test); the two cross-profile
- * searches, which build one per local profile (cmds/revert.c revert_select_profile,
- * its rows at or beneath a path, and cmds/remove.c remove_overlaps); and a
- * restore's two, at its draft's base and at the commit it restores from
- * (core/restore.c restore_path).
+ * revert's preview, the commit's file at its argument's own place where the path
+ * reaches one claim, read off one of the commit (cmds/revert.c cmd_revert); add,
+ * which builds one over its draft's base (core/profiles.h profile_draft_base)
+ * and asks it every naming question for the length of the command (cmds/add.c
+ * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); the two
+ * cross-profile searches, which build one per local profile (cmds/revert.c
+ * revert_select_profile, its rows at or beneath a path, and cmds/remove.c
+ * remove_overlaps); and a restore's two, at its draft's base and at the commit
+ * it restores from (core/restore.c restore_path).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -1027,24 +1027,22 @@ error_t manifest_holder(
  * this before the namer — a derived claim is something the profile holds and
  * nothing it names, so the namer alone would climb past it and answer a name
  * the profile never held; the name a restore writes a commit's claim at, the
- * head's at the claim's place (core/restore.c restore_select), and revert's
- * preview, the head's claim at its argument's own place, whose name the revert
- * writes there (cmds/revert.c cmd_revert); remove's search, what every other
- * local profile claims where a removal takes a claim, each asked of its own view
- * (cmds/remove.c remove_overlaps); add's three questions of a path it names or
- * walks (cmds/add.c cmd_add and add_collect): which rules reach it — a claim
- * meets the -e layer alone, no rule of discovery (add_verdict) — whether the
- * profile's own claim agrees with what stands there now — the one reading that
- * sees an explicit claim with nothing beneath it for either of the profile's
- * documents to find, and a derived row included, since a profile holding a subtree
- * beneath a path is a statement a path that became a file contradicts — and whether
- * the add captures it, a claim being left as it stands but under --force
- * (add_list); every claim an enabled profile holds at a link above a capture,
- * the capturing profile's off its own view and every other's off the enabled
- * one (cmds/add.c add_refuse_ancestry); whether a row a transition left no row
- * at is its profile's claim there still, standing nowhere, which counts it
- * overridden rather than departed (manifest_diff); whether any profile holds an
- * explicit claim where the user's node squats above a named update's leaf, a
+ * head's at the claim's place (core/restore.c restore_select); remove's search,
+ * what every other local profile claims where a removal takes a claim, each asked
+ * of its own view (cmds/remove.c remove_overlaps); add's three questions of a
+ * path it names or walks (cmds/add.c cmd_add and add_collect): which rules reach
+ * it — a claim meets the -e layer alone, no rule of discovery (add_verdict) —
+ * whether the profile's own claim agrees with what stands there now — the one
+ * reading that sees an explicit claim with nothing beneath it for either of the
+ * profile's documents to find, and a derived row included, since a profile holding
+ * a subtree beneath a path is a statement a path that became a file contradicts
+ * — and whether the add captures it, a claim being left as it stands but under
+ * --force (add_list); every claim an enabled profile holds at a link above a
+ * capture, the capturing profile's off its own view and every other's off the
+ * enabled one (cmds/add.c add_refuse_ancestry); whether a row a transition left
+ * no row at is its profile's claim there still, standing nowhere, which counts
+ * it overridden rather than departed (manifest_diff); whether any profile holds
+ * an explicit claim where the user's node squats above a named update's leaf, a
  * lost blob's place no re-derivation frees (cmds/update.c cmd_update); the claim
  * that takes a path's place where update deletes the claim standing there, the
  * highest other profile's (cmds/update.c update_print_preview); whether the
@@ -1182,7 +1180,7 @@ bool manifest_holds_name(
  * directory claims, a rung being none to count (cmds/export.c
  * export_collect_filesystem, export_entry_from_row); and the commit's claims a
  * restore writes, a rung being none to restore (core/restore.c restore_path),
- * and the one revert's preview says it leaves at its argument's own place
+ * and the file revert's preview shows whole at its argument's own place
  * (cmds/revert.c cmd_revert).
  *
  * @param manifest Manifest (NULL answers false)

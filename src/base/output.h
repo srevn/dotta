@@ -702,10 +702,11 @@ void output_format_kinds(
  * name a path beside its names — status's unused-path listing, where the path
  * is the shared term of three paths on one line and the absolute spelling would
  * be the longest of them, and add's refusals that say which name a path has;
- * and what a revert of a path is said of, where it is no file (cmds/revert.c
- * cmd_revert: its preview, its receipt, its refusals). A screen listing managed
- * paths one to a line prints them absolute and does not come here. PATH_MAX bytes
- * hold any path the table validated.
+ * and what a revert of a path is said of, what was typed (cmds/revert.c cmd_revert:
+ * its preview, its summaries, its refusals, and its search's,
+ * revert_select_profile). A screen listing managed paths one to a line prints
+ * them absolute and does not come here. PATH_MAX bytes hold any path the table
+ * validated.
  *
  * @param path Path to spell, absolute or as a user typed it — only one beneath
  *        `home` changes (must not be NULL)

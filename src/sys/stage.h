@@ -78,13 +78,12 @@
  * and the tree write refuses an id the ODB lacks. *By commit time* is the whole
  * of the promise: the put itself does not check, so an id whose object is not
  * written yet is admitted and refused only if the commit still lacks it. A writer
- * that must decide before it writes puts what it will write without writing it:
- * its bytes unwritten, the stage's to write at its commit, or an id whose object
- * it materialises itself later — revert's restore puts a reseal's hash before
- * its preview (core/profiles.h profile_restore_file), and revert stores the object
- * only past the prompt — so a dry run leaves the database as it found it. Bytes
- * are stored as given — no clean filter, no autocrlf, no filemode config — the
- * way apply writes them back; the mode is the caller's word.
+ * that must decide before it writes puts its bytes unwritten, the stage's to
+ * write at its commit — a restore's reseal, made before its writer's preview
+ * (core/profiles.h profile_restore_file) — so a stage freed first, a dry run's,
+ * leaves the database as it found it. Bytes are stored as given — no clean filter,
+ * no autocrlf, no filemode config — the way apply writes them back; the mode is
+ * the caller's word.
  *
  * Nothing here touches HEAD, a working directory, or the repository's own index,
  * and neither an open nor an admission writes anything — the ref is resolved
@@ -329,8 +328,9 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out);
  * Reader: a profile's admission of a blob (core/profiles.c profile_admit), for
  * add's walk and its argument arm, before either lists a name. A profile's restore
  * deliberately does not read it (core/profiles.c profile_restore_file) — it holds
- * the id and the mode, so it puts the entry itself before its writer's preview
- * and needs the actual index operation's refusal there, not a question about it.
+ * the entry, an id or a reseal's bytes, and the mode, so it puts the entry itself
+ * before its writer's preview and needs the actual index operation's refusal
+ * there, not a question about it.
  *
  * @param adm Admission (must not be NULL)
  * @param path Storage path (must not be NULL)
@@ -449,6 +449,9 @@ error_t stage_put_blob(
  * later put or removal there displaced is never written. A refused put keeps
  * nothing, and neither does an entry the index already holds as given (the header):
  * its blob is the store's, or one an earlier put kept.
+ *
+ * Reader: core/profiles.c profile_restore_file, a seal restored under another
+ * name than it was made under.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

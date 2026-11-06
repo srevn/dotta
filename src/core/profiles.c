@@ -33,7 +33,9 @@
  * and writes the claim into the copy, and the climbs claim the way to a leaf
  * off the disk — the first capture where the profile does not pass through a
  * rung yet, the named re-derivation again where a run's paths select one; a restore
- * asks the base the same, puts its entry by id and writes its claim, and its
+ * reads the commit's blob once, its stamp's source and a reseal's where its name
+ * moved, asks the base the same, puts its entry — at its id, or as the bytes
+ * the stage writes at its commit — and writes the commit's claim whole, and its
  * way where the profile does not pass through it, into the copy; dotta's own
  * file is put beside the claims. A merge composes its tree first — each name
  * Git could not compose settled by a rule, or for the run's side — then its claims,
@@ -58,6 +60,7 @@
 
 #include "base/arena.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/string.h"
@@ -1901,44 +1904,75 @@ static error_t profile_restore_ancestors(
 }
 
 error_t profile_restore_file(
-    profile_draft_t *draft, const profile_claim_t *claim, profile_t *from,
-    const char *from_storage_path
+    profile_draft_t *draft, const char *storage_path, const profile_claim_t *claim,
+    profile_t *from, keymgr *keymgr
 ) {
     CHECK_NULL(draft);
+    CHECK_NULL(storage_path);
     CHECK_NULL(claim);
     CHECK_NULL(from);
-    CHECK_NULL(from_storage_path);
+
+    /* The blob, read once, through the repository the commit's tree was read
+     * from: the read is the proof the store holds it, whatever its filemode,
+     * and its bytes the stamp's one source — a link's are its target, never a
+     * seal (infra/content.h), so its kind is its filemode's */
+    gitops_blob_view_t view;
+    error_t err = gitops_blob_view_open(git_tree_owner(from->tree), &claim->blob_oid, &view);
+    if (err) return error_wrap(err, "Cannot restore '%s'", claim->storage_path);
+
+    const content_kind_t kind = claim->type == PATH_TYPE_SYMLINK
+        ? CONTENT_PLAINTEXT : content_classify_bytes(view.data, view.size);
+
+    /* A seal binds its name, so one written under another is opened under its
+     * own and sealed again under the written one (crypto/cipher.h "Path binding")
+     * — bytes the stage writes at its commit and never before. Bytes that carry
+     * no binding enter at their id, whichever name */
+    buffer_t rebound = BUFFER_INIT;
+    if (kind != CONTENT_PLAINTEXT && strcmp(claim->storage_path, storage_path) != 0) {
+        err = content_rebind(
+            view.data, view.size, claim->storage_path, storage_path, draft->base->name,
+            keymgr, &rebound
+        );
+        if (err) {
+            err = error_wrap(
+                err, "Cannot restore '%s' as '%s'", claim->storage_path, storage_path
+            );
+        }
+    }
+    gitops_blob_view_close(&view);
 
     /* The admission's two halves, each refusing before anything moves: the sheet's,
      * then the tree's, which the put asks of the index it writes — the entry at
-     * its id, an object the ODB holds by the commit, so nothing is written here */
-    error_t err = profile_refuse_beneath(draft, claim->storage_path);
-    if (!err) {
-        err = stage_put_blob(
-            draft->stage, claim->storage_path, &claim->blob_oid,
-            gitops_type_filemode(claim->type)
+     * the claim's id, or at the rebound bytes' the stage keeps for its commit,
+     * so nothing is written here (sys/stage.h stage_put_unwritten) */
+    const git_filemode_t mode = gitops_type_filemode(claim->type);
+    if (!err) err = profile_refuse_beneath(draft, storage_path);
+    if (!err && rebound.data) {
+        err = stage_put_unwritten(
+            draft->stage, storage_path, rebound.data, rebound.size, mode
         );
+    } else if (!err) {
+        err = stage_put_blob(draft->stage, storage_path, &claim->blob_oid, mode);
     }
+    buffer_deinit(&rebound);
 
     /* Then the put rule at the name, and the way the commit stood the file on */
-    if (!err) err = profile_convert(draft, claim->storage_path);
-    if (!err) {
-        err = profile_restore_ancestors(
-            draft, from, from_storage_path, claim->storage_path
-        );
-    }
+    if (!err) err = profile_convert(draft, storage_path);
+    if (!err) err = profile_restore_ancestors(draft, from, claim->storage_path, storage_path);
     if (err) return err;
 
-    /* The claim at its own kind, the sheet's copy of it — or, where it claims
-     * nothing, a link the commit records no ownership for, the retire of the
-     * item standing at the name (core/metadata.h metadata_write_item) */
+    /* The commit's claim whole at its own kind, the stamp its bytes' — a version
+     * this build cannot read collapsing onto sealed, as a capture's does — the
+     * sheet's copy of it; or, where it claims nothing, no mode, owner, group or
+     * stamp, the retire of the item standing at the name (core/metadata.h
+     * metadata_write_item) */
     const metadata_item_t item = {
         .kind      = PATH_KIND_FILE,
-        .key       = claim->storage_path,
+        .key       = storage_path,
         .mode      = claim->mode,
         .owner     = claim->owner,
         .group     = claim->group,
-        .encrypted = claim->encrypted,
+        .encrypted = kind != CONTENT_PLAINTEXT,
     };
     metadata_write_item(draft->sheet, &item);
 
@@ -2642,8 +2676,8 @@ error_t profile_draft_merge(
      * for the content and for each kind of claim */
     profile_merge_t merge = {
         .draft      = draft,
-        .merge_base = profile_open(name, stage_merge_base(stage)),
-        .theirs     = profile_open(name, stage_theirs(stage)),
+        .merge_base = profile_open(name,            stage_merge_base(stage)),
+        .theirs     = profile_open(name,            stage_theirs(stage)),
         .side       = side,
         .sheet      = metadata_create(draft->arena),
         .arena      = arena,

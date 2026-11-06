@@ -82,18 +82,20 @@ typedef struct {
  * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
  * 2. Resolves commit reference in profile branch history
  * 3. Opens the profile's draft at its head (core/profiles.h profile_draft_t),
- *    and reads the claim the commit holds — a blob's, decoded — what the head's
- *    tree holds at the name the write uses, which may be nothing, and the restored
- *    blob's own bytes
+ *    and reads the claim the commit holds — a blob's, decoded — and what the
+ *    head's tree holds at the name the write uses, which may be nothing
  * 4. Refuses a typed name that would be the profile's second for one path
- * 5. Restores the claim onto the profile's draft — the write's own admission,
- *    made here so that a commit that cannot hold it refuses before the preview
- *    and not after the prompt: the sheet first, since a directory the profile
- *    claims and nothing fills has no entry for the index to find and a blob above
- *    one leaves it nowhere to stand, then the tree. The entry is put at its id
- *    and no object is written; the claim goes beside it, and the directory claims
- *    the file stood on at the commit wherever the profile does not pass through
- *    them at the head (core/profiles.h profile_restore_file)
+ * 5. Restores the commit's claim, whole, onto the profile's draft — its blob
+ *    read once, the proof the store holds it and its stamp's source, and resealed
+ *    where its name moved; then the write's own admission, made here so that a
+ *    commit that cannot hold it refuses before the preview and not after the
+ *    prompt: the sheet first, since a directory the profile claims and nothing
+ *    fills has no entry for the index to find and a blob above one leaves it
+ *    nowhere to stand, then the tree. The entry is put and no object is written,
+ *    a reseal's bytes the stage's to write at the commit; the claim goes beside
+ *    it, and the directory claims the file stood on at the commit wherever the
+ *    profile does not pass through them at the head (core/profiles.h
+ *    profile_restore_file)
  * 6. Answers "nothing to do" when the restore moved neither document
  * 7. Refuses, off a terminal, a confirmation it owes (unless --force)
  * 8. Shows the preview (restored / diff / mode and ownership only), naming the

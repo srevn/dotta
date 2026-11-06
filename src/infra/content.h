@@ -71,8 +71,8 @@
  *   (cipher for the format's constants and header, keymgr for every encrypt and
  *   decrypt)
  * - Used by: infra/epoch (the census classifies), core (workspace's looks, deploy's
- *   reads, a profile's seal), commands (show, diff, export, revert, list; add
- *   and update through the two captures)
+ *   reads, a profile's seal, and a restore's stamp and reseal), commands (show,
+ *   diff, export, revert, list; add and update through the two captures)
  */
 
 #ifndef DOTTA_CONTENT_H
@@ -120,7 +120,10 @@ typedef enum {
  *
  * Pure computation; no I/O. Use when callers already have the bytes in hand (a
  * file just read from disk, an in-memory buffer from another layer) and want to
- * avoid a Git ODB round-trip.
+ * avoid a Git ODB round-trip. Readers: this module's own judgements of bytes it
+ * holds (content_classify_entry, content_capture_file's refusal of a plaintext
+ * that reads as a seal, content_rebind's domain), and core/profiles.c
+ * profile_restore_file, the stamp of a blob the restore read once.
  *
  * NULL-safe: data == NULL OR size < CIPHER_DETECT_BYTES → PLAINTEXT.
  *
@@ -143,13 +146,14 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * stamp instead (core/metadata.h metadata_item_t) — as the seal a capture keeps
  * does first, asking the bytes only where the stamp says none. Readers:
  * `core/profiles.c profile_sealed` (that seal, policy priority 3, where a wrong
- * answer commits a secret in the clear), `cmds/revert.c cmd_revert` (the stamp
- * it writes, and existence for every filemode), `infra/epoch.c epoch_present_blob`
- * (which blobs a rotation must not orphan, where a false absence outlives the
- * run). Every reader is outside this module, and that is the shape rather than
- * an accident: content's own functions judge bytes they already hold
+ * answer commits a secret in the clear), `infra/epoch.c epoch_present_blob` (which
+ * blobs a rotation must not orphan, where a false absence outlives the run).
+ * Every reader is outside this module, and that is the shape rather than an
+ * accident: content's own functions judge bytes they already hold
  * (content_classify_bytes on a view, content_classify_entry inside a read), so
- * none of them pays a load to ask. A reader not on this list is a bug.
+ * none of them pays a load to ask — nor does a restore, which reads the blob it
+ * stamps once and judges the bytes in hand (core/profiles.c profile_restore_file).
+ * A reader not on this list is a bug.
  *
  * The price, measured rather than read off the docs: the blob is loaded whole
  * to reach six bytes, libgit2 offering no partial read of a packed object — and
@@ -162,8 +166,8 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * judged by its bytes — the regular kinds dotta writes and any other a foreign
  * tree carries — so an unfamiliar mode fails closed, and a sealed blob under it
  * still reads as sealed. The blob is loaded whatever the mode: the load is the
- * proof the repository holds the object, which cmds/revert reads as one for every
- * filemode.
+ * proof the repository holds the object, so a blob the store lost is this question
+ * failing, never an answer.
  *
  * When `out_epoch_fp` is non-NULL and the blob classifies ENCRYPTED, the header's
  * epoch fingerprint (KDF_EPOCH_FP_SIZE bytes — which repository epoch keyed this
@@ -293,16 +297,18 @@ error_t content_get_from_blob_oid(
 );
 
 /**
- * The bytes this blob's content takes under another name
+ * The bytes a blob's content takes under another name
  *
  * Encrypted bytes carry their storage path in the seal (crypto/cipher.h "Path
  * binding"), so a claim that changes name cannot carry its blob's id: no read
  * under the new name could open it. This opens the content under `from` and seals
  * it under `to` — the same plaintext, the same encryption intent, a different
- * object — and the caller stores what it gets.
+ * object — and the caller stores what it gets. The bytes are the blob's, in the
+ * caller's hand: the read that proves the store holds the blob and stamps its
+ * claim is the caller's, so the blob is read once.
  *
- * Domain: bytes that carry a binding. A blob content_classify calls PLAINTEXT
- * is a caller's bug and dies (base/error.h CHECK_ARG) rather than being copied
+ * Domain: bytes that carry a binding. Bytes content_classify_bytes calls PLAINTEXT
+ * are a caller's bug and die (base/error.h CHECK_ARG) rather than being copied
  * — an unbound blob's id travels unchanged, and the caller that reads the kind
  * for its own claim already knows which it holds. UNSUPPORTED_VERSION is refused
  * in content_plaintext's own words: this build cannot open the bytes, so it cannot
@@ -312,7 +318,8 @@ error_t content_get_from_blob_oid(
  * A link is not content and never reaches here: its bytes are a target path,
  * and Git's filemode is the authority on that at every boundary
  * (content_capture_link, every read here — each takes the entry's filemode —
- * core/profiles.c profile_decode_blob's link rule, cmds/revert.c's claim).
+ * core/profiles.c profile_decode_blob's link rule, and a restored claim's type,
+ * profile_restore_file's).
  *
  * The write-boundary invariant content_capture_file states holds here too: what
  * is answered classifies ENCRYPTED, as the source did, so a caller stamping
@@ -328,8 +335,8 @@ error_t content_get_from_blob_oid(
  * is opened into `out_bytes` and sealed there under `to`, so only the seal is
  * ever left in it.
  *
- * @param repo Repository the blob is read from (must not be NULL)
- * @param blob The blob's id (must not be NULL)
+ * @param data The blob's bytes, as the store holds them (in the domain: never NULL)
+ * @param size Byte count
  * @param from_storage_path The name the bytes were sealed under (must not be
  *          NULL; the AAD they are opened with)
  * @param to_storage_path The name they are sealed under (must not be NULL)
@@ -345,14 +352,13 @@ error_t content_get_from_blob_oid(
  * - ERR_INVALID_ARG: a name past the cipher's bound, the seal's refusal under
  *   "Cannot encrypt '<to>'" — the read left the master held, so the seal asks
  *   no key
- * - ERR_GIT: the blob could not be loaded
  *
- * Reader: a revert whose name changed between the commit and the branch's head
- * (cmds/revert.c).
+ * Reader: core/profiles.c profile_restore_file, a seal restored under another
+ * name than it was made under.
  */
 error_t content_rebind(
-    git_repository *repo,
-    const git_oid *blob,
+    const uint8_t *data,
+    size_t size,
     const char *from_storage_path,
     const char *to_storage_path,
     const char *profile,

@@ -113,11 +113,13 @@
 
 /* A profile's draft renders its commit's message from a writer's words over what
  * the commit changes (infra/commit.h), takes a capture of a file (infra/content.h),
- * climbs through a mount table (infra/mount.h) and asks a run's path filter
- * (infra/pathspec.h), each by pointer; each is named here and defined there. */
+ * reseals a restored file under its key manager (crypto/keymgr.h), climbs through
+ * a mount table (infra/mount.h) and asks a run's path filter (infra/pathspec.h),
+ * each by pointer; each is named here and defined there. */
 typedef struct commit_changes commit_changes_t;
 typedef struct commit_words commit_words_t;
 typedef struct content_capture content_capture_t;
+typedef struct keymgr keymgr;
 typedef struct mount_table mount_table_t;
 typedef struct pathspec pathspec_t;
 
@@ -237,9 +239,9 @@ typedef struct {
  * export_collect_storage), so the mode an export copies off a claim is the one
  * a row would place; the record a capture's claim builds, a file's and a
  * directory's, add's and update's (cmds/add.c add_capture and cmd_add,
- * cmds/update.c update_profile), so the record holds the mode the row places;
- * and revert's mode for a file its commit claims nothing about (cmds/revert.c
- * cmd_revert, step 14).
+ * cmds/update.c update_profile), so the record holds the mode the row places. A
+ * restore writes no floor where its commit claimed no mode: the claim whole,
+ * its absence read here wherever it is placed (profile_restore_file).
  *
  * @param claim A decoded claim (must not be NULL)
  * @return The mode the claim stands for
@@ -672,15 +674,15 @@ typedef struct {
  * Readers: profile_holds, which asks it first and the sheet on its silence;
  * profile_find, whose file claim is the blob it answers; profile_sealed, whose
  * seal is that blob's, its stamp or its bytes, and none where no blob stands;
- * cmds/revert.c cmd_revert, at the name the restore writes in the head (step
- * 11), the entry's identity what the preview diffs, and revert_select_profile,
- * at each holder's own name for the argument — whether a file can be restored
- * there (revert_restorable, the one question both ask); a profile's changes,
- * whether a blob stands at a name the sheet moved and the tree did not, where
- * the base's is the commit's (profile_changes); and a merge, what each of its
- * three sides holds at a name Git's merge left in conflict, each side's kept on
- * the content conflict noted there (profile_merge_name), and at a file's claim
- * a side moved, whose words each side's node decides (profile_merge_file).
+ * cmds/revert.c cmd_revert, at the name the restore writes in the head, the entry's
+ * identity what the preview diffs, and revert_select_profile, at each holder's
+ * own name for the argument — whether a file can be restored there
+ * (revert_restorable, the one question both ask); a profile's changes, whether
+ * a blob stands at a name the sheet moved and the tree did not, where the base's
+ * is the commit's (profile_changes); and a merge, what each of its three sides
+ * holds at a name Git's merge left in conflict, each side's kept on the content
+ * conflict noted there (profile_merge_name), and at a file's claim a side moved,
+ * whose words each side's node decides (profile_merge_file).
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path, or a name Git's merge left in
@@ -733,12 +735,12 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * side holds is its removal (profile_merge_directory) — the four through
  * profile_passes. A reader not on this list is a bug. Four neighbours ask
  * profile_entry instead, the tree alone: revert's read of the head at the name
- * it writes (cmds/revert.c cmd_revert, step 11), and of each holder's head in
- * its search (revert_select_profile, at the holder's own name for the argument),
- * where a directory claim is never refused — it gives way to the write where it
- * stands, and rides it where the head's blob contradicts it; the seal a capture
- * keeps (profile_sealed), which a blob alone holds; a profile's changes, whether
- * a blob stands at a name the tree did not move (profile_changes); and a merge,
+ * it writes (cmds/revert.c cmd_revert), and of each holder's head in its search
+ * (revert_select_profile, at the holder's own name for the argument), where a
+ * directory claim is never refused — it gives way to the write where it stands,
+ * and rides it where the head's blob contradicts it; the seal a capture keeps
+ * (profile_sealed), which a blob alone holds; a profile's changes, whether a
+ * blob stands at a name the tree did not move (profile_changes); and a merge,
  * whose rules and words read each side's node, never its sheet (profile_merge_name,
  * profile_merge_file).
  *
@@ -1472,46 +1474,61 @@ error_t profile_derive_ancestors(
 );
 
 /**
- * A claim a commit held, restored at its name, with the way the commit stood it on
+ * A file claim a commit held — a blob's — restored at `storage_path`, the name
+ * the commit writes, with the way the commit stood it on
  *
- * The claim is the write's whole: its name, where the restore writes it; its
- * blob, an id the ODB holds by the commit — a writer that decides before it writes
- * puts the id now and stores the object past its prompt (sys/stage.h
- * stage_put_blob); its type; and what its item carries, the mode, the owner and
- * group, the stamp. In order, each refusal before the sheet moves:
+ * The claim is the commit's, whole: its mode, owner and group as it claimed them,
+ * and none where it claimed none, its absence read as the floor wherever a mode
+ * is placed (profile_claim_mode), so the sheet stays as sparse as the commit's.
+ * Its blob is read once, through the repository `from`'s tree was read from:
+ * the read is the proof the store holds it, for every filemode, and its bytes
+ * decide the stamp — a regular file's, the write boundary's own reading
+ * (core/policy.h), never the commit's stamp — and, where they are sealed and
+ * `storage_path` is not the claim's own name, are opened under that name and
+ * sealed under `storage_path` (crypto/cipher.h "Path binding"), put as bytes
+ * the stage writes at its commit (sys/stage.h stage_put_unwritten). A blob that
+ * carries no binding — plaintext, or a link's target — enters at its id under
+ * either name. In order, each refusal before anything moves:
+ *   - the read, under "Cannot restore '%s'", the claim's own name;
+ *   - the reseal, under "Cannot restore '%s' as '%s'": ERR_LOCKED without a key,
+ *     the read's own ladder (infra/content.h content_rebind);
  *   - the admission (profile_draft_t): the sheet's half, ERR_CONFLICT "Cannot
  *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
  *     the byte-least such claim; then the tree's, the put's own (sys/stage.h
- *     stage_put_blob, ERR_CONFLICT or ERR_INVALID_ARG), which writes no object;
+ *     stage_put_blob, stage_put_unwritten: ERR_CONFLICT or ERR_INVALID_ARG),
+ *     which writes no object;
  *   - the put rule at the name: a directory claim standing there gives way, one
  *     the base's blob contradicts rides the write;
- *   - the way: each rung of the name, paired from the leaf with a rung of
- *     `from_storage_path` — both names place one path, so their tails end alike
+ *   - the way: each rung of `storage_path`, paired from the leaf with a rung of
+ *     the claim's own name — both names place one path, so their tails end alike
  *     — takes `from`'s directory claim at its pair, derived, wherever the profile
  *     does not pass through the rung, as a capture claims one from the disk
  *     (profile_capture_ancestors): the base holds nothing at it (profile_holds),
  *     nor a directory it tracks beneath it;
  *   - the claim at its own kind, written (core/metadata.h metadata_write_item):
- *     the claim's, or — where it claims nothing, a link the commit records no
- *     ownership for — the retire of the FILE item standing there.
+ *     the commit's, or — where it claims nothing, no mode, owner, group or stamp
+ *     — the retire of the FILE item standing there.
  * A failure past the put leaves a draft its writer abandons (sys/stage.h).
  *
  * Reader: cmds/revert.c cmd_revert.
  *
  * @param draft The draft (must not be NULL)
- * @param claim The claim the write restores, a blob's (must not be NULL; its
- *              strings borrowed for the call)
+ * @param storage_path The name the restore writes: the claim's own, or the one
+ *                     the profile holds the place by (must not be NULL)
+ * @param claim The file claim the commit holds, a blob's, as its walk decodes
+ *              it (must not be NULL; borrowed for the call)
  * @param from The profile at the commit the claim came from (must not be NULL;
  *             its sheet read strictly)
- * @param from_storage_path The commit's name for the file, whose rungs the way's
- *                          are paired with (must not be NULL)
+ * @param keymgr Key manager, for a reseal (can be NULL: a reseal is then refused,
+ *               ERR_LOCKED)
  * @return Error or NULL on success
  */
 error_t profile_restore_file(
     profile_draft_t *draft,
+    const char *storage_path,
     const profile_claim_t *claim,
     profile_t *from,
-    const char *from_storage_path
+    keymgr *keymgr
 );
 
 /**

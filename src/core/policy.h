@@ -99,14 +99,14 @@ typedef enum {
  *   (cmds/update.c update_capture), add in its decision pass (cmds/add.c cmd_add);
  *   false where no blob stands, a link keeping no name sealed. Its two witnesses,
  *   the blob's bytes and the claim's stamp, a cache of them established at the
- *   write boundary (cmds/add.c, cmds/update.c, and cmds/revert.c's restore),
- *   seal wherever either does: a sheet that disagrees with its tree is a state
- *   the view tolerates (core/profiles.c profile_step), and here a wrong answer
- *   publishes a secret. Stated: a stamp a hand writes over plaintext is a seal
- *   like any other — the next capture seals the file, --no-encrypt is refused
- *   over it, and with encryption off its capture is refused, update's after a
- *   preview that listed it — and remove-then-add is the way out. Policy reads
- *   the answer as the bool and opens no document.
+ *   write boundary (cmds/add.c, cmds/update.c, and a restore, core/profiles.c
+ *   profile_restore_file), seal wherever either does: a sheet that disagrees
+ *   with its tree is a state the view tolerates (core/profiles.c profile_step),
+ *   and here a wrong answer publishes a secret. Stated: a stamp a hand writes
+ *   over plaintext is a seal like any other — the next capture seals the file,
+ *   --no-encrypt is refused over it, and with encryption off its capture is
+ *   refused, update's after a preview that listed it — and remove-then-add is
+ *   the way out. Policy reads the answer as the bool and opens no document.
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)
@@ -149,12 +149,13 @@ error_t encryption_policy_should_encrypt(
  *
  * Why a bool is exact: the caller holds the view's cached `encrypted` — byte
  * truth by the write-boundary invariant (stamped from the blob's bytes at every
- * committing boundary — cmds/add.c, cmds/update.c, cmds/revert.c — projected
- * onto the view row at build). That bool collapses ENCRYPTED and
- * UNSUPPORTED_VERSION onto true, and the collapse is exactly right here: a blob
- * at a cipher version this build does not understand still carries encryption
- * intent, and flagging it as "missing encryption" would be misleading — the version
- * skew surfaces from the content read path when a caller actually tries to decrypt.
+ * committing boundary — cmds/add.c, cmds/update.c, core/profiles.c
+ * profile_restore_file — projected onto the view row at build). That bool collapses
+ * ENCRYPTED and UNSUPPORTED_VERSION onto true, and the collapse is exactly right
+ * here: a blob at a cipher version this build does not understand still carries
+ * encryption intent, and flagging it as "missing encryption" would be misleading
+ * — the version skew surfaces from the content read path when a caller actually
+ * tries to decrypt.
  *
  * Pure — no I/O, no allocation. NULL-safe (returns false if config or storage_path
  * is NULL); an inactive policy (no compiled ruleset) never matches.

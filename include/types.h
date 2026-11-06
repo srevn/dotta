@@ -224,9 +224,9 @@ static inline const char *path_type_noun(path_type_t type) {
  * directory, and on a link, the one capture that claims no mode, the record's
  * don't-care) — so no row, record, entry or verdict carries it. The header show
  * prints and the capture lines add prints test it on the decoded claim, where a
- * mode is claimed (cmds/show.c show_print_blob, cmds/add.c add_print_capture),
- * and revert on the commit's, where a file claiming nothing takes its type's
- * floor (cmds/revert.c cmd_revert, step 14).
+ * mode is claimed (cmds/show.c show_print_blob, cmds/add.c add_print_capture);
+ * a restore writes it back as its commit claimed it, absence and all
+ * (core/profiles.h profile_restore_file).
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 

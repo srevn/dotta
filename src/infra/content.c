@@ -359,16 +359,13 @@ error_t content_get_from_blob_oid(
 }
 
 error_t content_rebind(
-    git_repository *repo,
-    const git_oid *blob,
+    const uint8_t *data, size_t size,
     const char *from_storage_path,
     const char *to_storage_path,
     const char *profile,
     keymgr *keymgr,
     buffer_t *out_bytes
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(blob);
     CHECK_NULL(from_storage_path);
     CHECK_NULL(to_storage_path);
     CHECK_NULL(profile);
@@ -376,29 +373,22 @@ error_t content_rebind(
 
     *out_bytes = (buffer_t){ 0 };
 
-    gitops_blob_view_t view;
-    error_t err = gitops_blob_view_open(repo, blob, &view);
-    if (err) {
-        return error_wrap(err, "Failed to load blob for '%s'", from_storage_path);
-    }
-
     /* Bytes are authoritative here as everywhere: only a sealed blob has a name
      * bound into it, and only it has anything to move — the domain the caller
-     * read for its own claim (the header). */
+     * read for its own claim (the header). A seal has bytes, so the domain's
+     * check is the NULL one too. */
     CHECK_ARG(
-        content_classify_bytes((const uint8_t *) view.data, view.size)
-        != CONTENT_PLAINTEXT, "content_rebind was handed unbound content"
+        content_classify_bytes(data, size) != CONTENT_PLAINTEXT,
+        "content_rebind was handed unbound content"
     );
 
     /* A content entry by the domain (the header): a link never reaches here. It
      * is opened into the caller's buffer and sealed there under the new name,
      * so only the seal is ever left in it: a refused read leaves it empty
      * (content_plaintext), and so does a refused seal (content_encrypt). */
-    err = content_plaintext(
-        view.data, view.size, GIT_FILEMODE_BLOB, from_storage_path, profile,
-        keymgr, out_bytes
+    error_t err = content_plaintext(
+        data, size, GIT_FILEMODE_BLOB, from_storage_path, profile, keymgr, out_bytes
     );
-    gitops_blob_view_close(&view);
     if (err) {
         return err;              /* the read ladder's own words, unwrapped */
     }

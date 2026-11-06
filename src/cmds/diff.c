@@ -1301,9 +1301,9 @@ static error_t diff_write_view(
  * One block, its boundary asked by its first line: each entry no path of the
  * arm's own reached (core/scope.h scope_coverage_misses) — which likely indicates
  * a typo — warned in the words of what the arm's paths are: the enabled view's
- * are active paths, a commit's are the commit's, and a miss in one says nothing
- * of the other. An entry that reached only paths of a profile -p leaves out names
- * the first one's profile.
+ * are active paths, a commit's are the commit's, a range's either commit's, and
+ * a miss in one says nothing of the others. An entry that reached only paths of
+ * a profile -p leaves out names the first one's profile.
  *
  * @param out Output context for the answers
  * @param scope The run's scope, whose path filter's entries the misses are counted

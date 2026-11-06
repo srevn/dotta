@@ -541,7 +541,8 @@ typedef struct {
  *
  * Readers: core/profiles.c profile_merge_file, the blob a file's claim stands
  * with, and profile_merge_contradicted, a blob at a rung of a directory claim's
- * name.
+ * name; core/metadata.c metadata_save_to_stage, the sheet a sheet claiming nothing
+ * takes, where one stands.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL)

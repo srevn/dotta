@@ -964,11 +964,11 @@ void profile_departures(
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
  *     one; the sheet is saved only where its claims are no longer the base's
- *     (core/metadata.h metadata_same), a hand's spelling kept otherwise; and a
- *     tree equal to the one opened is no commit (sys/stage.h stage_commit). A
- *     merge's draft has always moved, its stage's second parent, and the save
- *     stands as written over a merge too, its sheet's name holding the base's
- *     sheet from the open.
+ *     (core/metadata.h metadata_same), a hand's spelling kept otherwise, and
+ *     none where it claims nothing (metadata_save_to_stage); and a tree equal
+ *     to the one opened is no commit (sys/stage.h stage_commit). A merge's draft
+ *     has always moved, its stage's second parent, and the save stands as written
+ *     over a merge too, its sheet's name holding the base's sheet from the open.
  *
  * Memory: a handle's own — an arena made at the open, holding the struct, the
  * sheet the commit carries — the copy of the base's with every claim an edit
@@ -1610,21 +1610,22 @@ error_t profile_changes(
  * no save, no message, no commit. Otherwise the prune, against the tree the commit
  * will record, counted where a count is asked — every derivation it takes but a
  * claim the base tracked, whose removal the writer names; the sheet saved where
- * its claims are no longer the base's; the message, the writer's words over what
- * the commit changes of the profile's explicit claims (profile_changes,
- * infra/commit.h commit_message) — never the writer's own lists, which hold what
- * it touched, a re-capture of what the profile holds among them; then one commit,
- * naming the writer's action (sys/stage.h stage_commit: a tree equal to the opened
- * one is none, a head another writer moved since the open is refused ERR_CONFLICT,
- * and one deleted since in Git's words). One commit a draft, answered as sys/stage
- * answers it: Git's null id where the gate stops it, and past the gate the tree
- * write's own answer — the commit made where an edit the gate saw stands past
- * the prune, since it moved a content entry or a claim and a sheet whose claims
- * moved spells other bytes, and the null id where the prune took back the only
- * edits the gate saw: a climb's rungs nothing tracked stands beneath, authored
- * and pruned in one draft, whose message no commit carries. A merge's draft always
- * commits: its gate passes (profile_changed), and its message is its writer's
- * whole words (infra/commit.h commit_words_t.custom_msg), Git's line for a merge.
+ * its claims are no longer the base's, and none where it claims nothing; the
+ * message, the writer's words over what the commit changes of the profile's
+ * explicit claims (profile_changes, infra/commit.h commit_message) — never the
+ * writer's own lists, which hold what it touched, a re-capture of what the profile
+ * holds among them; then one commit, naming the writer's action (sys/stage.h
+ * stage_commit: a tree equal to the opened one is none, a head another writer
+ * moved since the open is refused ERR_CONFLICT, and one deleted since in Git's
+ * words). One commit a draft, answered as sys/stage answers it: Git's null id
+ * where the gate stops it, and past the gate the tree write's own answer — the
+ * commit made where an edit the gate saw stands past the prune, since it moved
+ * a content entry or a claim and a sheet whose claims moved spells other bytes,
+ * and the null id where the prune took back the only edits the gate saw: a climb's
+ * rungs nothing tracked stands beneath, authored and pruned in one draft, whose
+ * message no commit carries. A merge's draft always commits: its gate passes
+ * (profile_changed), and its message is its writer's whole words (infra/commit.h
+ * commit_words_t.custom_msg), Git's line for a merge.
  *
  * Readers: cmds/add.c cmd_add and cmds/update.c update_profile, which count the
  * prune and read whether the commit landed, so a capture that put back what the

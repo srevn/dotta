@@ -9,6 +9,9 @@
  * it retires the one standing at its key — a capture's whose look claims nothing,
  * a restore's of a claim that says nothing (core/profiles.h profile_capture_file,
  * profile_restore_file) — while a document's is read past (metadata_from_json).
+ * And so does the document: a sheet that claims nothing is no file, which the
+ * save takes where a tree holds one (metadata_save_to_stage), and a tree without
+ * one loads as a sheet claiming nothing (metadata_load_from_tree).
  *
  * Authority, per fact:
  * - content and type: the tree's (a blob, a link, an executable) — never restated
@@ -880,6 +883,11 @@ error_t metadata_from_json(
  * is normalized by the save and moves its blob; nothing here promises otherwise,
  * so the caller saves only a sheet whose claims moved (metadata_same), and a
  * commit that moved none keeps a hand's spelling.
+ *
+ * A sheet that claims nothing is no file (the module header): its save takes
+ * the blob the stage holds at the sheet's name, where it holds one, and puts
+ * none — the twin of the load, which reads a tree without one as a sheet claiming
+ * nothing (metadata_load_from_tree).
  *
  * @param stage The stage the sheet goes on (must not be NULL)
  * @param metadata Metadata to save (must not be NULL)

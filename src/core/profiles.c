@@ -2941,7 +2941,8 @@ error_t profile_commit(
     err = profile_prune_ancestors(draft, out_pruned);
     if (err) return err;
 
-    /* The sheet, saved only where its claims are no longer the base's: a commit
+    /* The sheet, saved only where its claims are no longer the base's — and none
+     * where it claims nothing (core/metadata.h metadata_save_to_stage): a commit
      * whose edits took no item and pruned none keeps the sheet's bytes as they
      * stand, a hand's spelling included, as the stage keeps a tree no edit moved
      * (core/metadata.h metadata_same) */

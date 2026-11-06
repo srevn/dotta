@@ -1159,14 +1159,21 @@ error_t metadata_load_from_tree(
 /**
  * Save metadata to a stage
  *
- * The sheet serialized, then put at .dotta/metadata.json as a regular blob.
+ * The sheet serialized, then put at .dotta/metadata.json as a regular blob —
+ * or, where it claims nothing, the blob the stage holds there taken.
  */
-error_t metadata_save_to_stage(
-    stage_t *stage,
-    const metadata_t *metadata
-) {
+error_t metadata_save_to_stage(stage_t *stage, const metadata_t *metadata) {
     CHECK_NULL(stage);
     CHECK_NULL(metadata);
+
+    /* No claim, no document: the sheet's file goes where the stage holds one,
+     * and none is put where it holds none — an orphan's stage, or one opened at
+     * a tree that holds no sheet. A tree without one loads as a sheet claiming
+     * nothing (metadata_load_from_tree), so the save is the load's twin */
+    if (metadata->files.count == 0 && metadata->directories.count == 0) {
+        return stage_holds(stage, METADATA_FILE_PATH).type == GIT_OBJECT_BLOB
+            ? stage_remove(stage, METADATA_FILE_PATH) : NULL;
+    }
 
     buffer_t json = metadata_to_json(metadata);
 

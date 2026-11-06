@@ -369,15 +369,16 @@ typedef enum {
  * Readers: profile_walk, profile_contradicted and the point questions
  * (profile_holds, profile_find, profile_sealed), which read the sheet through
  * it; a profile's draft, which reads it at the open, strictly (profile_draft_seed),
- * and copies it for a writer's commit (profile_draft_open, profile_draft_orphan);
- * a merge, which reads theirs' and the merge base's at its open, strictly, each
- * said by theirs' commit (profile_draft_merge); cmds/revert.c cmd_revert, which
- * reads its target commit's before any question of it, its failure said as the
- * commit's; cmds/show.c show_file, whose header says what its tolerant read lost;
- * cmds/list.c list_files, whose verbose rows say what its tolerant walk lost;
- * cmds/export.c cmd_export, which says what a tolerant arm's collection lost,
- * once, beside the two arms whose copy came out empty, where the failure is the
- * answer (export_collect_profile, export_collect_storage); and cmds/remove.c
+ * and copies it for a writer's commit (profile_draft_open, profile_draft_orphan),
+ * or a commit's, whole, for one (profile_restore_tree); a merge, which reads
+ * theirs' and the merge base's at its open, strictly, each said by theirs' commit
+ * (profile_draft_merge); cmds/revert.c cmd_revert, which reads its target commit's
+ * before any question of it, its failure said as the commit's; cmds/show.c
+ * show_file, whose header says what its tolerant read lost; cmds/list.c list_files,
+ * whose verbose rows say what its tolerant walk lost; cmds/export.c cmd_export,
+ * which says what a tolerant arm's collection lost, once, beside the two arms
+ * whose copy came out empty, where the failure is the answer
+ * (export_collect_profile, export_collect_storage); and cmds/remove.c
  * remove_profile, which says before its preview what its hooks' tolerant list lost.
  *
  * @param profile Handle (must not be NULL)
@@ -914,7 +915,8 @@ void profile_departures(
  * whatever the commit does; or, over a merge, the claims composed over its merged
  * tree, which no writer edits. A writer asks the base and edits the draft; it
  * never holds the sheet — it hands the draft what it captured from the disk or
- * restores from a commit, and the draft authors the claim — and the draft answers
+ * restores from a commit, a claim or the commit's whole tree
+ * (profile_restore_tree), and the draft authors the claim — and the draft answers
  * what the base cannot: whether a name a writer chooses before reading it has
  * room beside the names chosen with it (profile_admit), whether its edits move
  * anything (profile_changed), and which explicit claims they add, update and
@@ -1572,6 +1574,37 @@ error_t profile_restore_directory(
 );
 
 /**
+ * A commit's whole tree and sheet, the draft's: every entry the commit's — its
+ * claims under its names, dotta's own files, its sheet's bytes — and the sheet
+ * the commit carries the commit's, copied
+ *
+ * No selection, stamp, reseal or key: the commit's own names and blobs. Its claims
+ * stand as the commit has them, a claim its tree contradicts carried as every
+ * write that does not aim at one carries it, and the commit's prune and save
+ * run as at every commit (profile_commit). So the commit records the commit's
+ * own tree but where the prune or the save moves its sheet: a derivation nothing
+ * stands beneath is pruned, and a sheet a hand wrote is saved in the serializer's
+ * bytes where its claims are not the head's. A sheet saying the head's claims
+ * in other bytes is kept as the commit spelled it, the commit moving it alone:
+ * then no list names anything, and the message's one line says ancestor claims
+ * changed (profile_changes). A mode Git's tree writer refuses, a hand's 100664,
+ * fails the commit only where its tree is rebuilt — the root's, for a name at
+ * the root, wherever the sheet is saved — the index keeping the tree's cache
+ * (sys/stage.h stage_read_tree).
+ *
+ * The commit's sheet is read first and strictly, so its refusal moves nothing,
+ * in the loader's words (core/metadata.h metadata_load_from_tree): a writer that
+ * reads it before says it as the commit's.
+ *
+ * @param draft The draft (must not be NULL)
+ * @param from The profile at the commit's tree (must not be NULL; its tree one
+ *             the draft's repository holds)
+ * @return Error or NULL on success: the sheet's, in the loader's words; or the
+ *         tree's, which will not read whole
+ */
+error_t profile_restore_tree(profile_draft_t *draft, profile_t *from);
+
+/**
  * One of dotta's own files, beside the claims
  *
  * A name outside the grammar (infra/label.h label_prefixes), which the decode
@@ -1644,7 +1677,9 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  * writes or takes the sheet. Nothing is written, so a dry run may ask it. A commit
  * whose lists name nothing moved only the way: every writer's edit moves an
  * explicit claim, the way to one, or an internal file — dotta's own riding a
- * profile's first capture (profile_put_internal_file).
+ * profile's first capture (profile_put_internal_file) — but a commit's whole
+ * tree restored over the head's claims in other bytes, which moves the sheet
+ * alone (profile_restore_tree).
  *
  * Reader: profile_commit, the names its message gives (infra/commit.h
  * commit_message). A reader not on this list is a bug.

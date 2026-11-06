@@ -546,6 +546,8 @@ error_t stage_settle(stage_t *st, const char *path, const git_tree *tree);
  * unwritten put the tree does not name at its path is displaced, its bytes never
  * written (stage_put_unwritten). Nothing is written.
  *
+ * Reader: core/profiles.c profile_restore_tree.
+ *
  * @param st Stage (must not be NULL)
  * @param tree The tree read (must not be NULL; one the stage's repository holds)
  * @return Error or NULL on success: a tree that will not read whole

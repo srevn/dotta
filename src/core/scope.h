@@ -570,8 +570,8 @@ bool scope_accepts_entry(
  * Each verb names its universe, hands its subjects in one at a time, in the one
  * shape every subject has whatever the verb holds it as — a profile, two names
  * and a kind (scope_coverage_add) — and words the misses itself. Readers:
- * cmds/diff.c diff_validate_filter, over a view's rows. A reader not on this
- * list is a bug.
+ * cmds/diff.c diff_validate_filter, over a view's rows, and diff_commits, over
+ * the names a commit range's two trees hold. A reader not on this list is a bug.
  *
  * A value of the arena it was made in, the misses with it; nothing frees one.
  */

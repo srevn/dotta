@@ -1540,20 +1540,62 @@ cleanup:
 }
 
 /**
- * The selection of a commit range: what diff_select_delta_cb reads and what it
- * leaves
+ * The selection of a commit range under the path filter: what its two readers read
  *
- * The filter, and what a delta's path is resolved through — the profile the range
- * belongs to and this machine's table, under which a past tree's names are placed
- * where the binding stands now, as the commit-to-workspace arm places them
- * (manifest_build_profile).
+ * The filter's two questions of a name of the range, one a reader — which entries
+ * it reaches, each name either tree holds handed to the coverage before the diff
+ * is generated (diff_cover_entry_cb), and whether the filter selects it, each
+ * delta asked as the diff is (diff_select_delta_cb) — and what a name is resolved
+ * through for both: the profile the range belongs to and this machine's table,
+ * under which a past tree's names are placed where the binding stands now, as
+ * the commit-to-workspace arm places them (manifest_build_profile).
  */
 typedef struct {
-    const pathspec_t *filter;       /* never NULL: the callback is installed under a filter alone */
+    scope_coverage_t *coverage;     /* the entries a name of either tree reaches */
+    const pathspec_t *filter;       /* never NULL: both readers run under a filter alone */
     const mount_table_t *mounts;
     const char *profile;
     arena_t *arena;                 /* the paths' lifetime: the command's */
 } diff_selection_t;
+
+/**
+ * Hand one name of a commit range's tree to the path filter's coverage
+ *
+ * A tree walk's visitor (sys/gitops.h gitops_tree_walk), over each of the range's
+ * two trees before the diff is generated: every name the diff could hold a delta
+ * for — an entry under a label that is no tree, a blob of any filemode and a
+ * gitlink alike, each of which a tree-to-tree diff spells a delta of
+ * (lib/libgit2/src/libgit2/diff_generate.c handle_unmatched_new_item,
+ * maybe_modified) — placed as its delta would be, and read as a file, as the
+ * delta is (diff_select_delta_cb). A tree is walked into, and one no label names
+ * skipped with everything beneath it: the content gate every walk over a profile's
+ * tree asks (infra/label.h label_prefixes). The walk ends once every entry of
+ * the filter has reached a name.
+ *
+ * @param path    The entry's name in the tree, joined by the walk
+ * @param entry   The entry
+ * @param payload The selection (diff_selection_t)
+ * @param next    What the walk does next: STOP once every entry is reached
+ * @return NULL: nothing here fails
+ */
+static error_t diff_cover_entry_cb(
+    const char *path, const git_tree_entry *entry, void *payload, gitops_next_t *next
+) {
+    diff_selection_t *sel = payload;
+
+    if (!label_prefixes(path)) {
+        *next = GITOPS_NEXT_SKIP;
+        return NULL;
+    }
+    if (git_tree_entry_type(entry) == GIT_OBJECT_TREE) return NULL;
+
+    const char *filesystem_path = mount_resolve(sel->arena, sel->mounts, sel->profile, path);
+
+    if (!scope_coverage_add(sel->coverage, sel->profile, filesystem_path, path, PATH_KIND_FILE)) {
+        *next = GITOPS_NEXT_STOP;
+    }
+    return NULL;
+}
 
 /**
  * Select one delta of a commit range under the path filter
@@ -1613,6 +1655,19 @@ static int diff_select_delta_cb(
  * delta by delta as the diff is generated (diff_select_delta_cb, each delta by
  * both its names under this machine's table), so the diff printed — names, stats,
  * patch — is the selection and nothing else.
+ *
+ * Each entry of the filter is answered before the diff is generated, over the
+ * range's own paths: every name either commit holds that a delta could be, placed
+ * as a delta is (diff_cover_entry_cb) — so an entry naming a path both commits
+ * hold unchanged has reached it, and one naming a path neither holds is warned,
+ * first, and alone where no entry reached a path, as the commit arm answers over
+ * its view (diff_validate_filter). The range is the profile -p names where it
+ * names any, so no path of it is hidden. No sheet is read: a range across a sheet
+ * an older schema wrote is answered and diffed under a filter as under none.
+ * And a directory claim a sheet alone holds — one tracked with nothing beneath
+ * it, which no tree holds — is no path of either commit: under a filter the sheet's
+ * own changes are out of the range (diff_select_delta_cb), so nothing there is
+ * compared.
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, the command arena and the output)
@@ -1680,15 +1735,32 @@ static error_t diff_commits(
         goto cleanup;
     }
 
-    /* Generate the diff, the filter selecting each delta on its way in. The
-     * selection is borrowed for the call: libgit2 reads the payload only while
-     * generating. */
+    /* The selection, borrowed by both its readers: the walks below, and libgit2,
+     * which reads the payload only while generating */
     diff_selection_t selection = {
-        .filter = path_filter, .mounts = mounts, .profile = profile, .arena = arena
+        .coverage = scope_coverage_create(scope, arena),
+        .filter   = path_filter,
+        .mounts   = mounts,
+        .profile  = profile,
+        .arena    = arena
     };
+
+    /* Under a filter, each entry answered first, over the range's own paths:
+     * the two trees walked, each only until every entry has reached a path, and
+     * the misses said before anything else — where no entry reached one, nothing
+     * can diff, and the answers are the whole report. Then the diff, the filter
+     * selecting each delta on its way in. */
     git_diff_options diff_opts;
     git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
     if (path_filter) {
+        err = gitops_tree_walk(tree1, diff_cover_entry_cb, &selection);
+        if (!err) err = gitops_tree_walk(tree2, diff_cover_entry_cb, &selection);
+        if (err) goto cleanup;
+
+        if (!diff_print_coverage(out, scope, selection.coverage, "path of either commit")) {
+            goto cleanup;
+        }
+
         diff_opts.notify_cb = diff_select_delta_cb;
         diff_opts.payload = &selection;
     }
@@ -1877,9 +1949,10 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
      *                    (scope_filters_profiles), else the enabled set.
      *   scope_paths    — CLI positional path filter (the range arm's delta
      *                    selection, the commit arm's comparison).
-     *   the coverage   — each entry of that filter answered alone over the view
-     *                    an arm compares, -p read beside it (scope_coverage_t,
-     *                    diff_validate_filter).
+     *   the coverage   — each entry of that filter answered alone over the paths
+     *                    an arm compares, -p read beside it: a view's rows, a
+     *                    range's two trees (scope_coverage_t: diff_validate_filter,
+     *                    diff_commits).
      *   the predicates — the workspace arm's presentation (scope_accepts_path,
      *                    scope_accepts_profile) and what its empty line claims
      *                    (scope_filters_profiles, scope_filters_paths).

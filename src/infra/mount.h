@@ -427,7 +427,13 @@ const mount_root_t *mount_root_of(
  * metadata_from_json), a tree's entries at their walk (core/profiles.c
  * profile_step), an argument at its resolver (infra/path.h path_input_resolve),
  * and the state's column by its own constraint (core/state.c storage_spelling).
- * One under no label is a caller's bug, and dies.
+ * Two readers join a tree's name no shape rule read, past the content gate alone
+ * (infra/label.h label_prefixes) — a commit range's names under a path filter,
+ * its deltas and its two trees' entries (cmds/diff.c diff_select_delta_cb,
+ * diff_cover_entry_cb) — and may: the path they join is only matched against
+ * the filter, never touched, so a name a hand spelled with a '..' component is
+ * matched under a spelling it escapes, and nothing more. One under no label is
+ * a caller's bug, and dies.
  *
  * @param arena        Arena the answer is spelled in (must not be NULL)
  * @param table        Mount table (must not be NULL)

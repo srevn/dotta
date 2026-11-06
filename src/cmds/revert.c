@@ -20,6 +20,7 @@
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "base/refspec.h"
+#include "base/secure.h"
 #include "base/string.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -307,6 +308,8 @@ static error_t revert_print_diff(
      * the routing decision lives with the blob, so encryption-state changes between
      * commits are handled by the content layer with no caller participation. */
     buffer_t head_plaintext = BUFFER_INIT;
+    buffer_t target_plaintext = BUFFER_INIT;
+    git_patch *patch = NULL;
     error_t err = content_get_from_blob_oid(
         repo,
         head_oid,
@@ -317,10 +320,10 @@ static error_t revert_print_diff(
         &head_plaintext
     );
     if (err) {
-        return error_wrap(err, "Failed to get current file content");
+        err = error_wrap(err, "Failed to get current file content");
+        goto cleanup;
     }
 
-    buffer_t target_plaintext = BUFFER_INIT;
     err = content_get_from_blob_oid(
         repo,
         target_oid,
@@ -331,8 +334,8 @@ static error_t revert_print_diff(
         &target_plaintext
     );
     if (err) {
-        buffer_deinit(&head_plaintext);
-        return error_wrap(err, "Failed to get target file content");
+        err = error_wrap(err, "Failed to get target file content");
+        goto cleanup;
     }
 
     /* Create patch directly from plaintext buffers using in-memory API
@@ -340,18 +343,15 @@ static error_t revert_print_diff(
      * This uses libgit2's buffer-based patch API to avoid creating temporary
      * blobs in the Git ODB that would persist until gc.
      */
-    git_patch *patch = NULL;
     int rc = git_patch_from_buffers(
         &patch,
         head_plaintext.data, head_plaintext.size, head_name,
         target_plaintext.data, target_plaintext.size, head_name,
         NULL  /* options */
     );
-
     if (rc < 0) {
-        buffer_deinit(&head_plaintext);
-        buffer_deinit(&target_plaintext);
-        return error_git(rc, "Cannot compare the two versions of '%s'", head_name);
+        err = error_git(rc, "Cannot compare the two versions of '%s'", head_name);
+        goto cleanup;
     }
 
     /* What the patch found, off libgit2's own tests, set as it was built: two
@@ -390,13 +390,20 @@ static error_t revert_print_diff(
         }
     }
 
+cleanup:
     git_patch_free(patch);
 
-    /* Free plaintext buffers */
+    /* The two plaintexts — a sealed file's decrypted bytes — wiped before they
+     * are freed, on every exit and whatever the reads left (base/buffer.h: on a
+     * failure the caller owns what the callee left), as the comparison wipes
+     * its copy (infra/compare.c); secure_wipe answers a NULL pointer and a zero
+     * length itself, so the tail is total without a guard */
+    secure_wipe(head_plaintext.data, head_plaintext.size);
     buffer_deinit(&head_plaintext);
+    secure_wipe(target_plaintext.data, target_plaintext.size);
     buffer_deinit(&target_plaintext);
 
-    return NULL;
+    return err;
 }
 
 /**

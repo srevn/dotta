@@ -572,7 +572,8 @@ bool scope_accepts_entry(
  * and a kind (scope_coverage_add) — and words the misses itself. Readers:
  * cmds/diff.c diff_validate_filter, over a view's rows, and diff_commits, over
  * the names a commit range's two trees hold; cmds/apply.c cmd_apply, over the
- * workspace's items, active and orphaned. A reader not on this list is a bug.
+ * workspace's items, active and orphaned; cmds/update.c cmd_update, over the
+ * active items and the scan's. A reader not on this list is a bug.
  *
  * A value of the arena it was made in, the misses with it; nothing frees one.
  */

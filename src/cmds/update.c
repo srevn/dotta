@@ -1465,6 +1465,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      *   scope_accepts_profile / scope_accepts_path, then scope_is_excluded —
      *   the per-item gates: update_partition's, and the named run's rows'
      *   (scope_accepts_entry)
+     *
+     *   the coverage — each path argument answered alone over the paths the run
+     *   can commit, -p read beside it (scope_coverage_t)
      */
     scope_inputs_t scope_inputs = {
         .profiles         = opts->profiles,
@@ -1547,6 +1550,64 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             "Filter: Excluding %zu pattern%s",
             opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
         );
+    }
+
+    /* Each path argument answered alone, over the paths the run can commit: every
+     * active path, and where the scan ran, each new file it found and each place
+     * it could not look — so what a flag withholds counts as reached, and an
+     * entry that reached only what -p leaves out names the first one's profile
+     * (core/scope.h scope_coverage_t). One block, its boundary asked by its first
+     * line. An argument naming a path inside a place the scan could not look
+     * reaches no item there, and warns beside that place's own line below
+     * (stated). */
+    {
+        scope_coverage_t *coverage = scope_coverage_create(scope, ctx->arena);
+
+        workspace_items_t active = workspace_active(ws);
+        for (size_t i = 0; i < active.count; i++) {
+            const workspace_item_t *item = active.entries[i];
+            if (!scope_coverage_add(
+                coverage, item->profile, item->filesystem_path, item->storage_path,
+                item->item_kind
+                )) {
+                break;
+            }
+        }
+
+        /* The scan's items, among the diverged, which lend the active ones too */
+        workspace_items_t diverged = workspace_diverged(ws);
+        for (size_t i = 0; i < diverged.count; i++) {
+            const workspace_item_t *item = diverged.entries[i];
+            if (item->state != WORKSPACE_STATE_UNTRACKED &&
+                item->state != WORKSPACE_STATE_UNSCANNED) {
+                continue;
+            }
+            if (!scope_coverage_add(
+                coverage, item->profile, item->filesystem_path, item->storage_path,
+                item->item_kind
+                )) {
+                break;
+            }
+        }
+
+        const char *what = ws_opts.analyze_untracked ? "active path or new file" : "active path";
+        scope_misses_t misses = scope_coverage_misses(coverage);
+        if (misses.count > 0) output_gap(out, OUTPUT_NORMAL);
+
+        for (size_t i = 0; i < misses.count; i++) {
+            const scope_miss_t *miss = &misses.entries[i];
+            if (miss->hidden) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "No %s matches %s'%s' (%s's, hidden by the profile filter)",
+                    what, miss->entry.rule ? "pattern " : "", miss->entry.text, miss->hidden
+                );
+            } else {
+                output_warning(
+                    out, OUTPUT_NORMAL, "No %s matches %s'%s'", what,
+                    miss->entry.rule ? "pattern " : "", miss->entry.text
+                );
+            }
+        }
     }
 
     /* Partition the diverged items: the scope, the flags, and for a deployed

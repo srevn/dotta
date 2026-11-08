@@ -3,8 +3,9 @@
  *
  * Splits "[profile:]<path>[@commit]" into three arena-backed slices, over the
  * one rule that says what a commit looks like — asked of the suffix after each
- * '@', from the last back, until one has a commit's shape. See refspec.h for
- * lifetime rules and for what that rule does and does not recognize.
+ * '@', from the last back, until one has a commit's shape: the commit a token
+ * carries (refspec_commit), the one search the parse splits at. See refspec.h
+ * for lifetime rules and for what that rule does and does not recognize.
  *
  * A partial parse that fails mid-way leaves a few unused bytes in the arena;
  * these are reclaimed when the arena is freed. No rollback is needed, so the
@@ -97,6 +98,24 @@ const char *refspec_head_steps(const char *spelling) {
     return NULL;
 }
 
+const char *refspec_commit(const char *token) {
+    if (!token) {
+        return NULL;
+    }
+
+    /* The shortest suffix with a commit's shape after an '@'. The last '@' is not
+     * always the one: a commit may carry an '@' of its own — `@` alone, HEAD@{…}
+     * — so `x@@` carries `@`, x at HEAD, and `x@HEAD@{1}` reaches the resolver's
+     * refusal of a step it does not take instead of reading as a name that holds
+     * it. */
+    for (const char *p = token + strlen(token); p > token; p--) {
+        if (p[-1] == '@' && refspec_looks_like_commit(p)) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
 error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
     CHECK_NULL(arena);
     CHECK_NULL(input);
@@ -104,18 +123,12 @@ error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
 
     refspec_t rs = { 0 };
 
-    /* The commit first: the shortest suffix with a commit's shape after an '@',
-     * and the file ends at that '@'. The last '@' is not always the one: a commit
-     * may carry an '@' of its own — `@` alone, HEAD@{…} — so `x@@` is x at HEAD,
-     * and `x@HEAD@{1}` reaches the resolver's refusal of a step it does not take
-     * instead of reading as a file whose name holds it. */
+    /* The commit first, the one the input carries, and the file ends at its '@' */
     const char *end = input + strlen(input);
-    for (const char *p = end; p > input; p--) {
-        if (p[-1] == '@' && refspec_looks_like_commit(p)) {
-            rs.commit = arena_strdup(arena, p);
-            end = p - 1;
-            break;
-        }
+    const char *commit = refspec_commit(input);
+    if (commit) {
+        rs.commit = arena_strdup(arena, commit);
+        end = commit - 1;
     }
 
     /* Then the profile, at the first ':' before the commit (a sub-profile like

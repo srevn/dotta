@@ -4,11 +4,11 @@
  * Parsing for `[profile:]<path>[@commit]`, for the commands that name a file
  * with an optional profile and commit; and the lexical rule that decides where
  * the '@' splits — what a commit reference looks like, with no repository in
- * hand — which those same commands ask of a whole positional where a slot of
- * theirs could hold one. Git's revision spellings are read here and in no lower
- * module — a commit reference's shape, and where HEAD's steps begin; resolving
- * one against a store is sys/revision's, HEAD's steps walked back from a branch's
- * head.
+ * hand, and the commit a token carries by it — which those same commands ask of
+ * a whole positional where a slot of theirs could hold one. Git's revision
+ * spellings are read here and in no lower module — a commit reference's shape,
+ * and where HEAD's steps begin; resolving one against a store is sys/revision's,
+ * HEAD's steps walked back from a branch's head.
  */
 
 #ifndef DOTTA_REFSPEC_H
@@ -19,12 +19,12 @@
 /**
  * Does the token look like a commit reference?
  *
- * The lexical half of the syntax below: what may stand after the last '@', and
- * — for the verbs whose positional slot could hold one — what a whole token may
- * be. It recognizes the spellings that name a commit with nothing looked up:
- * HEAD's (refspec_head_steps — `HEAD` or `@` where the word ends there or a
- * modifier follows it: `HEAD~1`, `HEAD^`, `HEAD~3^2`, `HEAD@{1}`, `HEAD:x`, `@`,
- * `@~1`, `@^2`), a bare SHA of 7 to 40 hex digits, and a SHA carrying a modifier
+ * The lexical half of the syntax below: what may stand after an '@', and — for
+ * the verbs whose positional slot could hold one — what a whole token may be.
+ * It recognizes the spellings that name a commit with nothing looked up: HEAD's
+ * (refspec_head_steps — `HEAD` or `@` where the word ends there or a modifier
+ * follows it: `HEAD~1`, `HEAD^`, `HEAD~3^2`, `HEAD@{1}`, `HEAD:x`, `@`, `@~1`,
+ * `@^2`), a bare SHA of 7 to 40 hex digits, and a SHA carrying a modifier
  * (`a4f2c8e^`, `def4567~2`).
  *
  * A shape and never an existence: nothing is resolved and no store is read, so
@@ -36,12 +36,13 @@
  * beside a profile's, the whole profile's commit or its path (cmds/revert.c
  * revert_post_parse).
  *
- * Readers: the parse below, for its '@' gate; show's one- and two-positional
- * forms, export's second positional, and revert's second word beside a profile's,
- * each deciding by this alone whether a token is its commit slot's; and diff's
- * classifier, which asks this first — a token shaped like a commit is never read
- * as a path, and the two shapes meet only in a revision whose pattern holds a
- * glob's bytes (infra/path.h path_input_announces_path).
+ * Readers: refspec_commit, for its '@' gate, and the parse below through it;
+ * show's one- and two-positional forms, export's second positional, and revert's
+ * second word beside a profile's, each deciding by this alone whether a token
+ * is its commit slot's; and diff's classifier, which asks this first — a token
+ * shaped like a commit is never read as a path, and the two shapes meet only in
+ * a revision whose pattern holds a glob's bytes (infra/path.h
+ * path_input_announces_path).
  *
  * @param token The token to read (may be NULL, which looks like nothing)
  * @return true iff the token has a commit reference's shape
@@ -73,6 +74,25 @@ bool refspec_looks_like_commit(const char *token);
 const char *refspec_head_steps(const char *spelling);
 
 /**
+ * The commit a token carries
+ *
+ * The shortest suffix after an '@' with a commit's shape
+ * (refspec_looks_like_commit), so an '@' that no commit follows is the name's
+ * own — `foo@bar.txt` carries none — and a commit holding an '@' of its own is
+ * split before it: `x@@` carries `@`, and `x@HEAD@{1}` carries `HEAD@{1}`, which
+ * the resolver refuses. A commit's shape inside the name before it stays the
+ * name's: `p:~/a@deadbeef0@HEAD` carries HEAD. A shape, never an existence: nothing
+ * is resolved, and a commit with no name before it (`@HEAD`) is carried all the
+ * same — the parse is what refuses such a token, as naming no file.
+ *
+ * Readers: refspec_parse, which ends the file at its '@'.
+ *
+ * @param token The token (may be NULL, which carries none)
+ * @return The commit, borrowed from `token` past its '@'; NULL where none stands
+ */
+const char *refspec_commit(const char *token);
+
+/**
  * Parsed refspec components.
  *
  * String fields point into the arena supplied to refspec_parse, which owns their
@@ -91,16 +111,16 @@ typedef struct {
  * Parse refspec: [profile:]<path>[@commit]
  *
  * Splits the input into profile, file path, and commit components. The commit
- * is found first: the shortest suffix after an '@' that has a commit's shape
- * (refspec_looks_like_commit), so an '@' that no commit follows is the name's
- * own, and a commit that carries an '@' of its own — `@` alone, `HEAD@{1}` — is
- * split before it. The profile is then what precedes the first ':' before the
- * commit, and is optional — NULL where no ':' stands there, and where nothing
- * precedes it, `:home/.bashrc` naming a file alone. A ':' the commit carries —
- * `HEAD^{/fix: typo}` — is the commit's, and no profile holds one
- * (git-check-ref-format). The names this order reads otherwise are a profile's
- * holding an '@' with a commit's shape after it — `x@HEAD@y:home/f`, or one ending
- * in `@HEAD` or `@@` — each read as a file at a commit the resolver then refuses.
+ * is found first, the one the input carries (refspec_commit): an '@' that no
+ * commit follows is the name's own, and a commit that carries an '@' of its own
+ * — `@` alone, `HEAD@{1}` — is split before it. The profile is then what precedes
+ * the first ':' before the commit, and is optional — NULL where no ':' stands
+ * there, and where nothing precedes it, `:home/.bashrc` naming a file alone. A
+ * ':' the commit carries — `HEAD^{/fix: typo}` — is the commit's, and no profile
+ * holds one (git-check-ref-format). The names this order reads otherwise are a
+ * profile's holding an '@' with a commit's shape after it — `x@HEAD@y:home/f`,
+ * or one ending in `@HEAD` or `@@` — each read as a file at a commit the resolver
+ * then refuses.
  *
  * A spelling whose ':' or commit sets a file apart and leaves nothing in its
  * place — `p:`, `p:@HEAD`, `@HEAD` — names no file, and is refused quoted as it

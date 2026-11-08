@@ -1926,9 +1926,9 @@ workspace_items_t workspace_directories(const workspace_t *ws);
  * Readers: core/cleanup.c cleanup_plan_build and core/deploy.c deploy_plan_build,
  * each by an exhaustive switch over the state — the scope exit's states, the
  * landing's — so a state added later is a build error in both engines; and
- * cmds/apply.c cmd_apply, which hands each to the path filter's coverage whatever
- * its state (core/scope.h scope_coverage_t), an orphan being a managed path in
- * every one. A reader not on this list is a bug.
+ * cmds/apply.c cmd_apply, which hands each to the coverage of the paths its line
+ * names whatever its state (core/scope.h scope_coverage_t), an orphan being a
+ * managed path in every one. A reader not on this list is a bug.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the analyzed orphans

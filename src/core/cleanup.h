@@ -77,7 +77,7 @@
  *                a directory's release by what it holds; the orphans a squatter
  *                displaces, for the plan's reach; the orphans beneath a directory,
  *                for its remainder
- * - scope.h:     the three filter dimensions
+ * - scope.h:     the four dimensions a line names
  * - filesystem.h: the parent's reach, the removals, execute's probe
  */
 

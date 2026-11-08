@@ -3918,7 +3918,8 @@ static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command
         const char *seen = hashmap_get(o->revisions, profile);
         if (seen && strcmp(seen, commit) != 0) {
             return error_create(
-                ERR_INVALID_ARG, "Commit given twice for '%s': '%s' and '%s'", profile, seen, commit
+                ERR_INVALID_ARG, "Commit given twice for '%s': '%s' and '%s'",
+                profile, seen, commit
             );
         }
         if (seen == NULL) hashmap_set(o->revisions, profile, arena_strdup(arena, commit));
@@ -4048,7 +4049,10 @@ static const args_opt_t apply_opts[] = {
 const args_command_t spec_apply = {
     .name        = "apply",
     .summary     = "Deploy enabled profiles to the filesystem",
-    .usage       = "%s apply [options] [profile[@commit] | path | profile:path[@commit]]...",
+    .usage       =
+        "%s apply [options] [profile|path]...\n"
+        "   or: %s apply [options] [profile@commit]...\n"
+        "   or: %s apply [options] [profile:path[@commit]]...",
     .description =
         "Converge the filesystem with enabled profiles: deploy new and\n"
         "updated files, prune the unchanged copies of files deleted from\n"
@@ -4056,19 +4060,23 @@ const args_command_t spec_apply = {
         "deployment state.\n",
     .notes       =
         "Path Arguments:\n"
-        "  A path narrows the run to what lies at or beneath it, in both\n"
-        "  directions: tracked files there are deployed and orphaned ones\n"
-        "  pruned, so 'apply ~/.zshrc' retires one orphan on its own.\n"
-        "  --keep-orphans leaves the orphans. Filesystem (~/.bashrc) and\n"
-        "  storage (home/.bashrc) forms are both accepted. A path holding\n"
-        "  *, ? or [ is also a pattern, and a \\ before each names it alone.\n"
-        "  A leading ! leaves it out.\n"
-        "  A profile:path ('work:~/.ssh') narrows to that profile's files there;\n"
-        "  a ! after its ':' leaves a path out of them, -e out of every argument.\n"
-        "  A profile or a profile:path ending in @<commit> deploys the files as\n"
-        "  that commit held them: 'status' then shows them changed, 'apply'\n"
-        "  brings the latest back, and 'revert' with the same argument keeps\n"
-        "  them.\n"
+        "  A path narrows the run to what lies at or beneath it: files there\n"
+        "  are deployed and old copies there cleaned up. Write it as on disk\n"
+        "  (~/.bashrc) or as the profile stores it (home/.bashrc). A path\n"
+        "  holding *, ? or [ is also a pattern, and a \\ before each names it\n"
+        "  alone. A leading ! leaves it out.\n"
+        "\n"
+        "Profile Paths:\n"
+        "  'work:~/.ssh' narrows the run to work's files in ~/.ssh. A ! after\n"
+        "  the ':' leaves a path out of them, and -e leaves it out of the\n"
+        "  whole run.\n"
+        "\n"
+        "Past Commits:\n"
+        "  A profile or a profile path ending in @<commit> deploys its files\n"
+        "  as that commit had them ('work@HEAD~1', 'work:~/.ssh@a4f2c8e').\n"
+        "  Nothing is committed: 'dotta status' then shows those files as\n"
+        "  changed, a plain 'dotta apply' brings back the latest, and\n"
+        "  'dotta revert' with the same argument commits the old version.\n"
         "\n"
         "Exclusion Patterns:\n"
         "  Excluded paths are protected from deployment, directory\n"

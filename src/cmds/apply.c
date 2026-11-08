@@ -9,6 +9,7 @@
 #include <git2.h>
 #include <pwd.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "base/arena.h"
 #include "base/args.h"
@@ -3834,8 +3835,9 @@ enum apply_class { APPLY_CLASS_PATH = 1, APPLY_CLASS_PROFILE, APPLY_CLASS_REFSPE
 
 /**
  * Positional classifier, from the token alone — completion runs it and never
- * apply_post_parse (base/args.h args_completion_t): a token carrying a commit
- * (base/refspec.h refspec_commit) or naming its profile before a ':' (infra/path.h
+ * apply_post_parse (base/args.h args_completion_t), and apply_complete asks it
+ * of the word before an `@` being typed: a token carrying a commit (base/refspec.h
+ * refspec_commit) or naming its profile before a ':' (infra/path.h
  * path_input_announces_profile) goes to refspecs[], for apply_post_parse to read;
  * one that announces a path to paths[] (path_input_announces_path); and what
  * announces nothing is a profile name. The commit is asked first, since a commit
@@ -3932,8 +3934,13 @@ static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command
 /**
  * What can stand at the cursor: an enabled profile or a path of the view (files,
  * and directory claims as subtree filters), in any order, as apply_classify routes
- * them — the view narrowed to what the profiles named so far win, by -p or bare,
- * which is the filter the run will apply — or a filesystem path.
+ * them — the view narrowed to what the profiles named on their own win, by -p
+ * or bare, the filter the run will apply but for a profile at a commit, which
+ * only apply_post_parse reads as one named on its own and so narrows nothing
+ * here — or a filesystem path. An `@` in the token being typed completes its
+ * commit part where the word before it names a profile, as apply_classify reads
+ * that word, a path's `@` being its own (completion_commits_at); a profile's
+ * ':' being typed, every profile's files as `profile:path` (completion_refspecs).
  */
 static args_want_t apply_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -3947,6 +3954,27 @@ static args_want_t apply_complete(
     }
     if (at->value_of != NULL) {
         return ARGS_WANT_NONE;   /* -e: a pattern */
+    }
+
+    /* A commit rides the word that names its profile: the word before the `@`
+     * being typed, classed as the run classes a token, asks for its commit where
+     * it is no path, a path's `@` being its own */
+    const char *commit_at = strrchr(at->current, '@');
+    if (commit_at != NULL) {
+        const char *word = arena_strndup(
+            ctx->arena, at->current, (size_t) (commit_at - at->current)
+        );
+        if (apply_classify(word) != APPLY_CLASS_PATH &&
+            completion_commits_at(ctx, out, at->current, NULL)) {
+            return ARGS_WANT_NONE;
+        }
+    }
+
+    /* A profile's ':' being typed: every profile's files as `profile:path`, the
+     * shell matching the one typed */
+    if (path_input_announces_profile(at->current)) {
+        completion_refspecs(ctx, out, NULL);
+        return ARGS_WANT_NONE;
     }
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);

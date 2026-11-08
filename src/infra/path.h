@@ -147,9 +147,10 @@ bool path_input_announces_path(const char *input);
  * and its path (`foo:*.conf`); a leading `**` component names the same paths as
  * a pattern.
  *
- * Readers: cmds/apply.c apply_classify, of the token, and apply_post_parse, of
- * the word its commit leaves — apply's alone: the verbs that take a refspec in
- * a slot of their own parse it there (base/refspec.h refspec_parse).
+ * Readers: cmds/apply.c apply_classify, of the token; apply_post_parse, of the
+ * word its commit leaves; and apply_complete, of the token being typed — apply's
+ * alone: the verbs that take a refspec in a slot of their own parse it there
+ * (base/refspec.h refspec_parse).
  *
  * @param input The positional (may be NULL, which names none)
  * @return true iff a profile's name stands before the input's first ':'

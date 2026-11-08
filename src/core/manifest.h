@@ -83,22 +83,22 @@
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_profile walks one profile
- *     the caller opened at a tree it holds or loaded at its head (core/profiles.h)
- *     — the historical diff (cmds/diff.c diff_commit_to_workspace), export's
- *     path arm, and the path argument of `show -p` and `list -p`, named over
- *     whatever tree the verb selected — and is the same per-profile step applied
- *     once. Each step places the claims its profile's walk shows (core/profiles.h
- *     profile_walk), which reads the claim sheet of the tree it walks: a tree
- *     without one holds an empty sheet, and a sheet that will not load fails
- *     the build rather than read as "no claims", so no caller of a builder chooses
- *     a policy for a fact the builder is the authority on. That is the view's
- *     rule and only the view's — a command reading a sheet for its own screen
- *     decides for itself (core/metadata.h). Both produce manifest_row_t rows
- *     directly, the one row shape every consumer reads, so there is no bridge
- *     between the build step and its readers. The dispatcher builds the view
- *     once per command for the commands that declare it (ctx->run.manifest,
- *     include/runtime.h); a command that moves Git or the enabled set builds
- *     the post-mutation view itself.
+ *     the caller opened at a commit or loaded at its head, or a draft's base
+ *     (core/profiles.h) — the historical diff (cmds/diff.c
+ *     diff_commit_to_workspace), export's path arm, and the path argument of
+ *     `show -p` and `list -p`, named over whatever commit the verb selected —
+ *     and is the same per-profile step applied once. Each step places the claims
+ *     its profile's walk shows (core/profiles.h profile_walk), which reads the
+ *     claim sheet of the tree it walks: a tree without one holds an empty sheet,
+ *     and a sheet that will not load fails the build rather than read as "no
+ *     claims", so no caller of a builder chooses a policy for a fact the builder
+ *     is the authority on. That is the view's rule and only the view's — a command
+ *     reading a sheet for its own screen decides for itself (core/metadata.h).
+ *     Both produce manifest_row_t rows directly, the one row shape every consumer
+ *     reads, so there is no bridge between the build step and its readers. The
+ *     dispatcher builds the view once per command for the commands that declare
+ *     it (ctx->run.manifest, include/runtime.h); a command that moves Git or
+ *     the enabled set builds the post-mutation view itself.
  *
  *   - Readers: manifest_rows (every row standing, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
@@ -435,13 +435,14 @@ error_t manifest_build(
  * the walk reads it, strictly, so one rule reads it). Readers that want files
  * only test row->type.
  *
- * The profile is the caller's to open — at a tree it holds, a historical commit's
- * or a stage's or the one a verb selected (core/profiles.h profile_open), or at
- * its head (profile_load) — and it names whose claims these are, a tree carrying
- * no name. The view keeps nothing of it: every string a row holds is copied, so
- * the profile may be freed as soon as this returns. The mount table is explicit
- * too, there being no state to derive one from and a past tree deliberately
- * resolved under today's topology.
+ * The profile is the caller's to open — at the commit a verb selected
+ * (core/profiles.h profile_open), at its head (profile_load), or a draft's base,
+ * at the tree its stage opened at (profile_draft_base) — and it names whose claims
+ * these are, a tree carrying no name. The view keeps nothing of it — every string
+ * a row holds is copied, so the profile may be freed as soon as this returns —
+ * and no head (manifest_head): its reader chose the commit and holds it. The
+ * mount table is explicit too, there being no state to derive one from and a
+ * past tree deliberately resolved under today's topology.
  *
  * Custom-prefix resolution is delegated to `mounts`. A custom/ claim the table
  * records no binding for contributes no row and is recorded on the view
@@ -554,9 +555,10 @@ const string_array_t *manifest_profiles(const manifest_t *manifest);
  * it read there (manifest_build), so the rows and this id are one read of the
  * ref, and a branch another process moves after the build moves neither. NULL
  * for a profile the view holds no contribution of — not enabled, or missing,
- * its branch gone (manifest_missing) — and for one profile's view, built at a
- * tree its caller holds, which names no commit (manifest_build_profile). A profile
- * whose branch stands and claims nothing has a head and no row.
+ * its branch gone (manifest_missing) — and for one profile's view, which keeps
+ * none: its reader chose the commit the profile was opened at, and holds it
+ * (manifest_build_profile). A profile whose branch stands and claims nothing
+ * has a head and no row.
  *
  * Readers: core/workspace.h workspace_unconfirmed (the head a kept answer for
  * bytes no base proves stands at), core/workspace.c workspace_ask_bases (the

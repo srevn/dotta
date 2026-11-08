@@ -1553,27 +1553,19 @@ error_t manifest_build(
             continue;
         }
 
-        /* The head's tree, in the words the profile's walk says of a tree it
-         * cannot read (core/profiles.h profile_walk): the view names the profile
-         * once, whichever read failed */
-        git_tree *tree = NULL;
-        int rc = git_commit_tree(&tree, head);
-        if (rc < 0) {
-            git_commit_free(head);
-            return error_git(rc, "Cannot read profile '%s'", name);
-        }
-
-        /* The profile's claims: the profile at the head's tree, its sheet read
-         * by the profile's walk from that tree, under the name whose claims they
-         * are, and the head's id kept beside them (manifest_head) — the rows
-         * and the head one read of the ref. One view, many profiles. The name
-         * the step copies is what every row of it borrows, so the view never
-         * depends on the state's row cache, and the profile, the tree and the
-         * head go with the iteration. */
-        profile_t *profile = profile_open(name, tree);
-        err = manifest_contribute(manifest, profile, git_commit_id(head), arena);
+        /* The profile's claims: the profile at its head — the head's tree read
+         * by the open, a tree that will not read refused there, naming the profile
+         * and the commit (core/profiles.h profile_open) — its sheet read by the
+         * profile's walk from that tree, under the name whose claims they are,
+         * and the head's id kept beside them (manifest_head): the rows and the
+         * head one read of the ref. One view, many profiles. The name the step
+         * copies is what every row of it borrows, so the view never depends on
+         * the state's row cache, and the profile and the head go with the
+         * iteration. */
+        profile_t *profile = NULL;
+        err = profile_open(name, head, &profile);
+        if (!err) err = manifest_contribute(manifest, profile, git_commit_id(head), arena);
         profile_free(profile);
-        git_tree_free(tree);
         git_commit_free(head);
 
         if (err) return err;
@@ -1610,7 +1602,8 @@ error_t manifest_build_profile(
 
     /* One contribution, settled and layered like any other, so one profile's
      * view answers manifest_lookup_claim and manifest_name exactly as an enabled
-     * view does — at a tree, which names no commit, so with no head. */
+     * view does — with no head: its reader chose the commit the profile was opened
+     * at, and holds it. */
     error_t err = manifest_contribute(manifest, profile, NULL, arena);
     if (err) return err;
 

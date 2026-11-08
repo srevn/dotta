@@ -507,9 +507,9 @@ typedef struct dotta_run {
  *         fs_remove_dir).
  *
  *       - A handle's own. Made by its opener and freed by its closer: a printer's
- *         list (base/output.h output_list_t), a profile at a tree (core/profiles.h
- *         profile_open): itself, its name, its sheet and the claims it lends; a
- *         profile's draft (core/profiles.h profile_draft_open,
+ *         list (base/output.h output_list_t), a profile at a commit
+ *         (core/profiles.h profile_open): itself, its name, its sheet and the
+ *         claims it lends; a profile's draft (core/profiles.h profile_draft_open,
  *         profile_draft_orphan, profile_draft_merge): itself, the sheet its commit
  *         carries — the copy it edits, or the claims a merge composed — the names
  *         its climb, its prune and a merge's rungs spell, and its commit's message

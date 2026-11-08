@@ -106,7 +106,6 @@
 #include "infra/label.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
-#include "sys/gitops.h"
 #include "sys/revision.h"
 
 /**
@@ -1175,7 +1174,6 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
     error_t err = NULL;
     git_commit *commit = NULL;
-    git_tree *tree = NULL;
     profile_t *profile = NULL;
     export_entry_list_t list = { 0 };
     char commit_suffix[24] = "";
@@ -1185,24 +1183,19 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     err = profile_require(repo, opts->profile);
     if (err) goto cleanup;
 
-    /* Load the tree (HEAD or historical commit). Every arm reads the SAME tree
-     * — its claim sheet included — so historical exports get historical modes
-     * and encryption flags. */
+    /* The profile at its head or at a historical commit, which every arm reads
+     * and nothing after the collection does: every arm reads the SAME commit's
+     * tree — its claim sheet included — so historical exports get historical
+     * modes and encryption flags. */
     if (opts->commit) {
         /* The resolution names both the commit and the branch in every fate it
          * has (sys/revision.h): nothing to restate, and the sentence that used
          * to stand over it said "not found" of an ancestry the walk could not
-         * read. */
+         * read. The profile is opened at the commit in hand, a tree that will
+         * not read refused naming it (core/profiles.h profile_open). */
         err = revision_load(repo, opts->profile, opts->commit, &commit);
+        if (!err) err = profile_open(opts->profile, commit, &profile);
         if (err) goto cleanup;
-
-        /* The commit is in hand and its tree is one dereference away; the OID
-         * helper beside this one would look the commit up a second time. */
-        int rc = git_commit_tree(&tree, commit);
-        if (rc < 0) {
-            err = error_git(rc, "Failed to load tree from commit '%s'", opts->commit);
-            goto cleanup;
-        }
 
         /* The commit as every screen of export names it — the dry run, the receipt,
          * each refusal — in revert's words for the commit it read */
@@ -1210,13 +1203,9 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
         snprintf(commit_suffix, sizeof(commit_suffix), " at commit %s", oid_str);
     } else {
-        err = gitops_load_branch_tree(repo, opts->profile, &tree);
+        err = profile_load(repo, opts->profile, &profile);
         if (err) goto cleanup;
     }
-
-    /* The profile at that tree, which every arm reads and nothing after the
-     * collection does */
-    profile = profile_open(opts->profile, tree);
 
     if (opts->file_path) {
         /* Read the argument in the key the user named — a path or a storage path,
@@ -1373,7 +1362,6 @@ cleanup:
         }
     }
     profile_free(profile);
-    if (tree) git_tree_free(tree);
     if (commit) git_commit_free(commit);
 
     return err;

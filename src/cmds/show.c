@@ -187,63 +187,15 @@ static error_t show_print_blob(
 }
 
 /**
- * The tree `show` reads, and the commit it came from
- *
- * The branch's head, or the tree of the commit the user named — resolved in the
- * branch, so a ref that means something elsewhere means nothing here. A resolved
- * commit is always in hand (sys/revision.h), and the handle is the tree's source
- * and the header's alike: it comes back beside the tree rather than being spent
- * here, because what it captions is printed once the argument has an answer
- * (show_provenance). `*out_commit` is NULL where the head was read — a head is
- * what the profile holds now and has no provenance to announce. Both are the
- * caller's to free.
- */
-static error_t show_source(
-    const dotta_ctx_t *ctx,
-    const char *profile,
-    const char *commit_ref,
-    git_tree **out_tree,
-    git_commit **out_commit
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(profile);
-    CHECK_NULL(out_tree);
-    CHECK_NULL(out_commit);
-
-    git_repository *repo = ctx->run.repo;
-
-    *out_tree = NULL;
-    *out_commit = NULL;
-
-    if (!commit_ref) return gitops_load_branch_tree(repo, profile, out_tree);
-
-    git_commit *commit = NULL;
-    error_t err = revision_load(repo, profile, commit_ref, &commit);
-    if (err) return err;
-
-    /* The commit is in hand, so its tree is one dereference and not a second
-     * lookup by oid. */
-    int rc = git_commit_tree(out_tree, commit);
-    if (rc < 0) {
-        git_commit_free(commit);
-        return error_git(rc, "Failed to load tree from commit '%s'", commit_ref);
-    }
-
-    *out_commit = commit;
-
-    return NULL;
-}
-
-/**
  * The provenance of what is about to be shown
  *
- * The commit's own header lines, from the handle show_source kept. A caption
- * stands over what it captions, so this is said only once the verb has an answer:
- * an argument the profile refuses by its own noun — a label, a root with no claim
- * on it — leaves nothing of the commit on screen, and the usage under a refusal
- * that asks for a profile cannot be followed into a second refusal under a header.
- * Past that point the header is what says which tree the bytes, or the absence
- * of them, were read from.
+ * The commit's own header lines, off the commit the verb read the profile at. A
+ * caption stands over what it captions, so this is said only once the verb has
+ * an answer: an argument the profile refuses by its own noun — a label, a root
+ * with no claim on it — leaves nothing of the commit on screen, and the usage
+ * under a refusal that asks for a profile cannot be followed into a second refusal
+ * under a header. Past that point the header is what says which commit the bytes,
+ * or the absence of them, were read at.
  */
 static void show_provenance(output_t *out, const git_commit *commit) {
     char oid_str[8];
@@ -575,7 +527,6 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     output_t *out = ctx->out;
 
     error_t err = NULL;
-    git_tree *tree = NULL;
     profile_t *profile = NULL;
     git_commit *source = NULL;
     const char *storage_path = NULL;
@@ -638,21 +589,26 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     if (err) goto cleanup;
 
     if (opts->profile) {
-        /* The profile named must be here before its tree is opened. Then the
-         * tree the profile selected — its head, or the commit's — which is both
-         * where the claim is looked for and what its bytes come from, so a name
-         * that changed since the commit is found as of then (core/scope.h
-         * scope_resolve_name). */
+        /* The profile named must be here before it is opened. Then the profile
+         * at the commit the user named — resolved in the branch, so a ref that
+         * means something elsewhere means nothing here (sys/revision.h), and
+         * kept, to caption the answer — or at its head, which captions nothing:
+         * both where the claim is looked for and what its bytes come from, so a
+         * name that changed since the commit is found as of then (core/scope.h
+         * scope_resolve_name), a tree that will not read refused naming the commit
+         * (core/profiles.h profile_open) */
         err = profile_require(repo, opts->profile);
         if (err) goto cleanup;
 
-        err = show_source(ctx, opts->profile, opts->commit, &tree, &source);
+        if (opts->commit) {
+            err = revision_load(repo, opts->profile, opts->commit, &source);
+            if (!err) err = profile_open(opts->profile, source, &profile);
+        } else {
+            err = profile_load(repo, opts->profile, &profile);
+        }
         if (err) goto cleanup;
 
-        /* The profile at that tree, held beside it */
-        profile = profile_open(opts->profile, tree);
-
-        /* The name the profile gives the argument at that tree (core/scope.h
+        /* The name the profile gives the argument at that commit (core/scope.h
          * scope_resolve_name): a name as typed, which show_file's own question
          * of the profile decides it holds, and a path its own view's */
         err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
@@ -710,20 +666,21 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         storage_path
     );
 
-    /* The head, which this arm is always about: the view is HEAD's, so the row
-     * that answered names no commit and there is no provenance to announce. The
-     * winning profile at it, held beside it as the -p arm holds its own, so either
-     * arm's header is the claim that profile decodes. */
-    err = show_source(ctx, row->profile, NULL, &tree, &source);
+    /* The winning profile at its head, which this arm is always about: the view
+     * is HEAD's, so the row that answered names no commit and there is no
+     * provenance to announce; the profile held as the -p arm holds its own, so
+     * either arm's header is the claim that profile decodes. The head is read
+     * here a second time, moments after the view read it: a writer landing between
+     * the two leaves the answer the later head's under the view's banner, a window
+     * stated and not closed */
+    err = profile_load(repo, row->profile, &profile);
     if (err) goto cleanup;
-    profile = profile_open(row->profile, tree);
 
     err = show_file(ctx, profile, storage_path);
 
 cleanup:
     git_commit_free(source);
     profile_free(profile);
-    git_tree_free(tree);
 
     return err;
 }

@@ -1038,12 +1038,11 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* The handles keep their column as a prefix — the commit reverted to, its
-     * tree and the profile at it — beside the profile's draft at its head */
+    /* The handles keep their column as a prefix — the commit reverted to and
+     * the profile at it — beside the profile's draft at its head */
     error_t err = NULL;
     git_commit *target_commit = NULL;
     profile_draft_t *draft = NULL;
-    git_tree *target_tree = NULL;
     profile_t *target_profile = NULL;
 
     /* The path, where one is given, in the key the user named — a path or a storage
@@ -1099,20 +1098,17 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = profile_draft_open(repo, profile, &draft);
     if (err) goto cleanup;
 
-    /* The commit's tree, opened once and lent to everything below that reads
-     * the commit, and the profile at it, whose sheet is read once, strictly,
-     * and said as the commit's: every later read of the commit — its claims at
-     * a path, the way a restore brings back, the whole tree — reads it through
-     * the profile at the commit's tree, so a sheet that will not load is refused
-     * here, naming the commit, whichever read would have met it first. A corrupt
-     * source sheet would invent attributes while claiming to restore them. A
-     * commit without a sheet loads as an empty one (the tree loader's contract). */
-    int rc = git_commit_tree(&target_tree, target_commit);
-    if (rc < 0) {
-        err = error_git(rc, "Cannot read the tree of commit '%s'", opts->commit);
-        goto cleanup;
-    }
-    target_profile = profile_open(profile, target_tree);
+    /* The profile at the commit, opened once and lent to everything below that
+     * reads the commit — a tree that will not read refused here, naming the commit
+     * (core/profiles.h profile_open) — whose sheet is read once, strictly, and
+     * said as the commit's: every later read of the commit — its claims at a
+     * path, the way a restore brings back, the whole tree — reads it through
+     * the profile at the commit, so a sheet that will not load is refused here,
+     * naming the commit, whichever read would have met it first. A corrupt source
+     * sheet would invent attributes while claiming to restore them. A commit
+     * without a sheet loads as an empty one (the tree loader's contract). */
+    err = profile_open(profile, target_commit, &target_profile);
+    if (err) goto cleanup;
 
     err = profile_load_sheet(target_profile);
     if (err) {
@@ -1450,7 +1446,6 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
 cleanup:
     profile_free(target_profile);
-    if (target_tree) git_tree_free(target_tree);
     profile_draft_free(draft);
     if (target_commit) git_commit_free(target_commit);
 

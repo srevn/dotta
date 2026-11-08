@@ -1,6 +1,6 @@
 /**
- * profiles.h - A profile: what its name says, what it claims at a tree, and the
- * draft of its next commit
+ * profiles.h - A profile: what its name says, what it claims at a commit, and
+ * the draft of its next commit
  *
  * A profile is dotta's: a name, and what it claims at each of its commits. Git
  * keeps it as a branch of the same name (sys/gitops.h gitops_branch_refname),
@@ -15,23 +15,24 @@
  * the profile claims of a name beyond what a tree can say, and the directories
  * a tree cannot hold, each claim keyed by its kind and its name, so one name
  * may carry a file's item and a directory's. A reader wants the claims, never
- * the two documents: it opens the profile at a tree and asks the handle, which
- * reads that tree's own sheet once, at the first question that needs it. What
- * the handle reads is Git's alone, the tree and its sheet: no view, no record,
- * no disk. What the profile's history says of a name — whether it left, and what
- * took it — is Git's too, asked at a head and never through the handle
- * (profile_departures). A writer wants the claims too: it opens the profile's
- * draft (profile_draft_t) — its next commit, built on a stage (sys/stage.h) —
- * asks the draft's base, the profile at the tree the draft opened at, and edits
- * the draft: never the two documents, which the draft keeps together by the rules
- * its type states — and a merge of two of its histories is a draft too, its claims
- * composed over the merged tree and every conflict settled at its open
- * (profile_draft_merge). The draft looks at the disk in one place, the way to a
- * leaf — first captured above a file a writer captured from it, and re-derived
- * where a named run's paths reach it — and asks the host twice more: the names
- * of a look's owner and group, where a capture names them (core/metadata.h
- * metadata_capture_file, metadata_capture_directory), and the commit's signature
- * where Git's configuration names none (sys/gitops.h gitops_get_signature).
+ * the two documents: it opens the profile at a commit and asks the handle, which
+ * reads the commit's tree at the open and that tree's own sheet once, at the
+ * first question that needs it. What the handle reads is Git's alone, the tree
+ * and its sheet: no view, no record, no disk. What the profile's history says
+ * of a name — whether it left, and what took it — is Git's too, asked at a head
+ * and never through the handle (profile_departures). A writer wants the claims
+ * too: it opens the profile's draft (profile_draft_t) — its next commit, built
+ * on a stage (sys/stage.h) — asks the draft's base, the profile at the tree the
+ * draft opened at, and edits the draft: never the two documents, which the draft
+ * keeps together by the rules its type states — and a merge of two of its histories
+ * is a draft too, its claims composed over the merged tree and every conflict
+ * settled at its open (profile_draft_merge). The draft looks at the disk in one
+ * place, the way to a leaf — first captured above a file a writer captured from
+ * it, and re-derived where a named run's paths reach it — and asks the host twice
+ * more: the names of a look's owner and group, where a capture names them
+ * (core/metadata.h metadata_capture_file, metadata_capture_directory), and the
+ * commit's signature where Git's configuration names none (sys/gitops.h
+ * gitops_get_signature).
  *
  * The decode, stated once, applied by the walk to every name it meets
  * (profile_walk) and by profile_find to the one it is asked, by the same rules
@@ -67,13 +68,14 @@
  * Failures are worded here, once, naming the profile: a sheet that will not load
  * in the loader's words, profile_load_sheet's "Failed to load metadata for profile
  * '%s'" over the step that refused (core/metadata.h metadata_load_from_tree);
- * the tree's under "Cannot read profile '%s'" for a walk, and "Cannot read '%s'
- * in profile '%s'" for a question asked at one name — a point question's, or
- * the classification's on the way to a directory claim's name — which names the
- * name it was asked. No reader says the profile again. A removal a profile's
- * draft cannot make is refused in its own document's words (profile_remove), a
- * name, a capture or a restore it cannot admit under "Cannot stage '%s'"
- * (profile_admit, profile_capture_file, profile_restore_file,
+ * the tree's under "Cannot read profile '%s' at commit %s" where the open cannot
+ * read the commit's (profile_open), "Cannot read profile '%s'" for a walk, and
+ * "Cannot read '%s' in profile '%s'" for a question asked at one name — a point
+ * question's, or the classification's on the way to a directory claim's name —
+ * which names the name it was asked. No reader says the profile again. A removal
+ * a profile's draft cannot make is refused in its own document's words
+ * (profile_remove), a name, a capture or a restore it cannot admit under "Cannot
+ * stage '%s'" (profile_admit, profile_capture_file, profile_restore_file,
  * profile_restore_directory), and a merge whose conflicts no side settles under
  * "Merging profile '%s' met %zu conflict%s" (profile_draft_merge). A restore's
  * own refusal names the claim by the commit's name for it — "in profile" would
@@ -84,9 +86,11 @@
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
  * the sheet it read, every claim profile_find answers and the name of each blob
- * profile_contradicted names over a claim; and a head profile_load read. Any
- * other tree it is opened at is the caller's, and outlives it. A claim a visitor
- * is shown is lent for its visit; one profile_find answers, for the handle's life.
+ * profile_contradicted names over a claim; and the tree its open read. The commit
+ * it was opened at is the caller's. A draft's base and a merge's two sides borrow
+ * their stage's trees instead, and go before the stage (profile_draft_t). A claim
+ * a visitor is shown is lent for its visit; one profile_find answers, for the
+ * handle's life.
  *
  * The layering convention, least specific first:
  * 1. global
@@ -254,60 +258,64 @@ typedef struct {
 mode_t profile_claim_mode(const profile_claim_t *claim);
 
 /**
- * A profile at one tree (opaque)
+ * A profile at a commit (opaque)
  *
- * The tree, the name whose claims it holds, and the sheet read from it at the
- * first question that needs it — kept, or its failure kept, for every question
- * after — and the claims it lends (profile_find), kept until it is released.
+ * The commit's tree, the name whose claims it holds, and the sheet read from
+ * that tree at the first question that needs it — kept, or its failure kept,
+ * for every question after — and the claims it lends (profile_find), kept until
+ * it is released.
  */
 typedef struct profile profile_t;
 
 /**
- * A profile at a tree the caller holds
+ * A profile at a commit
  *
- * Any tree, and it outlives the handle: a head, a commit's, a stage's, Git's
- * empty tree. `name` says whose claims these are, since a tree carries no name;
- * the sheet is read through the repository the tree was read from. Reads nothing
- * — the sheet waits for the first question that needs it — so the open cannot fail.
+ * The commit's tree, read here and the handle's own, through the commit's own
+ * repository; `name` says whose claims these are, since neither the commit nor
+ * its tree carries a name. The sheet waits for the first question that needs
+ * it, so the tree is all the open reads, and its one refusal: "Cannot read profile
+ * '%s' at commit %s", the commit in seven characters as every screen spells one.
  *
- * Readers: core/manifest.c manifest_build (the tree of each enabled head
- * gitops_branch_commit found), cmds/revert.c cmd_revert (its target commit's),
- * cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c cmd_export,
- * cmds/show.c cmd_show and cmds/list.c list_path_history (the tree the verb
- * selected), cmds/list.c list_profiles and list_files (the tree of the head each
- * listing read, so what each prints is that commit's), cmds/completion.c
- * changes_emit (the tree of the head a path's changes are walked back from),
- * cmds/remove.c remove_profile (the tree of the head its deletion is from: every
- * claim for its hooks, the counts for its preview); profile_load, at the head
- * it read; a profile's draft, at the tree its stage opened at — a head, or Git's
- * empty tree — every opener through one seed (profile_draft_seed); and a merge,
- * at theirs and at its merge base (profile_draft_merge).
+ * Readers: core/manifest.c manifest_build (each enabled head gitops_branch_commit
+ * found), cmds/revert.c cmd_revert (its target commit), cmds/diff.c
+ * diff_commit_to_workspace (the commit the search found), cmds/export.c cmd_export
+ * and cmds/show.c cmd_show (the commit a refspec names), cmds/list.c list_profiles,
+ * list_files and list_path_history (the head each listing read, so what each
+ * prints is that commit's), cmds/completion.c changes_emit (the head a path's
+ * changes are walked back from), cmds/remove.c remove_profile (the head its
+ * deletion is from: every claim for its hooks, the counts for its preview); and
+ * profile_load, at the head it read.
  *
  * @param name Whose claims these are (must not be NULL; copied)
- * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
- * @return The handle (released by profile_free); never NULL
+ * @param commit The commit (must not be NULL; borrowed for the call)
+ * @param out The handle (must not be NULL; released by profile_free); NULL on a
+ *            failure
+ * @return Error or NULL on success: the tree's, "Cannot read profile '%s' at
+ *         commit %s"
  */
-profile_t *profile_open(const char *name, const git_tree *tree);
+error_t profile_open(const char *name, const git_commit *commit, profile_t **out);
 
 /**
  * A profile at its head, where the reader needs its branch to stand
  *
- * profile_open at the head gitops_load_branch_tree reads, the tree the handle's
- * own. A branch that does not stand is refused in gitops' words (sys/gitops.h,
- * ERR_NOT_FOUND naming the reference), never answered empty; nothing is said
- * over them, the reference naming the branch. The code is the absence's alone —
- * a head that will not read is Git's error — so a reader for whom the absence
- * is an answer takes it off the refusal (cmds/profile.c profile_list, an enabled
- * row's no branch), or reads gitops_branch_commit and opens the profile at the
- * tree of what it finds (core/manifest.c manifest_build).
+ * profile_open at the head gitops_load_branch_commit reads. A branch that does
+ * not stand is refused in gitops' words (sys/gitops.h, ERR_NOT_FOUND naming the
+ * reference), never answered empty; nothing is said over them, the reference
+ * naming the branch. The code is the absence's alone — a head that will not read
+ * is Git's error — so a reader for whom the absence is an answer takes it off
+ * the refusal (cmds/profile.c profile_list, an enabled row's no branch), or reads
+ * gitops_branch_commit and opens the profile at what it finds (core/manifest.c
+ * manifest_build).
  *
  * Readers: cmds/remove.c remove_overlaps and cmds/revert.c revert_select_profile,
  * which load every local profile; cmds/ignore.c ignore_test; the questions asked
  * of a head by name, what it holds and whether it needs a target — cmds/profile.c
  * profile_list and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c
- * read_targets, cmds/key.c key_status; and the directory claims a completion
- * offers at a profile's head — export's (cmds/completion.c completion_directories)
- * and remove's own (cmds/remove.c remove_complete).
+ * read_targets, cmds/key.c key_status; the directory claims a completion offers
+ * at a profile's head — export's (cmds/completion.c completion_directories) and
+ * remove's own (cmds/remove.c remove_complete); and the head a verb reads where
+ * no commit is named — export's (cmds/export.c cmd_export) and show's, of the
+ * profile named or of the one whose row stands at the path (cmds/show.c cmd_show).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param name The profile's name, which its branch is named by (must not be NULL;
@@ -320,7 +328,7 @@ error_t profile_load(git_repository *repo, const char *name, profile_t **out);
 
 /**
  * Release a handle: its arena — the handle, its name, its sheet and the claims
- * it lent — and a head it loaded
+ * it lent — and the tree its open read
  *
  * @param profile Handle (NULL is a no-op)
  */

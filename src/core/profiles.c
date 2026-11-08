@@ -1,19 +1,21 @@
 /**
- * profiles.c - A profile: what its name says, what it claims at a tree, and the
- * draft of its next commit
+ * profiles.c - A profile: what its name says, what it claims at a commit, and
+ * the draft of its next commit
  *
  * The name's questions: which names this machine layers (the host's), in what
  * order (the names' alone), and whether a profile's branch stands (Git's). The
- * handle is a tree and the sheet read from it once, at the first question, its
- * failure kept beside it; the handle itself stands in an arena of its own, with
- * its name, its sheet and every claim it lends. The walk is the decode
- * core/profiles.h states, in two halves: one walk of the tree for the blobs
- * (profile_step), then the sheet's directory items, each asked the one question
- * that classifies it, whether a blob stands at its name or at a rung above it
- * (profile_blob_above) — the items a blob stands over are profile_contradicted's.
- * The point questions ask the decode of one name: what the tree holds there,
- * Git's one-entry rule (profile_entry); a blob's claim through the walk's own
- * decode (profile_decode_blob), over the entry that rule answers; and the directory
+ * handle is a commit's tree, read at the open, and the sheet read from it once,
+ * at the first question, its failure kept beside it — or, for a draft's base
+ * and a merge's two sides, a tree its stage lends; the handle itself stands in
+ * an arena of its own, with its name, its sheet and every claim it lends, made
+ * by one constructor (profile_seed). The walk is the decode core/profiles.h states,
+ * in two halves: one walk of the tree for the blobs (profile_step), then the
+ * sheet's directory items, each asked the one question that classifies it, whether
+ * a blob stands at its name or at a rung above it (profile_blob_above) — the
+ * items a blob stands over are profile_contradicted's. The point questions ask
+ * the decode of one name: what the tree holds there, Git's one-entry rule
+ * (profile_entry); a blob's claim through the walk's own decode
+ * (profile_decode_blob), over the entry that rule answers; and the directory
  * claim standing at a name through the question the walk asks of each item
  * (profile_directory_item), decoded as the walk decodes it
  * (profile_decode_directory). The seal at a name is the blob's, asked of its
@@ -244,16 +246,25 @@ mode_t profile_claim_mode(const profile_claim_t *claim) {
 struct profile {
     arena_t *arena;         /* The handle's own: the handle, its name, the claims it lends */
     const char *name;       /* Whose claims these are, named over every failure */
-    const git_tree *tree;   /* The caller's, or `own` */
-    git_tree *own;          /* The head profile_load read; NULL at a caller's tree */
+    const git_tree *tree;   /* `own`, or a stage's */
+    git_tree *own;          /* The commit's tree, read at the open; NULL at a stage's */
     metadata_t *sheet;      /* In the arena; NULL until a question loads it, and beside a failure */
     error_t sheet_failure;  /* Why it would not load; NULL where it did or is not asked yet */
 };
 
-profile_t *profile_open(const char *name, const git_tree *tree) {
-    CHECK_NULL(name);
-    CHECK_NULL(tree);
-
+/**
+ * The handle at a tree: the openers' one constructor
+ *
+ * Readers: profile_open, at the commit's tree it read and the handle owns; and
+ * a profile's draft, at the trees its stage lends and keeps — the base at the
+ * tree the stage opened at (profile_draft_seed), a merge's merge base and theirs
+ * (profile_draft_merge).
+ *
+ * @param name Whose claims these are (copied)
+ * @param tree The tree (borrowed)
+ * @return The handle; never NULL
+ */
+static profile_t *profile_seed(const char *name, const git_tree *tree) {
     /* The handle in an arena of its own, made here and freed with it, beside
      * the name it copies and every claim it lends; the tree borrowed, and nothing
      * read: the sheet waits for the first question that needs it
@@ -267,6 +278,34 @@ profile_t *profile_open(const char *name, const git_tree *tree) {
     return profile;
 }
 
+error_t profile_open(const char *name, const git_commit *commit, profile_t **out) {
+    CHECK_NULL(name);
+    CHECK_NULL(commit);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    /* The commit's tree, through the commit's own repository
+     * (lib/libgit2/src/libgit2/commit.c git_commit_tree). One that will not read
+     * is refused before any handle exists, in the walk's words beside the commit:
+     * between the failing call and the error only the id is read and spelled,
+     * which sets no error (object_api.c git_commit_id, oid.c git_oid_tostr) */
+    git_tree *tree = NULL;
+    int rc = git_commit_tree(&tree, commit);
+    if (rc < 0) {
+        char id[8];
+        git_oid_tostr(id, sizeof(id), git_commit_id(commit));
+        return error_git(rc, "Cannot read profile '%s' at commit %s", name, id);
+    }
+
+    /* The profile at it, the tree the handle's own and released with it */
+    profile_t *profile = profile_seed(name, tree);
+    profile->own = tree;
+
+    *out = profile;
+    return NULL;
+}
+
 error_t profile_load(git_repository *repo, const char *name, profile_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
@@ -275,25 +314,21 @@ error_t profile_load(git_repository *repo, const char *name, profile_t **out) {
     *out = NULL;
 
     /* The head, its absence refused in gitops' words, which name the reference:
-     * nothing to say over them */
-    git_tree *head = NULL;
-    error_t err = gitops_load_branch_tree(repo, name, &head);
-    if (err) return err;
+     * nothing to say over them; and the profile opened at it */
+    git_commit *head = NULL;
+    error_t err = gitops_load_branch_commit(repo, name, &head);
+    if (!err) err = profile_open(name, head, out);
+    git_commit_free(head);
 
-    /* The profile at it, and the head the handle's own, released with it */
-    profile_t *profile = profile_open(name, head);
-    profile->own = head;
-
-    *out = profile;
-    return NULL;
+    return err;
 }
 
 void profile_free(profile_t *profile) {
     if (!profile) return;
 
-    /* What the arena does not hold first, read off the handle while it stands;
-     * then the arena, and the handle with it, its name, its sheet and every claim
-     * it lent */
+    /* What the arena does not hold first, read off the handle while it stands —
+     * the tree its open read; then the arena, and the handle with it, its name,
+     * its sheet and every claim it lent */
     git_tree_free(profile->own);
     arena_free(profile->arena);
 }
@@ -1120,7 +1155,7 @@ static error_t profile_draft_seed(const char *name, stage_t *stage, profile_draf
     profile_draft_t *draft = arena_calloc(arena, 1, sizeof(*draft));
     draft->arena = arena;
     draft->stage = stage;
-    draft->base = profile_open(name, stage_tree(stage));
+    draft->base = profile_seed(name, stage_tree(stage));
 
     error_t err = profile_load_sheet(draft->base);
     if (err) {
@@ -2773,8 +2808,8 @@ error_t profile_draft_merge(
      * for the content and for each kind of claim */
     profile_merge_t merge = {
         .draft      = draft,
-        .merge_base = profile_open(name, stage_merge_base(stage)),
-        .theirs     = profile_open(name, stage_theirs(stage)),
+        .merge_base = profile_seed(name, stage_merge_base(stage)),
+        .theirs     = profile_seed(name, stage_theirs(stage)),
         .side       = side,
         .sheet      = metadata_create(draft->arena),
         .arena      = arena,

@@ -555,12 +555,12 @@ error_t gitops_reference_tree(
  * (gitops_branch_refname) on the way: gitops_branch_tree's twin, for a reader
  * that needs the head itself — the history behind it, or its id beside its tree.
  * Readers: core/manifest.c manifest_build (each enabled profile whose branch it
- * found standing, its claims read from the head's tree and the head's id kept
- * beside them, a branch gone since contributing nothing), core/workspace.c
- * workspace_ask_departures (each owned file orphan's disabled profile whose branch
- * it found standing, one gone since answering every name GONE) and cmds/remove.c
- * remove_profile (the head a deletion takes, read once, before it says what it
- * takes; a branch gone, no profile to delete).
+ * found standing, its claims read from the profile opened at the head and the
+ * head's id kept beside them, a branch gone since contributing nothing),
+ * core/workspace.c workspace_ask_departures (each owned file orphan's disabled
+ * profile whose branch it found standing, one gone since answering every name
+ * GONE) and cmds/remove.c remove_profile (the head a deletion takes, read once,
+ * before it says what it takes; a branch gone, no profile to delete).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
@@ -757,9 +757,10 @@ error_t gitops_load_reference_commit(
  * rule (gitops_branch_refname) on the way, and every failure names the reference.
  * Readers: the revision's three askers, sys/revision.c revision_load and
  * core/scope.c scope_resolve_commit and scope_resolve_range, which read a branch's
- * head once and ask it; cmds/list.c list_profiles, list_files and
- * list_path_history, which read every fact a screen prints off it;
- * cmds/completion.c commits_walk and changes_emit, which walk back from it.
+ * head once and ask it; core/profiles.c profile_load, which opens the profile
+ * at it; cmds/list.c list_profiles, list_files and list_path_history, which read
+ * every fact a screen prints off it; cmds/completion.c commits_walk and
+ * changes_emit, which walk back from it.
  *
  * @param repo Repository (must not be NULL)
  * @param branch Branch name (must not be NULL)

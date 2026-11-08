@@ -1071,7 +1071,6 @@ static error_t remove_profile(
 
     /* Initialize all resources to NULL */
     error_t err = NULL;
-    git_tree *tree = NULL;
     profile_t *profile = NULL;
     const char *remote_name = NULL;
     remote_t *remote = NULL;
@@ -1085,8 +1084,8 @@ static error_t remove_profile(
      * branch. One that is not here is refused whatever --force says: the flag
      * answers the questions a deletion asks — the warnings below and the
      * confirmation they preface — and an absence is none of them. The id is kept
-     * and the commit let go: the tree and the id are all the deletion reads of
-     * it. */
+     * and the commit let go once the profile is opened at it: the profile and
+     * the id are all the deletion reads of it. */
     git_commit *head = NULL;
     err = gitops_branch_commit(repo, opts->profile, &head);
     if (!err && !head) {
@@ -1096,15 +1095,14 @@ static error_t remove_profile(
 
     git_oid head_oid;
     git_oid_cpy(&head_oid, git_commit_id(head));
-    int rc = git_commit_tree(&tree, head);
+
+    /* The profile at that commit, for all the deletion says before it acts: every
+     * claim it takes, for its hooks, and what it holds, for the preview and the
+     * confirmation, one commit for both — a tree that will not read refused here,
+     * naming the commit (core/profiles.h profile_open) */
+    err = profile_open(opts->profile, head, &profile);
     git_commit_free(head);
-    if (rc < 0) {
-        /* In the words the walk below says of a tree it cannot read
-         * (core/profiles.h profile_walk): the deletion says one thing of its
-         * tree */
-        err = error_git(rc, "Cannot read profile '%s'", opts->profile);
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* SAFETY: Prevent deletion of last remaining profile */
     string_array_t all_profiles;
@@ -1118,11 +1116,6 @@ static error_t remove_profile(
         );
         goto cleanup;
     }
-
-    /* The profile at that tree, for all the deletion says before it acts: every
-     * claim it takes, for its hooks, and what it holds, for the preview and the
-     * confirmation, one commit for both */
-    profile = profile_open(opts->profile, tree);
 
     /* Every claim the deletion takes, each placed where this machine puts it —
      * the claims the walk shows, and those the tree contradicts, by the producer
@@ -1156,14 +1149,12 @@ static error_t remove_profile(
      * profile_counts): one truth with `dotta list`. Its failure is display-only
      * — the deletion must not refuse over a count — so it becomes the phrase
      * the preview prints, its error dropped and err back to the NULL the phase
-     * began with. The profile and its tree are read no further: the claims its
-     * hooks are handed hold their own copies. */
+     * began with. The profile is read no further: the claims its hooks are handed
+     * hold their own copies. */
     profile_counts_t count = { 0 };
     err = profile_counts(profile, &count);
     profile_free(profile);
     profile = NULL;
-    git_tree_free(tree);
-    tree = NULL;
 
     char counts[64];
     if (err) {
@@ -1239,7 +1230,7 @@ static error_t remove_profile(
          * first saves them: the deletion is pushed as well. */
         if (!opts->force) {
             size_t ahead = 0, behind = 0;
-            rc = git_oid_is_zero(&tracking)
+            int rc = git_oid_is_zero(&tracking)
                 ? 0 : git_graph_ahead_behind(&ahead, &behind, repo, &head_oid, &tracking);
             if (rc < 0) {
                 err = error_git(
@@ -1434,12 +1425,11 @@ static error_t remove_profile(
     hook_fire_post(config, out, &hook_inv);
 
 cleanup:
-    /* The profile and the tree it was opened at are freed once its count is read;
-     * here only a refusal before that frees them. The record phase ended its
-     * own transaction. The session, where one was met: its free commits the
-     * credential helper's verdict (sys/remote.h remote_free). */
+    /* The profile is freed once its count is read; here only a refusal before
+     * that frees it. The record phase ended its own transaction. The session,
+     * where one was met: its free commits the credential helper's verdict
+     * (sys/remote.h remote_free). */
     profile_free(profile);
-    git_tree_free(tree);
     remote_free(remote);
 
     return err;

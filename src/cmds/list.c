@@ -245,16 +245,14 @@ static error_t list_profiles(
             /* Its last commit, kept for the line's tail */
             lines[i].commit = stats_commit_info(ctx->arena, head);
 
-            /* What it holds, counted over the same commit's tree (core/profiles.h
-             * profile_counts); a tree or a count that will not read leaves the
-             * line its commit, its error warned and dropped */
-            git_tree *tree = NULL;
-            int rc = git_commit_tree(&tree, head);
+            /* What it holds, counted over the profile at the same commit
+             * (core/profiles.h profile_counts); a tree or a count that will not
+             * read leaves the line its commit, its error warned and dropped */
+            profile_t *profile = NULL;
+            err = profile_open(name, head, &profile);
             git_commit_free(head);
-            profile_t *profile = rc < 0 ? NULL : profile_open(name, tree);
             profile_counts_t count = { 0 };
-            err = rc < 0 ? error_git(rc, "Cannot read the head's tree")
-                         : profile_counts(profile, &count);
+            if (!err) err = profile_counts(profile, &count);
 
             /* And what that weighs, folded over the same profile through one
              * handle on the object database (list_size_claim): the line's two
@@ -262,13 +260,12 @@ static error_t list_profiles(
              * it neither */
             list_size_t size = { 0 };
             if (!err) {
-                rc = git_repository_odb(&size.odb, repo);
+                int rc = git_repository_odb(&size.odb, repo);
                 err = rc < 0 ? error_git(rc, "Cannot open the object database")
                              : profile_walk(profile, PROFILE_READ_STRICT, list_size_claim, &size);
             }
             git_odb_free(size.odb);
             profile_free(profile);
-            git_tree_free(tree);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
@@ -498,10 +495,10 @@ static error_t list_files(
     /* One branch read serves the whole listing: its head, read once, and every
      * fact the listing prints taken off that commit — the rows and the count
      * (what else the profile holds, when it holds no file) from the profile at
-     * that commit's tree, the history behind each row from its id — so a branch
-     * another writer moves under the listing lends no row another snapshot's
-     * history. The id is kept and the commit let go: the tree and the id are
-     * all the listing reads of it. */
+     * that commit, the history behind each row from its id — so a branch another
+     * writer moves under the listing lends no row another snapshot's history.
+     * The id is kept and the commit let go once the profile is opened at it:
+     * the profile and the id are all the listing reads of it. */
     error_t err = profile_require(repo, opts->profile);
     if (err) return err;
 
@@ -511,23 +508,17 @@ static error_t list_files(
 
     git_oid head_oid;
     git_oid_cpy(&head_oid, git_commit_id(head));
-    git_tree *tree = NULL;
-    int rc = git_commit_tree(&tree, head);
+    profile_t *profile = NULL;
+    err = profile_open(opts->profile, head, &profile);
     git_commit_free(head);
-    if (rc < 0) {
-        /* In the words the walk below says of a tree it cannot read
-         * (core/profiles.h profile_walk): the listing says one thing of its tree */
-        return error_git(rc, "Cannot read profile '%s'", opts->profile);
-    }
+    if (err) return err;
 
-    /* The profile at that tree, held beside it, and every file it claims, collected
-     * in one walk: each row's name, blob and stamp as the profile decodes them,
-     * so no row asks the tree again (list_collect_file). Read tolerantly — the
-     * listing is the tree's and stands, the marks are the sheet's and do not —
-     * so a sheet that will not load costs the rows their marks alone, said where
-     * the marks would print. What the walk cannot read of the tree is its failure,
-     * in the profile's words. */
-    profile_t *profile = profile_open(opts->profile, tree);
+    /* Every file the profile claims, collected in one walk: each row's name,
+     * blob and stamp as the profile decodes them, so no row asks the tree again
+     * (list_collect_file). Read tolerantly — the listing is the tree's and stands,
+     * the marks are the sheet's and do not — so a sheet that will not load costs
+     * the rows their marks alone, said where the marks would print. What the
+     * walk cannot read of the tree is its failure, in the profile's words. */
     list_walk_t walk = { .arena = ctx->arena };
     err = profile_walk(profile, PROFILE_READ_TOLERANT, list_collect_file, &walk);
     if (err) goto cleanup;
@@ -752,7 +743,6 @@ static error_t list_files(
 
 cleanup:
     profile_free(profile);
-    git_tree_free(tree);
 
     return err;
 }
@@ -824,7 +814,9 @@ static error_t list_path_history(
 
         /* The winner names both halves: whose claim stands there, and what it
          * is called — the row is that profile's own, so there is nothing to look
-         * up again in the profile. */
+         * up again in the profile. Its head is read below a second time, moments
+         * after the view read it: a writer landing between the two lends the
+         * history the later head's, a window stated and not closed. */
         name = row->profile;
         storage_path = row->storage_path;
     }
@@ -832,22 +824,18 @@ static error_t list_path_history(
     /* The branch read once, at its head: where a path is named, what the pre-check
      * below reads and where the history behind the name starts are all that one
      * commit's, so a branch another writer moves meanwhile lends the history no
-     * other snapshot. The id is kept and the commit let go. */
+     * other snapshot. The id is kept and the commit let go once the profile is
+     * opened at it. */
     git_commit *head = NULL;
     err = gitops_load_branch_commit(repo, name, &head);
     if (err) return err;
 
     git_oid head_oid;
     git_oid_cpy(&head_oid, git_commit_id(head));
-    git_tree *tree = NULL;
-    int rc = git_commit_tree(&tree, head);
+    profile_t *profile = NULL;
+    err = profile_open(name, head, &profile);
     git_commit_free(head);
-    if (rc < 0) {
-        return error_git(rc, "Cannot read profile '%s'", name);
-    }
-
-    /* The profile at the head's tree, held beside it */
-    profile_t *profile = profile_open(name, tree);
+    if (err) return err;
 
     /* A profile named: the name it gives the argument at that head (core/scope.h
      * scope_resolve_name) — a name as typed, which the pre-check below decides
@@ -870,7 +858,6 @@ static error_t list_path_history(
     profile_held_t held;
     if (!err) err = profile_holds(profile, storage_path, &held);
     profile_free(profile);
-    git_tree_free(tree);
     if (err) return err;
 
     switch (held.kind) {

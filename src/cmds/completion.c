@@ -446,25 +446,23 @@ static void changes_emit(
 
     /* The branch's head, read once, as commits_walk reads it: the name the path
      * is given and the history behind it are that one commit's. The id is kept
-     * and the commit let go. */
+     * and the commit let go once the profile is opened at it. */
     git_commit *head = NULL;
     err = gitops_load_branch_commit(repo, name, &head);
     if (err) return;
 
     git_oid head_oid;
     git_oid_cpy(&head_oid, git_commit_id(head));
-    git_tree *tree = NULL;
-    int rc = git_commit_tree(&tree, head);
+    profile_t *profile = NULL;
+    err = profile_open(name, head, &profile);
     git_commit_free(head);
-    if (rc < 0) return;
+    if (err) return;
 
-    /* The profile at the head's tree names the path (core/scope.h
-     * scope_resolve_name): a name as typed, a path its own view's */
-    profile_t *profile = profile_open(name, tree);
+    /* The profile at the head names the path (core/scope.h scope_resolve_name):
+     * a name as typed, a path its own view's */
     const char *storage_path = NULL;
     err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
     profile_free(profile);
-    git_tree_free(tree);
     if (err) return;
 
     /* Its changes from that head, a file's or everything beneath a directory's

@@ -129,8 +129,8 @@ error_t revision_find(
  * its history does not hold. Every failure names what failed, the revision or
  * the branch, so a caller adds nothing by restating the subject. Readers, none
  * of which wraps: export.c cmd_export (the refspec's @commit), revert.c cmd_revert
- * (the commit reverted to), show.c show_source and cmd_show (a file's tree, and
- * a commit shown under a named profile).
+ * (the commit reverted to), show.c cmd_show (a file's commit, and a commit shown
+ * under a named profile).
  *
  * The commit is the whole answer, and its OID is read off it (git_commit_id):
  * nothing is handed back beside it, so no caller holds two views of one fact

@@ -1442,7 +1442,6 @@ static error_t diff_commit_to_workspace(
     error_t err = NULL;
     git_commit *commit = NULL;
     const char *name = NULL;  /* borrowed from the enabled set */
-    git_tree *tree = NULL;
 
     /* Step 1: Resolve commit to find which profile contains it. The search answers
      * for every profile ahead of the holder, so a profile that will not read
@@ -1456,16 +1455,9 @@ static error_t diff_commit_to_workspace(
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
 
-    /* Step 2: Get tree from THE HISTORICAL COMMIT (not HEAD!) — from the commit
-     * in hand, the OID helper beside it being a second lookup of what is here. */
-    int rc = git_commit_tree(&tree, commit);
-    if (rc < 0) {
-        err = error_git(rc, "Failed to get tree from commit %s", oid_str);
-        goto cleanup;
-    }
-
-    /* Step 3: Build the historical view: the profile at the commit's tree, built
-     * into a view and let go.
+    /* Step 2: Build the historical view: the profile at THE HISTORICAL COMMIT
+     * (not HEAD!), built into a view and let go — a tree that will not read refused
+     * by the open, naming the commit (core/profiles.h profile_open).
      *
      * The tree's own claim sheet is the profile's to read (core/profiles.h), so
      * the historical rows carry the modes and stamps that commit claimed, and a
@@ -1475,19 +1467,20 @@ static error_t diff_commit_to_workspace(
      * The view is allocated into the borrowed command arena; it outlives every
      * reader below, then lives until command end. */
     manifest_t *historical = NULL;
-    profile_t *profile = profile_open(name, tree);
-    err = manifest_build_profile(profile, mounts, arena, &historical);
+    profile_t *profile = NULL;
+    err = profile_open(name, commit, &profile);
+    if (!err) err = manifest_build_profile(profile, mounts, arena, &historical);
     profile_free(profile);
     if (err) goto cleanup;
 
-    /* Step 4: The record, read once for every row: whose an absence is, and which
+    /* Step 3: The record, read once for every row: whose an absence is, and which
      * copies are the commit's unread, by the record at each row's path */
     state_record_t *records = NULL;
     size_t record_count = 0;
     err = state_records(state, arena, &records, &record_count);
     if (err) goto cleanup;
 
-    /* Step 5: What the run prints, chosen once its facts are in hand, so a commit
+    /* Step 4: What the run prints, chosen once its facts are in hand, so a commit
      * whose tree or sheet will not read is refused with nothing above it. First
      * the filter's coverage over the commit's view, before anything is compared,
      * as the workspace arm answers it over its own: where no entry reaches a
@@ -1533,7 +1526,6 @@ static error_t diff_commit_to_workspace(
     }
 
 cleanup:
-    git_tree_free(tree);
     git_commit_free(commit);
 
     return err;

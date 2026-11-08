@@ -169,24 +169,24 @@ static const char *apply_route_label(const workspace_item_t *item) {
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each a way out one of its rows has, gated by what is actually present — the
- * reasons, the routes the consent rows read, the claim that holds a named squatter
- * (the fate-borne ancestry), and the read a line names: a conflict-only run is
- * not told to fix paths by hand, a squatter is told of a wider scope only where
- * a tracked claim holds it and of the re-derivation only where a derived one
- * does, a run that holds root is not told to hold it, and an unreadable-only
- * run is offered neither a flag that will not lift it nor a by-hand fix for a
- * path dotta could not even read: it closes with its own line, because dotta
- * never writes on a guess. No line says "by hand" alone: an incapacity's row
- * already names the path a hand would open, as a refused prune's does
- * (apply_print_cleanup_refused), so the hand is named only beside a second way
- * out the row does not name. The refusals the run's identity met — a landing
- * whose bits deny the invoker, a directory it does not own or may not read, a
- * pair it cannot set, a look that met EACCES on the path itself or on the node
- * or copy a TYPE line names, and a clearance's stop the bits refused — close by
- * naming sudo, and only for a run that holds none: identity()->privileged. The
- * line offers root and promises nothing: a policy may deny root a landing or a
- * read as well. The key's refusal — the row's own look's, or the node's or the
- * copy's a TYPE line names — closes the same way, naming the verb that lifts
+ * reasons, the routes the consent rows read, the class of a named squatter the
+ * run gives no fate (the skip's ancestry), and the read a line names: a
+ * conflict-only run is not told to fix paths by hand, a squatter is told of a
+ * wider scope only where one plans it and of the re-derivation only where the
+ * user's own node stands at a rung, a run that holds root is not told to hold
+ * it, and an unreadable-only run is offered neither a flag that will not lift
+ * it nor a by-hand fix for a path dotta could not even read: it closes with its
+ * own line, because dotta never writes on a guess. No line says "by hand" alone:
+ * an incapacity's row already names the path a hand would open, as a refused
+ * prune's does (apply_print_cleanup_refused), so the hand is named only beside
+ * a second way out the row does not name. The refusals the run's identity met —
+ * a landing whose bits deny the invoker, a directory it does not own or may not
+ * read, a pair it cannot set, a look that met EACCES on the path itself or on
+ * the node or copy a TYPE line names, and a clearance's stop the bits refused —
+ * close by naming sudo, and only for a run that holds none: identity()->privileged.
+ * The line offers root and promises nothing: a policy may deny root a landing
+ * or a read as well. The key's refusal — the row's own look's, or the node's or
+ * the copy's a TYPE line names — closes the same way, naming the verb that lifts
  * it, and the switch before it where the configuration has encryption off
  * (config->encryption_enabled) — the two facts of the run this block asks; the
  * two refusals are told apart by the field the label above reads. Neither line
@@ -449,14 +449,20 @@ static void apply_print_deploy_skips(
      * and update's only where that scan ran out, its loop guarded as the sudo
      * line's is; where any such skip is bytes no base proves, a line of their
      * own, disk's kept in a profile of its own; a named squatter's second way
-     * out, by the claim that holds it (ancestry) — a wider scope plans a tracked
-     * ancestor, and a derived claim is never planned, so its way out is the named
-     * re-derivation, whose own preview names what the re-capture would commit,
-     * where a squatter nothing claims has none: its row names it, and the hand
-     * is all there is. Last, UNREADABLE's closing, a clearance's stop's among
-     * them, its line naming the path it could not read — an unreadable path is
-     * not "in the way", and a fix-or-widen instruction would misname a refusal
-     * to judge what could not be seen. */
+     * out, by its class (ancestry), which says whose node stands there and who
+     * moved it — a wider scope plans a tracked row's squatter, the user's node
+     * or dotta's own copy, and dotta's own copy at a rung, the view having moved
+     * past it (promoted, core/deploy.c deploy_plan_build), whatever that run
+     * then asks, --force for the user's node or an edited copy and nothing of
+     * an untouched one, so the line names no row: the class says whose node stands,
+     * never whether its row is tracked. The user's own node at a rung is never
+     * planned, so no scope and no flag helps, and its way out is the named
+     * re-derivation, which retires a claim the disk contradicts and leaves the
+     * arrangement the user's; a squatter nothing claims carries no class: its
+     * row names it, and the hand is all there is. Last, UNREADABLE's closing, a
+     * clearance's stop's among them, its line naming the path it could not read
+     * — an unreadable path is not "in the way", and a fix-or-widen instruction
+     * would misname a refusal to judge what could not be seen. */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
@@ -508,16 +514,20 @@ static void apply_print_deploy_skips(
         }
     }
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
-        if (verdicts->skipped.entries[i].ancestry == DEPLOY_ANCESTRY_TRACKED) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
+
+        if (s->ancestry == WORKSPACE_DISPLACED_TRACKED ||
+            s->ancestry == WORKSPACE_DISPLACED_STALE ||
+            s->ancestry == WORKSPACE_DISPLACED_CONFLICT) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Fix the path by hand, or widen the scope so a tracked ancestor is planned"
+                "  Fix the path by hand, or widen the scope to include it"
             );
             break;
         }
     }
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
-        if (verdicts->skipped.entries[i].ancestry == DEPLOY_ANCESTRY_DERIVED) {
+        if (verdicts->skipped.entries[i].ancestry == WORKSPACE_DISPLACED_DERIVED) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or 'dotta update <dir>' to re-derive the way there"

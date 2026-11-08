@@ -347,8 +347,10 @@ typedef enum {
  * the climb's retire answers for — but at a lost blob's place); and core/deploy.c
  * check_ancestry, off the squatted directory itself — a caller that needs the
  * squatter, which no item carries, is lent it whole, the claim this class is
- * copied from (workspace_squatted_ancestor), so apply's remedy and status's section
- * cannot name two claimants for one squatter.
+ * copied from (workspace_squatted_ancestor) — which copies the class onto the
+ * skip of a row whose squatter the run gives no fate, for cmds/apply.c
+ * apply_print_deploy_skips to part its remedy on, so apply's remedy and status's
+ * section read one class for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -2177,7 +2179,7 @@ typedef struct {
  * which reads all three — the path, to find the fate this run gave the squatted
  * directory's row; the length, to name it on the skip of a row it holds
  * (core/deploy.h deploy_skip_t); the claim, for the remedy where the run gave
- * that row no fate (deploy_ancestry_t) — core/deploy.c deploy_plan_build, the
+ * that row no fate, copied onto the skip — core/deploy.c deploy_plan_build, the
  * path alone, above a row displaced in a node's class: which of the plan's nodes
  * the row's landing replaces (deploy_reach) — and cmds/update.c cmd_update, the
  * path alone, above a named leaf the user's squatter displaces: whether a profile

@@ -896,28 +896,28 @@ static bool node_is_replaced(const deploy_preflight_t *verdicts, const char *pat
  *   no fate       this run never reaches the ancestor (out of scope, -p'd
  *                 away, -e'd, or an ancestor claim the plan never holds): ANCESTOR
  *                 — the same fate a squatter no row names earns at check_landing,
- *                 an incapacity. The skip carries which claim holds the squatter
- *                 — the load's own note of it, lent with the path — because the
- *                 remedies part ways there: a wider scope plans a tracked row,
- *                 and a rung dotta's own copy squats, the view having moved past
- *                 it (promoted, deploy_plan_build); the named re-derivation retires
+ *                 an incapacity. The skip carries the squatter's class — the
+ *                 load's own note of it, lent with the path — because the remedies
+ *                 part ways there: a wider scope plans a tracked row's squatter,
+ *                 and dotta's own copy at a rung, the view having moved past it
+ *                 (promoted, deploy_plan_build); the named re-derivation retires
  *                 an ancestor claim the user's own squatter holds
  *
- * The claimant is written in the no-fate arm alone — a row beneath a skipped
- * squatter leaves the ancestry NONE, its remedy being that squatter's own line's
- * (deploy_ancestry_t). Called before check_landing by the ladder, and once more
- * per ancestor candidate; the ladder decides in path order, so an ancestor's
- * own fate is always already taken when a row beneath it is reached — and noted,
- * where it was skipped for its pair with nothing standing there. The skip and
- * *out_absent are written only when an ancestor decides — the caller's zero skip
- * and false stand otherwise, and the row judges itself.
+ * The class is written in the no-fate arm alone — a row beneath a skipped squatter
+ * leaves the ancestry NONE, its remedy being that squatter's own line's
+ * (core/deploy.h deploy_skip_t). Called before check_landing by the ladder, and
+ * once more per ancestor candidate; the ladder decides in path order, so an
+ * ancestor's own fate is always already taken when a row beneath it is reached
+ * — and noted, where it was skipped for its pair with nothing standing there.
+ * The skip and *out_absent are written only when an ancestor decides — the caller's
+ * zero skip and false stand otherwise, and the row judges itself.
  *
  * @param ws Workspace, for the squatted-ancestor answer (must not be NULL)
  * @param verdicts The fates decided so far (must not be NULL)
  * @param path Planned path (must not be NULL)
  * @param skip The row's skip in the making (must not be NULL): the reason — TYPE,
  *        ANCESTOR or OWNERSHIP — the named ancestor's prefix length, and where
- *        the run gave a squatter no fate the claim at it
+ *        the run gave a squatter no fate its class
  * @param out_absent Whether the run empties the path before writing it (must
  *        not be NULL)
  */
@@ -971,13 +971,12 @@ static void check_ancestry(
         }
     }
 
-    /* No fate: ANCESTOR, and the claim the load noted beside the squatter — the
-     * view's face lends a view claim alone. A wider scope plans every squatter
-     * but one: the user's own at a rung (DERIVED), which no plan holds and the
-     * named re-derivation answers for */
+    /* No fate: ANCESTOR, and the squatter's class as the load noted it — the
+     * view's face lends a view claim alone, TRACKED to CONFLICT. A wider scope
+     * plans every squatter but one: the user's own at a rung (DERIVED), which
+     * no plan holds and the named re-derivation answers for */
     skip->reason = DEPLOY_SKIP_ANCESTOR;
-    skip->ancestry = above->claim == WORKSPACE_DISPLACED_DERIVED
-        ? DEPLOY_ANCESTRY_DERIVED : DEPLOY_ANCESTRY_TRACKED;
+    skip->ancestry = above->claim;
 }
 
 /**
@@ -1021,11 +1020,10 @@ static void check_ancestry(
  *                             ancestry, and this run will not replace it (Coherent
  *                             Scope) — skipped (ANCESTOR), by hand. The rung
  *                             ran first, so nothing the load saw claims the
- *                             squatter: the skip's ancestry is UNCLAIMED, the
- *                             one ancestry this producer can find — and nothing
- *                             enabled claims it at all, a claim of it leaving a
- *                             directory row there or no row beneath it
- *                             (core/manifest.c manifest_layer)
+ *                             squatter, and the skip carries no class of it —
+ *                             nothing enabled claims it at all, a claim of it
+ *                             leaving a directory row there or no row beneath
+ *                             it (core/manifest.c manifest_layer)
  *   unreachable               EACCES is a denial too (PERMISSION, with no
  *                             ancestor to name); any other errno is left for
  *                             the write to report
@@ -1034,21 +1032,20 @@ static void check_ancestry(
  * (ensure_parents), so this is a prediction of the run, not a model of it.
  *
  * The skip is written only on a refusal — the caller's zero skip stands when
- * the landing is clear — and its ancestry only on the ANCESTOR one. The named
- * ancestor is a prefix of the planned path itself, so it travels as a byte length
- * (deploy_skip_t). A PERMISSION with an ancestor reads "<ancestor> is not
- * writable", or "is not searchable" where the row's own look was refused beneath
- * it — the refusal asks both bits at once, and the look says which refused; without
- * one, "ancestry cannot be reached" — the zero length is itself the honest fact
- * (the offender could not be named).
+ * the landing is clear. The named ancestor is a prefix of the planned path itself,
+ * so it travels as a byte length (deploy_skip_t). A PERMISSION with an ancestor
+ * reads "<ancestor> is not writable", or "is not searchable" where the row's
+ * own look was refused beneath it — the refusal asks both bits at once, and the
+ * look says which refused; without one, "ancestry cannot be reached" — the zero
+ * length is itself the honest fact (the offender could not be named).
  *
  * @param ws Workspace, for the claimed-ancestor lookup (must not be NULL)
  * @param verdicts The fates decided so far, for the deployable-directory test
  *        (must not be NULL)
  * @param path Planned path (must not be NULL)
  * @param skip The row's skip in the making (must not be NULL): PERMISSION or
- *        ANCESTOR, the refusing ancestor's prefix length (0 where none could be
- *        named), and UNCLAIMED on the ANCESTOR refusal alone
+ *        ANCESTOR, and the refusing ancestor's prefix length (0 where none could
+ *        be named)
  */
 static void check_landing(
     const workspace_t *ws, const deploy_preflight_t *verdicts, const char *path,
@@ -1082,9 +1079,6 @@ static void check_landing(
 
     skip->reason = is_dir ? DEPLOY_SKIP_PERMISSION : DEPLOY_SKIP_ANCESTOR;
     skip->ancestor = ancestor_len(slash);
-    if (!is_dir) {
-        skip->ancestry = DEPLOY_ANCESTRY_UNCLAIMED;
-    }
 
 cleanup:
     free(scratch);

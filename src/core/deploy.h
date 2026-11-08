@@ -395,9 +395,9 @@ static inline deploy_clearance_t deploy_clearance(const workspace_item_t *item) 
  * is the rung's — and, since the rung's reach is the view's directory rows rather
  * than the walk's, whether it is the rung that answers no longer depends on how
  * the user spelled the add. The two producers stay one reason and one exit
- * contribution; what a consumer may tell apart is the claim that holds the
- * squatter, which the skip carries (deploy_ancestry_t) — the remedy differs by
- * claimant where the refusal does not. And why UNREADABLE ranks after every path
+ * contribution; what a consumer may tell apart is the squatter's class, which
+ * the skip carries (deploy_skip_t) — the remedy differs by whose node stands
+ * there where the refusal does not. And why UNREADABLE ranks after every path
  * rung where its siblings (cleanup_skip_reason, workspace_item_route) rank the
  * same fact first: the landing check, when it has something to say, names the
  * ancestry that refused the look — the actionable half of the very same fact.
@@ -501,51 +501,6 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
 }
 
 /**
- * The claim standing at the squatted ancestor an ANCESTOR skip names
- *
- * One reason, one exit — but the remedy is the claimant's. A row a plan holds,
- * out of the run's reach, is planned by a wider scope, which then replaces the
- * squatter: a tracked row's under --force, and dotta's own copy at a rung, Git
- * having moved past it (promoted, deploy_plan_build), unasked where the copy is
- * untouched. An ancestor claim the user's own squatter holds is never planned,
- * so no scope and no flag helps: the consent-preserving cure is the named
- * re-derivation ('dotta update <dir>'), which retires a claim the disk contradicts
- * and leaves the arrangement the user's. A squatter nothing claims is the landing
- * check's find past the rung: by hand is all there is. A record that alone
- * remembers a directory there is no claim on a planned row at all (the reach
- * rule, core/workspace.h): the rung never names it, the landing check meets what
- * stands there on its own terms, and apply's own cleanup releases the record in
- * the same run. And dotta's own file or link above a row is the landing's, never
- * a squatter the run has no fate for: the plan holds it wherever a row of the
- * run lies beneath it (deploy_plan_t's nodes), and preflight replaces it, the
- * row then planned absent, or keeps it with a skip of its own, whose class the
- * row takes — so there is no fourth ancestry.
- *
- * Written where the reason is decided. TRACKED and DERIVED by the ancestry rung
- * (check_ancestry), off the claim the load noted beside the squatter
- * (core/workspace.h workspace_squatted_t) — the claim every path beneath it carries
- * as its displaced class, so the remedy here and status's Displaced paths section
- * cannot name two claimants for one squatter: DERIVED where the user's own squatter
- * holds an ancestor claim, TRACKED for every other view claim; UNCLAIMED by the
- * landing check (check_landing), the one ancestry it can find. Read by cmds/apply.c
- * apply_print_deploy_skips, whose remedies part on it.
- *
- * The ancestry answers for ANCESTOR, where the reason is one and the cure is
- * not — and only where the skip is the squatter's only report: a squatter this
- * run never reached, or one nothing claims. NONE everywhere else: on every skip
- * whose reason is another, and on a row beneath a squatter this run planned and
- * skipped, which reads ANCESTOR and names it but whose remedy is that squatter's
- * own skip, listed above the row — TRACKED's line, a wider scope, is false of a
- * squatter already in it.
- */
-typedef enum {
-    DEPLOY_ANCESTRY_NONE = 0,  /* Another reason, or a squatter with a skip of its own */
-    DEPLOY_ANCESTRY_TRACKED,   /* A row a plan holds stands there: tracked, or promoted */
-    DEPLOY_ANCESTRY_DERIVED,   /* An ancestor claim the user's own squatter holds */
-    DEPLOY_ANCESTRY_UNCLAIMED  /* Nothing claims it — the landing check's find */
-} deploy_ancestry_t;
-
-/**
  * Where a clearance stopped, or its first edit — the path a skip names at its
  * row's path or beneath it
  *
@@ -591,11 +546,22 @@ typedef struct {
  * reason has no ancestor to name: it is about the planned path itself (OWNERSHIP
  * is, save beneath an absent directory skipped for its pair), or (PERMISSION
  * alone) the ancestry could not even be reached to name its refusing node.
- * `ancestry` says which claim holds the named path where the skip is the squatter's
- * only report — ANCESTOR's alone, and NONE on a row beneath a skipped squatter
- * (deploy_ancestry_t). `blocker` is the path a clearance names at the row's path
- * or beneath it — where its walk stopped, or the first copy only --force removes
- * (deploy_blocker_t) — and none on every skip the walk did not write.
+ * `ancestry` is the named squatter's class where the skip is the squatter's only
+ * report — ANCESTOR's alone, where the run gives the squatter no fate, written
+ * where that reason is decided (core/deploy.c check_ancestry): the class the
+ * load noted beside the squatter, which every path beneath it carries as its
+ * displaced class (core/workspace.h workspace_squatted_t), so apply's remedy,
+ * which parts on it (cmds/apply.c apply_print_deploy_skips), and status's Displaced
+ * paths section read one class. A view row's squatter, TRACKED to CONFLICT: a
+ * record's memory is no claim on a planned row (the reach rule, core/workspace.h
+ * workspace_displaced_t), and dotta's node above a row is the landing's, held
+ * wherever a row of the run lies beneath it (deploy_plan_t's nodes). NONE on
+ * every other skip: on a row beneath a squatter the run planned and skipped,
+ * whose remedy is that squatter's own skip, listed above it, and on a squatter
+ * nothing claims, the landing check's find, which no class names. `blocker` is
+ * the path a clearance names at the row's path or beneath it — where its walk
+ * stopped, or the first copy only --force removes (deploy_blocker_t) — and none
+ * on every skip the walk did not write.
  *
  * The item is the verdict's: the one the row's bucket holds, or the node the
  * plan holds, and never NULL (deploy_verdict_t). Whether it holds a look is the
@@ -618,7 +584,7 @@ typedef struct {
     const workspace_item_t *item;    /* Borrowed (workspace lifetime), as the verdict's — never NULL */
     deploy_skip_reason_t reason;
     size_t ancestor;                 /* Prefix length of the named ancestor; 0 = none */
-    deploy_ancestry_t ancestry;      /* ANCESTOR only: the claim at a squatter with no skip of its own */
+    workspace_displaced_t ancestry;  /* ANCESTOR only: the class of a squatter the run gives no fate */
     deploy_blocker_t blocker;        /* A clearance's stop or first edit, at or beneath the path; none elsewhere */
 } deploy_skip_t;
 

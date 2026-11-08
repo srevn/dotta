@@ -14,24 +14,24 @@
  * Snapshot ownership:
  *   The workspace is the authority for the join within its lifetime: the view
  *   (core/manifest.h — every enabled profile at a revision of its branch, built
- *   by the dispatcher at the start of the command and borrowed here,
- *   `ctx->run.manifest`) and the record (read once, state_records, and held by
- *   the items). Downstream consumers (deploy, cleanup, command-internal analyses)
- *   read both through workspace accessors — the active items, each carrying its
- *   row and the record at its path (workspace_active, workspace_directories,
- *   workspace_files), the orphans (workspace_orphans), and the item at a path
- *   (workspace_find) — rather than building a view or calling state_records
- *   themselves. The view has no writer: it is current by construction and nothing
- *   invalidates it. The record has three writers while a workspace is live —
- *   the load's own flush, its last step (workspace_load), workspace_anchor and
- *   workspace_learn — and each writes a record whole, built before its statement
- *   (core/state.h state_write), and points the path's item at it once the store
- *   holds it: the flush after its own commit, or at its end in the caller's
- *   transaction; the other two at once, in the run's. The record an item held
- *   before is never written, so a reader that took it earlier reads what the
- *   load read, whenever it reads. Retirements (state_retire, from apply's record
- *   phase and the verbs) go to the database directly — no later reader in the
- *   run consults a retired path.
+ *   at the start of the command and borrowed here: the dispatcher's,
+ *   `ctx->run.manifest`, or apply's own at the revisions its line names) and
+ *   the record (read once, state_records, and held by the items). Downstream
+ *   consumers (deploy, cleanup, command-internal analyses) read both through
+ *   workspace accessors — the active items, each carrying its row and the record
+ *   at its path (workspace_active, workspace_directories, workspace_files), the
+ *   orphans (workspace_orphans), and the item at a path (workspace_find) — rather
+ *   than building a view or calling state_records themselves. The view has no
+ *   writer: it is current by construction and nothing invalidates it. The record
+ *   has three writers while a workspace is live — the load's own flush, its last
+ *   step (workspace_load), workspace_anchor and workspace_learn — and each writes
+ *   a record whole, built before its statement (core/state.h state_write), and
+ *   points the path's item at it once the store holds it: the flush after its
+ *   own commit, or at its end in the caller's transaction; the other two at once,
+ *   in the run's. The record an item held before is never written, so a reader
+ *   that took it earlier reads what the load read, whenever it reads. Retirements
+ *   (state_retire, from apply's record phase and the verbs) go to the database
+ *   directly — no later reader in the run consults a retired path.
  *
  *   Exception: the verbs — add, remove, revert, and update after its commit —
  *   write the record through state.h directly, what only their commit knows:
@@ -41,7 +41,8 @@
  *   their commit changed. add, remove and revert load no workspace, and nothing
  *   reads update's after its record write, so there is no snapshot for the write
  *   to desync. profile enable / disable write only the enabled set, sync writes
- *   nothing, and completion reads the dispatcher's view alone.
+ *   nothing, and completion builds the view a source reads and writes nothing
+ *   (cmds/completion.c completion_files).
  *
  *   The workspace's products (rows, records, verdicts) are read through the
  *   workspace; the run's resources (the repository, the content cache) are read
@@ -1663,12 +1664,12 @@ typedef struct {
  * still load the full workspace and apply the filter at display time via
  * scope_accepts_profile).
  *
- * The workspace keeps no copy of the profile set: the view itself is the
- * dispatcher's, built over the enabled set at the start of the command and borrowed
- * here — one tree walk per enabled profile, once per command — and what needs
- * the set's order reads it from the view (manifest_profiles: the untracked scan's
- * registration of its roots), so the workspace borrows nothing a caller must
- * keep alive beside it.
+ * The workspace keeps no copy of the profile set: the view itself is the command's,
+ * built over the enabled set at its start — the dispatcher's, or apply's own —
+ * and borrowed here, one tree walk per enabled profile, once per command; and
+ * what needs the set's order reads it from the view (manifest_profiles: the
+ * untracked scan's registration of its roots), so the workspace borrows nothing
+ * a caller must keep alive beside it.
  *
  * The flush, the load's last step, once every verdict is in, writes what the
  * load owes the record: one write per owed item — its record whole, as the load
@@ -1808,10 +1809,11 @@ typedef struct {
  *              it must outlive the workspace. Obtain from `ctx->run.content_cache`
  *              under a spec that declares crypto)
  * @param manifest The view over the enabled set (must not be NULL; borrowed —
- *                 it must outlive the workspace. `ctx->run.manifest`, which the
- *                 command's spec declares with `.manifest`; no command mutates
- *                 Git or the enabled set between dispatch and workspace_load,
- *                 so it is current)
+ *                 it must outlive the workspace. The command's:
+ *                 `ctx->run.manifest`, which its spec declares with `.manifest`,
+ *                 or apply's own at the revisions its line names (cmds/apply.c
+ *                 cmd_apply); no command mutates Git or the enabled set between
+ *                 the build and workspace_load, so it is current)
  * @param opts The two analyses this load may decline (must not be NULL)
  * @param arena The arena the workspace lives in, and everything it holds (the
  *              items, the record, the diverged items, the partition's arrays),

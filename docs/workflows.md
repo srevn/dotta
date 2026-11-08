@@ -44,6 +44,9 @@ dotta apply -p darwin
 # Deploy specific files
 dotta apply ~/.bashrc ~/.zshrc
 
+# Deploy one profile's path as a past commit held it
+dotta apply darwin:~/.config/nvim@HEAD~1
+
 # Force overwrite modified files
 dotta apply --force
 
@@ -52,6 +55,8 @@ dotta apply --keep-orphans
 ```
 
 `apply` performs full synchronization: it deploys new and updated files, and prunes dotta's own unchanged copies of orphaned files — those of disabled profiles, and those deleted from their profiles.
+
+A profile, or one profile's path, ending in `@<commit>` deploys its files as that commit held them, and commits nothing. `dotta status` then lists them as changes to deploy, `dotta apply` brings the latest version back, and `dotta revert darwin:~/.config/nvim@HEAD~1` makes the old version the profile's.
 
 ### A Machine That Already Has Its Own Files
 

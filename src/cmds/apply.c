@@ -14,7 +14,9 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/hashmap.h"
 #include "base/output.h"
+#include "base/refspec.h"
 #include "base/string.h"
 #include "cmds/completion.h"
 #include "core/cleanup.h"
@@ -2538,11 +2540,22 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    state_t *state = ctx->run.state;                /* Borrowed from dispatcher (WRITE) */
+    state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
     content_cache_t *content_cache = ctx->run.content_cache;
-    const manifest_t *manifest = ctx->run.manifest; /* The view at dispatch */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
+
+    /* The view the run converges to: every enabled profile, each at the revision
+     * the line names for it and at its head where it names none (core/manifest.h
+     * manifest_build) — built here, where the line is read, since the dispatcher
+     * reads none. Its refusal is the builder's, as dispatch's would be: a revision
+     * that does not resolve or that its branch holds no commit for, and a profile
+     * that will not read at the commit it was asked at, naming that commit. */
+    output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
+
+    manifest_t *manifest = NULL;
+    error_t err = manifest_build(repo, state, opts->revisions, ctx->arena, &manifest);
+    if (err) return err;
 
     /* Build operation scope
      *
@@ -2556,26 +2569,29 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *                    build's shape, for the verbose path count and the
      *                    nothing-to-do exit.
      *   the coverage   — each path argument answered alone over the managed
-     *                    paths, -p read beside it (scope_coverage_t).
+     *                    paths, the profiles its word names read beside it
+     *                    (scope_coverage_t).
      *
      * The per-iteration predicates are the two planners' (deploy_plan_build,
      * cleanup_plan_build): apply reads the scope through the plans and applies
      * no gate of its own.
      *
-     * Scope_build resolves enabled (lenient on empty), resolves and validates
-     * the CLI filter, compiles the path filter, and deep-copies excludes. */
-    output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
-
+     * scope_build borrows the enabled set off the view just built (lenient on
+     * empty), checks every profile the line names against it, and compiles the
+     * paths — those named on their own, and each profile:path profile's — and
+     * the excludes. */
     scope_inputs_t scope_inputs = {
         .profiles         = opts->profiles,
         .profile_count    = opts->profile_count,
         .paths            = opts->paths,
         .path_count       = opts->path_count,
+        .refspecs         = opts->refspecs,
+        .refspec_count    = opts->refspec_count,
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
     scope_t *scope = NULL;
-    error_t err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
+    err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
     if (err) return err;
 
     output_print(
@@ -2603,8 +2619,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * writes what it owes the record)
      *
      * After workspace_load returns, every active path is an item, the clean ones
-     * too — the whole enabled set, over the view the dispatcher built; the plan
-     * below applies the scope.
+     * too — the whole enabled set, over the view built above; the plan below
+     * applies the scope.
      *
      * The load writes what it owes the record before it returns — its observations,
      * a directory's or a file's in the place of a record whose node the look
@@ -2988,8 +3004,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Each path argument answered alone, over apply's universe, the managed paths:
      * the workspace's items, active and orphaned, whatever bucket a plan holds
      * each in — so what a flag withholds counts as reached, and an entry that
-     * reached only what -p leaves out names the first one's profile (core/scope.h
-     * scope_coverage_t). One block, its boundary asked by its first line. */
+     * reached only what its word's profiles leave out — -p's, or a profile:path's
+     * own — names the first one's profile (core/scope.h scope_coverage_t). One
+     * block, its boundary asked by its first line. */
     {
         scope_coverage_t *coverage = scope_coverage_create(scope, ctx->arena);
 
@@ -3813,15 +3830,103 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
 /* Command-local positional classes. Start at 1 to reserve 0 for the engine's
  * "unclassified" sentinel (see args.h:args_class_t). */
-enum apply_class { APPLY_CLASS_PATH = 1, APPLY_CLASS_PROFILE, };
+enum apply_class { APPLY_CLASS_PATH = 1, APPLY_CLASS_PROFILE, APPLY_CLASS_REFSPEC, };
 
 /**
- * Positional classifier: a token that announces a path goes to paths[], and what
- * announces nothing is a profile name (infra/path.h path_input_announces_path).
+ * Positional classifier, from the token alone — completion runs it and never
+ * apply_post_parse (base/args.h args_completion_t): a token carrying a commit
+ * (base/refspec.h refspec_commit) or naming its profile before a ':' (infra/path.h
+ * path_input_announces_profile) goes to refspecs[], for apply_post_parse to read;
+ * one that announces a path to paths[] (path_input_announces_path); and what
+ * announces nothing is a profile name. The commit is asked first, since a commit
+ * may hold a ':' or a glob's bytes, and the profile's name before the pattern,
+ * so `p:'*.conf'` is p's; every token neither question takes keeps the class it
+ * had, a path or a profile's name.
  */
 static args_class_t apply_classify(const char *tok) {
-    return path_input_announces_path(tok) ? APPLY_CLASS_PATH
-                                          : APPLY_CLASS_PROFILE;
+    if (refspec_commit(tok) || path_input_announces_profile(tok)) return APPLY_CLASS_REFSPEC;
+    return path_input_announces_path(tok) ? APPLY_CLASS_PATH : APPLY_CLASS_PROFILE;
+}
+
+/**
+ * Each refspec read into the view's fact and the scope's
+ *
+ * The commit a word carries is the revision its profile is read at, one a profile
+ * (core/manifest.h manifest_build, its map), and the word its commit leaves selects
+ * what it would select alone, read by the classifier's own rungs: a profile:path
+ * the scope's, the token raw (core/scope.h scope_inputs_t); a profile's name a
+ * profile named on its own, so `apply p@C X` is p's X; and a path, at a commit,
+ * is refused. The profiles and the refspecs are laid out anew in `arena`, the
+ * profiles named on their own first and each word after them in the line's order:
+ * the options point at the new arrays, and the engine's are never written.
+ */
+static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command_t *cmd) {
+    (void) cmd;
+    cmd_apply_options_t *o = opts_v;
+    if (o->refspec_count == 0) return NULL;
+
+    /* Worst case: every refspec a profile's name, or every one a profile:path
+     * (update_post_parse's raw shape) */
+    char **profiles = arena_calloc(arena, o->profile_count + o->refspec_count, sizeof(*profiles));
+    size_t profile_count = 0;
+    for (; profile_count < o->profile_count; profile_count++) {
+        profiles[profile_count] = o->profiles[profile_count];
+    }
+    char **refspecs = arena_calloc(arena, o->refspec_count, sizeof(*refspecs));
+    size_t refspec_count = 0;
+    o->revisions = hashmap_borrow(arena, o->refspec_count);
+
+    for (size_t i = 0; i < o->refspec_count; i++) {
+        char *token = o->refspecs[i];
+
+        /* The whole token first: one that names no file — `p:`, `p:@C`, `@HEAD`,
+         * `:@HEAD` — is refused before its word is asked anything */
+        refspec_t rs = { 0 };
+        error_t err = refspec_parse(arena, token, &rs);
+        if (err) return error_wrap(err, "Failed to parse file specification");
+
+        /* The word its commit leaves, never empty once the parse has passed the
+         * token, and asked the rungs in place of the token, since a commit may
+         * hold a ':' or a glob's bytes that are no word's */
+        const char *commit = refspec_commit(token);
+        char *word = commit ? arena_strndup(arena, token, (size_t) (commit - 1 - token)) : token;
+
+        const char *profile = rs.profile;
+        if (path_input_announces_profile(word)) {
+            /* A profile:path, its profile the parse's: the search that cut the
+             * word found the parse's commit, so the ':' before it is the rung's */
+            refspecs[refspec_count++] = token;
+        } else if (path_input_announces_path(word)) {
+            /* A path, here only at a commit: no profile to read it at, whatever
+             * -p names (show reads one profile, apply's -p filters any number) */
+            return error_create(
+                ERR_INVALID_ARG, "A path at a commit names its profile: '%s'", token
+            );
+        } else {
+            /* A profile's name, here only at a commit: named on its own */
+            profile = word;
+            profiles[profile_count++] = word;
+        }
+        if (commit == NULL) continue;
+
+        /* Its commit is the revision its profile is read at: the same spelling
+         * again is the same revision, and another is refused, compared as typed
+         * and before anything is read — the map is the seen-set and the build's
+         * input in one */
+        const char *seen = hashmap_get(o->revisions, profile);
+        if (seen && strcmp(seen, commit) != 0) {
+            return error_create(
+                ERR_INVALID_ARG, "Commit given twice for '%s': '%s' and '%s'", profile, seen, commit
+            );
+        }
+        if (seen == NULL) hashmap_set(o->revisions, profile, arena_strdup(arena, commit));
+    }
+
+    o->profiles = profiles;
+    o->profile_count = profile_count;
+    o->refspecs = refspecs;
+    o->refspec_count = refspec_count;
+    return NULL;
 }
 
 /**
@@ -3894,7 +3999,9 @@ static const args_opt_t apply_opts[] = {
     /* Positionals: bare `<path>` tokens append to paths[]; bare `<profile>` tokens
      * append to profiles[]. The -p/--profile flag above targets the same profiles[]
      * array, so `-p darwin foo` and `darwin foo` produce the same list in argv
-     * order. */
+     * order. A token carrying a commit, or naming its profile before a ':', appends
+     * to refspecs[], which apply_post_parse reads: a profile at a commit joins
+     * profiles[] there, after every name given on its own. */
     ARGS_POSITIONAL(
         APPLY_CLASS_PATH,
         cmd_apply_options_t,paths,            path_count
@@ -3903,19 +4010,23 @@ static const args_opt_t apply_opts[] = {
         APPLY_CLASS_PROFILE,
         cmd_apply_options_t,profiles,         profile_count
     ),
+    ARGS_POSITIONAL(
+        APPLY_CLASS_REFSPEC,
+        cmd_apply_options_t,refspecs,         refspec_count
+    ),
     ARGS_END,
 };
 
 const args_command_t spec_apply = {
-    .name         = "apply",
-    .summary      = "Deploy enabled profiles to the filesystem",
-    .usage        = "%s apply [options] [profile|path]...",
-    .description  =
+    .name        = "apply",
+    .summary     = "Deploy enabled profiles to the filesystem",
+    .usage       = "%s apply [options] [profile[@commit] | path | profile:path[@commit]]...",
+    .description =
         "Converge the filesystem with enabled profiles: deploy new and\n"
         "updated files, prune the unchanged copies of files deleted from\n"
         "their profiles or whose profile was disabled, and update the\n"
         "deployment state.\n",
-    .notes        =
+    .notes       =
         "Path Arguments:\n"
         "  A path narrows the run to what lies at or beneath it, in both\n"
         "  directions: tracked files there are deployed and orphaned ones\n"
@@ -3924,34 +4035,41 @@ const args_command_t spec_apply = {
         "  storage (home/.bashrc) forms are both accepted. A path holding\n"
         "  *, ? or [ is also a pattern, and a \\ before each names it alone.\n"
         "  A leading ! leaves it out.\n"
+        "  A profile:path ('work:~/.ssh') narrows to that profile's files there;\n"
+        "  a ! after its ':' leaves a path out of them, -e out of every argument.\n"
+        "  A profile or a profile:path ending in @<commit> deploys the files as\n"
+        "  that commit held them: 'status' then shows them changed, 'apply'\n"
+        "  brings the latest back, and 'revert' with the same argument keeps\n"
+        "  them.\n"
         "\n"
         "Exclusion Patterns:\n"
         "  Excluded paths are protected from deployment, directory\n"
         "  convergence and pruning. Patterns follow gitignore glob syntax;\n"
         "  a trailing slash restricts a pattern to directories. Repeatable.\n"
         "  A pattern names a path as in .dottaignore: '.ssh/*' for ~/.ssh/*.\n",
-    .examples     =
+    .examples    =
         "  %s apply                            # Deploy all enabled profiles\n"
         "  %s apply --force                    # Lift the consent skips (overwrite, prune)\n"
         "  %s apply -p work                    # Filter to 'work' profile\n"
         "  %s apply -p work ~/.bashrc          # Profile + path filter\n"
         "  %s apply ~/.bashrc ~/.zshrc         # Deploy specific files only\n"
+        "  %s apply work:~/.config/nvim@HEAD~1 # nvim as work held it a commit ago\n"
         "  %s apply -n                         # Preview without applying\n"
         "  %s apply --exclude '.ssh/*'         # Protect matched paths\n",
-    .epilogue     =
+    .epilogue    =
         "See also:\n"
         "  %s status          # Preview pending deployment\n"
         "  %s update          # Commit filesystem changes back\n"
         "  %s profile enable  # Enable a profile for deployment\n",
-    .opts_size    = sizeof(cmd_apply_options_t),
-    .opts         = apply_opts,
-    .classify     = apply_classify,
-    .complete     = apply_complete,
-    .payload      = &(const dotta_needs_t){
-        .repo     = DOTTA_REPO_OPEN,
-        .state    = DOTTA_STATE_WRITE,
-        .crypto   = DOTTA_CRYPTO_OBTAIN,
-        .manifest = true,
+    .opts_size   = sizeof(cmd_apply_options_t),
+    .opts        = apply_opts,
+    .classify    = apply_classify,
+    .post_parse  = apply_post_parse,
+    .complete    = apply_complete,
+    .payload     = &(const dotta_needs_t){
+        .repo    = DOTTA_REPO_OPEN,
+        .state   = DOTTA_STATE_WRITE,
+        .crypto  = DOTTA_CRYPTO_OBTAIN,
     },
-    .dispatch     = apply_dispatch,
+    .dispatch    = apply_dispatch,
 };

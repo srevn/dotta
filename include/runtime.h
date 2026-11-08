@@ -293,12 +293,12 @@ typedef enum dotta_verbosity {
  * arena, which nothing frees (the run, below).
  *
  * Who declares it: the commands whose subject is the view — the workspace commands
- * (status, diff, apply, update — `workspace_load` borrows the view rather than
- * building one) — and `profile enable`, which reads the view before once — an
- * enabled profile Git holds no branch for (`manifest_missing`), and one whose
- * claims are placed nowhere for want of a target (`manifest_unbound`), each of
- * which an enable naming that profile warns of — and whose build gates the set
- * it adds to: each profile it adds is read as strictly as the build reads one
+ * (status, diff, update — `workspace_load` borrows the view rather than building
+ * one) — and `profile enable`, which reads the view before once — an enabled
+ * profile Git holds no branch for (`manifest_missing`), and one whose claims
+ * are placed nowhere for want of a target (`manifest_unbound`), each of which
+ * an enable naming that profile warns of — and whose build gates the set it adds
+ * to: each profile it adds is read as strictly as the build reads one
  * (`core/profiles.h` `profile_needs_target`), its binding by the target's reading
  * (`infra/path.h` `path_input_target`), so no enable completes on a set the build
  * refuses. A build that fails ends dispatch with the builder's message — a tree
@@ -320,10 +320,13 @@ typedef enum dotta_verbosity {
  * run builds the view before its acts and the one after them for its Manifest
  * block, a failure of either warned and the block skipped, and a dry run builds
  * none) builds its own where it needs it, with the failure handling that path
- * wants. A command that moves Git or the enabled set and reads the view it leaves
- * (add, update, remove, sync, clone, interactive) builds that view itself — the
- * builder called again over the rows as they now stand: `run.manifest` is the
- * view at dispatch and is never rebuilt — see "Members not welcome" #1 on the run.
+ * wants. apply, whose subject is the view too, builds its own at the revisions
+ * its line names (`cmds/apply.c` `cmd_apply`) — a line the dispatcher does not
+ * read — and refuses a build that fails in the builder's words, as dispatch would.
+ * A command that moves Git or the enabled set and reads the view it leaves (add,
+ * update, remove, sync, clone, interactive) builds that view itself — the builder
+ * called again over the rows as they now stand: `run.manifest` is the view at
+ * dispatch and is never rebuilt — see "Members not welcome" #1 on the run.
  *
  * tolerant
  * --------

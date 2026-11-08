@@ -99,8 +99,9 @@
  *     Both produce manifest_row_t rows directly, the one row shape every consumer
  *     reads, so there is no bridge between the build step and its readers. The
  *     dispatcher builds the view once per command for the commands that declare
- *     it (ctx->run.manifest, include/runtime.h); a command that moves Git or
- *     the enabled set builds the post-mutation view itself.
+ *     it (ctx->run.manifest, include/runtime.h), and apply builds its own at
+ *     the revisions its line names (cmds/apply.c cmd_apply); a command that moves
+ *     Git or the enabled set builds the post-mutation view itself.
  *
  *   - Readers: manifest_rows (every row standing, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
@@ -426,7 +427,8 @@ typedef struct manifest manifest_t;
  * @param revisions The run's revisions: a profile's name → the revision it is
  *                  read at, as typed (const char *); a profile it holds no key
  *                  for is read at HEAD, and so is every profile where it is NULL
- *                  (borrowed for the call)
+ *                  (borrowed for the call). apply's line fills it (cmds/apply.c
+ *                  apply_post_parse); every other caller passes NULL
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
  * @param out Manifest (must not be NULL)

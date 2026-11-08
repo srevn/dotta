@@ -82,15 +82,15 @@ struct workspace {
     git_repository *repo;                        /* Borrowed reference */
     arena_t *arena;                              /* Borrowed; backs every workspace-lifetime string */
 
-    /* The view: every enabled profile at a revision of its branch, built by the
-     * dispatcher at the start of the command and borrowed here (ctx->run.manifest
-     * — rows and index alike are the command arena's, and nothing frees a view).
-     * Rows are read-only for the whole run — the record a writer patches is the
-     * one its item holds (workspace_item_t), never a row. The view's own index
-     * answers the scan at each child it lists (workspace_scan): a path is one
-     * row, and each asks row->type for the kind it wants. A reader outside the
-     * module asks for the path's item instead, which carries its row
-     * (workspace_find). */
+    /* The view: every enabled profile at a revision of its branch, built at the
+     * start of the command and borrowed here — the dispatcher's, ctx->run.manifest,
+     * or apply's own at the revisions its line names; rows and index alike are
+     * the command arena's, and nothing frees a view. Rows are read-only for the
+     * whole run — the record a writer patches is the one its item holds
+     * (workspace_item_t), never a row. The view's own index answers the scan at
+     * each child it lists (workspace_scan): a path is one row, and each asks
+     * row->type for the kind it wants. A reader outside the module asks for the
+     * path's item instead, which carries its row (workspace_find). */
     const manifest_t *manifest;                  /* Borrowed */
 
     /* The active items: one per row of the view, the directories and then the
@@ -3584,10 +3584,10 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  *
  * The join at the centre of every load. The expected side — every enabled profile
  * at a revision of its branch, both kinds, one row per path — is ws->manifest,
- * the dispatcher's view: each of its rows is made an item before anything is
- * looked at, and the items are sorted by kind (workspace_kind_order). The record
- * is then read once and walked once: a record an active item stands at is that
- * item's, and a record none stands at is an orphan, an item of its own.
+ * the command's view: each of its rows is made an item before anything is looked
+ * at, and the items are sorted by kind (workspace_kind_order). The record is
+ * then read once and walked once: a record an active item stands at is that item's,
+ * and a record none stands at is an orphan, an item of its own.
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is active iff the view has a row for it, and a record is an orphan iff
@@ -4055,11 +4055,12 @@ error_t workspace_load(
     /* Borrow caller-owned resources. Lifetime guarantees: repo is ctx->run.repo
      * (command-scoped); state comes from ctx->run.state (command-scoped);
      * content_cache comes from ctx->run.content_cache (command-scoped, wraps
-     * ctx->run.keymgr); manifest is ctx->run.manifest (the view the dispatcher
-     * built over the enabled set, command-scoped); arena is ctx->arena
-     * (command-scoped). All five must outlive the workspace. The view is the
-     * persistent enabled set's, never a CLI filter's: `dotta status -p global`
-     * loads the whole workspace and filters at display time. */
+     * ctx->run.keymgr); manifest is the command's view over the enabled set
+     * (ctx->run.manifest, or the one apply built at its line's revisions,
+     * command-scoped either way); arena is ctx->arena (command-scoped). All five
+     * must outlive the workspace. The view is the persistent enabled set's, never
+     * a CLI filter's: `dotta status -p global` loads the whole workspace and
+     * filters at display time. */
     ws->repo = repo;
     ws->state = state;
     ws->content_cache = content_cache;

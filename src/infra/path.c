@@ -25,6 +25,11 @@
  *                             slot is still undecided: a path, or a name (list,
  *                             diff, apply, update)
  *
+ *   path_input_announces_profile
+ *                           - the profile:path grammar's, asked of the same
+ *                             positional: a profile's name before its ':', or a
+ *                             path holding one (apply)
+ *
  *   path_input_announces_rule
  *                           - the filter's question: a rule, or a path named
  *                             exactly (the pathspec's gate, and the pattern a
@@ -54,6 +59,8 @@
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
+#define PATH_WILDCARDS "*?["   /* a rule's alphabet: the filter's wildcards (path_input_announces_rule) */
+
 bool path_input_announces_path(const char *input) {
     if (!input || input[0] == '\0') return false;
 
@@ -65,10 +72,21 @@ bool path_input_announces_path(const char *input) {
            label_prefixes(input) || path_input_announces_rule(input);
 }
 
+bool path_input_announces_profile(const char *input) {
+    const char *colon = input ? strchr(input, ':') : NULL;
+    if (colon == NULL || colon == input) return false;   /* no ':', or no name before it */
+
+    /* path_input_announces_path's tests, a rule's bounded at the ':' — a wildcard
+     * after it is the profile's own pattern — and the label's asked of the whole
+     * token, which a label's word alone before the ':' does not open */
+    return !(input[0] == '/' || input[0] == '~' || input[0] == '.' || input[0] == '!' ||
+           label_prefixes(input) || strcspn(input, PATH_WILDCARDS) < (size_t) (colon - input));
+}
+
 bool path_input_announces_rule(const char *input) {
     CHECK_NULL(input);
 
-    return input[0] == '!' || strpbrk(input, "*?[") != NULL;
+    return input[0] == '!' || strpbrk(input, PATH_WILDCARDS) != NULL;
 }
 
 error_t path_input_resolve(

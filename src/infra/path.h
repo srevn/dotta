@@ -33,10 +33,11 @@
  * mount_resolve's join as a producer of one key (infra/mount.h, the four
  * producers), and why no caller hands a topology down to read an argument.
  *
- * One question stands before any reading, over the spelling alone and the caller's
+ * Two questions stand before any reading, over the spelling alone and the caller's
  * to ask first: whether a positional announces a path at all, where a verb's
- * slot could hold a profile instead (path_input_announces_path). It resolves
- * nothing, and it is not the resolver's own reading, which is wider.
+ * slot could hold a profile instead (path_input_announces_path), and whether it
+ * names its profile before a ':' (path_input_announces_profile). Neither resolves
+ * anything, and neither is the resolver's own reading, which is wider.
  */
 
 #ifndef DOTTA_PATH_H
@@ -116,14 +117,44 @@ typedef struct {
  * in a revision whose pattern holds a glob's bytes, which is never a path.
  *
  * Readers: list's inference form and its completion, diff's and apply's positional
- * classifiers, update's first-positional rule and its completion, and revert's
- * first word, in every form, and its completion's search for the profile holding
- * a path (cmds/revert.c revert_post_parse, revert_holder).
+ * classifiers, apply's reading of the word a commit leaves (cmds/apply.c
+ * apply_post_parse), update's first-positional rule and its completion, and
+ * revert's first word, in every form, and its completion's search for the profile
+ * holding a path (cmds/revert.c revert_post_parse, revert_holder).
  *
  * @param input The positional (may be NULL, which announces nothing)
  * @return true iff the input announces a path, or a pattern that selects one
  */
 bool path_input_announces_path(const char *input);
+
+/**
+ * Does the positional name its profile before a ':'?
+ *
+ * The profile:path grammar's question (base/refspec.h refspec_parse: the profile
+ * is what precedes the first ':'), asked of a token whose slot is undecided and
+ * before a pattern is read in it — so `p:*.conf` is p's pattern, never a path
+ * holding a ':'. What stands before the first ':' is a profile's name unless
+ * the token announces a path there: a place in its first byte, a label opening
+ * it, or a rule — a negation, or a wildcard ahead of the ':', one after it being
+ * the profile's own pattern. So a path holding a ':' keeps its reading — `~/a:b`,
+ * `home/a:b`, `*a:b*`, `./a:b`, `!a:b` — and nothing before the ':' names no
+ * profile: `:x` announces nothing, and is read as path_input_announces_path reads
+ * it. A label's word alone before the ':' is a profile's name, the one spelling
+ * a positional has for a profile so named (`home:~/.x`), `home` alone being the
+ * namespace's own directory (path_input_announces_path).
+ *
+ * A basename pattern holding a ':' ahead of its first wildcard reads as a profile
+ * and its path (`foo:*.conf`); a leading `**` component names the same paths as
+ * a pattern.
+ *
+ * Readers: cmds/apply.c apply_classify, of the token, and apply_post_parse, of
+ * the word its commit leaves — apply's alone: the verbs that take a refspec in
+ * a slot of their own parse it there (base/refspec.h refspec_parse).
+ *
+ * @param input The positional (may be NULL, which names none)
+ * @return true iff a profile's name stands before the input's first ':'
+ */
+bool path_input_announces_profile(const char *input);
 
 /**
  * Does the input announce a rule — a pattern in the filter's grammar — rather
@@ -135,7 +166,8 @@ bool path_input_announces_path(const char *input);
  *
  * Readers: infra/pathspec.c pathspec_create (the filter's gate) and
  * path_input_announces_path (a pattern announces a path) — the one alphabet, so
- * a pattern never lands in a bucket that cannot read it.
+ * a pattern never lands in a bucket that cannot read it, and the one
+ * path_input_announces_profile reads ahead of a ':'.
  *
  * @param input The input (must not be NULL)
  * @return true iff the input announces a rule

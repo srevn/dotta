@@ -12,6 +12,8 @@
 #include <runtime.h>
 #include <types.h>
 
+#include "base/hashmap.h"
+
 /**
  * Command options
  */
@@ -20,6 +22,9 @@ typedef struct {
     size_t profile_count;       /* Number of profiles */
     char **paths;               /* Specific paths to apply (NULL = all) */
     size_t path_count;          /* Number of paths */
+    char **refspecs;            /* profile:path arguments, raw: the scope parses each whole */
+    size_t refspec_count;       /* Number of profile:path arguments */
+    hashmap_t *revisions;       /* Profile name -> its revision, as typed (NULL = all at HEAD) */
     bool force;                 /* Override deploy's conflicts and cleanup's skip reasons */
     bool dry_run;               /* Don't actually deploy */
     bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */
@@ -36,14 +41,16 @@ typedef struct {
  * the files and tracked directories that diverge, and removes the ones orphaned
  * by a disabled profile or by a deletion in Git.
  *
- * Orchestrates scope resolution, workspace divergence analysis, plan construction,
- * pre-flight checks, the apply hooks, and execution. Builds no view of its own:
- * the dispatcher builds it over the enabled set at every run whose spec declares
- * it (src/main.c open_run), and apply reads it through the workspace. Never asks
- * for root: a landing the invoker cannot write, a pair it cannot set or an orphan
- * whose parent refuses its removal is a preflight skip that closes by naming
- * sudo, and a run under sudo lands or prunes it through the syscall's second
- * try (sys/filesystem) with no prompt of dotta's between.
+ * Orchestrates the view's build, scope resolution, workspace divergence analysis,
+ * plan construction, pre-flight checks, the apply hooks, and execution. Builds
+ * the view it converges to — each enabled profile at the revision the line names
+ * for it, at its head where it names none (core/manifest.h manifest_build) —
+ * the one workspace command that builds its own, since the dispatcher reads no
+ * line, and reads it through the workspace. Never asks for root: a landing the
+ * invoker cannot write, a pair it cannot set or an orphan whose parent refuses
+ * its removal is a preflight skip that closes by naming sudo, and a run under
+ * sudo lands or prunes it through the syscall's second try (sys/filesystem) with
+ * no prompt of dotta's between.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

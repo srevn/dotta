@@ -245,10 +245,12 @@ const git_oid *stage_head(const stage_t *st);
  * bootstrap_edit), read from the tree the session commits on; and the tree a
  * merge settles a name from for ours — its sheet's own name and a content conflict
  * the run settles for ours (core/profiles.c profile_merge_tree), and a removal
- * beside a change of the executable bit alone (profile_merge_name). Never NULL:
- * an orphan's stage stands on the empty tree, and a profile's draft — the one
- * reader that opens one, for add — reads it as a profile with nothing in it yet,
- * no entry and no sheet. Borrowed; valid until stage_free.
+ * beside a change of the executable bit alone (profile_merge_name); and the tree
+ * the sheet's own name is settled back from past a commit's whole tree read
+ * (profile_restore_tree). Never NULL: an orphan's stage stands on the empty tree,
+ * and a profile's draft — the one reader that opens one, for add — reads it as
+ * a profile with nothing in it yet, no entry and no sheet. Borrowed; valid until
+ * stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree
@@ -523,17 +525,22 @@ error_t stage_conflicts(const stage_t *st, arena_t *arena, string_array_t *out);
  * among them — and the tree's take their place: a blob at the name, a subtree's
  * blobs beneath it, or nothing where the tree holds nothing at the name. So a
  * blob beside a directory settles whole either way, and a name Git composed or
- * took cleanly is settled as one in conflict is. Each entry is put as every entry
- * is (stage_put), its mode the tree's, so a gitlink's is refused; the blobs are
- * the tree's, held already, so a settle writes nothing. In path order a name
- * precedes everything beneath it, so a name's settle and the settles beneath
- * it, made in that order from one tree, leave what the tree holds there. A settle
- * that fails leaves the name half settled: a writer abandons the stage.
+ * took cleanly is settled as one in conflict is; and what stood goes first, the
+ * tree cache along the name with it, whatever the settle puts back
+ * (lib/libgit2/src/libgit2/index.c index_remove_entry), so the commit's tree
+ * write rebuilds every tree above the name. Each entry is put as every entry is
+ * (stage_put), so a gitlink's is refused, its mode the tree's as libgit2 reads
+ * one — a hand's 100664 Git's regular 100644 (tree.c git_tree_entry_filemode);
+ * the blobs are the tree's, held already, so a settle writes nothing. In path
+ * order a name precedes everything beneath it, so a name's settle and the settles
+ * beneath it, made in that order from one tree, leave what the tree holds there.
+ * A settle that fails leaves the name half settled: a writer abandons the stage.
  *
  * Readers: core/profiles.c profile_merge_tree — the sheet's own name from the
  * opened tree, the base's, and each content conflict from the side the run names
- * — and profile_merge_name, a removal beside a change of the executable bit alone,
- * from the side holding no regular file there.
+ * — profile_merge_name, a removal beside a change of the executable bit alone,
+ * from the side holding no regular file there; and profile_restore_tree, the
+ * sheet's own name from the opened tree, past a commit's whole tree read.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

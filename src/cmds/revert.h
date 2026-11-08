@@ -7,10 +7,10 @@
  * each claim under the name the profile holds its place by, else the commit's
  * own; and every claim the profile holds there that the commit did not is removed
  * (revert_restore_path). A whole profile takes the commit's tree whole, its own
- * names and dotta's own files with them (core/profiles.h profile_restore_tree).
- * Nothing on disk changes: every machine's next apply brings its files in line,
- * deleting the unchanged copies of the files a revert removed (infra/commit.h
- * commit_action_t).
+ * names and dotta's own files with them, its sheet the save's as at every commit
+ * (core/profiles.h profile_restore_tree). Nothing on disk changes: every machine's
+ * next apply brings its files in line, deleting the unchanged copies of the files
+ * a revert removed (infra/commit.h commit_action_t).
  */
 
 #ifndef DOTTA_CMD_REVERT_H

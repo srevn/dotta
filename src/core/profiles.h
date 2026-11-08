@@ -992,7 +992,9 @@ void profile_departures(
  *     none where it claims nothing (metadata_save_to_stage); and a tree equal
  *     to the one opened is no commit (sys/stage.h stage_commit). A merge's draft
  *     has always moved, its stage's second parent, and the save stands as written
- *     over a merge too, its sheet's name holding the base's sheet from the open.
+ *     over a merge and over a commit's whole tree too, the sheet's name holding
+ *     the base's sheet until the save — settled back where Git's merge or the
+ *     tree's read put another (profile_draft_merge, profile_restore_tree).
  *
  * Memory: a handle's own — an arena made at the open, holding the struct, the
  * sheet the commit carries — the copy of the base's with every claim an edit
@@ -1597,23 +1599,26 @@ error_t profile_restore_directory(
 
 /**
  * A commit's whole tree and sheet, the draft's: every entry the commit's — its
- * claims under its names, dotta's own files, its sheet's bytes — and the sheet
- * the commit carries the commit's, copied
+ * claims under its names, dotta's own files — but the sheet's own name, the base's
+ * as every draft's index holds it, and the sheet the commit carries the commit's,
+ * copied
  *
  * No selection, stamp, reseal or key: the commit's own names and blobs. Its claims
  * stand as the commit has them, a claim its tree contradicts carried as every
  * write that does not aim at one carries it, and the commit's prune and save
- * run as at every commit (profile_commit). So the commit records the commit's
- * own tree but where the save moves its sheet — where its claims, past the prune,
- * are not the head's: there a derivation nothing stands beneath is pruned, and
- * a sheet a hand wrote is saved in the serializer's bytes. Where they are the
- * head's, no save runs, and the sheet stands as the commit spelled it, a derivation
- * nothing stands beneath kept in it; one in other bytes than the head's is the
- * commit's one move: then no list names anything, and the message's one line
- * says ancestor claims changed (profile_changes). A mode Git's tree writer refuses,
- * a hand's 100664, fails the commit only where its tree is rebuilt — the root's,
- * for a name at the root, wherever the sheet is saved — the index keeping the
- * tree's cache (sys/stage.h stage_read_tree).
+ * run as at every commit (profile_commit). The commit's bytes at the sheet's
+ * name are no document the save reads — the copy is — so the name is settled
+ * back from the tree the stage opened, as a merge settles it (profile_draft_merge),
+ * and the commit records the commit's own tree but its sheet, which the save
+ * moves as at every commit: the copy, saved, where its claims past the prune
+ * are no longer the head's, and the head's own where they are. So a derivation
+ * nothing stands beneath goes with the prune, and a sheet saying the head's claims
+ * in other bytes moves nothing. A mode Git's tree writer refuses, a hand's 100664,
+ * fails the commit where its tree is rebuilt — the root's at every restore, the
+ * settle taking its cache, the index keeping every other tree's (sys/stage.h
+ * stage_read_tree) — and a head's sheet a hand committed so is settled back under
+ * Git's regular mode, a move of the tree no list names: every restore over it
+ * commits, its message saying ancestor claims changed (stage_settle).
  *
  * The commit's sheet is read first and strictly, so its refusal moves nothing,
  * in the loader's words, which name the commit (profile_load_sheet).
@@ -1623,8 +1628,9 @@ error_t profile_restore_directory(
  * @param draft The draft (must not be NULL)
  * @param from The profile at the commit (must not be NULL; its tree one the draft's
  *             repository holds)
- * @return Error or NULL on success: the sheet's, in the loader's words; or the
- *         tree's, which will not read whole
+ * @return Error or NULL on success: the sheet's, in the loader's words; the tree's,
+ *         which will not read whole; or the settle's, an entry the stage refuses
+ *         at the sheet's own name
  */
 error_t profile_restore_tree(profile_draft_t *draft, profile_t *from);
 
@@ -1701,9 +1707,8 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  * writes or takes the sheet. Nothing is written, so a dry run may ask it. A commit
  * whose lists name nothing moved only the way: every writer's edit moves an
  * explicit claim, the way to one, or an internal file — dotta's own riding a
- * profile's first capture (profile_put_internal_file) — but a commit's whole
- * tree restored over the head's claims in other bytes, which moves the sheet
- * alone (profile_restore_tree).
+ * profile's first capture (profile_put_internal_file), or a commit's whole tree
+ * (profile_restore_tree).
  *
  * Readers: profile_commit, the names its message gives (infra/commit.h
  * commit_message); and cmds/revert.c cmd_revert, asked before its commit, its

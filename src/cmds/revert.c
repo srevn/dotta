@@ -344,7 +344,7 @@ static error_t revert_take_claim(const profile_claim_t *claim, void *payload) {
  * path keys both; written through the draft's verbs (core/profiles.h), so every
  * rule of a restored claim is the draft's, and every rule of an entry the stage's.
  * A whole profile is no path: its commit is the commit's own tree, no claim
- * selected (core/profiles.h profile_restore_tree).
+ * selected, its sheet the save's (core/profiles.h profile_restore_tree).
  *
  * The argument reaches a place, or a name. A path, and a name this machine places,
  * reach every claim either side places at or beneath that place, whichever label
@@ -706,8 +706,8 @@ cleanup:
  * effect another machine feels, every machine's unchanged copy deleted at its
  * next apply, in update's words for its own (cmds/update.c update_print_preview).
  * A revert whose lists name nothing moves only the way to the claims — a derived
- * directory's attributes, or a sheet saying the head's claims in other bytes —
- * and says so in the message's own line, tensed for a preview.
+ * directory's attributes — and says so in the message's own line, tensed for a
+ * preview.
  *
  * Reader: cmd_revert, every revert but one file's restore.
  *
@@ -1150,8 +1150,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* Nothing to do: the revert moved neither the tree nor the sheet, each held
      * against the one the draft opened (core/profiles.h profile_changed) — every
      * claim the path reaches held alike, the way to them too, or the commit's
-     * tree the head's own. Said as every command says it has nothing to do, naming
-     * what the revert is said of, its profile and the commit. */
+     * tree the head's own, its sheet held by its claims. Said as every command
+     * says it has nothing to do, naming what the revert is said of, its profile
+     * and the commit. */
     bool changed = false;
     err = profile_changed(draft, &changed);
     if (err) goto cleanup;

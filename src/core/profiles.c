@@ -40,7 +40,8 @@
  * bytes the stage writes at its commit — and writes the commit's claim whole,
  * and its way where the profile does not pass through it, into the copy, a
  * directory's asking the tree the commit would record for room first; a commit's
- * whole tree takes the index whole, and its sheet the copy's place; dotta's own
+ * whole tree takes the index whole but the sheet's own name, settled back to
+ * the base's as a merge settles it, and its sheet the copy's place; dotta's own
  * file is put beside the claims. A merge composes its tree first — each name
  * Git could not compose settled by a rule, or for the run's side — then its claims,
  * one pass a kind over the three sides' sheets in step, each claim a side moved
@@ -2142,6 +2143,12 @@ error_t profile_restore_tree(profile_draft_t *draft, profile_t *from) {
     /* Its tree, the index's whole — its claims under its names, dotta's own files,
      * its sheet's bytes — and the cache with it (sys/stage.h stage_read_tree) */
     err = stage_read_tree(draft->stage, from->tree);
+    if (err) return err;
+
+    /* Then the sheet's own name, the base's, as every draft's index holds it
+     * until the save: the commit's bytes there are no document the save reads,
+     * the copy below is (profile_merge_tree, the merge's same settle) */
+    err = stage_settle(draft->stage, METADATA_FILE_PATH, stage_tree(draft->stage));
     if (err) return err;
 
     /* And the sheet the commit carries, the commit's, copied into the draft's

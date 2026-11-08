@@ -1765,10 +1765,11 @@ static void apply_print_cleanup_preview(
          * question every screen asks), standing at its new path or not, which
          * "(no longer active)" would hide: a BOUND one by its own verdict, a
          * SHARED one under --force. A deleted one's profile's history says update
-         * deleted it (workspace_item_t's departure), as status's line says it
-         * (core/workspace.c workspace_item_line) — never a relocation, none being
-         * read of a name its profile lacks. The rest are no longer active: a
-         * profile disabled, and under --force a copy whose history would not
+         * or revert deleted it (workspace_item_t's departure), as status's line
+         * says it (core/workspace.c workspace_item_line) — a relocation first
+         * where its claim stands elsewhere all the same, the view reading its
+         * profile at a commit that holds the name. The rest are no longer active:
+         * a profile disabled, and under --force a copy whose history would not
          * read. */
         size_t moved = 0;
         size_t deleted = 0;

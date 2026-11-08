@@ -606,16 +606,16 @@ const git_oid *manifest_head(const manifest_t *manifest, const char *profile);
  * The one the build made from the rows it read (manifest_build), or the caller's
  * (manifest_build_profile). Borrowed for the view's lifetime — the build's is
  * the arena's, and the caller of one profile's view keeps its table alive as
- * long as the view. Rule 1, never cache a cache: a consumer that holds the view
- * and needs the topology it was placed by reads it here rather than building a
- * second table from the same rows, so the names it places and the rows it selects
- * read one value. Readers: the dispatcher (`run.mounts` for a command that declares
- * the view, include/runtime.h); a filesystem argument to `ignore --test`, and
- * add's receipt's labels, its let-go and its ancestry refusal (cmds/add.c
- * add_labels, add_write_record, add_refuse_ancestry), each of which builds a
- * view of its own and reads the table back from it rather than beside it. Show
- * and list build one too and ask it nothing: their arm asks the view its set
- * and the row an argument names, by key alone (core/scope.h scope_resolve_claim).
+ * long as the view. A consumer that holds the view and needs the topology it
+ * was placed by reads it here rather than building a second table from the same
+ * rows, so the names it places and the rows it selects read one value. Readers:
+ * the dispatcher (`run.mounts` for a command that declares the view,
+ * include/runtime.h); a filesystem argument to `ignore --test`, and add's receipt's
+ * labels, its let-go and its ancestry refusal (cmds/add.c add_labels,
+ * add_write_record, add_refuse_ancestry), each of which builds a view of its
+ * own and reads the table back from it rather than beside it. Show and list build
+ * one too and ask it nothing: their arm asks the view its set and the row an
+ * argument names, by key alone (core/scope.h scope_resolve_claim).
  *
  * Pure value return — no allocation, no error path.
  *
@@ -632,7 +632,7 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest);
  * machine's $HOME and the root sentinel at "/" (infra/mount.h) — offered without
  * a view, for a command that declares `mounts` and not `manifest`
  * (include/runtime.h). A command declaring both reads manifest_mounts instead
- * and gets the view's own: one build, one value. Rule 1, never cache a cache.
+ * and gets the view's own: one build, one value.
  *
  * `binding` is NULL for a reader describing the machine as it stands — the
  * dispatcher's build and the view's own. A command that declares a binding of
@@ -1111,15 +1111,16 @@ const manifest_row_t *manifest_lookup_claim(
  * O(P) over the profiles to find the contribution, then O(1): one probe of the
  * index the contribution keeps of its rows by name, built as they are cut — an
  * insert a row, which every build pays, the enabled set's and one profile's alike
- * (core/manifest.c manifest_contribute). So a relocation within an enabled profile
- * — a moved target or HOME — costs each of its orphans one probe, and a profile
- * the view holds no contribution for costs the search alone: the commonest ask,
- * a disabled profile's orphans.
+ * (core/manifest.c manifest_contribute). So an enabled profile's orphan costs
+ * one probe — a copy its root moved away from, one its history deleted — and
+ * one of a profile the view holds no contribution for, a disabled one's, the
+ * search alone.
  *
  * Reader: the relocation read (core/workspace.c workspace_analyze_orphans), once
- * per owned orphan whose claim may stand elsewhere — a file its profile still
- * holds, and a directory, which no history is asked of — never a file its history
- * took away, which no row of its profile carries.
+ * per owned orphan whose claim may stand elsewhere — a file its history leaves
+ * dotta's to prune, held or deleted, and a directory, which no history is asked
+ * of. A deleted name is in a row of its profile only where the view read the
+ * profile at a commit that holds it.
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param profile The claim's profile (NULL names no row)

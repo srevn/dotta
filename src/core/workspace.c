@@ -388,7 +388,7 @@ workspace_fault_t workspace_code_fault(error_code_t code) {
  * where the look succeeded and there is no error to class — total over the
  * convention every verb in the tree returns by, so a fold can be written at the
  * call itself rather than through a local whose only job is to outlive the test
- * (workspace_measure; Rule 5).
+ * (workspace_measure).
  *
  * Called at the four folds that hold an error of the look they just made —
  * workspace_analyze_file's look at the content, workspace_measure's compare,
@@ -2067,8 +2067,8 @@ static void workspace_index_entries(workspace_t *ws) {
  * input as the passphrase (crypto/keymgr.h).
  *
  * Readers: the orphan analysis's arms that keep the copy dotta's — position beneath
- * a blob, a file its history says the user deleted, and the owned tail, a file
- * its profile still holds or a directory, which no history is asked of
+ * a blob, and the owned tail, a file its history leaves dotta's to prune, held
+ * or deleted, and a directory, which no history is asked of
  * (workspace_analyze_orphans) — and the join's look at dotta's node above a row,
  * whose class every path beneath it reads (workspace_look_orphan). A fact, not
  * a verdict: cleanup's still skips a prunable copy for a divergence or a reason
@@ -2519,29 +2519,31 @@ static void workspace_ask_departures(
  *     its profile's history says of the name at the head this load stands on —
  *     an enabled profile's branch's head the view kept, a disabled one's branch
  *     now (workspace_ask_departures): HELD, the profile holds it still — disabled,
- *     or the claim moved with its root — and DELETED, every commit that took it
- *     named update or revert, a deletion its profile committed, are dotta's to
- *     prune, divergence permitting; REMOVED, NEVER_HELD and GONE — a commit that
- *     took it named another action or none, no commit of the history held it,
- *     the branch is gone — leave the deployed copy alone (RELEASED). UNVERIFIED
- *     — a history that would not read, the head's own among it — keeps the orphan
- *     skipped until it reads, since a release would retire the record and a prune
- *     would remove the copy and neither is a guess to make — until --force, which
- *     lifts every skip a file carries (core/cleanup.h cleanup_verdict), and so
- *     may remove a copy its history would have released. Skipped and not measured:
+ *     the claim moved with its root, or the view reading it at a commit that
+ *     lacks the name — and DELETED, every commit that took it named update or
+ *     revert, a deletion its profile committed, are dotta's to prune, divergence
+ *     permitting; REMOVED, NEVER_HELD and GONE — a commit that took it named
+ *     another action or none, no commit of the history held it, the branch is
+ *     gone — leave the deployed copy alone (RELEASED). UNVERIFIED — a history
+ *     that would not read, the head's own among it — keeps the orphan skipped
+ *     until it reads, since a release would retire the record and a prune would
+ *     remove the copy and neither is a guess to make — until --force, which lifts
+ *     every skip a file carries (core/cleanup.h cleanup_verdict), and so may
+ *     remove a copy its history would have released. Skipped and not measured:
  *     no reader shows a bit beside a fault, so a compare would only give the
  *     item a second reason for the one fate it already has. The departure raises
  *     nothing, so a history that would not read is this orphan's skip and never
  *     the load's — the rule the file analysis takes for its own looks. An owned
  *     directory is not asked: it holds no bytes, and what is left in it decides
  *     (below);
- *   - the relocation read, of an owned directory and of an owned file its profile
- *     still holds (HELD): one whose claim its profile still holds elsewhere, of
- *     its own kind and standing there or not, carries the class of the namespace
- *     the claim lands in (workspace_relocation_t), read where the row is found
- *     and the row not kept, and that class picks the fate (cleanup_verdict).
- *     Elsewhere is another string, and where the row stands another entry: a
- *     row standing on the record's very entry was the entry's arm above.
+ *   - the relocation read, of an owned directory and of an owned file its history
+ *     leaves dotta's to prune (HELD, DELETED): one whose claim the view reads
+ *     its profile holding elsewhere, of its own kind and standing there or not,
+ *     carries the class of the namespace the claim lands in
+ *     (workspace_relocation_t), read where the row is found and the row not kept,
+ *     and that class picks the fate (cleanup_verdict). Elsewhere is another string,
+ *     and where the row stands another entry: a row standing on the record's
+ *     very entry was the entry's arm above.
  *
  * Then, deepest first, each directory the ladder left a scope exit's — present,
  * looked at, readable — by what is left in it. One holding what no apply removes
@@ -2757,19 +2759,16 @@ static void workspace_analyze_orphans(workspace_t *ws) {
 
             switch (departure) {
                 case PROFILE_DEPARTURE_HELD:
-                    /* Its profile holds the name still — disabled, or the claim
-                     * moved with its root: dotta's to prune, divergence permitting,
-                     * and where the claim stands now is read below */
-                    break;
-
+                /* Its profile holds the name still — disabled, the claim moved
+                 * with its root, or a view reading the profile at a commit that
+                 * lacks the name */
                 case PROFILE_DEPARTURE_DELETED:
-                    /* A deletion its profile committed, update's or revert's:
-                     * dotta's to prune, divergence permitting. A name the head
-                     * lacks is in no row of its profile — an enabled one's rows
-                     * were read at that head, and a disabled one has none — so
-                     * no relocation is read */
-                    workspace_measure(ws, item);
-                    continue;
+                    /* A deletion its profile committed, update's or revert's.
+                     * Either is dotta's to prune, divergence permitting, and
+                     * where its claim stands now is read below — a deleted name's
+                     * as a held one's, since the view may read the profile at a
+                     * commit that holds it */
+                    break;
 
                 case PROFILE_DEPARTURE_REMOVED:
                 /* A commit that took it named another action, or none */
@@ -2799,28 +2798,29 @@ static void workspace_analyze_orphans(workspace_t *ws) {
             }
         }
 
-        /* The relocation read: a relocated orphan is one whose claim its profile
-         * still holds at another path. The record's own (profile, storage path)
-         * pair is asked of that profile's own rows (manifest_lookup_storage),
-         * standing or not, and a row found there projects to another string: a
-         * claim its profile held at the record's path would stand there, the
-         * record no orphan, or stand nowhere beneath a blob, the arm above, and
-         * one name places at one path. Where the row stands it projects to another
-         * entry too — a root re-spelled under another name of one directory is
-         * the guard's above, not a relocation; one standing nowhere was never
-         * looked at, and there a re-spelled root reads as a move, which can only
-         * add the class's skip. So the claim moved with its root: a re-targeted
-         * custom/ binding, a different $HOME. Whether it stands at its new path
-         * is that path's precedence, and says nothing of the copy left here.
-         * The class picks the fate at cleanup_verdict, and root/ never gets here
-         * — its projection is fixed, so a root/ claim's old and new locations
-         * are one string and the record was never orphaned. And strictly its
-         * own kind: a row of the other kind under the name is the name retyped,
-         * another claim, never this one moved — which HELD rules out for a file,
-         * and the row's own type alone for a directory, no history asked there.
-         * Asked of every owned directory and of a file its profile still holds:
-         * one probe of the profile's own rows by name, and a disabled profile
-         * has none in the view.
+        /* The relocation read: a relocated orphan is one whose claim the view
+         * reads its profile holding at another path. The record's own (profile,
+         * storage path) pair is asked of that profile's own rows
+         * (manifest_lookup_storage), standing or not, and a row found there
+         * projects to another string: a claim its profile held at the record's
+         * path would stand there, the record no orphan, or stand nowhere beneath
+         * a blob, the arm above, and one name places at one path. Where the row
+         * stands it projects to another entry too — a root re-spelled under another
+         * name of one directory is the guard's above, not a relocation; one
+         * standing nowhere was never looked at, and there a re-spelled root reads
+         * as a move, which can only add the class's skip. So the claim moved
+         * with its root: a re-targeted custom/ binding, a different $HOME. Whether
+         * it stands at its new path is that path's precedence, and says nothing
+         * of the copy left here. The class picks the fate at cleanup_verdict,
+         * and root/ never gets here — its projection is fixed, so a root/ claim's
+         * old and new locations are one string and the record was never orphaned.
+         * And strictly its own kind: a row of the other kind under the name is
+         * the name retyped, another claim, never this one moved — which the row's
+         * own type rules out, for a file as for a directory: a file's history
+         * speaks of its head, and the view may read the profile at another commit.
+         * Asked of every owned directory and of every owned file its history
+         * leaves dotta's to prune, held or deleted: one probe of the profile's
+         * own rows by name, and a disabled profile has none in the view.
          *
          * The class is read here, where the row is found, and the row is not
          * kept: an orphan item carries none, which is how the entries tell a
@@ -4799,8 +4799,8 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
              * it is (a re-targeted custom/ copy prunes, a moved home's is skipped
              * unless --force); this only names what the copy is. An overridden
              * copy and a node carry none: the relocation is read of an owned
-             * directory and of an owned file its profile still holds alone
-             * (workspace_analyze_orphans). */
+             * directory and of an owned file its history leaves dotta's to prune
+             * alone (workspace_analyze_orphans). */
             if (item->relocation != WORKSPACE_RELOCATION_NONE) {
                 workspace_line_add(&line, "relocated");
             }

@@ -362,9 +362,9 @@ typedef enum {
 /**
  * The rule of the namespace a relocated claim lands in — the class of a relocation
  *
- * A relocation is an orphan whose own claim its profile still holds at another
- * path, standing there or not: the record's (profile, storage path) pair found
- * the profile's row of the record's kind, which projects elsewhere
+ * A relocation is an orphan whose own claim the view reads its profile holding
+ * at another path, standing there or not: the record's (profile, storage path)
+ * pair found the profile's row of the record's kind, which projects elsewhere
  * (workspace_analyze_orphans). What becomes of the copy left behind turns on
  * one question — did the user move the claim, or did the ground move under it —
  * and the answer is the mounting rule of the namespace the claim is named in
@@ -2313,9 +2313,9 @@ typedef struct {
  * [modified], then the claim axes, with [relocated] beside them. Absence,
  * [displaced] and [relocated] reach an orphan alone, an overridden copy and a
  * node being looked at by construction, and the relocation read asked only of
- * an owned directory and of an owned file its profile still holds. The kind is
- * none of theirs: another node where dotta's stood is released before any measure,
- * its [type] beside [released].
+ * an owned directory and of an owned file its history leaves dotta's to prune.
+ * The kind is none of theirs: another node where dotta's stood is released before
+ * any measure, its [type] beside [released].
  *
  * The colour, one a line. A deployed row's is ranked once its words are written,
  * the first rung that answers winning:

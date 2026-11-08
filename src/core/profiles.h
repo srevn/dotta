@@ -65,19 +65,21 @@
  * a name the walk shows; the decode states it rather than repairs it.
  *
  * Failures are worded here, once, naming the profile: a sheet that will not load
- * in the loader's words (core/metadata.h metadata_load_from_tree); the tree's
- * under "Cannot read profile '%s'" for a walk, and "Cannot read '%s' in profile
- * '%s'" for a question asked at one name — a point question's, or the
- * classification's on the way to a directory claim's name — which names the name
- * it was asked. No reader says the profile again. A removal a profile's draft
- * cannot make is refused in its own document's words (profile_remove), a name,
- * a capture or a restore it cannot admit under "Cannot stage '%s'" (profile_admit,
- * profile_capture_file, profile_restore_file, profile_restore_directory), and a
- * merge whose conflicts no side settles under "Merging profile '%s' met %zu
- * conflict%s" (profile_draft_merge). A restore's own refusal names the claim by
- * the commit's name for it — "in profile" would read as the head's, which the
- * writer names — beside the name it writes where the two part: "Cannot restore
- * '%s'", "Cannot restore '%s' as '%s'" (profile_restore_file).
+ * in the loader's words, profile_load_sheet's "Failed to load metadata for profile
+ * '%s'" over the step that refused (core/metadata.h metadata_load_from_tree);
+ * the tree's under "Cannot read profile '%s'" for a walk, and "Cannot read '%s'
+ * in profile '%s'" for a question asked at one name — a point question's, or
+ * the classification's on the way to a directory claim's name — which names the
+ * name it was asked. No reader says the profile again. A removal a profile's
+ * draft cannot make is refused in its own document's words (profile_remove), a
+ * name, a capture or a restore it cannot admit under "Cannot stage '%s'"
+ * (profile_admit, profile_capture_file, profile_restore_file,
+ * profile_restore_directory), and a merge whose conflicts no side settles under
+ * "Merging profile '%s' met %zu conflict%s" (profile_draft_merge). A restore's
+ * own refusal names the claim by the commit's name for it — "in profile" would
+ * read as the head's, which the writer names — beside the name it writes where
+ * the two part: "Cannot restore '%s'", "Cannot restore '%s' as '%s'"
+ * (profile_restore_file).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -385,7 +387,8 @@ typedef enum {
  * remove_profile, which says before its preview what its hooks' tolerant list lost.
  *
  * @param profile Handle (must not be NULL)
- * @return The sheet's failure, in the loader's words, or NULL
+ * @return The sheet's failure, "Failed to load metadata for profile '%s'" over
+ *         the step that refused (core/metadata.h metadata_load_from_tree), or NULL
  */
 error_t profile_load_sheet(profile_t *profile);
 
@@ -1601,8 +1604,8 @@ error_t profile_restore_directory(
  * tree's cache (sys/stage.h stage_read_tree).
  *
  * The commit's sheet is read first and strictly, so its refusal moves nothing,
- * in the loader's words (core/metadata.h metadata_load_from_tree): a writer that
- * reads it before says it as the commit's.
+ * in the loader's words (profile_load_sheet): a writer that reads it before says
+ * it as the commit's.
  *
  * Reader: cmds/revert.c cmd_revert, a whole profile's revert, which reads the
  * commit's sheet before it, said as the commit's.

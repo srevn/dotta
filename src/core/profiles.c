@@ -311,10 +311,12 @@ error_t profile_load_sheet(profile_t *profile) {
      * an empty one, never NULL — so a handle holding neither has not asked yet;
      * and a failure leaves the sheet as it was, NULL beside it (core/metadata.h
      * metadata_load_from_tree, untouched on failure). The sheet is the handle's
-     * own, in its arena, read off its tree */
+     * own, in its arena, read off its tree, and a failure is said here as the
+     * profile's, over the step the loader names: the loader names no profile */
     if (!profile->sheet && !profile->sheet_failure) {
-        profile->sheet_failure = metadata_load_from_tree(
-            profile->tree, profile->name, profile->arena, &profile->sheet
+        error_t err = metadata_load_from_tree(profile->tree, profile->arena, &profile->sheet);
+        profile->sheet_failure = error_wrap(
+            err, "Failed to load metadata for profile '%s'", profile->name
         );
     }
 

@@ -784,7 +784,10 @@ metadata_ownership_t metadata_capture_directory(
  * Git's lookup reads as nothing there (lib/libgit2/src/libgit2/tree.c
  * git_tree_entry_bypath), an unreadable blob, a document the parser refuses (a
  * version mismatch, a duplicated claim) — and a reader that folds one into an
- * empty sheet is reading a corrupt sheet as "no claims".
+ * empty sheet is reading a corrupt sheet as "no claims". Each names its own step
+ * and none the profile, which a tree does not carry: the loader's one reader,
+ * the profile's handle, says whose sheet would not load over it (core/profiles.h
+ * profile_load_sheet), as the save and the parse never named one either.
  *
  * The view holds to that without exception: the profile's walk reads the sheet
  * of the tree it walks, strictly for the view, and one that will not load fails
@@ -798,26 +801,25 @@ metadata_ownership_t metadata_capture_directory(
  * questions (core/profiles.h profile_walk and profile_find, from cmds/export.c
  * export_collect_profile and export_collect_storage; the bytes come out of a
  * damaged profile, warned once by cmd_export, and a copy left with nothing in
- * it is refused in the loader's words), the header show prints over a blob it
- * can read anyway — the mode, the ownership and the annotation alike, warned —
- * through the profile's tolerant read (core/profiles.h profile_find, from
- * cmds/show.c show_file), the file listing's verbose marks through the profile's
- * tolerant walk (core/profiles.h profile_walk, from cmds/list.c list_files, warned;
- * the listing is the tree's and stands, the marks are the sheet's and do not),
- * the completion's offer through the profile's strict walk (core/profiles.h
- * profile_walk, from cmds/completion.c completion_directories, which drops the
- * failure as every completion source drops its own: cmds/completion.h), remove's
- * own directory offer the same way through its strict walk and profile_contradicted
- * (core/profiles.h, from cmds/remove.c remove_complete), and the claims a profile's
- * deletion takes, whose paths its hooks are handed, through the profile's tolerant
- * walk and profile_contradicted (core/profiles.h, from cmds/remove.c
- * remove_profile, through remove_list_claims; the profile goes all the same,
- * its hooks handed the tree's files alone, warned before the preview). A further
- * reader would have to argue for one.
+ * it is refused in the handle's line over the loader's), the header show prints
+ * over a blob it can read anyway — the mode, the ownership and the annotation
+ * alike, warned — through the profile's tolerant read (core/profiles.h
+ * profile_find, from cmds/show.c show_file), the file listing's verbose marks
+ * through the profile's tolerant walk (core/profiles.h profile_walk, from
+ * cmds/list.c list_files, warned; the listing is the tree's and stands, the marks
+ * are the sheet's and do not), the completion's offer through the profile's strict
+ * walk (core/profiles.h profile_walk, from cmds/completion.c
+ * completion_directories, which drops the failure as every completion source
+ * drops its own: cmds/completion.h), remove's own directory offer the same way
+ * through its strict walk and profile_contradicted (core/profiles.h, from
+ * cmds/remove.c remove_complete), and the claims a profile's deletion takes,
+ * whose paths its hooks are handed, through the profile's tolerant walk and
+ * profile_contradicted (core/profiles.h, from cmds/remove.c remove_profile, through
+ * remove_list_claims; the profile goes all the same, its hooks handed the tree's
+ * files alone, warned before the preview). A further reader would have to argue
+ * for one.
  *
  * @param tree Git tree to load from (must not be NULL)
- * @param profile The profile whose sheet this is, named over every failure —
- *                its callers name it nowhere (must not be NULL)
  * @param arena The arena the sheet lives in (must not be NULL); a load that fails
  *              leaves what it parsed there, unreachable, until the arena goes
  * @param out The sheet (must not be NULL); untouched on failure, so the NULL a
@@ -827,7 +829,6 @@ metadata_ownership_t metadata_capture_directory(
  */
 error_t metadata_load_from_tree(
     const git_tree *tree,
-    const char *profile,
     arena_t *arena,
     metadata_t **out
 );

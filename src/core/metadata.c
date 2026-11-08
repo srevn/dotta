@@ -1091,17 +1091,15 @@ cleanup:
  * sheet — no .dotta, or a .dotta directory without the file — holds an empty
  * sheet: the absence's arm is the one producer of that answer, so no reader folds
  * a not-found into a sheet of its own, and a file or a submodule at .dotta is
- * never read as the absence. Every failure meets one tail, which names the profile
- * over it.
+ * never read as the absence. Every failure names its own step, and whose sheet
+ * it was is its one reader's to say (core/profiles.c profile_load_sheet).
  */
 error_t metadata_load_from_tree(
     const git_tree *tree,
-    const char *profile,
     arena_t *arena,
     metadata_t **out
 ) {
     CHECK_NULL(tree);
-    CHECK_NULL(profile);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -1150,10 +1148,10 @@ error_t metadata_load_from_tree(
     git_tree_entry_free(entry);             /* NULL-safe, and NULL unless rc == 0 */
 
     /* Each step names its own — the file or the submodule at .dotta, the entry,
-     * the blob, the byte the parse stopped at — and none the profile, which this
-     * loader alone was handed: said once, over whichever refused, so no caller
-     * says it again */
-    return error_wrap(err, "Failed to load metadata for profile '%s'", profile);
+     * the blob, the byte the parse stopped at — and none the profile, which a
+     * tree does not carry: the one reader says whose, over whichever refused
+     * (core/profiles.c profile_load_sheet) */
+    return err;
 }
 
 /**

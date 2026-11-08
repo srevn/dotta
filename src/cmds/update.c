@@ -883,7 +883,7 @@ static error_t update_write_record(
 
     /* The post-commit view, once */
     manifest_t *manifest = NULL;
-    err = manifest_build(repo, state, ctx->arena, &manifest);
+    err = manifest_build(repo, state, NULL, ctx->arena, &manifest);
     if (err) goto cleanup;
 
     /* One lookup per committed path, both kinds; the arms of the header doc. A

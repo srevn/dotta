@@ -6,25 +6,26 @@
  * operations.
  *
  * The expected side is computed, never stored: every load builds the manifest
- * (core/manifest.h) from the enabled profiles at HEAD — both kinds, one row per
- * path, precedence resolved — so an external commit, a pull, a revert or a scope
- * change is simply in the next view. Nothing repairs a cache because there is
- * none. The record dotta keeps of each path (the path_records table: what it
- * deployed or observed there, when, with what stat) is loaded beside the view
- * and paired with it by path. It is dotta's own and nothing repairs it either:
- * the analyses read it as the base of every three-way question — and, where it
- * holds none, as the answer a load kept for the bytes, at a head the view is
- * checked against — and its writers here (the load's flush, workspace_anchor,
- * workspace_learn) write it only on disk's word — a live look there, or the run's
- * own write: the claim its write landed, save the mode of a directory a run could
- * not narrow back (core/deploy.h deploy_working_mode, stated) — and, of bytes
- * no base proves, the row's own branch's beside it: whether its history held
- * them at the row's name; of dotta's own orphan, its profile's: whether every
- * commit that took its name deleted it. Each writes a record whole and publishes
- * it: the item at the path holds the record the store holds, and the one it held
- * before is never written. A record whose path the view lacks is an orphan, and
- * the orphan analysis asks its profile's history — the only authority that knows
- * — why it is one, a deletion's answer kept under the head it was asked at.
+ * (core/manifest.h) from the enabled profiles, each at a revision of its branch
+ * — both kinds, one row per path, precedence resolved — so an external commit,
+ * a pull, a revert or a scope change is simply in the next view. Nothing repairs
+ * a cache because there is none. The record dotta keeps of each path (the
+ * path_records table: what it deployed or observed there, when, with what stat)
+ * is loaded beside the view and paired with it by path. It is dotta's own and
+ * nothing repairs it either: the analyses read it as the base of every three-way
+ * question — and, where it holds none, as the answer a load kept for the bytes,
+ * at a head the view is checked against — and its writers here (the load's flush,
+ * workspace_anchor, workspace_learn) write it only on disk's word — a live look
+ * there, or the run's own write: the claim its write landed, save the mode of a
+ * directory a run could not narrow back (core/deploy.h deploy_working_mode, stated)
+ * — and, of bytes no base proves, the row's own branch's beside it: whether its
+ * history held them at the row's name; of dotta's own orphan, its profile's:
+ * whether every commit that took its name deleted it. Each writes a record whole
+ * and publishes it: the item at the path holds the record the store holds, and
+ * the one it held before is never written. A record whose path the view lacks
+ * is an orphan, and the orphan analysis asks its profile's history — the only
+ * authority that knows — why it is one, a deletion's answer kept under the head
+ * it was asked at.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with
@@ -81,14 +82,15 @@ struct workspace {
     git_repository *repo;                        /* Borrowed reference */
     arena_t *arena;                              /* Borrowed; backs every workspace-lifetime string */
 
-    /* The view: every enabled profile at HEAD, built by the dispatcher at the
-     * start of the command and borrowed here (ctx->run.manifest — rows and index
-     * alike are the command arena's, and nothing frees a view). Rows are read-only
-     * for the whole run — the record a writer patches is the one its item holds
-     * (workspace_item_t), never a row. The view's own index answers the scan at
-     * each child it lists (workspace_scan): a path is one row, and each asks
-     * row->type for the kind it wants. A reader outside the module asks for the
-     * path's item instead, which carries its row (workspace_find). */
+    /* The view: every enabled profile at a revision of its branch, built by the
+     * dispatcher at the start of the command and borrowed here (ctx->run.manifest
+     * — rows and index alike are the command arena's, and nothing frees a view).
+     * Rows are read-only for the whole run — the record a writer patches is the
+     * one its item holds (workspace_item_t), never a row. The view's own index
+     * answers the scan at each child it lists (workspace_scan): a path is one
+     * row, and each asks row->type for the kind it wants. A reader outside the
+     * module asks for the path's item instead, which carries its row
+     * (workspace_find). */
     const manifest_t *manifest;                  /* Borrowed */
 
     /* The active items: one per row of the view, the directories and then the
@@ -2177,14 +2179,15 @@ static int workspace_profile_order(const void *a, const void *b) {
  * The file items whose analysis found disk's bytes none of the row's where no
  * base stands, and noted the bytes' answer owed (workspace_analyze_file): each
  * as the entry it would be at its row's name (infra/content.h content_capture_oid),
- * asked of its row's profile's history at the head the view's rows were read
- * from (core/manifest.h manifest_head, sys/history.h history_held), one ask a
- * profile. A blob the history held is a base both sides held — Git at a commit
- * the head reaches, disk now — and the frame reads it as it reads the record's:
- * STALE in CONTENT's place, its claims riding as the join wrote them, the base
- * the item's content. Bytes no commit held, the history read whole, are the item's
- * content kept unconfirmed at that head. A copy the capture refuses and a history
- * read short keep nothing: the note is dropped, and the record keeps what it held.
+ * asked of its row's profile's history at its branch's head, the view's — the
+ * head the row's revision was found in (core/manifest.h manifest_head,
+ * sys/history.h history_held) — one ask a profile. A blob the history held is a
+ * base both sides held — Git at a commit the head reaches, disk now — and the
+ * frame reads it as it reads the record's: STALE in CONTENT's place, its claims
+ * riding as the join wrote them, the base the item's content. Bytes no commit
+ * held, the history read whole, are the item's content kept unconfirmed at that
+ * head. A copy the capture refuses and a history read short keep nothing: the
+ * note is dropped, and the record keeps what it held.
  *
  * Between the join and the list: every verdict the join wrote is in, and nothing
  * reads one before the list derives the diverged items — the index reads looks,
@@ -2270,9 +2273,9 @@ static void workspace_ask_bases(workspace_t *ws) {
         noted[entry_count++] = item;
     }
 
-    /* One ask a profile, at the head its rows were read from — a view over the
-     * enabled set holds one for every row's profile — and each holding completes
-     * its note or drops it */
+    /* One ask a profile, at its branch's head, the view's — a view over the enabled
+     * set holds one for every row's profile — and each holding completes its
+     * note or drops it */
     history_holding_t *holdings = arena_calloc(frame, entry_count, sizeof(*holdings));
     for (size_t start = 0; start < entry_count;) {
         const char *profile = noted[start]->profile;
@@ -2322,9 +2325,9 @@ static void workspace_ask_bases(workspace_t *ws) {
  * Ask each owned file orphan's profile what its history says of the name
  *
  * The files among the owned orphans, by their record's profile, and one ask a
- * profile at the head this load stands on: an enabled profile's, the one the
- * view read its rows at (core/manifest.h manifest_head), none where the view
- * found its branch gone; a disabled one's, its branch's head read by name now
+ * profile at the head this load stands on: an enabled profile's, its branch's
+ * head the view kept (core/manifest.h manifest_head), none where the view found
+ * its branch gone; a disabled one's, its branch's head read by name now
  * (sys/gitops.h gitops_branch_commit), none where the branch is proven gone —
  * every disabled profile's at once (gitops_branches_exist). No head answers every
  * name GONE, and a head every name of the run: off the record where it keeps
@@ -2381,14 +2384,14 @@ static void workspace_ask_departures(
         size_t end = start + 1;
         while (end < file_count && strcmp(files[end]->profile, profile) == 0) end++;
 
-        /* The head this load stands on. An enabled profile's is the one the view
-         * read its rows at, so what its rows lack and what its history says of
-         * it are one read of the ref — and its none, the branch the view found
-         * gone, answers every name GONE with nothing read. A disabled profile
-         * has no head in the view, and its branch's is read now where it stands,
-         * in the order the disabled were asked. Which of the two a profile is,
-         * the rows the view was built from say (workspace_load: the view
-         * current). */
+        /* The head this load stands on. An enabled profile's is its branch's
+         * head the view kept, the one its rows' revision was found in, so what
+         * its rows lack and what its history says of it are one read of the ref
+         * — and its none, the branch the view found gone, answers every name
+         * GONE with nothing read. A disabled profile has no head in the view,
+         * and its branch's is read now where it stands, in the order the disabled
+         * were asked. Which of the two a profile is, the rows the view was built
+         * from say (workspace_load: the view current). */
         const git_oid *head = NULL;
         git_commit *commit = NULL;
         error_t err = NULL;
@@ -2514,7 +2517,7 @@ static void workspace_ask_departures(
  *     asked about it;
  *   - the departure of an owned file (core/profiles.h profile_departure_t), what
  *     its profile's history says of the name at the head this load stands on —
- *     the one the view read an enabled profile's rows at, a disabled one's branch
+ *     an enabled profile's branch's head the view kept, a disabled one's branch
  *     now (workspace_ask_departures): HELD, the profile holds it still — disabled,
  *     or the claim moved with its root — and DELETED, every commit that took it
  *     named update or revert, a deletion its profile committed, are dotta's to
@@ -3580,11 +3583,11 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  * An item per active path and per orphan record, each record paired onto its item
  *
  * The join at the centre of every load. The expected side — every enabled profile
- * at HEAD, both kinds, one row per path — is ws->manifest, the dispatcher's view:
- * each of its rows is made an item before anything is looked at, and the items
- * are sorted by kind (workspace_kind_order). The record is then read once and
- * walked once: a record an active item stands at is that item's, and a record
- * none stands at is an orphan, an item of its own.
+ * at a revision of its branch, both kinds, one row per path — is ws->manifest,
+ * the dispatcher's view: each of its rows is made an item before anything is
+ * looked at, and the items are sorted by kind (workspace_kind_order). The record
+ * is then read once and walked once: a record an active item stands at is that
+ * item's, and a record none stands at is an orphan, an item of its own.
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is active iff the view has a row for it, and a record is an orphan iff

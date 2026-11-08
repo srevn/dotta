@@ -254,7 +254,7 @@ static error_t initialize_state(
     }
     if (!err && profiles->count > 0) {
         manifest_t *view = NULL;
-        err = manifest_build(repo, state, arena, &view);
+        err = manifest_build(repo, state, NULL, arena, &view);
     }
 
     /* Commit transaction */

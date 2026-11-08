@@ -941,7 +941,7 @@ static error_t add_refuse_ancestry(
          * any argument and kept for the rest */
         if (!enabled->manifest) {
             error_t err = manifest_build(
-                ctx->run.repo, ctx->run.state, ctx->arena, &enabled->manifest
+                ctx->run.repo, ctx->run.state, NULL, ctx->arena, &enabled->manifest
             );
             if (!err) {
                 err = state_records(
@@ -1614,7 +1614,7 @@ static error_t add_write_record(
      * The builder reads the rows as STEP 1 left them — a new row, or a target
      * re-bound — so a path under the just-bound target is a custom/ row here. */
     manifest_t *manifest = NULL;
-    err = manifest_build(repo, state, ctx->arena, &manifest);
+    err = manifest_build(repo, state, NULL, ctx->arena, &manifest);
     if (err) goto cleanup;
 
     /* The record as it stands first, read before the write that rewrites it, so

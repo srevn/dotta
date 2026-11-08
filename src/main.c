@@ -241,7 +241,7 @@ static error_t open_run(
      * alike: nothing for close_run. */
     if (needs->manifest) {
         manifest_t *view = NULL;
-        err = manifest_build(run->repo, run->state, arena, &view);
+        err = manifest_build(run->repo, run->state, NULL, arena, &view);
         if (err) goto done;
         run->manifest = view;
     }

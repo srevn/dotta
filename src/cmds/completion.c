@@ -148,7 +148,7 @@ void completion_files(
      * whole `dotta __complete` invocation (process start included) on a 4-profile
      * / ~180-row repository, measured 2026-08 — well inside a tab-press. */
     manifest_t *manifest = NULL;
-    error_t err = manifest_build(repo, state, ctx->arena, &manifest);
+    error_t err = manifest_build(repo, state, NULL, ctx->arena, &manifest);
     if (err) {
         return;
     }

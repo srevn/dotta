@@ -325,7 +325,7 @@ static error_t remove_write_record(
     if (err) goto cleanup;
 
     manifest_t *after = NULL;
-    err = manifest_build(ctx->run.repo, state, ctx->arena, &after);
+    err = manifest_build(ctx->run.repo, state, NULL, ctx->arena, &after);
     if (err) goto cleanup;
 
     for (size_t i = 0; i < record_count; i++) {

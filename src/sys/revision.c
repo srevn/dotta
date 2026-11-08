@@ -365,6 +365,37 @@ error_t revision_find(
 }
 
 /**
+ * The commit a revision names in a branch, or a refusal
+ */
+error_t revision_require(
+    git_repository *repo, const revision_t *rev, const char *branch,
+    git_commit *head, git_commit **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(rev);
+    CHECK_NULL(branch);
+    CHECK_NULL(head);
+    CHECK_NULL(out);
+
+    /* The query, which leaves no commit where it fails, and none where the branch
+     * holds none: the refusal's case */
+    error_t err = revision_find(repo, rev, branch, head, out);
+    if (err || *out) return err;
+
+    /* The branch has no commit for it: HEAD's steps reach past its history or
+     * match nothing in it, or its history does not hold the commit. */
+    if (rev->steps) {
+        return error_create(
+            ERR_NOT_FOUND, "'%s' names no commit of branch '%s'", rev->spelling, branch
+        );
+    }
+    return error_create(
+        ERR_NOT_FOUND, "Commit '%s' is not reachable from branch '%s'", rev->spelling,
+        branch
+    );
+}
+
+/**
  * The commit a revision names in a named branch
  */
 error_t revision_load(
@@ -388,19 +419,7 @@ error_t revision_load(
     err = gitops_load_branch_commit(repo, branch, &head);
     if (err) return err;
 
-    err = revision_find(repo, &rev, branch, head, out);
+    err = revision_require(repo, &rev, branch, head, out);
     git_commit_free(head);
-    if (err || *out) return err;
-
-    /* The branch has no commit for it: HEAD's steps reach past its history or
-     * match nothing in it, or its history does not hold the commit. */
-    if (rev.steps) {
-        return error_create(
-            ERR_NOT_FOUND, "'%s' names no commit of branch '%s'", spelling, branch
-        );
-    }
-    return error_create(
-        ERR_NOT_FOUND, "Commit '%s' is not reachable from branch '%s'", spelling,
-        branch
-    );
+    return err;
 }

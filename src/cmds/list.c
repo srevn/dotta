@@ -792,7 +792,7 @@ static error_t list_path_history(
         /* The owner is the view's: the enabled set at HEAD, precedence resolved,
          * which holds the set it was built from. The view is the arena's. */
         manifest_t *manifest = NULL;
-        err = manifest_build(repo, state, ctx->arena, &manifest);
+        err = manifest_build(repo, state, NULL, ctx->arena, &manifest);
         if (err) return err;
 
         /* Nowhere to search: refused as show refuses it — the fact the set's

@@ -1004,7 +1004,7 @@ static error_t revert_write_record(
         }
 
         if (!after) {
-            err = manifest_build(ctx->run.repo, state, ctx->arena, &after);
+            err = manifest_build(ctx->run.repo, state, NULL, ctx->arena, &after);
             if (err) goto cleanup;
         }
         if (manifest_lookup(after, removed.entries[i])) continue;

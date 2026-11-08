@@ -1,16 +1,18 @@
 /**
  * manifest.h - The view: every enabled profile's claims, placed and layered
  *
- * The manifest is the precedence-resolved view of every enabled profile at HEAD:
- * one row per active filesystem path, both kinds, the claim standing there already
+ * The manifest is the precedence-resolved view of every enabled profile, each
+ * read at a revision of its branch — HEAD, unless the run names another: one
+ * row per active filesystem path, both kinds, the claim standing there already
  * applied (manifest_row_t, below). It is computed from Git at every load and
- * never stored — Git × the state's rows × this machine's $HOME → rows is a pure
- * function; the enabled set and each profile's target are read from the state
- * handle's row cache (core/state.h), the mount table is derived from them inside
- * the build, and nothing here writes. Surface is two-fold — builders and readers
- * — with one function beside them: manifest_mount_table, the build's own table
- * derivation on its own, for a command that needs this machine's topology without
- * a view (include/runtime.h) or with a binding of its own the rows do not hold yet.
+ * never stored — Git × the state's rows × the run's revisions × this machine's
+ * $HOME → rows is a pure function; the enabled set and each profile's target
+ * are read from the state handle's row cache (core/state.h), the mount table is
+ * derived from them inside the build, and nothing here writes. Surface is two-fold
+ * — builders and readers — with one function beside them: manifest_mount_table,
+ * the build's own table derivation on its own, for a command that needs this
+ * machine's topology without a view (include/runtime.h) or with a binding of
+ * its own the rows do not hold yet.
  *
  * The view has two layers. A **contribution** is one profile's claims placed
  * under this machine's topology: its tree's blobs and its sheet's directory items,
@@ -102,7 +104,7 @@
  *
  *   - Readers: manifest_rows (every row standing, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
- *     manifest_head (the commit each one's rows were read from), manifest_mounts
+ *     manifest_head (each one's branch's head at the build), manifest_mounts
  *     (the table the rows were placed by, lent), manifest_lookup (by filesystem
  *     path, O(1)), manifest_blob_above and manifest_active_beneath (the blob
  *     standing above a path, and whether a row stands beneath it), manifest_holder
@@ -114,8 +116,8 @@
  *     views, in claims, that sync's Manifest block prints.
  *
  * Core Principles:
- *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
- *     inputs give the same rows on every machine
+ *   - Pure: the view is a function of Git, the state's rows, the run's revisions
+ *     and $HOME — the same inputs give the same rows on every machine
  *   - Computed, never stored: every load builds it; nothing invalidates it because
  *     nothing is held past its lifetime
  *   - Precedence-aware over settled contributions — a profile's claims are placed
@@ -348,7 +350,10 @@ typedef struct manifest manifest_t;
  * by `dotta init`) has no rows and yields an empty view.
  *
  * Performance: O(N) where N is total files across all profiles. One Git tree
- * alive per iteration (loaded, walked, freed).
+ * alive per iteration (loaded, walked, freed): the tree of the commit the profile's
+ * revision names, which costs nothing past the head where it is HEAD, and one
+ * reachability question from the head where the run names a commit (sys/revision.h
+ * revision_find).
  *
  * The mount table custom/ paths resolve under is built here, from the same rows
  * (manifest_mount_table): a re-target is in the next build because the next build
@@ -359,18 +364,25 @@ typedef struct manifest manifest_t;
  *
  * Every enabled branch is asked first whether it stands, all at once (sys/gitops.h
  * gitops_branches_exist): however many are gone, the store's packed refs are
- * read once, and where every one stands, never. Each profile is then read at
- * its branch's head, once: the commit whose tree its claims come from, its id
- * kept beside them (manifest_head), so the rows and the head are one read of
- * the ref. A profile whose branch does not exist — proven so at once, or by its
- * own read where another process deleted it since — contributes no rows and is
- * listed among the missing (manifest_missing), which the health commands say,
- * and the workspace reads that profile's records as orphans. The unbound claim
- * is the dead branch's sibling at claim scale: this machine cannot place it,
- * and the build says so as data, not failure. Only those two questions are
- * tolerant: a branch that exists but cannot be loaded (corrupt object, I/O) still
- * fails the build, as do a failed lookup and metadata that will not parse — those
- * stay retryable errors, never silent omissions.
+ * read once, and where every one stands, never. Each profile's head is then read
+ * once, and the profile read at a revision of its branch — the one the run names
+ * for it, HEAD where it names none: the revision found in that head's history
+ * (sys/revision.h revision_require) and the profile opened at the commit it names
+ * (core/profiles.h profile_open), the head's id kept beside its claims whatever
+ * revision they were read at (manifest_head) — so the commit and the head are
+ * one read of the ref. A revision is read only for an enabled profile whose branch
+ * stands: one the run names for a profile no enabled row names is never read —
+ * that profile is the scope's to refuse — nor is a missing profile's. A profile
+ * whose branch does not exist — proven so at once, or by its own read where another
+ * process deleted it since — contributes no rows and is listed among the missing
+ * (manifest_missing), which the health commands say, and the workspace reads
+ * that profile's records as orphans. The unbound claim is the dead branch's sibling
+ * at claim scale: this machine cannot place it, and the build says so as data,
+ * not failure. Only those two questions are tolerant: a branch that exists but
+ * cannot be loaded (corrupt object, I/O) still fails the build, as do a failed
+ * lookup and metadata that will not parse — those stay retryable errors, never
+ * silent omissions — and so does a revision that does not resolve, or that its
+ * branch holds no commit for, in sys/revision's words.
  *
  * Per profile, in order: the claims its walk shows (core/profiles.h profile_walk)
  * — the tree's blobs first, then the DIRECTORY items of its metadata.json — are
@@ -411,6 +423,10 @@ typedef struct manifest manifest_t;
  * @param repo Git repository (must not be NULL)
  * @param state State handle the enabled set and targets are read from (must not
  *              be NULL; borrowed, only the row cache is consulted)
+ * @param revisions The run's revisions: a profile's name → the revision it is
+ *                  read at, as typed (const char *); a profile it holds no key
+ *                  for is read at HEAD, and so is every profile where it is NULL
+ *                  (borrowed for the call)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
  * @param out Manifest (must not be NULL)
@@ -419,6 +435,7 @@ typedef struct manifest manifest_t;
 error_t manifest_build(
     git_repository *repo,
     const state_t *state,
+    const hashmap_t *revisions,
     arena_t *arena,
     manifest_t **out
 );
@@ -548,17 +565,23 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
 const string_array_t *manifest_profiles(const manifest_t *manifest);
 
 /**
- * The commit a profile's rows were read from
+ * Its branch's head at the build, whatever revision its rows were read at
  *
  * The head its branch named when the view was built: the build reads each enabled
- * branch's commit once, opens its tree and keeps the commit's id beside the claims
- * it read there (manifest_build), so the rows and this id are one read of the
- * ref, and a branch another process moves after the build moves neither. NULL
- * for a profile the view holds no contribution of — not enabled, or missing,
- * its branch gone (manifest_missing) — and for one profile's view, which keeps
- * none: its reader chose the commit the profile was opened at, and holds it
- * (manifest_build_profile). A profile whose branch stands and claims nothing
- * has a head and no row.
+ * branch's head once, finds in it the revision the profile is read at, and keeps
+ * the head's id beside the claims (manifest_build), so the rows and this id are
+ * one read of the ref, and a branch another process moves after the build moves
+ * neither. The head and never the revision, since every history the workspace
+ * asks is asked back from it (core/workspace.c workspace_ask_bases,
+ * workspace_ask_departures): bytes the head's history held are a base whatever
+ * revision the rows were read at — a copy no record confirmed that holds them
+ * reads STALE, apply's, where the revision's history would leave it UNCONFIRMED
+ * — and dotta's copy of a name the head holds and the revision lacks is HELD,
+ * dotta's to prune. NULL for a profile the view holds no contribution of — not
+ * enabled, or missing, its branch gone (manifest_missing) — and for one profile's
+ * view, which keeps none: its reader chose the commit the profile was opened
+ * at, and holds it (manifest_build_profile). A profile whose branch stands and
+ * claims nothing has a head and no row.
  *
  * Readers: core/workspace.h workspace_unconfirmed (the head a kept answer for
  * bytes no base proves stands at), core/workspace.c workspace_ask_bases (the

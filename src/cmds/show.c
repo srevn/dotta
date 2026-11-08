@@ -642,7 +642,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* The owning profile is the view's: the enabled set at HEAD with precedence
      * resolved, which holds the set it was built from */
     manifest_t *manifest = NULL;
-    err = manifest_build(repo, state, ctx->arena, &manifest);
+    err = manifest_build(repo, state, NULL, ctx->arena, &manifest);
     if (err) goto cleanup;
 
     /* Nowhere to search: refused as the commit search refuses it — the fact the

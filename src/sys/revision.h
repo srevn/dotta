@@ -2,10 +2,11 @@
  * revision.h - A commit a user named: the spelling read, and asked of a branch
  *
  * The one reader of a revision against a store: the spelling read once, before
- * any branch is chosen (revision_resolve), then asked of a branch's head
- * (revision_find), or of a named branch, where a branch that has no commit for
- * it is the refusal (revision_load). What a spelling looks like with no store
- * in hand is base/refspec.h's; what a reference holds is sys/gitops.h's.
+ * any branch is chosen (revision_resolve), then asked of a branch's head — a
+ * query (revision_find), or refusing where the branch has no commit for it
+ * (revision_require) — or of a named branch, its head read there and asked the
+ * same (revision_load). What a spelling looks like with no store in hand is
+ * base/refspec.h's; what a reference holds is sys/gitops.h's.
  *
  * A spelling is a name and the steps after it, as git reads one
  * (lib/git/object-name.c get_oid_1). dotta has one name of its own, HEAD — `HEAD`
@@ -88,20 +89,20 @@ error_t revision_resolve(
 /**
  * The commit a revision names in a branch, or NULL where the branch has none
  *
- * A query, asked of a head the caller read once (sys/gitops.h
- * gitops_load_branch_commit) so every revision asked of a branch is asked of
- * one head. HEAD's steps are walked from it, and NULL is a history shorter than
- * they reach or one that holds no commit a search matches — proven by the parent
- * count each commit on the way was read with, and by the end of a walk that read
- * every commit it passed, never by a lookup that missed. A commit is the branch's
- * where the head is that commit or reaches it through its parents, and NULL is
- * a history that does not hold it. A commit the walk could not load and a history
- * the query could not read are the failures, each naming the revision and the
- * branch — even where libgit2 answers GIT_ENOTFOUND, which here is an object
- * the store has lost and never an answer. The walk is stricter than its answer
- * needs in one place: libgit2 reads a commit's parents before it yields the commit
- * (revwalk.c get_revision), so a search whose match has lost a parent fails where
- * git would answer the match.
+ * A query — revision_require is its refusing twin — asked of a head the caller
+ * read once (sys/gitops.h gitops_load_branch_commit) so every revision asked of
+ * a branch is asked of one head. HEAD's steps are walked from it, and NULL is a
+ * history shorter than they reach or one that holds no commit a search matches
+ * — proven by the parent count each commit on the way was read with, and by the
+ * end of a walk that read every commit it passed, never by a lookup that missed.
+ * A commit is the branch's where the head is that commit or reaches it through
+ * its parents, and NULL is a history that does not hold it. A commit the walk
+ * could not load and a history the query could not read are the failures, each
+ * naming the revision and the branch — even where libgit2 answers GIT_ENOTFOUND,
+ * which here is an object the store has lost and never an answer. The walk is
+ * stricter than its answer needs in one place: libgit2 reads a commit's parents
+ * before it yields the commit (revwalk.c get_revision), so a search whose match
+ * has lost a parent fails where git would answer the match.
  *
  * @param repo Repository (must not be NULL)
  * @param rev The revision (must not be NULL)
@@ -120,17 +121,43 @@ error_t revision_find(
 );
 
 /**
+ * The commit a revision names in a branch, or a refusal
+ *
+ * revision_find's refusing twin, asked of a head the caller read once: the commit
+ * the query finds, and where the branch has none the refusal that says so — HEAD's
+ * steps reaching past the branch's history or matching nothing in it, a commit
+ * its history does not hold — naming the revision and the branch, as the query's
+ * own failures do, so a caller adds nothing by restating the subject.
+ *
+ * Readers: revision_load (a named branch, its head read there) and core/manifest.c
+ * manifest_build (each enabled profile at the revision its run names, HEAD where
+ * it names none, asked of the head the build read).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param rev The revision (must not be NULL)
+ * @param branch The head's branch, for what a failure names (must not be NULL)
+ * @param head The branch's head (must not be NULL; borrowed)
+ * @param out The commit (must not be NULL, caller must free with git_commit_free)
+ * @return Error or NULL on success
+ */
+error_t revision_require(
+    git_repository *repo,
+    const revision_t *rev,
+    const char *branch,
+    git_commit *head,
+    git_commit **out
+);
+
+/**
  * The commit a revision names in a named branch, or a refusal
  *
  * The revision read (revision_resolve), the branch's head read once (sys/gitops.h
- * gitops_load_branch_commit), and the one asked of the other (revision_find); a
- * revision the branch has no commit for is the refusal that says so — HEAD's
- * steps reaching past the branch's history or matching nothing in it, a commit
- * its history does not hold. Every failure names what failed, the revision or
- * the branch, so a caller adds nothing by restating the subject. Readers, none
- * of which wraps: export.c cmd_export (the refspec's @commit), revert.c cmd_revert
- * (the commit reverted to), show.c cmd_show (a file's commit, and a commit shown
- * under a named profile).
+ * gitops_load_branch_commit), and the one asked of the other, refused where the
+ * branch has no commit for it (revision_require). Every failure names what failed,
+ * the revision or the branch, so a caller adds nothing by restating the subject.
+ * Readers, none of which wraps: export.c cmd_export (the refspec's @commit),
+ * revert.c cmd_revert (the commit reverted to), show.c cmd_show (a file's commit,
+ * and a commit shown under a named profile).
  *
  * The commit is the whole answer, and its OID is read off it (git_commit_id):
  * nothing is handed back beside it, so no caller holds two views of one fact

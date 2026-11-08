@@ -13,24 +13,25 @@
  *
  * Snapshot ownership:
  *   The workspace is the authority for the join within its lifetime: the view
- *   (core/manifest.h — every enabled profile at HEAD, built by the dispatcher
- *   at the start of the command and borrowed here, `ctx->run.manifest`) and the
- *   record (read once, state_records, and held by the items). Downstream consumers
- *   (deploy, cleanup, command-internal analyses) read both through workspace
- *   accessors — the active items, each carrying its row and the record at its
- *   path (workspace_active, workspace_directories, workspace_files), the orphans
- *   (workspace_orphans), and the item at a path (workspace_find) — rather than
- *   building a view or calling state_records themselves. The view has no writer:
- *   it is current by construction and nothing invalidates it. The record has
- *   three writers while a workspace is live — the load's own flush, its last
- *   step (workspace_load), workspace_anchor and workspace_learn — and each writes
- *   a record whole, built before its statement (core/state.h state_write), and
- *   points the path's item at it once the store holds it: the flush after its
- *   own commit, or at its end in the caller's transaction; the other two at once,
- *   in the run's. The record an item held before is never written, so a reader
- *   that took it earlier reads what the load read, whenever it reads. Retirements
- *   (state_retire, from apply's record phase and the verbs) go to the database
- *   directly — no later reader in the run consults a retired path.
+ *   (core/manifest.h — every enabled profile at a revision of its branch, built
+ *   by the dispatcher at the start of the command and borrowed here,
+ *   `ctx->run.manifest`) and the record (read once, state_records, and held by
+ *   the items). Downstream consumers (deploy, cleanup, command-internal analyses)
+ *   read both through workspace accessors — the active items, each carrying its
+ *   row and the record at its path (workspace_active, workspace_directories,
+ *   workspace_files), the orphans (workspace_orphans), and the item at a path
+ *   (workspace_find) — rather than building a view or calling state_records
+ *   themselves. The view has no writer: it is current by construction and nothing
+ *   invalidates it. The record has three writers while a workspace is live —
+ *   the load's own flush, its last step (workspace_load), workspace_anchor and
+ *   workspace_learn — and each writes a record whole, built before its statement
+ *   (core/state.h state_write), and points the path's item at it once the store
+ *   holds it: the flush after its own commit, or at its end in the caller's
+ *   transaction; the other two at once, in the run's. The record an item held
+ *   before is never written, so a reader that took it earlier reads what the
+ *   load read, whenever it reads. Retirements (state_retire, from apply's record
+ *   phase and the verbs) go to the database directly — no later reader in the
+ *   run consults a retired path.
  *
  *   Exception: the verbs — add, remove, revert, and update after its commit —
  *   write the record through state.h directly, what only their commit knows:
@@ -1091,7 +1092,7 @@ static inline const state_record_t *workspace_unconfirmed(
         return NULL;
     }
 
-    /* At the head the view's rows were read from */
+    /* At its branch's head, the view's */
     const git_oid *head = manifest_head(view, row->profile);
     return head && git_oid_equal(head, &record->head) ? record : NULL;
 }
@@ -1600,7 +1601,8 @@ typedef struct {
  *
  * Slices the view, loads the record and performs divergence analysis against
  * the filesystem, then writes what the analyses established into the record:
- * - The view: every enabled profile's tree and metadata at HEAD
+ * - The view: every enabled profile's tree and metadata at a revision of its
+ *   branch, the branch's head kept beside them
  * - The record: the path_records in the store's dotta.db, read at the partition
  *   and written last, by the flush (below)
  * - The filesystem: one look per row, either kind, and one per record the view

@@ -443,7 +443,7 @@ static error_t plan_apply(state_t *deploy_state, const plan_t *plan) {
 static error_t plan_check(git_repository *repo, state_t *deploy_state) {
     arena_t *frame = arena_create(0);
     manifest_t *view = NULL;
-    error_t err = manifest_build(repo, deploy_state, frame, &view);
+    error_t err = manifest_build(repo, deploy_state, NULL, frame, &view);
     arena_free(frame);
     return err;
 }

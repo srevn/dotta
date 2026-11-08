@@ -57,6 +57,7 @@
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
+#include "sys/revision.h"
 
 /**
  * One profile's claims, placed under the topology, precedence aside
@@ -81,7 +82,7 @@
  */
 typedef struct {
     const char *profile;           /* Arena-backed; the same pointer every row of it carries */
-    git_oid head;                  /* The commit its claims were read from; zero for one profile's view */
+    git_oid head;                  /* Its branch's head, the claims read at a revision of it; zero for one profile's view */
     manifest_row_t **rows;         /* Every row each index keeps, in claim order (arena, exact) */
     size_t count;                  /* Rows in it */
     hashmap_t *names;              /* name → its row in rows (arena); NULL where none is kept */
@@ -924,10 +925,9 @@ static error_t manifest_note_claim(const profile_claim_t *claim, void *payload) 
  *
  * The per-profile step both builders run, and the whole of the within-profile
  * rule. The contribution is registered here — its arena-backed name (every row
- * of it borrows the pointer), the commit its claims were read from, its two
- * indexes, and its slot in the view's parallel arrays — so one function owns
- * one profile's claims from the name to the settled spine, and the builders hand
- * over a profile and its head.
+ * of it borrows the pointer), its branch's head, its two indexes, and its slot
+ * in the view's parallel arrays — so one function owns one profile's claims from
+ * the name to the settled spine, and the builders hand over a profile and its head.
  *
  * The profile's walk shows every claim the profile makes, decoded (core/profiles.h
  * profile_walk) — its blobs, then the directory claims its own tree does not
@@ -952,8 +952,9 @@ static error_t manifest_note_claim(const profile_claim_t *claim, void *payload) 
  *                 rows)
  * @param profile The profile (must not be NULL; its name is copied, and its sheet
  *                read through it)
- * @param head The commit the profile's tree is the head of, its id copied
- *             (manifest_head), or NULL for a tree its caller holds
+ * @param head The profile's branch's head, whatever revision it was opened at,
+ *             its id copied (manifest_head), or NULL for one profile's view,
+ *             whose reader chose the commit (manifest_build_profile)
  * @param arena Arena backing the contribution (must not be NULL)
  * @return Error or NULL on success
  */
@@ -1504,7 +1505,8 @@ error_t manifest_mount_table(
  * Build the manifest over the enabled set
  */
 error_t manifest_build(
-    git_repository *repo, const state_t *state, arena_t *arena, manifest_t **out
+    git_repository *repo, const state_t *state, const hashmap_t *revisions,
+    arena_t *arena, manifest_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1559,19 +1561,28 @@ error_t manifest_build(
             continue;
         }
 
-        /* The profile's claims: the profile at its head — the head's tree read
-         * by the open, a tree that will not read refused there, naming the profile
-         * and the commit (core/profiles.h profile_open) — its sheet read by the
-         * profile's walk from that tree, under the name whose claims they are,
-         * and the head's id kept beside them (manifest_head): the rows and the
-         * head one read of the ref. One view, many profiles. The name the step
-         * copies is what every row of it borrows, so the view never depends on
-         * the state's row cache, and the profile and the head go with the
-         * iteration. */
+        /* The profile's claims: the profile at the revision the run names for
+         * it, HEAD where it names none — found in the head just read, so the
+         * commit and the head are one read of the ref, and refused in its own
+         * words where the branch holds no commit for it (sys/revision.h
+         * revision_require) — the commit's tree read by the open, a tree that
+         * will not read refused there, naming the profile and the commit
+         * (core/profiles.h profile_open), its sheet read by the profile's walk
+         * from that tree, under the name whose claims they are, and the head's
+         * id kept beside them whatever revision they were read at (manifest_head).
+         * One view, many profiles. The name the step copies is what every row
+         * of it borrows, so the view never depends on the state's row cache,
+         * and the profile, the commit and the head go with the iteration. */
+        const char *spelling = hashmap_get(revisions, name);
+        revision_t rev;
+        git_commit *commit = NULL;
         profile_t *profile = NULL;
-        err = profile_open(name, head, &profile);
+        err = revision_resolve(repo, spelling ? spelling : "HEAD", &rev);
+        if (!err) err = revision_require(repo, &rev, name, head, &commit);
+        if (!err) err = profile_open(name, commit, &profile);
         if (!err) err = manifest_contribute(manifest, profile, git_commit_id(head), arena);
         profile_free(profile);
+        git_commit_free(commit);
         git_commit_free(head);
 
         if (err) return err;
@@ -1718,7 +1729,7 @@ static const contribution_t *manifest_contribution(
 }
 
 /**
- * The commit a profile's rows were read from
+ * Its branch's head at the build, whatever revision its rows were read at
  */
 const git_oid *manifest_head(const manifest_t *manifest, const char *profile) {
     if (!manifest) return NULL;

@@ -24,9 +24,9 @@
  * one's -p names any local profile, enabled or not, and never reads the set.
  *
  * A scope answers, for a command that holds the view, "what subset of the view
- * — every enabled profile at its head, precedence resolved — does this invocation
- * touch?". It bundles the set with the three filter dimensions every such command
- * carries:
+ * — every enabled profile, each at the revision the run reads it at, precedence
+ * resolved — does this invocation touch?". It bundles the set with the three
+ * filter dimensions every such command carries:
  *
  *   1. Profile filter     — CLI -p <names> (optional)
  *   2. Path filter        — CLI positional path arguments (optional)

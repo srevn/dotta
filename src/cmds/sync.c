@@ -976,7 +976,7 @@ static void sync_print_receipt(
  */
 static manifest_t *sync_view(const dotta_ctx_t *ctx) {
     manifest_t *view = NULL;
-    error_t err = manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &view);
+    error_t err = manifest_build(ctx->run.repo, ctx->run.state, NULL, ctx->arena, &view);
     if (err) {
         output_gap(ctx->out, OUTPUT_NORMAL);
         output_warning(ctx->out, OUTPUT_NORMAL, "%s", error_line(err));

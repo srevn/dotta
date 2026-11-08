@@ -683,7 +683,7 @@ static error_t ignore_test(
                 if (!err) err = manifest_build_profile(profile, mounts, ctx->arena, &view);
                 profile_free(profile);
             } else {
-                err = manifest_build(repo, state, ctx->arena, &view);
+                err = manifest_build(repo, state, NULL, ctx->arena, &view);
             }
             if (err) return err;
 

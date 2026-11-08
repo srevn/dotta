@@ -1385,8 +1385,12 @@ typedef enum {
  * and occupant the load wrote once, and the record at its path — its base for
  * the bytes and the profile it names — as the item holds it, which an ownership
  * event replaces (workspace_reassigned says what reading the live record means).
- * No syscall, no options; the first rung that answers wins, the content's axis
- * asked before the claim's:
+ * The route is asked over two records — the load's list before its flush
+ * (core/workspace.c workspace_list), every screen after it — and answers alike
+ * over both: the flush gives a base to no item carrying CONTENT or TYPE, nor
+ * takes one from it, and moves no owned record's binding (core/workspace.c
+ * workspace_flush, workspace_learning). No syscall, no options; the first rung
+ * that answers wins, the content's axis asked before the claim's:
  *
  *   displaced, TRACKED       DISPLACED_TRACKED — the user's squatter a tracked
  *                            row claims stands above the path, so nothing there

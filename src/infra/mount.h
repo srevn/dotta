@@ -418,10 +418,10 @@ const mount_root_t *mount_root_of(
  * read it as the fact it is: the manifest's claim routine skips the claim and
  * records it on the view (manifest_unbound, the health channel); a restore reaches
  * such a claim only by name, under an argument this machine places nowhere too
- * (core/restore.c); user-facing contexts fall back to a display spelling (remove.c,
- * and revert.c, whose hooks and record phase it places) or let a hint stand in
- * (ignore.c). HOME and ROOT lookups always answer — those entries are unconditional
- * in every well-formed mount table.
+ * (cmds/revert.c revert_restore_path); user-facing contexts fall back to a display
+ * spelling (remove.c, and revert.c, whose hooks and record phase it places) or
+ * let a hint stand in (ignore.c). HOME and ROOT lookups always answer — those
+ * entries are unconditional in every well-formed mount table.
  *
  * Nothing else can happen, so nothing here fails. A storage path is validated
  * where it is read, not only where it was written (infra/label.h

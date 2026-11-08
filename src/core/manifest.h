@@ -475,7 +475,7 @@ error_t manifest_build(
  * cross-profile searches, which build one per local profile (cmds/revert.c
  * revert_select_profile, its rows at or beneath a path, and cmds/remove.c
  * remove_overlaps); and a restore's two, at its draft's base and at the commit
- * it restores from (core/restore.c restore_path).
+ * it restores from (cmds/revert.c revert_restore_path).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -657,13 +657,13 @@ error_t manifest_mount_table(
  * these (cmds/status.c status_print_profiles, cmds/apply.c cmd_apply, cmds/sync.c
  * cmd_sync); export reads the count alone, for the reason its refusal gives
  * (cmds/export.c export_collect_filesystem); a restore writes the commit's beneath
- * a name the argument places nowhere, each under its own (core/restore.c
- * restore_path); and an enable that names an enabled profile holding them says
- * so (cmds/profile.c profile_enable). The repair is one command (`profile enable
- * <p> --target /path`), the untracking another (`remove`). The screen says **no
- * target** or **needs a target**, never "unbound": the header's word is what
- * the build could not do, the screen's is what the user must give. Strings are
- * the build arena's, same lifetime as the rows.
+ * a name the argument places nowhere, each under its own (cmds/revert.c
+ * revert_restore_path); and an enable that names an enabled profile holding them
+ * says so (cmds/profile.c profile_enable). The repair is one command (`profile
+ * enable <p> --target /path`), the untracking another (`remove`). The screen
+ * says **no target** or **needs a target**, never "unbound": the header's word
+ * is what the build could not do, the screen's is what the user must give. Strings
+ * are the build arena's, same lifetime as the rows.
  */
 typedef struct {
     const char *profile;
@@ -1027,7 +1027,7 @@ error_t manifest_holder(
  * this before the namer — a derived claim is something the profile holds and
  * nothing it names, so the namer alone would climb past it and answer a name
  * the profile never held; the name a restore writes a commit's claim at, the
- * head's at the claim's place (core/restore.c restore_select); remove's search,
+ * head's at the claim's place (cmds/revert.c revert_select_claim); remove's search,
  * what every other local profile claims where a removal takes a claim, each asked
  * of its own view (cmds/remove.c remove_overlaps); add's three questions of a
  * path it names or walks (cmds/add.c cmd_add and add_collect): which rules reach
@@ -1179,7 +1179,7 @@ bool manifest_holds_name(
  * Readers: the name's holders, a rung holding no name (manifest_holder); export's
  * directory claims, a rung being none to count (cmds/export.c
  * export_collect_filesystem, export_entry_from_row); and the commit's claims a
- * restore writes, a rung being none to restore (core/restore.c restore_path),
+ * restore writes, a rung being none to restore (cmds/revert.c revert_restore_path),
  * and the file revert's preview shows whole at its argument's own place
  * (cmds/revert.c cmd_revert).
  *

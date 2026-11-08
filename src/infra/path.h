@@ -199,14 +199,13 @@ bool path_input_announces_rule(const char *input);
  *   - export (cmds/export.c) takes either, one arm each: a name selects what
  *     the profile claims at and beneath it, a filesystem path the profile's rows
  *     there.
- *   - a restore (core/restore.h restore_path) takes either, by place: a filesystem
- *     path is one, and a name the place this machine puts it at — every claim
- *     there, whichever label names it — while a name it places nowhere reaches
- *     the claims named beneath it.
- *   - revert (cmds/revert.c) hands either to the restore, and with no profile
- *     named finds the one holding it in the key it named (revert_select_profile):
- *     a filesystem path by the rows each profile's view stands at or beneath
- *     it, a name by either of its documents holding it.
+ *   - revert (cmds/revert.c) takes either, its restore by place
+ *     (revert_restore_path): a filesystem path is one, and a name the place this
+ *     machine puts it at — every claim there, whichever label names it — while
+ *     a name it places nowhere reaches the claims named beneath it; and with no
+ *     profile named it finds the one holding it in the key it named
+ *     (revert_select_profile): a filesystem path by the rows each profile's view
+ *     stands at or beneath it, a name by either of its documents holding it.
  *   - show and list (cmds/) take either: a name the user typed is Git's key
  *     already, and a filesystem path is the profile's to name (core/scope.h
  *     scope_resolve_name). Without a profile, they hand either to the enabled

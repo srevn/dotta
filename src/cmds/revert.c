@@ -26,7 +26,6 @@
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
-#include "core/restore.h"
 #include "core/state.h"
 #include "infra/commit.h"
 #include "infra/content.h"
@@ -193,6 +192,299 @@ static error_t revert_select_profile(
 }
 
 /**
+ * One write of a restore: a claim the commit's view stands where the argument
+ * reaches, and the name the draft writes it at
+ */
+typedef struct {
+    const char *storage_path;       /* The name written: the head's at its place, else its own */
+    const profile_claim_t *claim;   /* The commit's claim, whole: lent by the commit's profile */
+} revert_write_t;
+
+/**
+ * A restore as it selects (revert_restore_path): the draft it edits, the two
+ * sides it reads, the path both are selected by, and the writes chosen so far
+ *
+ * Readers: revert_restore_path, which makes it, and the statics it calls —
+ * revert_reaches, revert_select_claim and revert_take_claim.
+ */
+typedef struct {
+    profile_draft_t *draft;          /* The profile's next commit: every removal's */
+    profile_t *from;                 /* The profile at the commit: every claim written */
+    manifest_t *head;                /* The head's view: the name each write takes */
+    const mount_table_t *mounts;     /* This machine's table: where each claim stands */
+    const char *profile;             /* The profile's name: the views' asker, each claim's placer */
+    path_key_t key;                  /* What a claim is selected by: where it stands, or its name */
+    const char *path;                /* The place the argument reaches, or a name placed nowhere */
+    size_t path_len;                 /* strlen(path), asked once */
+    ptr_array_t writes;              /* Each write chosen (revert_write_t), in the view's order */
+    hashmap_t *written;              /* The name each write takes → the write */
+    size_t found;                    /* The claims selected on either side, each once */
+    arena_t *frame;                  /* The call's own: the views, the places, the writes */
+} revert_restore_t;
+
+/**
+ * Whether the argument reaches a claim, asked in the key of the path it reaches:
+ * where the claim stands — nowhere, where this machine places it nowhere — or
+ * its name
+ *
+ * The one selection both sides are asked (revert_select_claim, revert_take_claim),
+ * so the commit's claims and the head's cannot part over what the argument reaches.
+ * Both views are one profile's under one table, so the two keys never cross: no
+ * claim this machine places has a name beneath a name it places nowhere.
+ *
+ * @param r The restore
+ * @param filesystem_path Where the claim stands, or NULL where it stands nowhere
+ * @param storage_path Its name
+ * @return Whether the claim lies at or beneath the path the argument reaches
+ */
+static bool revert_reaches(
+    const revert_restore_t *r, const char *filesystem_path, const char *storage_path
+) {
+    const char *key = r->key == PATH_KEY_FILESYSTEM ? filesystem_path : storage_path;
+
+    return key && str_path_under(key, r->path, r->path_len);
+}
+
+/**
+ * One of the commit's claims, chosen where the argument reaches it: the claim
+ * whole, and the name the draft writes it at
+ *
+ * The claim as the commit's walk decodes it (core/profiles.h profile_find): the
+ * view's row is the claim placed, its mode a floor where the commit claimed none
+ * (core/manifest.h manifest_row_t, "Totality"), and a restore writes what the
+ * commit claimed. Its name the one the head gives its place — the head's claim
+ * there, explicit else derived (core/manifest.h manifest_lookup_claim) — else
+ * its own; a claim placed nowhere has no place to ask, and keeps its own. No
+ * two writes take one name: a name places at one path, and one row stands at a
+ * path.
+ *
+ * @param r The restore
+ * @param filesystem_path Where the commit's view stands the claim, or NULL where
+ *        it stands nowhere
+ * @param storage_path The commit's name for it
+ * @param kind Its kind
+ * @return Error or NULL on success: the claim's, in the profile's words
+ */
+static error_t revert_select_claim(
+    revert_restore_t *r,
+    const char *filesystem_path,
+    const char *storage_path,
+    path_kind_t kind
+) {
+    if (!revert_reaches(r, filesystem_path, storage_path)) return NULL;
+
+    const profile_claim_t *claim = NULL;
+    error_t err = profile_find(r->from, PROFILE_READ_STRICT, kind, storage_path, &claim);
+    if (err) return err;
+
+    const manifest_row_t *held = filesystem_path
+        ? manifest_lookup_claim(r->head, r->profile, filesystem_path)
+        : NULL;
+
+    /* Each write allocated alone, so the index holds it where the list's spine
+     * moves (core/manifest.c's rows, the same idiom); counted where its claim
+     * is one, a derivation being the way to the claims */
+    revert_write_t *w = arena_alloc(r->frame, sizeof(*w));
+    *w = (revert_write_t){
+        .storage_path = held ? held->storage_path : claim->storage_path,
+        .claim = claim,
+    };
+    ptr_array_push(&r->writes, w);
+    hashmap_add(r->written, w->storage_path, w);
+    if (claim->type != PATH_TYPE_DIRECTORY || claim->tracked) r->found++;
+
+    return NULL;
+}
+
+/**
+ * One of the head's claims, taken from the draft where the argument reaches it
+ * and no write takes its name in its kind
+ *
+ * The visitor of the walk over the draft's base and of its contradicted claims:
+ * between the two, every claim the head holds, standing or not, once
+ * (core/profiles.h profile_walk, profile_contradicted), each placed where this
+ * machine puts it, as the head's view placed it. The walk reads the base and
+ * the removal edits the draft — its stage, and the sheet its commit carries,
+ * neither of which the base holds or reads (core/profiles.h profile_draft_t) —
+ * so a claim taken moves nothing the walk has yet to show.
+ *
+ * @param claim One of the head's claims, decoded (borrowed for the call)
+ * @param payload The restore (revert_restore_t)
+ * @return Error or NULL on success: the removal's, in the draft's words
+ */
+static error_t revert_take_claim(const profile_claim_t *claim, void *payload) {
+    revert_restore_t *r = payload;
+
+    /* A derivation is the way to the claims beneath it, and no writer's to take:
+     * the commit's prune takes one nothing stands beneath any longer */
+    if (claim->type == PATH_TYPE_DIRECTORY && !claim->tracked) return NULL;
+
+    /* Where the argument reaches it, and no write takes its name in its kind: a
+     * write of the other kind at its name takes the place this removal leaves */
+    const char *filesystem_path = mount_resolve(
+        r->frame, r->mounts, r->profile, claim->storage_path
+    );
+    if (!revert_reaches(r, filesystem_path, claim->storage_path)) return NULL;
+
+    const path_kind_t kind = path_type_kind(claim->type);
+    const revert_write_t *w = hashmap_get(r->written, claim->storage_path);
+    if (w && path_type_kind(w->claim->type) == kind) return NULL;
+
+    r->found++;
+    return profile_remove(r->draft, kind, claim->storage_path);
+}
+
+/**
+ * The profile's claims at and beneath `arg`, made the commit's on its draft
+ *
+ * One rule for a file, a directory and every place the table puts claims beneath:
+ * what the commit's view stands there comes back, and what the head holds there
+ * that no restore writes goes. Read through two views of the one profile — at
+ * the draft's base, and at the commit — placed by this machine's table, so one
+ * path keys both; written through the draft's verbs (core/profiles.h), so every
+ * rule of a restored claim is the draft's, and every rule of an entry the stage's.
+ * A whole profile is no path: its commit is the commit's own tree, no claim
+ * selected (core/profiles.h profile_restore_tree).
+ *
+ * The argument reaches a place, or a name. A path, and a name this machine places,
+ * reach every claim either side places at or beneath that place, whichever label
+ * names it; a name this machine places nowhere — a custom/ name with no target
+ * here — reaches every claim either side holds at or beneath that name. Of those:
+ *   - the commit's, as its view stands them (core/manifest.h
+ *     manifest_build_profile), one a place, the view standing one row a path,
+ *     each restored whole by the draft's verb of its kind (core/profiles.h
+ *     profile_restore_file, profile_restore_directory) — a derived one with its
+ *     attributes, as the commit had them — under the name the head gives its
+ *     place, its claim there, explicit else derived (manifest_lookup_claim),
+ *     else under its own: a name is where a claim lands on every machine, and
+ *     the profile's stays. A claim the commit held that stood nowhere in its
+ *     view — a second name for one path, a claim its own claims contradict — is
+ *     not restored; one placed nowhere keeps its own name;
+ *   - the head's, every claim it holds, standing or not (core/profiles.h
+ *     profile_walk, profile_contradicted), each taken from the draft
+ *     (profile_remove) where no restore writes its name in its kind. A derived
+ *     one is the way to the claims beneath it, and no writer's to take: the
+ *     commit's prune takes one nothing stands beneath any longer.
+ * Every removal before any restore, so a restore of the other kind at a name
+ * meets nothing in its way. All or nothing: any refusal — the draft's, the stage's,
+ * a seal's that moves with no key — leaves a draft its writer abandons.
+ *
+ * A claim the head holds as the commit held it is written over and moves nothing
+ * (sys/stage.h, an entry put as the index holds it; core/metadata.h
+ * metadata_write_item), and still pays its restore's reads: its blob, for the
+ * stamp, and a tree lookup a rung of its way. The head's claims are placed again,
+ * as its view placed them (infra/mount.h mount_resolve): a second walk of the
+ * profile, beside the two views' builds.
+ *
+ * What moved is the draft's to say (profile_changed, profile_changes); the one
+ * thing no draft holds is how many claims the argument reaches.
+ *
+ * Reader: cmd_revert, a revert at a path: it refuses an argument that reaches
+ * no claim, and says one file's restore whole where the argument reaches one,
+ * the commit's file at its own place.
+ *
+ * @param ctx Dispatch context: this machine's table, which places both sides,
+ *            and the key manager, for a sealed claim restored under another name
+ *            (must not be NULL; with no key manager such a restore is refused,
+ *            ERR_LOCKED)
+ * @param draft The profile's next commit, opened at its head (must not be NULL)
+ * @param arg The argument, in the key it named (must not be NULL)
+ * @param place Where the argument stands on this machine: the path itself, or
+ *              the place this machine puts the name at; NULL for a name placed
+ *              nowhere, which reaches by name (cmd_revert)
+ * @param from The profile at the commit's tree (must not be NULL; its sheet read
+ *             strictly)
+ * @param out_found The claims the argument reaches, the commit's and the head's,
+ *                  a claim both hold counted once and a derivation, a way, none
+ *                  (must not be NULL; 0 after an error)
+ * @return Error or NULL on success
+ */
+static error_t revert_restore_path(
+    const dotta_ctx_t *ctx, profile_draft_t *draft, const path_input_t *arg,
+    const char *place, profile_t *from, size_t *out_found
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(draft);
+    CHECK_NULL(arg);
+    CHECK_NULL(from);
+    CHECK_NULL(out_found);
+
+    *out_found = 0;
+
+    /* Everything the selection spells — the two views, each claim's place, the
+     * writes and their index — in a frame of the call's own, its answer no memory:
+     * the draft copies what it keeps of a name (include/runtime.h, "Memory") */
+    profile_t *base = profile_draft_base(draft);
+    arena_t *frame = arena_create(0);
+
+    /* The path every claim is asked to lie at or beneath: the place the argument
+     * reaches, so every claim standing there is reached whichever label names
+     * it — else, a name placed nowhere, the name itself, its claims standing
+     * nowhere for a place to reach */
+    const char *path = place ? place : arg->storage_path;
+
+    revert_restore_t r = {
+        .draft    = draft,
+        .from     = from,
+        .mounts   = ctx->run.mounts,
+        .profile  = profile_name(base),
+        .key      = place ? PATH_KEY_FILESYSTEM : PATH_KEY_STORAGE,
+        .path     = path,
+        .path_len = strlen(path),
+        .frame    = frame,
+    };
+    ptr_array_init(&r.writes, frame, 0);
+    r.written = hashmap_borrow(frame, 0);
+
+    /* The two views, each one profile's under this machine's table: the head's,
+     * which names each write, and the historical, the profile at the commit's
+     * tree, which stands the claims written */
+    manifest_t *historical = NULL;
+    error_t err = manifest_build_profile(base, ctx->run.mounts, frame, &r.head);
+    if (!err) err = manifest_build_profile(from, ctx->run.mounts, frame, &historical);
+
+    /* The commit's claims the argument reaches, as its view stands them, in its
+     * view's order: each this machine places — the layer's rung being no claim
+     * of the profile's — then each it places nowhere (revert_select_claim) */
+    const manifest_rows_t rows = manifest_rows(historical);
+    for (size_t i = 0; !err && i < rows.count; i++) {
+        const manifest_row_t *row = rows.entries[i];
+        if (!manifest_holds_row(historical, row)) continue;
+
+        err = revert_select_claim(
+            &r, row->filesystem_path, row->storage_path, path_type_kind(row->type)
+        );
+    }
+    const manifest_unbound_t unbound = manifest_unbound(historical);
+    for (size_t i = 0; !err && i < unbound.count; i++) {
+        err = revert_select_claim(
+            &r, NULL, unbound.entries[i].storage_path, unbound.entries[i].kind
+        );
+    }
+
+    /* The head's claims the argument reaches that no write takes — every claim
+     * it holds, standing or not: the walk's, then those its own tree contradicts
+     * — taken before any write, so a write of the other kind at a name meets
+     * nothing in its way (revert_take_claim) */
+    if (!err) err = profile_walk(base, PROFILE_READ_STRICT, revert_take_claim, &r);
+    if (!err) err = profile_contradicted(base, PROFILE_READ_STRICT, revert_take_claim, &r);
+
+    /* Then each write, by the draft's verb of its claim's kind: the claim whole
+     * at its name, and the way the commit stood it on */
+    for (size_t i = 0; !err && i < r.writes.count; i++) {
+        const revert_write_t *w = r.writes.entries[i];
+        err = w->claim->type == PATH_TYPE_DIRECTORY
+            ? profile_restore_directory(draft, w->storage_path, w->claim, from)
+            : profile_restore_file(draft, w->storage_path, w->claim, from, ctx->run.keymgr);
+    }
+
+    if (!err) *out_found = r.found;
+    arena_free(frame);
+
+    return err;
+}
+
+/**
  * Print one line of a patch as libgit2 hands it, coloured by its origin
  *
  * Nothing is added: a change line that ends without a newline is followed by
@@ -276,8 +568,8 @@ static int revert_print_line_cb(
  *
  * The name is the one the revert writes the file at, and the head's entry is
  * read there (cmd_revert): wherever there is a blob to diff against, the head
- * held that name, the one the restore writes over (core/restore.h), so the write's
- * name is the head's binding and one string labels both sides.
+ * held that name, the one the restore writes over (revert_restore_path), so the
+ * write's name is the head's binding and one string labels both sides.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param profile Profile name, for key derivation (must not be NULL)
@@ -831,21 +1123,30 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* The revert, onto the draft, and nothing written to the repository: the
      * path's claims made the commit's — every claim the commit's view stands at
      * and beneath it, under the name the head holds its place by, and every claim
-     * the head holds there that the commit did not, removed (core/restore.h
-     * restore_path) — or the commit's whole tree (core/profiles.h
-     * profile_restore_tree). Every refusal comes here, before the preview promises
-     * anything: a stage collision, a lost blob, a seal that moves to another
-     * name with no key. A reseal's bytes wait in the stage until its commit, so
-     * a dry run, a refusing hook or a declined question leaves the object database
-     * as it found it (sys/stage.h stage_put_unwritten).
+     * the head holds there that the commit did not, removed (revert_restore_path)
+     * — or the commit's whole tree (core/profiles.h profile_restore_tree). Every
+     * refusal comes here, before the preview promises anything: a stage collision,
+     * a lost blob, a seal that moves to another name with no key. A reseal's
+     * bytes wait in the stage until its commit, so a dry run, a refusing hook
+     * or a declined question leaves the object database as it found it (sys/stage.h
+     * stage_put_unwritten).
      *
      * The restore answers how many claims the path reaches at the head and at
      * the commit together. None is no revert to make — usually a typo — and refused
      * as an absence on both sides, naming what was typed: "nothing to revert"
      * is the change test's, for a path a side holds. */
+    const char *place = NULL;
     size_t found = 0;
     if (opts->path) {
-        err = restore_path(draft, mounts, &arg, target_profile, ctx->run.keymgr, &found);
+        /* Where the path stands on this machine, said once for the restore and
+         * for the one-file preview below: a path is its own place, and a name
+         * the place this machine puts it at — none for a name it places nowhere,
+         * which the restore reaches by name */
+        place = arg.key == PATH_KEY_FILESYSTEM
+            ? arg.filesystem_path
+            : mount_resolve(ctx->arena, mounts, profile, arg.storage_path);
+
+        err = revert_restore_path(ctx, draft, &arg, place, target_profile, &found);
         if (!err && found == 0) {
             err = error_create(
                 ERR_NOT_FOUND, "'%s' not found in profile '%s', at its head or at commit %s",
@@ -908,21 +1209,18 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * one change is that file's restore: a name it adds or updates that the table
      * places at the argument's own place, as the record phase reads a place a
      * claim was restored at (revert_write_record). The restore writes one claim
-     * a place, under the head's name for it or else its own (core/restore.h
-     * restore_path), and a name places at one path (infra/mount.h mount_resolve),
-     * so the name moved there is that write, read off the commit and never named
-     * again here; a change the table places anywhere else lists the changes.
-     * The commit's claim is read off its one-profile view, built again (stated),
-     * the layer's rung being no claim of the profile's, and the head's entry
-     * off its tree at the name (core/profiles.h profile_entry). A name this machine
-     * places nowhere has no place, and lists its changes. */
+     * a place, under the head's name for it or else its own (revert_restore_path),
+     * and a name places at one path (infra/mount.h mount_resolve), so the name
+     * moved there is that write, read off the commit and never named again here;
+     * a change the table places anywhere else lists the changes. The commit's
+     * claim is read off its one-profile view, built again (stated), the layer's
+     * rung being no claim of the profile's, and the head's entry off its tree
+     * at the name (core/profiles.h profile_entry). A name this machine places
+     * nowhere has no place, and lists its changes. */
     const manifest_row_t *target = NULL;
     profile_held_t held = { .kind = PROFILE_HELD_NOTHING };
     const char *file = NULL;
     if (found == 1 && changes.added.count + changes.updated.count == 1) {
-        const char *place = arg.key == PATH_KEY_FILESYSTEM
-            ? arg.filesystem_path
-            : mount_resolve(ctx->arena, mounts, profile, arg.storage_path);
         const char *name = changes.added.count > 0
             ? changes.added.entries[0]
             : changes.updated.entries[0];

@@ -498,7 +498,7 @@ typedef struct dotta_run {
  *         bootstrap_live), a run's own lists (`utils/bootstrap.c` bootstrap_fire),
  *         a fetch's refspecs (`sys/remote.c` remote_fetch), a diff's attribution
  *         index (`core/manifest.c` manifest_diff), the two views a restore selects
- *         through and the writes it chooses (`core/restore.c` restore_path),
+ *         through and the writes it chooses (`cmds/revert.c` revert_restore_path),
  *         the table with no binding a profile's need of a target is asked of
  *         (`core/profiles.c` profile_needs_target), a listing read to decide
  *         (`sys/filesystem.c` fs_remove_empty_dir, `sys/gitops.c`

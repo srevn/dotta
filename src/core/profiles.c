@@ -1559,12 +1559,12 @@ static bool profile_tracked_beneath(const metadata_t *sheet, const char *key) {
  * beneath it stands, and none is asked whether a blob contradicts it. The base
  * holds none there either but where a restore of a path took it first — the head's
  * blob at a name the commit held a directory at, removed before the restores
- * (core/restore.h restore_path) — and then answers that the profile passes through
- * the rung: benign, the rung lying at or beneath the path, where the restore
- * writes the commit's own claim. A merge's side may hold a blob above the rung:
- * a tracked claim the blob contradicts beneath it then answers that the side
- * passes through — a removal — and wherever the merged tree keeps that blob, no
- * directory claim beneath it stands (profile_merge_contradicted).
+ * (cmds/revert.c revert_restore_path) — and then answers that the profile passes
+ * through the rung: benign, the rung lying at or beneath the path, where the
+ * restore writes the commit's own claim. A merge's side may hold a blob above
+ * the rung: a tracked claim the blob contradicts beneath it then answers that
+ * the side passes through — a removal — and wherever the merged tree keeps that
+ * blob, no directory claim beneath it stands (profile_merge_contradicted).
  *
  * Readers: profile_capture_ancestors and profile_derive_ancestors, at each rung
  * a directory stands at; profile_restore_ancestors, at each rung of the way it

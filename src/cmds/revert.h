@@ -6,11 +6,11 @@
  * profile's head. At a path, what the commit's view stands there comes back,
  * each claim under the name the profile holds its place by, else the commit's
  * own; and every claim the profile holds there that the commit did not is removed
- * (core/restore.h restore_path). A whole profile takes the commit's tree whole,
- * its own names and dotta's own files with them (core/profiles.h
- * profile_restore_tree). Nothing on disk changes: every machine's next apply
- * brings its files in line, deleting the unchanged copies of the files a revert
- * removed (infra/commit.h commit_action_t).
+ * (revert_restore_path). A whole profile takes the commit's tree whole, its own
+ * names and dotta's own files with them (core/profiles.h profile_restore_tree).
+ * Nothing on disk changes: every machine's next apply brings its files in line,
+ * deleting the unchanged copies of the files a revert removed (infra/commit.h
+ * commit_action_t).
  */
 
 #ifndef DOTTA_CMD_REVERT_H
@@ -53,7 +53,7 @@ typedef struct {
  * (infra/path.h path_input_announces_path): `src/config@C` is the profile
  * src/config, and `./src/config@C` the path. A typed name is a path like any
  * other: the place this machine puts it at — or, where it places it nowhere,
- * the name itself (core/restore.h) — so the revert writes the name the profile
+ * the name itself (revert_restore_path) — so the revert writes the name the profile
  * holds and authors none.
  *
  * The profile is the one named — a refspec's, -p's, a whole profile's own word
@@ -92,9 +92,9 @@ typedef struct {
  * next load reads a restored file there as [stale].
  *
  * Costs, a verb's, paid when typed: at a path, the restore's two one-profile
- * views and its walk of the profile (core/restore.h), and where the path reaches
- * one claim the preview's view of the commit, built again; without a profile
- * named, a one-profile view per local profile (revert_select_profile).
+ * views and its walk of the profile (revert_restore_path), and where the path
+ * reaches one claim the preview's view of the commit, built again; without a
+ * profile named, a one-profile view per local profile (revert_select_profile).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

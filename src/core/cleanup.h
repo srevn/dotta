@@ -106,12 +106,12 @@
  *
  * An orphan whose own note displaces orphans the run does not reach — out of
  * scope, or spared by -e — waits for a run that reaches them all (`displacing`):
- * said at -v alone (stated), never touched. The note lasts only as long as the
- * orphan's record, so released alone that record would take with it what keeps
- * a later load from looking through its node at them, and pruning there
- * (core/workspace.h workspace_displaced_orphans). Asked after -e and
- * --keep-orphans, each of which leaves it alone already; a run that reaches them
- * all settles it with them.
+ * reported beside the work the plans withheld (cmds/apply.c apply_print_withheld),
+ * never touched. The note lasts only as long as the orphan's record, so released
+ * alone that record would take with it what keeps a later load from looking through
+ * its node at them, and pruning there (core/workspace.h
+ * workspace_displaced_orphans). Asked after -e and --keep-orphans, each of which
+ * leaves it alone already; a run that reaches them all settles it with them.
  *
  * A landing's orphan is no orphan cleanup settles: dotta's node above a row
  * (WORKSPACE_STATE_OBSTRUCTING), whose place the landing of the rows beneath it
@@ -137,7 +137,7 @@ typedef struct {
     workspace_items_t directories;   /* ORPHANED / RELEASED directory items in scope */
     workspace_items_t excluded;      /* Both kinds, spared by -e — reported, never touched */
     workspace_items_t kept;          /* Both kinds, kept by --keep-orphans — reported, never touched */
-    workspace_items_t displacing;    /* Both kinds, displacing an orphan the run does not reach — never touched */
+    workspace_items_t displacing;    /* Both kinds, displacing an orphan the run does not reach — reported, never touched */
 } cleanup_plan_t;
 
 /**

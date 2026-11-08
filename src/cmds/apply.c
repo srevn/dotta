@@ -913,7 +913,7 @@ static void apply_print_reassignments(
 }
 
 /**
- * Report the work the plans withheld, by flag, and count it
+ * Report the work the plans withheld, by why, and count it
  *
  * -e (files, the plan's directories, orphans), --skip-existing (files) and
  * --keep-orphans (orphans) all mean "in scope, needed work, deliberately not
@@ -922,10 +922,22 @@ static void apply_print_reassignments(
  * exit's, and the landing's — dotta's nodes above rows, the copies beneath blob
  * rows — which deploy's plan spares (core/deploy.h deploy_ceded_t); and with
  * one, the row in its way, which lands only with every removal its way needs,
- * one line of their own whichever flag spared it. The three flags take three
- * lines, that one a fourth, and -e's splits its count at verbose: each row by
- * the act its plan holds it for, the orphans apart, and the landing's apart from
- * them by what they stand in the way of.
+ * one line of their own whichever flag spared it. The line's own narrowing
+ * withholds too: an orphan in scope whose fate waits on a path the run does not
+ * reach — a landing's, which goes only with the landing of the row in its way
+ * (deploy_ceded_t's unreached), and one whose own note displaces orphans the
+ * run does not reach, which goes only with them (core/cleanup.h cleanup_plan_t's
+ * displacing). The three flags take three lines, the rows a spared orphan keeps
+ * a fourth, the narrowing's two orphans a fifth and a sixth, each by what it
+ * waits on, and -e's splits its count at verbose: each row by the act its plan
+ * holds it for, the orphans apart, and the landing's apart from them by what
+ * they stand in the way of.
+ *
+ * Every bucket the two plans hold for work the run leaves is one of these — each
+ * partition's excluded, skipped_existing and skipped_kept, deploy's ceded orphans,
+ * cleanup's excluded, kept and displacing — so whatever of its scope's work a
+ * run leaves is said here, but the copies beneath a row it withholds, which stand
+ * with that row in no bucket of their own.
  *
  * Printed once, above the nothing-to-do exit — so a run that does nothing else
  * still says what it withheld — and therefore also above the confirmation prompt,
@@ -938,11 +950,12 @@ static void apply_print_reassignments(
  * and the lines above it can never be two sums of one set.
  *
  * @param deploy_plan Deployment plan (must not be NULL)
- * @param cleanup_plan Cleanup plan, whose `excluded` and `kept` buckets carry
- *        the orphans an -e pattern spared and the ones --keep-orphans kept (must
- *        not be NULL)
- * @return The paths the plans withheld, every flag's, said or not (--quiet says
- *         none)
+ * @param cleanup_plan Cleanup plan, whose `excluded`, `kept` and `displacing`
+ *        buckets carry the orphans an -e pattern spared, the ones --keep-orphans
+ *        kept and the ones waiting on orphans the run does not reach (must not
+ *        be NULL)
+ * @return The paths the plans withheld, every bucket's, said or not (--quiet
+ *         says none)
  */
 static size_t apply_print_withheld(
     output_t *out,
@@ -1042,7 +1055,35 @@ static size_t apply_print_withheld(
         );
     }
 
-    return excluded + existing + kept + skipped_kept;
+    /* A landing's orphan in scope whose row the line's narrowing leaves out: it
+     * goes only with that row's landing (core/deploy.h deploy_ceded_t), so it
+     * waits for a run that lands the row, and one line says so at every verbosity.
+     * Never a plain run's, which plans every row. */
+    size_t unreached = deploy_plan->ceded.unreached.count;
+    if (unreached > 0) {
+        output_print(
+            out, OUTPUT_NORMAL,
+            "Skipped {cyan}%zu{reset} orphaned path%s (in the way of a deployment outside "
+            "this run)\n",
+            unreached, unreached == 1 ? "" : "s"
+        );
+    }
+
+    /* An orphan whose own note displaces orphans the line's narrowing leaves
+     * out: it goes only with them, so no later load looks through its node at
+     * them (core/cleanup.h cleanup_plan_t), and it waits for a run that reaches
+     * them all, one line saying so at every verbosity. Never a plain run's, which
+     * reaches every orphan. */
+    size_t displacing = cleanup_plan->displacing.count;
+    if (displacing > 0) {
+        output_print(
+            out, OUTPUT_NORMAL,
+            "Skipped {cyan}%zu{reset} orphaned path%s (above an orphan outside this run)\n",
+            displacing, displacing == 1 ? "" : "s"
+        );
+    }
+
+    return excluded + existing + kept + skipped_kept + unreached + displacing;
 }
 
 /**
@@ -3317,8 +3358,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * consent is given with the full picture — and counted by the block that
      * says it: the nothing-to-do line must not claim no work was there when its
      * only work was withheld. ("Withheld" is the plan-time word — the user's
-     * own flags, -e, --skip-existing and --keep-orphans; "skipped" is preflight's,
-     * a fate the run decided.) */
+     * own flags, -e, --skip-existing and --keep-orphans, and the orphans the
+     * line's narrowing leaves waiting on a path the run does not reach; "skipped"
+     * is preflight's, a fate the run decided.) */
     size_t withheld = apply_print_withheld(out, deploy_plan, cleanup_plan);
 
     /* The clean reassignments, said where they are written: the loops above wrote

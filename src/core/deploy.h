@@ -708,11 +708,12 @@ typedef struct {
 /**
  * The landing's orphans in scope that no landing of this run removes, by why
  *
- * Dotta's nodes above rows and the copies beneath blob rows alike. Reported where
- * a flag of the user's spared one (cmds/apply.c apply_print_withheld), never
- * touched. One a flag spares keeps the row in its way from landing
+ * Dotta's nodes above rows and the copies beneath blob rows alike, each bucket
+ * reported beside the work the plans withheld (cmds/apply.c apply_print_withheld),
+ * never touched. One a flag spares keeps the row in its way from landing
  * (deploy_partition_t's skipped_kept), and the rest of that row's way waits with
- * it; one no row of the run reaches waits for a run that lands one.
+ * it; one no row of the run reaches — the row in its way left out by the line's
+ * narrowing — waits for a run that lands one.
  */
 typedef struct {
     workspace_items_t excluded;    /* -e names it */

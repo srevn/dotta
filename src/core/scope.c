@@ -436,10 +436,19 @@ bool scope_accepts_profile(const scope_t *s, const char *profile) {
 }
 
 bool scope_accepts_path(
-    const scope_t *s, const char *filesystem_path, const char *storage_path,
-    path_kind_t kind
+    const scope_t *s, const char *profile, const char *filesystem_path,
+    const char *storage_path, path_kind_t kind
 ) {
-    return pathspec_matches(s->paths, filesystem_path, storage_path, kind);
+    return scope_accepts_profile(s, profile)
+           && pathspec_matches(s->paths, filesystem_path, storage_path, kind);
+}
+
+bool scope_accepts_beneath(
+    const scope_t *s, const char *profile, const char *filesystem_path,
+    const char *storage_path
+) {
+    return scope_accepts_profile(s, profile)
+           && pathspec_matches_beneath(s->paths, filesystem_path, storage_path);
 }
 
 bool scope_is_excluded(
@@ -455,8 +464,7 @@ bool scope_accepts_entry(
     const scope_t *s, const char *profile, const char *filesystem_path,
     const char *storage_path, path_kind_t kind
 ) {
-    return scope_accepts_profile(s, profile)
-           && scope_accepts_path(s, filesystem_path, storage_path, kind)
+    return scope_accepts_path(s, profile, filesystem_path, storage_path, kind)
            && !scope_is_excluded(s, storage_path, kind);
 }
 

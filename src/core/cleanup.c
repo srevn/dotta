@@ -105,12 +105,11 @@ cleanup_plan_t *cleanup_plan_build(
                 CHECK_ARG(false, "the orphans' lender lent an item that is no orphan");
         }
 
-        /* Coherent Scope principle: the same operation-scope triplet the deploy
-         * planner applies. Profile / path dimensions reject silently — the orphan
-         * is outside the user's declared operation scope. */
-        if (!scope_accepts_profile(scope, item->profile) ||
-            !scope_accepts_path(
-            scope, item->filesystem_path, item->storage_path, item->item_kind
+        /* Coherent Scope principle: the same operation-scope gates the deploy
+         * planner applies. The profile and the path, asked as one, reject silently
+         * — the orphan is outside the user's declared operation scope. */
+        if (!scope_accepts_path(
+            scope, item->profile, item->filesystem_path, item->storage_path, item->item_kind
             )) {
             continue;
         }

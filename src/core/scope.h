@@ -485,14 +485,12 @@ const string_array_t *scope_profiles(const scope_t *s);
  * by delta, a commit's view compared under it, the entries counted against the
  * coverage's misses: cmds/diff.c diff_select_delta_cb, diff_print_view,
  * diff_write_view, diff_print_coverage) and apply's count line (cmds/apply.c
- * cmd_apply), the last two through pathspec_count; update's named re-derivation
- * hands it to the draft, which asks it of each rung of the chains it climbs
- * (cmds/update.c cmd_update, core/profiles.h profile_derive_ancestors); and
- * update's partition asks it of a place the scan could not look, whether a path
- * it may select lies beneath (cmds/update.c update_partition, infra/pathspec.h
- * pathspec_matches_beneath). Per-iteration checks of a path itself should use
- * scope_accepts_path instead, and what each entry reached is the coverage's to
- * answer (scope_coverage_t).
+ * cmd_apply), the last two through pathspec_count; and update's named
+ * re-derivation, which hands it to the draft, which asks it of each rung of the
+ * chains it climbs (cmds/update.c cmd_update, core/profiles.h
+ * profile_derive_ancestors). Per-iteration checks of a path itself should use
+ * scope_accepts_path instead, and of a place no look reached scope_accepts_beneath;
+ * what each entry reached is the coverage's to answer (scope_coverage_t).
  *
  * Borrowed from the scope.
  */
@@ -517,17 +515,25 @@ bool scope_filters_paths(const scope_t *s);
  *
  * When no CLI filter was given, every profile matches. The profile must not be
  * NULL: every subject a reader asks about has one.
+ *
+ * Asked alone by cmds/status.c, whose scope names no path — status_print_profiles,
+ * status_print_manifest, status_partition, status_write, status_print_summary —
+ * and by the scope's own questions: scope_accepts_path, scope_accepts_beneath
+ * and the coverage (scope_coverage_add). A site that holds a subject's path asks
+ * the two as one.
  */
 bool scope_accepts_profile(const scope_t *s, const char *profile);
 
 /**
- * Path dimension check.
+ * Profile and path dimension check, asked as one.
  *
- * Both names of the subject: a filter entry reads the one in its own vocabulary
- * — a filesystem shape the filesystem path, a storage shape or a bare pattern
- * the name (pathspec_matches). When no path filter was built, every subject
- * matches. A name the caller does not have is NULL and is read by no entry of
- * that vocabulary; a subject with neither name matches nothing under a filter.
+ * The profile in the profile filter (scope_accepts_profile), and the path in
+ * the path filter. Both names of the subject: a filter entry reads the one in
+ * its own vocabulary — a filesystem shape the filesystem path, a storage shape
+ * or a bare pattern the name (pathspec_matches). When no path filter was built,
+ * every path matches. A name the caller does not have is NULL and is read by no
+ * entry of that vocabulary; a subject with neither name matches nothing under a
+ * filter.
  *
  * `kind` is the manifest's kind of the path — PATH_KIND_DIRECTORY for a tracked
  * directory even when a file currently squats it on disk. State file rows are
@@ -535,9 +541,30 @@ bool scope_accepts_profile(const scope_t *s, const char *profile);
  */
 bool scope_accepts_path(
     const scope_t *s,
+    const char *profile,
     const char *filesystem_path,
     const char *storage_path,
     path_kind_t kind
+);
+
+/**
+ * Profile and path dimension check, for a place no look reached.
+ *
+ * scope_accepts_path's twin: may a path of the profile at or beneath the place
+ * be accepted? A place the scan could not look answers for every path beneath
+ * it, so it is in scope wherever such a path could be: the profile in the profile
+ * filter (scope_accepts_profile), and the place within the path filter's reach
+ * (infra/pathspec.h pathspec_matches_beneath). When no path filter was built,
+ * the profile alone answers.
+ *
+ * Reader: cmds/update.c update_partition, a place the scan could not look. A
+ * reader not on this list is a bug.
+ */
+bool scope_accepts_beneath(
+    const scope_t *s,
+    const char *profile,
+    const char *filesystem_path,
+    const char *storage_path
 );
 
 /**
@@ -578,11 +605,11 @@ bool scope_is_excluded(
  * Combined per-iteration check.
  *
  * Equivalent to:
- *     scope_accepts_profile(s, profile) && scope_accepts_path(s, filesystem_path,
- *         storage_path, kind) && !scope_is_excluded(s, storage_path, kind)
+ *     scope_accepts_path(s, profile, filesystem_path, storage_path, kind) &&
+ *         !scope_is_excluded(s, storage_path, kind)
  *
  * Use at sites that do not need by-reason granularity. Sites that count or report
- * exclusion reasons separately should use the three granular predicates above.
+ * exclusion reasons separately should ask the two granular predicates apart.
  */
 bool scope_accepts_entry(
     const scope_t *s,

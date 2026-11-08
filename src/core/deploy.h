@@ -1001,12 +1001,12 @@ typedef struct {
  * claim being no convergence of the run's save where dotta's own copy squats
  * it, Git having moved past that copy (STALE: the squatter is Git's pending move,
  * which the run converges — promoted, a replace) — gating each on
- * scope_accepts_profile ∧ scope_accepts_path(kind), then classifying it by deploy's
- * work predicate (missing, or diverged in content / mode / ownership / type /
- * stale) and by the reasons its work is skipped: scope_is_excluded(kind), then
- * a landing's orphan in its way a flag spares, then skip_existing. Every item
- * was analyzed — neither kind is a load's to decline (workspace_load) — so a
- * clean one is a path the load looked at and found agreeing.
+ * scope_accepts_path(kind), the profile asked with the path, then classifying
+ * it by deploy's work predicate (missing, or diverged in content / mode / ownership
+ * / type / stale) and by the reasons its work is skipped: scope_is_excluded(kind),
+ * then a landing's orphan in its way a flag spares, then skip_existing. Every
+ * item was analyzed — neither kind is a load's to decline (workspace_load) — so
+ * a clean one is a path the load looked at and found agreeing.
  *
  * A path beneath a squatted directory needs no rule of the plan's own: the
  * workspace looked at nothing there, so the row's item carries the displaced

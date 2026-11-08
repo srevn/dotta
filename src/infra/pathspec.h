@@ -174,8 +174,8 @@ bool pathspec_matches(
  * A subject the caller has no name for is read by no entry of that vocabulary.
  * Never fails.
  *
- * Reader: cmds/update.c update_partition, a place the scan could not look. A
- * reader not on this list is a bug.
+ * Reader: core/scope.c scope_accepts_beneath, asked of a place the scan could
+ * not look (cmds/update.c update_partition). A reader not on this list is a bug.
  *
  * @param spec            Pathspec (NULL selects everything: true)
  * @param filesystem_path Where the directory stands (NULL: no filesystem entry

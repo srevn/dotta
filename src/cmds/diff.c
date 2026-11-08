@@ -591,15 +591,13 @@ static void diff_print_direction(
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
-        /* The path filter (user-specified paths), the row read by its own kind */
+        /* The profile and the path filters, asked as one, the row read by its
+         * own kind */
         if (!scope_accepts_path(
-            scope, item->filesystem_path, item->storage_path, item->item_kind
+            scope, item->profile, item->filesystem_path, item->storage_path, item->item_kind
             )) {
             continue;
         }
-
-        /* The profile filter (CLI filtering) */
-        if (!scope_accepts_profile(scope, item->profile)) continue;
 
         /* The direction's line, or nothing to list */
         const char *line = diff_status_line(item, direction);
@@ -791,10 +789,10 @@ static int diff_write_item(
  * Write the patches a direction lists, then the patch's end: diff_print_direction's
  * twin
  *
- * The rows the screen lists, by its three tests — the path filter, the profile
- * filter, the direction's line — each its patch (diff_write_item), and nothing
- * else: no header, sentence, separator or empty line. The stream's state is the
- * first failed write's errno, which ends it.
+ * The rows the screen lists, by its two tests — the profile and the path filters,
+ * asked as one, then the direction's line — each its patch (diff_write_item),
+ * and nothing else: no header, sentence, separator or empty line. The stream's
+ * state is the first failed write's errno, which ends it.
  *
  * @param diverged Diverged items from workspace (borrowed slice)
  * @param cache Content cache for blob access (must not be NULL)
@@ -812,15 +810,13 @@ static error_t diff_write_direction(
     for (size_t i = 0; !failed && i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
-        /* The path filter (user-specified paths), the row read by its own kind */
+        /* The profile and the path filters, asked as one, the row read by its
+         * own kind */
         if (!scope_accepts_path(
-            scope, item->filesystem_path, item->storage_path, item->item_kind
+            scope, item->profile, item->filesystem_path, item->storage_path, item->item_kind
             )) {
             continue;
         }
-
-        /* The profile filter (CLI filtering) */
-        if (!scope_accepts_profile(scope, item->profile)) continue;
 
         /* The direction's line, or nothing to list */
         const char *line = diff_status_line(item, direction);
@@ -1946,8 +1942,8 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
      *                    range's two trees (scope_coverage_t: diff_validate_filter,
      *                    diff_commits).
      *   the predicates — the workspace arm's presentation (scope_accepts_path,
-     *                    scope_accepts_profile) and what its empty line claims
-     *                    (scope_filters_profiles, scope_filters_paths).
+     *                    the profile asked with the path) and what its empty
+     *                    line claims (scope_filters_profiles, scope_filters_paths).
      */
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,

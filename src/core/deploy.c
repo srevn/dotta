@@ -392,9 +392,8 @@ deploy_plan_t *deploy_plan_build(
          * reach and this decides whether there is anything to reach for. */
         if (!item->row->tracked && !(item->divergence & DIVERGENCE_STALE)) continue;
 
-        if (!scope_accepts_profile(scope, item->profile) ||
-            !scope_accepts_path(
-            scope, item->filesystem_path, item->storage_path, PATH_KIND_DIRECTORY
+        if (!scope_accepts_path(
+            scope, item->profile, item->filesystem_path, item->storage_path, PATH_KIND_DIRECTORY
             )) {
             continue;                        /* out of scope: invisible */
         }
@@ -417,9 +416,8 @@ deploy_plan_t *deploy_plan_build(
     for (size_t i = 0; i < files.count; i++) {
         const workspace_item_t *item = files.entries[i];
 
-        if (!scope_accepts_profile(scope, item->profile) ||
-            !scope_accepts_path(
-            scope, item->filesystem_path, item->storage_path, PATH_KIND_FILE
+        if (!scope_accepts_path(
+            scope, item->profile, item->filesystem_path, item->storage_path, PATH_KIND_FILE
             )) {
             continue;
         }
@@ -459,10 +457,9 @@ deploy_plan_t *deploy_plan_build(
         const deploy_node_t *node = &nodes[i];
         const workspace_item_t *item = node->item;
 
-        if (!node->reached && (!scope_accepts_profile(scope, item->profile) ||
-            !scope_accepts_path(
-            scope, item->filesystem_path, item->storage_path, item->item_kind
-            ))) {
+        if (!node->reached && !scope_accepts_path(
+            scope, item->profile, item->filesystem_path, item->storage_path, item->item_kind
+            )) {
             continue;
         }
 

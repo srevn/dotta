@@ -146,10 +146,10 @@ typedef struct {
  * Walks the workspace's orphans once (core/workspace.h workspace_orphans), by
  * an exhaustive switch over the state: ORPHANED and RELEASED kept, an OBSTRUCTING
  * node and an OVERRIDDEN copy left to their landing (core/deploy.h). Gates each
- * on scope_accepts_profile ∧ scope_accepts_path(kind), then routes it by
- * scope_is_excluded(kind), then keep_orphans, then whether the run reaches every
- * orphan its own note displaces (core/workspace.h workspace_displaced_orphans),
- * then item_kind.
+ * on scope_accepts_path(kind), the profile asked with the path, then routes it
+ * by scope_is_excluded(kind), then keep_orphans, then whether the run reaches
+ * every orphan its own note displaces (core/workspace.h
+ * workspace_displaced_orphans), then item_kind.
  *
  * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace loaded with orphan analysis (must not be NULL)

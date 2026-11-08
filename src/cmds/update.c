@@ -309,16 +309,15 @@ static void update_partition(
 
         /* Outside the profiles and the paths the user named: invisible, as to
          * every scope reader — the path filter reads both names. A place the
-         * scan could not look answers for every path beneath it, so a path the
-         * filter may select there reaches it too (infra/pathspec.h
-         * pathspec_matches_beneath): nothing beneath it was looked at, a named
-         * one included */
-        if (!scope_accepts_profile(scope, item->profile)) continue;
+         * scan could not look answers for every path beneath it, so one where a
+         * path the scope may accept lies beneath it is reached too (core/scope.h
+         * scope_accepts_beneath): nothing beneath it was looked at, a named one
+         * included */
         if (!scope_accepts_path(
-            scope, item->filesystem_path, item->storage_path, item->item_kind
+            scope, item->profile, item->filesystem_path, item->storage_path, item->item_kind
             ) &&
-            !(item->state == WORKSPACE_STATE_UNSCANNED && pathspec_matches_beneath(
-                scope_paths(scope), item->filesystem_path, item->storage_path
+            !(item->state == WORKSPACE_STATE_UNSCANNED && scope_accepts_beneath(
+                scope, item->profile, item->filesystem_path, item->storage_path
             ))) {
             continue;
         }
@@ -1462,9 +1461,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      *   scope_enabled  — the persistent enabled set, the CLI filter's bound.
      *   scope_profiles — update operation face (hook context string).
      *
-     *   scope_accepts_profile / scope_accepts_path, then scope_is_excluded —
-     *   the per-item gates: update_partition's, and the named run's rows'
-     *   (scope_accepts_entry)
+     *   scope_accepts_path — or of a place the scan could not look,
+     *   scope_accepts_beneath — then scope_is_excluded: the per-item gates,
+     *   update_partition's, and the named run's rows' (scope_accepts_entry)
      *
      *   the coverage — each path argument answered alone over the paths the run
      *   can commit, -p read beside it (scope_coverage_t)

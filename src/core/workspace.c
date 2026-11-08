@@ -2816,8 +2816,8 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * another claim, never this one moved — which HELD rules out for a file,
          * and the row's own type alone for a directory, no history asked there.
          * Asked of every owned directory and of a file its profile still holds:
-         * it scans the profile's own rows, and a disabled profile has none in
-         * the view.
+         * one probe of the profile's own rows by name, and a disabled profile
+         * has none in the view.
          *
          * The class is read here, where the row is found, and the row is not
          * kept: an orphan item carries none, which is how the entries tell a

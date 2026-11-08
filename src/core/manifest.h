@@ -1085,17 +1085,18 @@ const manifest_row_t *manifest_lookup_claim(
  * A caller with no profile in hand asks manifest_holder: the first of several
  * rows holding a name was never an answer.
  *
- * Linear over the profile's own rows, and nothing for a profile the view holds
- * no contribution for, the commonest ask: a disabled profile's orphans. A
- * relocation within an enabled profile — a moved target or HOME — scans that
- * profile's rows once per orphan, and an index of each contribution's rows by
- * name is the upgrade if a measure ever shows the scan.
+ * O(P) over the profiles to find the contribution, then O(1): one probe of the
+ * index the contribution keeps of its rows by name, built as they are cut — an
+ * insert a row, which every build pays, the enabled set's and one profile's alike
+ * (core/manifest.c manifest_contribute). So a relocation within an enabled profile
+ * — a moved target or HOME — costs each of its orphans one probe, and a profile
+ * the view holds no contribution for costs the search alone: the commonest ask,
+ * a disabled profile's orphans.
  *
  * Reader: the relocation read (core/workspace.c workspace_analyze_orphans), once
  * per owned orphan whose claim may stand elsewhere — a file its profile still
- * holds, which has already cost a walk of its history, and a directory, which
- * no history is asked of — never a file its history took away, which no row of
- * its profile carries.
+ * holds, and a directory, which no history is asked of — never a file its history
+ * took away, which no row of its profile carries.
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param profile The claim's profile (NULL names no row)

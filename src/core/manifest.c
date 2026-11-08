@@ -72,16 +72,19 @@
  *
  * `rows` is allocated once at the step's tail, sized exactly from the two indexes,
  * and nothing on it is ever rewritten: a name that lost the path, and a second
- * chain through one, stay in the arena and simply leave the slice.
+ * chain through one, stay in the arena and simply leave the slice. Its rows are
+ * indexed by name as it is cut, a name keying one row of the profile
+ * (core/manifest.h manifest_lookup_storage).
  *
  * Every index is the build's arena's, as the view's own is; their keys borrow
- * the arena-backed path each row carries.
+ * the arena-backed path or name each row carries.
  */
 typedef struct {
     const char *profile;           /* Arena-backed; the same pointer every row of it carries */
     git_oid head;                  /* The commit its claims were read from; zero for one profile's view */
     manifest_row_t **rows;         /* Every row each index keeps, in claim order (arena, exact) */
     size_t count;                  /* Rows in it */
+    hashmap_t *names;              /* name → its row in rows (arena); NULL where none is kept */
     hashmap_t *explicit;           /* path → the explicit claim kept there (arena) */
     hashmap_t *derived;            /* path → the derived claim placed there first (arena) */
 
@@ -1017,10 +1020,12 @@ static error_t manifest_contribute(
      * order. A name that lost and a second chain stay in the arena and leave
      * the slice; a derived claim at the path of the profile's own explicit claim
      * stays in it, for the layer to hide. Sized exactly — the two indexes are
-     * the count. */
+     * the count — and each row indexed by its name, which the walk shows once,
+     * so no other row of the profile spells it. */
     size_t kept = hashmap_size(c->explicit) + hashmap_size(c->derived);
     if (kept > 0) {
         c->rows = arena_calloc(arena, kept, sizeof(*c->rows));
+        c->names = hashmap_borrow(arena, kept);
         for (size_t j = 0; j < placed.count; j++) {
             manifest_row_t *row = placed.entries[j];
             const manifest_row_t *held = hashmap_get(
@@ -1028,6 +1033,7 @@ static error_t manifest_contribute(
             );
             if (held == row) {
                 c->rows[c->count++] = row;
+                hashmap_add(c->names, row->storage_path, row);
             }
         }
     }
@@ -1754,15 +1760,9 @@ const manifest_row_t *manifest_lookup_storage(
     if (!c) return NULL;
 
     /* The one row of its own that spells the name, standing or not: a name is
-     * one claim, placed at one path (core/manifest.h) */
-    for (size_t j = 0; j < c->count; j++) {
-        const manifest_row_t *row = c->rows[j];
-        if (strcmp(row->storage_path, storage_path) == 0) {
-            return row;
-        }
-    }
-
-    return NULL;
+     * one claim, placed at one path (core/manifest.h), and its rows are indexed
+     * by it — no index where the profile kept no row */
+    return hashmap_get(c->names, storage_path);
 }
 
 /**

@@ -1508,8 +1508,11 @@ static error_t export_post_parse(
  * path; after a bare profile a file or directory claim of that profile, or a
  * commit; after `profile@commit` a claim of that profile alone, its commit given;
  * then the commit, the path's own changes (completion_path_history). An `@` in
- * the token being typed completes its commit part, its profile the token's own
- * or the bare profile's before it (completion_commits_at); -o takes a path.
+ * the token being typed completes its commit part where the grammar reads one:
+ * in the first word, its profile the token's own, and in a path after a bare
+ * profile, which names it (completion_commits_at); in the destination and in a
+ * claim after `profile@commit`, each taken as typed, it is the path's own. -o
+ * takes a path.
  */
 static args_want_t export_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1529,10 +1532,16 @@ static args_want_t export_complete(
         return ARGS_WANT_NONE;
     }
 
-    /* A bare profile names the profile a path after it is read in, so an `@`
-     * after that path asks it; a word naming a path or its commit pins none */
-    const char *pinned = rs.profile == NULL && rs.commit == NULL ? rs.file : NULL;
-    if (completion_commits_at(ctx, out, at->current, pinned)) {
+    /* After `profile:path` the destination follows — a filesystem path, whose
+     * `@` is its own — and nothing after it */
+    if (rs.profile != NULL) {
+        return o->positional_count == 1 ? ARGS_WANT_FILES : ARGS_WANT_NONE;
+    }
+
+    /* An `@` opens a commit slot where no commit is given yet: in the first word,
+     * and in a path after a bare profile, which names the profile it is read
+     * in. After `profile@commit` the path is taken as typed, its `@` its own */
+    if (rs.commit == NULL && completion_commits_at(ctx, out, at->current, rs.file)) {
         return ARGS_WANT_NONE;
     }
 
@@ -1540,11 +1549,6 @@ static args_want_t export_complete(
         completion_profiles(ctx, out, COMPLETION_LOCAL);
         completion_refspecs(ctx, out, NULL);
         return ARGS_WANT_NONE;
-    }
-
-    /* After `profile:path` the destination follows, nothing after it */
-    if (rs.profile != NULL) {
-        return o->positional_count == 1 ? ARGS_WANT_FILES : ARGS_WANT_NONE;
     }
 
     if (o->positional_count == 1) {

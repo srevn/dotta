@@ -237,7 +237,8 @@ static void show_provenance(output_t *out, const git_commit *commit) {
 }
 
 /**
- * Print one claim of the profile the caller opened
+ * Print one claim of the profile the caller opened, under the caption of the
+ * commit it was opened at
  *
  * The name is asked of the profile (core/profiles.h profile_holds), and answered
  * four ways. A blob is printed. A subtree and a gitlink are each refused by their
@@ -247,14 +248,27 @@ static void show_provenance(output_t *out, const git_commit *commit) {
  * neither document holds is not found, in the one sentence every verb says of
  * it (core/profiles.h profile_held_kind_t).
  *
- * The blob's header is the claim the profile makes there (core/profiles.h
- * profile_find), read tolerantly: a sheet that will not load costs the header
- * its claim, never the bytes, and is said once.
+ * The caption stands over the answer, each of the four (show_provenance): never
+ * over a refusal of what stands at the name itself — a sheet that will not load
+ * where the tree is silent, a subtree that will not read — whose own words name
+ * the commit. The blob's header is the claim the profile makes there
+ * (core/profiles.h profile_find), read tolerantly: a sheet that will not load
+ * costs the header its claim, never the bytes, and is said once, above the caption,
+ * so nothing stands between the caption and the header it opens.
+ *
+ * @param ctx The run (must not be NULL)
+ * @param profile The profile, at its head or at the commit the user named (must
+ *                not be NULL)
+ * @param storage_path The name the profile gives the argument (must not be NULL)
+ * @param commit The commit the profile was opened at, which captions the answer;
+ *               NULL at a head, which captions nothing
+ * @return Error or NULL on success
  */
 static error_t show_file(
     const dotta_ctx_t *ctx,
     profile_t *profile,
-    const char *storage_path
+    const char *storage_path,
+    const git_commit *commit
 ) {
     /* What stands at the name, asked of the profile's two documents at once and
      * strictly: a sheet that will not load refuses a name the tree is silent
@@ -264,27 +278,28 @@ static error_t show_file(
     error_t err = profile_holds(profile, storage_path, &held);
     if (err) return err;
 
+    /* A blob's header reads the sheet, tolerantly: one that will not load is
+     * said here, above the caption, in the loader's line, which names the profile
+     * at the commit it read, as every reader of that sheet says it */
+    if (held.kind == PROFILE_HELD_FILE) {
+        err = profile_load_sheet(profile);
+        if (err) output_warning(ctx->out, OUTPUT_NORMAL, "%s", error_line(err));
+    }
+
+    /* The name is answered, so the commit it was read at can caption the answer;
+     * a head names none and captions nothing */
+    if (commit) show_provenance(ctx->out, commit);
+
     switch (held.kind) {
         case PROFILE_HELD_FILE: {
             /* The claim the profile makes at the name, for the header: decoded
              * as the walk decodes it, read tolerantly. A blob stands there, so
-             * a file claim does; a sheet that will not load leaves it at its
-             * floors, and is said once, in the listing's words over the loader's
-             * root (cmds/list.c list_files) */
+             * a file claim does, at its floors where the sheet would not load */
             const profile_claim_t *claim = NULL;
             err = profile_find(
                 profile, PROFILE_READ_TOLERANT, PATH_KIND_FILE, storage_path, &claim
             );
             if (err) return err;
-
-            err = profile_load_sheet(profile);
-            if (err) {
-                output_warning(
-                    ctx->out, OUTPUT_NORMAL,
-                    "Failed to read what profile '%s' claims: %s",
-                    profile_name(profile), error_message(error_root(err))
-                );
-            }
 
             return show_print_blob(ctx, profile_name(profile), claim);
         }
@@ -614,13 +629,9 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
         if (err) goto cleanup;
 
-        /* The argument is answered, so the commit it was read from can caption
-         * the answer. A head named none and captions nothing. */
-        if (source) {
-            show_provenance(out, source);
-        }
-
-        err = show_file(ctx, profile, storage_path);
+        /* The answer, under the caption of the commit named, where one was
+         * (show_file) */
+        err = show_file(ctx, profile, storage_path, source);
         goto cleanup;
     }
 
@@ -676,7 +687,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     err = profile_load(repo, row->profile, &profile);
     if (err) goto cleanup;
 
-    err = show_file(ctx, profile, storage_path);
+    err = show_file(ctx, profile, storage_path, NULL);
 
 cleanup:
     git_commit_free(source);

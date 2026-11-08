@@ -264,6 +264,12 @@ error_t stage_merge(
     return stage_seed(repo, refname, parent, theirs, out);
 }
 
+const git_oid *stage_head(const stage_t *st) {
+    CHECK_NULL(st);
+
+    return st->parent ? git_commit_id(st->parent) : NULL;
+}
+
 const git_tree *stage_tree(const stage_t *st) {
     CHECK_NULL(st);
 

@@ -264,8 +264,8 @@ struct profile {
  * @param name Whose claims these are (copied)
  * @param tree The tree (borrowed)
  * @param commit The commit whose tree it is, which every failure names (copied);
- *               NULL where the handle names none — a draft's base, and a merge's
- *               merge base and theirs (profile_subject)
+ *               NULL where the handle names none — a merge's merge base and theirs,
+ *               and a created profile's base, at Git's empty tree (profile_subject)
  * @return The handle; never NULL
  */
 static profile_t *profile_seed(const char *name, const git_tree *tree, const git_oid *commit) {
@@ -285,9 +285,9 @@ static profile_t *profile_seed(const char *name, const git_tree *tree, const git
 
 /**
  * What every failure the handle words is said of: the profile at the commit it
- * was opened at, or the profile alone where it names none — a draft's base, and
- * a merge's merge base and theirs, whose sheets the merge says by their role
- * (profile_draft_merge)
+ * was opened at, or the profile alone where it names none — a merge's merge base
+ * and theirs, whose sheets the merge says by their role (profile_draft_merge),
+ * and a created profile's base, at Git's empty tree, which holds nothing to fail on
  *
  * Spelled where a failure is said, in the handle's arena, so a handle that fails
  * nowhere spells nothing. Called among error_git's arguments (profile_blob_above,
@@ -1186,17 +1186,18 @@ struct profile_draft {
 static error_t profile_draft_seed(const char *name, stage_t *stage, profile_draft_t **out) {
     /* The draft in an arena of its own, made here and freed with it, as the profile
      * handle stands in its own, and the stage its own from here on. Then the
-     * base at the tree the stage opened — the head's, or Git's empty tree, which
-     * holds no sheet and so an empty one — its sheet read now and strictly: a
-     * writer refuses a sheet that will not load before its preview. The struct
-     * holds each from its first allocation, so the sheet's failure releases all
-     * of them through profile_draft_free, and outlives the base that kept it
+     * base at the tree the stage opened, named by the head it opened at — the
+     * head's tree, or Git's empty tree with no head, which holds no sheet and
+     * so an empty one — its sheet read now and strictly: a writer refuses a sheet
+     * that will not load before its preview, naming the head. The struct holds
+     * each from its first allocation, so the sheet's failure releases all of
+     * them through profile_draft_free, and outlives the base that kept it
      * (base/error.h "Lifetime") */
     arena_t *arena = arena_create(0);
     profile_draft_t *draft = arena_calloc(arena, 1, sizeof(*draft));
     draft->arena = arena;
     draft->stage = stage;
-    draft->base = profile_seed(name, stage_tree(stage), NULL);
+    draft->base = profile_seed(name, stage_tree(stage), stage_head(stage));
 
     error_t err = profile_load_sheet(draft->base);
     if (err) {

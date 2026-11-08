@@ -66,24 +66,25 @@
  * a name the walk shows; the decode states it rather than repairs it.
  *
  * Failures are worded here, once, naming the profile at the commit it was opened
- * at — the commit unsaid where the handle names none: a draft's base and a merge's
- * two sides, at the trees their stage lends (core/profiles.c profile_subject):
- * a sheet that will not load in the loader's words, profile_load_sheet's "Failed
- * to load metadata for profile '%s' at commit %s" over the step that refused
- * (core/metadata.h metadata_load_from_tree); the tree's under "Cannot read profile
- * '%s' at commit %s", the open's and a walk's alike (profile_open, profile_walk),
- * and "Cannot read '%s' in profile '%s' at commit %s" for a question asked at
- * one name — a point question's, or the classification's on the way to a directory
- * claim's name — which names the name it was asked. No reader says the profile
- * or its commit again. A removal a profile's draft cannot make is refused in
- * its own document's words (profile_remove), a name, a capture or a restore it
- * cannot admit under "Cannot stage '%s'" (profile_admit, profile_capture_file,
- * profile_restore_file, profile_restore_directory), and a merge whose conflicts
- * no side settles under "Merging profile '%s' met %zu conflict%s"
- * (profile_draft_merge). A restore's own refusal names the claim by the commit's
- * name for it — "in profile" would read as the head's, which the writer names —
- * beside the name it writes where the two part: "Cannot restore '%s'", "Cannot
- * restore '%s' as '%s'" (profile_restore_file).
+ * at — the commit unsaid where the handle names none: a merge's two sides, at
+ * the trees its stage lends, and a created profile's base, at Git's empty tree
+ * (core/profiles.c profile_subject): a sheet that will not load in the loader's
+ * words, profile_load_sheet's "Failed to load metadata for profile '%s' at commit
+ * %s" over the step that refused (core/metadata.h metadata_load_from_tree); the
+ * tree's under "Cannot read profile '%s' at commit %s", the open's and a walk's
+ * alike (profile_open, profile_walk), and "Cannot read '%s' in profile '%s' at
+ * commit %s" for a question asked at one name — a point question's, or the
+ * classification's on the way to a directory claim's name — which names the name
+ * it was asked. No reader says the profile or its commit again. A removal a
+ * profile's draft cannot make is refused in its own document's words
+ * (profile_remove), a name, a capture or a restore it cannot admit under "Cannot
+ * stage '%s'" (profile_admit, profile_capture_file, profile_restore_file,
+ * profile_restore_directory), and a merge whose conflicts no side settles under
+ * "Merging profile '%s' met %zu conflict%s" (profile_draft_merge). A restore's
+ * own refusal names the claim by the commit's name for it — "in profile" would
+ * read as the head's, which the writer names — beside the name it writes where
+ * the two part: "Cannot restore '%s'", "Cannot restore '%s' as '%s'"
+ * (profile_restore_file).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -1011,7 +1012,8 @@ typedef struct profile_draft profile_draft_t;
  * not stand is refused ERR_NOT_FOUND, naming its reference), the base at the
  * tree the stage opened, and the base's sheet read now and strictly: a writer
  * refuses a sheet that will not load before its preview, in the loader's words,
- * where a reader may go on without it.
+ * which name the head the stage opened at (sys/stage.h stage_head), where a reader
+ * may go on without it.
  *
  * Readers: cmds/add.c cmd_add, for a profile its pre-flight found; cmds/remove.c
  * remove_paths, cmds/revert.c cmd_revert, and cmds/update.c update_execute, one
@@ -1443,7 +1445,7 @@ error_t profile_capture_directory(
  * @param retired Count of derived claims the climb retired, every name of each
  *                place it retired at, added to (must not be NULL)
  * @return Error or NULL on success: the base's tree, under "Cannot read '%s' in
- *         profile '%s'"
+ *         profile '%s' at commit %s"
  */
 error_t profile_capture_ancestors(
     profile_draft_t *draft,
@@ -1485,7 +1487,7 @@ error_t profile_capture_ancestors(
  * @param retired Count of derived claims the climb retired, every name of each
  *                place it retired at, added to (must not be NULL)
  * @return Error or NULL on success: the base's tree, under "Cannot read '%s' in
- *         profile '%s'"
+ *         profile '%s' at commit %s"
  */
 error_t profile_derive_ancestors(
     profile_draft_t *draft,
@@ -1715,7 +1717,7 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  *            success alone)
  * @return Error or NULL on success: the tree's comparison's, which needs a store
  *         that changed beneath the draft; or the base's, under "Cannot read '%s'
- *         in profile '%s'"
+ *         in profile '%s' at commit %s"
  */
 error_t profile_changes(
     const profile_draft_t *draft,

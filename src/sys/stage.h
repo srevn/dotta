@@ -219,6 +219,19 @@ error_t stage_merge(
 );
 
 /**
+ * The head the stage opened at, by its id: its commit's first parent — over a
+ * merge's stage, ours; NULL for an orphan's stage, which opened at Git's empty
+ * tree and commits a root
+ *
+ * Reader: core/profiles.c profile_draft_seed, the commit a draft's base names
+ * over every failure it words. Borrowed; valid until stage_free.
+ *
+ * @param st Stage (must not be NULL)
+ * @return The head's id, or NULL
+ */
+const git_oid *stage_head(const stage_t *st);
+
+/**
  * The tree the stage opened at — the ref's own bytes at open
  *
  * Over a merge's stage, the head's, whatever the merge composed: what the merge

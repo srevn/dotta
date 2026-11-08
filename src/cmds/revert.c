@@ -1094,7 +1094,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * is reverted. Its sheet is read now, strictly: a corrupt destination sheet
      * would discard claims for unrelated paths when the commit saved its
      * replacement, so one that will not load is refused before the preview, in
-     * the loader's words, as every writer refuses it. */
+     * the loader's words naming the head, as every writer refuses it. */
     err = profile_draft_open(repo, profile, &draft);
     if (err) goto cleanup;
 

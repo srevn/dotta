@@ -1427,21 +1427,27 @@ static void apply_print_deploy_summary(
  * A receipt reports effects. That is why this one re-tells a fate deploy's does
  * not: a deploy skip has no effect at all — nothing written, no record moved —
  * and the preview is its one home, where a cleanup release is an effect (the
- * record retires) and belongs here too. A second telling says the same thing in
- * the same order as the first, so the sections (kind-major) and the summary's
- * counts (fate-major) both take the preview's order — pruned, released, skipped,
- * then what was already gone — and the sections close on the failures: one section
- * at every verbosity, both kinds in act order, each row with its cause, the shape
- * of deploy's "Failed deployments". Where a section has more than one source —
- * the skipped files and directories (skipped for a reason or refused at preflight,
- * and a directory refused at removal), the reclaimed paths (gone at load, gone
- * by the time the run looked) — the verdicts' rows print first, so a run that
- * had both names each once.
+ * record retires) and belongs here too. A release and a reclaim are the record's
+ * alone — each retires a record and touches nothing on disk — so each is told
+ * only where the record phase landed it (recorded, apply_write_record): a store
+ * that refused the phase took every retire back, and the next run that lands
+ * one tells it. Every other fate names an act on disk, which stands either way.
+ * A second telling says the same thing in the same order as the first, so the
+ * sections (kind-major) and the summary's counts (fate-major) both take the
+ * preview's order — pruned, released, skipped, then what was already gone — and
+ * the sections close on the failures: one section at every verbosity, both kinds
+ * in act order, each row with its cause, the shape of deploy's "Failed
+ * deployments". Where a section has more than one source — the skipped files
+ * and directories (skipped for a reason or refused at preflight, and a directory
+ * refused at removal), the reclaimed paths (gone at load, gone by the time the
+ * run looked) — the verdicts' rows print first, so a run that had both names
+ * each once.
  */
 static void apply_print_cleanup_receipt(
     output_t *out,
     const cleanup_preflight_t *verdicts,
-    const cleanup_receipt_t *receipt
+    const cleanup_receipt_t *receipt,
+    bool recorded
 ) {
     /* Verbose mode: show individual items per outcome */
     if (receipt->pruned_files.count > 0) {
@@ -1454,7 +1460,7 @@ static void apply_print_cleanup_receipt(
         }
     }
 
-    if (verdicts->released_files.count > 0) {
+    if (recorded && verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Released files");
         for (size_t i = 0; i < verdicts->released_files.count; i++) {
             output_print(
@@ -1483,7 +1489,7 @@ static void apply_print_cleanup_receipt(
         }
     }
 
-    if (verdicts->absent_files.count + receipt->reclaimed_files.count > 0) {
+    if (recorded && verdicts->absent_files.count + receipt->reclaimed_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
         for (size_t i = 0; i < verdicts->absent_files.count; i++) {
             output_print(
@@ -1509,7 +1515,7 @@ static void apply_print_cleanup_receipt(
         }
     }
 
-    if (verdicts->released_dirs.count > 0) {
+    if (recorded && verdicts->released_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Released directories");
         for (size_t i = 0; i < verdicts->released_dirs.count; i++) {
             output_print(
@@ -1542,7 +1548,7 @@ static void apply_print_cleanup_receipt(
         }
     }
 
-    if (verdicts->absent_dirs.count + receipt->reclaimed_dirs.count > 0) {
+    if (recorded && verdicts->absent_dirs.count + receipt->reclaimed_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
         for (size_t i = 0; i < verdicts->absent_dirs.count; i++) {
             output_print(
@@ -1591,18 +1597,22 @@ static void apply_print_cleanup_receipt(
  * in the preview's order — pruned, released, skipped, then what was already gone
  * — each read off the object that holds it, in the summary's one block: deploy's
  * lines above it, where it has any. The acts the run did carry their mark, and
- * what it did not do is said plainly. At every level: the verbose sections, and
- * the failures at every level, stand above it.
+ * what it did not do is said plainly; a release and a reclaim, the record's alone,
+ * only where the record phase landed them, as the receipt tells them. At every
+ * level: the verbose sections, and the failures at every level, stand above it.
  *
  * @param out Output context (must not be NULL)
  * @param verdicts Preflight's decisions (must not be NULL)
  * @param receipt What execute found and did: the empty one where nothing ran
  *                (must not be NULL)
+ * @param recorded Whether the record phase landed (apply_write_record): a store
+ *                 that refused it took every release and reclaim back
  */
 static void apply_print_cleanup_summary(
     output_t *out,
     const cleanup_preflight_t *verdicts,
-    const cleanup_receipt_t *receipt
+    const cleanup_receipt_t *receipt,
+    bool recorded
 ) {
     if (receipt->pruned_files.count > 0) {
         output_success(
@@ -1620,7 +1630,7 @@ static void apply_print_cleanup_summary(
         );
     }
 
-    if (verdicts->released_files.count > 0) {
+    if (recorded && verdicts->released_files.count > 0) {
         output_success(
             out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management",
             verdicts->released_files.count,
@@ -1628,7 +1638,7 @@ static void apply_print_cleanup_summary(
         );
     }
 
-    if (verdicts->released_dirs.count > 0) {
+    if (recorded && verdicts->released_dirs.count > 0) {
         output_success(
             out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} director%s from management",
             verdicts->released_dirs.count,
@@ -1672,7 +1682,7 @@ static void apply_print_cleanup_summary(
     size_t reclaimed = verdicts->absent_files.count + verdicts->absent_dirs.count +
         receipt->reclaimed_files.count + receipt->reclaimed_dirs.count;
 
-    if (reclaimed > 0) {
+    if (recorded && reclaimed > 0) {
         output_success(
             out, OUTPUT_NORMAL,
             "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)",
@@ -3632,28 +3642,33 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         cleanup_receipt = cleanup_execute(ctx->arena, cleanup_verdicts);
         deploy_release(ctx->arena, deploy_receipt);
 
-        /* The receipts, once every act is done, in the order the previews printed
-         * them, and beneath them all the run's summary, their counts one block
-         * at every level: the empty receipt says nothing */
-        apply_print_deploy_receipt(out, deploy_receipt);
-        apply_print_cleanup_receipt(out, cleanup_verdicts, cleanup_receipt);
-        apply_print_deploy_summary(out, deploy_verdicts, deploy_receipt);
-        apply_print_cleanup_summary(out, cleanup_verdicts, cleanup_receipt);
-
         /* The record of what the run did — the orphans it settled, the paths it
-         * wrote — whole or not at all (apply_write_record). A record the store
-         * refused is said beneath the receipts, in the store's own words, and
-         * names no remedy: the first refused statement ended the phase and the
-         * rollback took the rest, so every path's record is what it was before
-         * the run, and what the run wrote on disk the next apply reads back.
-         * One that landed says the pending reassignments it acknowledged, both
-         * kinds, rewritten behind the run's own writes (deployed files; converged
-         * directories), a line of the receipts' summary — the clean ones were
-         * said where they were written. */
+         * wrote — whole or not at all (apply_write_record), once every act is
+         * done and before a line of them is said: a release, a reclaim and an
+         * acknowledgement are the record's alone, so each is said only where
+         * the phase landed it, and every other line names an act on disk, which
+         * stands either way and the next apply reads back */
         size_t acknowledged_count = 0;
         error_t record_err = apply_write_record(
             ctx, ws, cleanup_verdicts, cleanup_receipt, deploy_receipt, now, &acknowledged_count
         );
+
+        /* The receipts, in the order the previews printed them, and beneath them
+         * all the run's summary, their counts one block at every level: the empty
+         * receipt says nothing */
+        apply_print_deploy_receipt(out, deploy_receipt);
+        apply_print_cleanup_receipt(out, cleanup_verdicts, cleanup_receipt, !record_err);
+        apply_print_deploy_summary(out, deploy_verdicts, deploy_receipt);
+        apply_print_cleanup_summary(out, cleanup_verdicts, cleanup_receipt, !record_err);
+
+        /* A record the store refused is said beneath the receipts, in the store's
+         * own words, and names no remedy: the first refused statement ended the
+         * phase and the rollback took the rest, so every path's record is what
+         * it was before the run, and what the run wrote on disk the next apply
+         * reads back. One that landed says the pending reassignments it
+         * acknowledged, both kinds, rewritten behind the run's own writes (deployed
+         * files; converged directories), a line of the receipts' summary — the
+         * clean ones were said where they were written. */
         if (record_err) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));

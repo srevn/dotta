@@ -45,9 +45,9 @@
  *              the view answer one instant's question once — the set the CLI
  *              filter is checked against. The workspace reads the same names
  *              off the view itself.
- *   profiles — display/hook face of the scope. Equal to the CLI filter names
- *              when one was given, each once, else equal to enabled. "What the
- *              user asked for, not the underlying world."
+ *   profiles — display/hook face of the scope: the enabled profiles the CLI filter
+ *              names, in precedence order, else every one. "What the user asked
+ *              for, not the underlying world."
  *   paths    — the CLI-derived path filter (NULL when no positional args), one
  *              matcher over the two keys a managed path has: its filesystem path
  *              and its storage path (infra/pathspec). Exposed for diff, which
@@ -70,10 +70,11 @@
  * Lifetime and ownership
  * ----------------------
  * scope_t is a value of the arena scope_build is handed — the struct, the filter's
- * names and the compiled filters — immutable once built, and nothing frees one.
- * Every CLI-derived input is copied there, so the caller's inputs may go once
- * scope_build returns. The enabled set is the view's, borrowed, so the view
- * outlives the scope: both are the command arena's, as every caller builds them.
+ * and the face's names, and the compiled filters — immutable once built, and
+ * nothing frees one. Every CLI-derived input is copied there, so the caller's
+ * inputs may go once scope_build returns. The enabled set is the view's, borrowed,
+ * so the view outlives the scope: both are the command arena's, as every caller
+ * builds them.
  *
  * Empty-enabled policy
  * --------------------
@@ -142,13 +143,14 @@ typedef struct scope_inputs {
  *      build found (core/manifest.h manifest_profiles) — which may be none (see
  *      "Empty-enabled policy" above).
  *   2. Check every CLI filter name against the enabled set (scope_filter): one
- *      not in it is refused, a name given twice is one profile, and the filter,
- *      where given, is the scope's face (scope_profiles).
+ *      not in it is refused, and a name given twice is one profile.
  *   3. Compile the positional arguments into the path filter (infra/pathspec):
  *      one matcher over the two keys a managed path has, each input read in the
  *      key its own shape names — none, every path in, where none was given.
  *   4. Compile the -e layer into `arena` (ignore_excludes_compile): a pattern
  *      the grammar refuses refuses the build, under the flag's name.
+ *   5. List the scope's face (scope_profiles): each enabled profile the line
+ *      names, in precedence order.
  *
  * @param repo   Repository: a -p name that is not enabled is asked of it, to tell
  *               a disabled profile from none here (must not be NULL)
@@ -466,9 +468,10 @@ const string_array_t *scope_enabled(const scope_t *s);
 /**
  * The scope's profiles — its display and hook face.
  *
- * Equal to the CLI filter names when -p was given — each once, in the order first
- * given — else equal to scope_enabled(s). Use this for hook context strings ("what
- * the user asked for") and for verbose output.
+ * The enabled profiles the line names, each once, in precedence order — the set's
+ * own (scope_enabled), whatever order the line named them in — and every one
+ * where it names none. Use this for hook context strings ("what the user asked
+ * for") and for verbose output.
  *
  * Always non-NULL. Borrowed from the scope.
  */

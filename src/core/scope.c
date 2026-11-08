@@ -22,18 +22,16 @@
  *
  * A value of the arena scope_build is handed, as everything it holds is but the
  * enabled set, which is the view's own, borrowed: the filter's names, the path
- * filter and the exclude layer. `profiles` points at one of the two lists — the
- * filter when -p was given, else the enabled set — set once during build. The
- * excludes are the -e layer core/ignore compiles (ignore_excludes_compile) —
- * the rules add's builder takes as its top layer, asked alone here
- * (scope_is_excluded).
+ * filter, the exclude layer and the face's names. The excludes are the -e layer
+ * core/ignore compiles (ignore_excludes_compile) — the rules add's builder takes
+ * as its top layer, asked alone here (scope_is_excluded).
  */
 struct scope {
     const string_array_t *enabled;      /* Persistent enabled set, the view's; may be empty */
     string_array_t filter;              /* CLI filter: every name -p gave, each enabled; empty without -p */
     const gitignore_ruleset_t *excludes_ruleset; /* The -e layer; NULL when no excludes */
     pathspec_t *paths;                  /* CLI path filter; NULL when no positional args */
-    const string_array_t *profiles;     /* &filter when -p was given, else enabled */
+    string_array_t profiles;            /* The face: the enabled profiles the line names, in precedence order */
 };
 
 /* -------------------------------------------------------------------- */
@@ -59,17 +57,13 @@ error_t scope_build(
      *    and the view answer one instant's question with one list. May be empty:
      *    an empty scope is not an error ("Empty-enabled policy", scope.h). */
     s->enabled = manifest_profiles(view);
-    s->profiles = s->enabled;
 
     /* 2. The CLI filter, every name checked against that set (scope_filter):
-     *    the view read the branches on the way in, so a name in it is a branch.
-     *    Where it was given, the filter is the scope's face — scope_profiles'
-     *    answer. */
+     *    the view read the branches on the way in, so a name in it is a branch. */
     error_t err = scope_filter(
         repo, s->enabled, in->profiles, in->profile_count, arena, &s->filter
     );
     if (err) return err;
-    if (s->filter.count > 0) s->profiles = &s->filter;
 
     /* 3. The path filter: one matcher over both keys a managed path has, each
      *    input read in the key its own shape names (infra/pathspec) — and none,
@@ -83,6 +77,18 @@ error_t scope_build(
         in->exclude_patterns, in->exclude_count, arena, &s->excludes_ruleset
     );
     if (err) return err;
+
+    /* 5. The face, once every word is read — scope_profiles' answer: each enabled
+     *    profile the line names, in the set's order whatever order the line named
+     *    it in, so every screen that lists the scope's profiles lists them as
+     *    the view layers them. A list of the scope's own, whatever the line
+     *    named. */
+    string_array_init(&s->profiles, arena, s->enabled->count);
+    for (size_t i = 0; i < s->enabled->count; i++) {
+        if (scope_accepts_profile(s, s->enabled->entries[i])) {
+            string_array_push(&s->profiles, s->enabled->entries[i]);
+        }
+    }
 
     *out = s;
     return NULL;
@@ -407,7 +413,7 @@ const string_array_t *scope_enabled(const scope_t *s) {
 }
 
 const string_array_t *scope_profiles(const scope_t *s) {
-    return s->profiles;
+    return &s->profiles;
 }
 
 const pathspec_t *scope_paths(const scope_t *s) {

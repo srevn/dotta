@@ -1177,8 +1177,9 @@ static inline bool workspace_capturable(const workspace_item_t *item) {
  * and on the length, each asked on its own side of it), classify_absent (an absence
  * over what the view moved past deletes nothing it holds) and workspace_item_line
  * (the [stale] that rides [undeployed]), with cmds/status.c
- * status_print_workspace's legend line for that row. A reader not on this list
- * is a bug.
+ * status_print_workspace's legend line for that row and cmds/apply.c cmd_apply's
+ * count of what Git moved, which asks it of a planned absence as the line does.
+ * A reader not on this list is a bug.
  */
 static inline bool workspace_stale(const manifest_row_t *row, const state_record_t *record) {
     return workspace_base(record) ? workspace_compare_confirmed(row, record) != CMP_EQUAL

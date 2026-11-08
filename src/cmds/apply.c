@@ -3253,33 +3253,46 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * The item's fact and not the plan's — the plan says what the run does, the
      * item says why — so the plan's pending items are walked once more, each
-     * bucket one kind. DIVERGENCE_STALE and DIVERGENCE_CLAIM_MOVED are the
-     * workspace's verdict of that move — the content, another kind or another
-     * confirmed blob (core/workspace.h workspace_stale), or a claim — the record
-     * of the node's (workspace_claims_moved), or one no record of the node holds
+     * bucket one kind, and each is asked what its line's [stale] asks
+     * (core/workspace.c workspace_item_line). Of a path standing, the bits:
+     * DIVERGENCE_STALE and DIVERGENCE_CLAIM_MOVED are the workspace's verdict
+     * of that move — the content, another kind or another confirmed blob
+     * (core/workspace.h workspace_stale), or a claim — the record of the node's
+     * (workspace_claims_moved), or one no record of the node holds
      * (core/workspace.c workspace_analyze_claim) — with a claim naming an owner
      * this host cannot resolve counted beside them, Git's to bring though no
      * run here can (core/workspace.h divergence_type_t) — a persistent signal
      * that survives status→apply sequences and counts the same however the branch
      * moved; work by definition (core/deploy.c deploy_needs_work), so only a
-     * pending item carries either. Every planned row counts, a row preflight
+     * pending item carries either. Of an absence, the record: no path bit survives
+     * one, so an UNDEPLOYED row is asked its record against the row — another
+     * kind, or bytes it confirmed (workspace_stale) — and a DELETED one never
+     * is, its record the row's own, which the view has not moved past
+     * (core/workspace.c classify_absent). Every planned row counts, a row preflight
      * will skip included — a Git move is the record against the view, and
      * preflight's answer does not change it — and a row the plan skips (-e,
-     * --skip-existing) is in neither bucket. */
+     * --skip-existing) is in neither bucket, nor is a rung the run creates on
+     * the way, which is no planned row: the preview counts no ancestor
+     * (apply_print_deploy_preview), so an absent rung's [stale] is status's
+     * alone. */
     size_t stale_files = 0;
     size_t stale_dirs = 0;
 
     for (size_t i = 0; i < deploy_plan->files.pending.count; i++) {
         const workspace_item_t *item = deploy_plan->files.pending.entries[i];
 
-        if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+        if ((item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) ||
+            (item->state == WORKSPACE_STATE_UNDEPLOYED && item->record &&
+            workspace_stale(item->row, item->record))) {
             stale_files++;
         }
     }
     for (size_t i = 0; i < deploy_plan->directories.pending.count; i++) {
         const workspace_item_t *item = deploy_plan->directories.pending.entries[i];
 
-        if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+        if ((item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) ||
+            (item->state == WORKSPACE_STATE_UNDEPLOYED && item->record &&
+            workspace_stale(item->row, item->record))) {
             stale_dirs++;
         }
     }

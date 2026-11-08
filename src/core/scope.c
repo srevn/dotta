@@ -431,10 +431,7 @@ bool scope_filters_paths(const scope_t *s) {
 /* -------------------------------------------------------------------- */
 
 bool scope_accepts_profile(const scope_t *s, const char *profile) {
-    /* Defensive: a NULL profile never matches anything, even "match all". */
-    if (!profile) return false;
-
-    /* No CLI filter → every non-NULL profile is in scope. */
+    /* No CLI filter → every profile is in scope. */
     return s->filter.count == 0 || string_array_contains(&s->filter, profile);
 }
 

@@ -515,8 +515,8 @@ bool scope_filters_paths(const scope_t *s);
 /**
  * Profile dimension check.
  *
- * NULL profile returns false (defensive — a NULL name never matches, even the
- * "match all" case). When no CLI filter was given, every non-NULL profile matches.
+ * When no CLI filter was given, every profile matches. The profile must not be
+ * NULL: every subject a reader asks about has one.
  */
 bool scope_accepts_profile(const scope_t *s, const char *profile);
 

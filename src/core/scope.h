@@ -12,8 +12,8 @@
  *     branches stand.
  *
  * The questions asked of the set take what they read, whichever way the set was
- * read: the filter -p's names make over it (scope_filter), the refusal an empty
- * set earns (scope_require_enabled) and which of the set holds a commit
+ * read: the filter a line's profile names make over it (scope_filter), the refusal
+ * an empty set earns (scope_require_enabled) and which of the set holds a commit
  * (scope_resolve_commit, scope_resolve_range) take the set as a value, and the
  * claim a file argument names (scope_resolve_claim) takes the set's view,
  * precedence resolved. Where the argument names its profile, no set is asked:
@@ -25,17 +25,27 @@
  *
  * A scope answers, for a command that holds the view, "what subset of the view
  * — every enabled profile, each at the revision the run reads it at, precedence
- * resolved — does this invocation touch?". It bundles the set with the three
- * filter dimensions every such command carries:
+ * resolved — does this invocation touch?". It bundles the set with the four
+ * dimensions a line names it by:
  *
- *   1. Profile filter     — CLI -p <names> (optional)
- *   2. Path filter        — CLI positional path arguments (optional)
- *   3. Exclude patterns   — CLI -e <patterns>            (optional)
+ *   1. Profile filter     — the profiles named on their own: -p <names>, or a
+ *                           bare name (optional)
+ *   2. Path filter        — the positional path arguments (optional)
+ *   3. profile:path       — a profile's files at a path, each profile's paths
+ *                           one matcher of its own (optional)
+ *   4. Exclude patterns   — -e <patterns> (optional)
+ *
+ * The profiles and the paths named on their own narrow each other, as they always
+ * have; a profile:path names that profile's files at that path; the run takes
+ * everything the line names, and a line naming nothing takes everything. -e
+ * withholds from all of it. Each word selects on its own: a negation named on
+ * its own leaves nothing out of a profile:path's paths — bound to the profile
+ * (p:'!x') it does, and -e leaves a path out of every word.
  *
  * Constructed once per command via scope_build; consulted many times via predicates
- * that replace the per-iteration triplet of `continue` guards at filter sites;
- * and asked, entry by entry, what its path filter reached among the subjects a
- * verb hands it (scope_coverage_t).
+ * at filter sites — the profile and the path asked as one (scope_accepts_path),
+ * then -e (scope_is_excluded); and asked, entry by entry, what the paths the
+ * line names reached among the subjects a verb hands it (scope_coverage_t).
  *
  * Vocabulary
  * ----------
@@ -45,22 +55,27 @@
  *              the view answer one instant's question once — the set the CLI
  *              filter is checked against. The workspace reads the same names
  *              off the view itself.
- *   profiles — display/hook face of the scope: the enabled profiles the CLI filter
- *              names, in precedence order, else every one. "What the user asked
- *              for, not the underlying world."
- *   paths    — the CLI-derived path filter (NULL when no positional args), one
- *              matcher over the two keys a managed path has: its filesystem path
- *              and its storage path (infra/pathspec). Exposed for diff, which
- *              selects a commit range delta by delta, compares a commit's view
- *              under it, and counts its entries against the coverage's misses,
- *              for apply's count line — both through pathspec_count — and for
- *              update's named re-derivation, which asks it of each rung of the
- *              chains it climbs (core/profiles.h profile_derive_ancestors); none
- *              of them has a profile or exclude semantics to honor — the rungs
- *              above a leaf the scope accepted are in no -e's way, an excluded
- *              directory excluding everything beneath it. In-workspace sites
- *              should prefer scope_accepts_path, and what each entry reached is
- *              the coverage's to answer, -p read beside it (scope_coverage_t).
+ *   profiles — display/hook face of the scope: the enabled profiles the line
+ *              names, in precedence order — every one where a word on its own
+ *              reaches every one. "What the user asked for, not the underlying
+ *              world."
+ *   paths    — the paths named on their own (NULL when none were), one matcher
+ *              over the two keys a managed path has: its filesystem path and
+ *              its storage path (infra/pathspec). Exposed for diff, which selects
+ *              a commit range delta by delta and compares a commit's view under
+ *              it, and for update's named re-derivation, which asks it of each
+ *              rung of the chains it climbs (core/profiles.h
+ *              profile_derive_ancestors); none of them has a profile or exclude
+ *              semantics to honor — the rungs above a leaf the scope accepted
+ *              are in no -e's way, an excluded directory excluding everything
+ *              beneath it — and neither verb names a profile:path. In-workspace
+ *              sites should prefer scope_accepts_path, and what each entry reached
+ *              is the coverage's to answer, each word's profiles read beside it
+ *              (scope_coverage_t).
+ *   refspecs — the profile:path arguments, each read whole: its profile checked
+ *              as -p's names are, its paths gathered into one matcher a profile,
+ *              its commit the view's (core/manifest.h manifest_build) and never
+ *              read here.
  *
  * The CRITICAL invariant — load the enabled set, never the filter — is enforced
  * by construction: the workspace never takes a profile list — the view it joins
@@ -69,12 +84,11 @@
  *
  * Lifetime and ownership
  * ----------------------
- * scope_t is a value of the arena scope_build is handed — the struct, the filter's
- * and the face's names, and the compiled filters — immutable once built, and
- * nothing frees one. Every CLI-derived input is copied there, so the caller's
- * inputs may go once scope_build returns. The enabled set is the view's, borrowed,
- * so the view outlives the scope: both are the command arena's, as every caller
- * builds them.
+ * scope_t is a value of the arena scope_build is handed — the struct, the names
+ * it lists and the filters it compiles — immutable once built, and nothing frees
+ * one. Every CLI-derived input is copied there, so the caller's inputs may go
+ * once scope_build returns. The enabled set is the view's, borrowed, so the view
+ * outlives the scope: both are the command arena's, as every caller builds them.
  *
  * Empty-enabled policy
  * --------------------
@@ -120,17 +134,20 @@ typedef struct scope scope_t;
 /**
  * Aggregated build inputs.
  *
- * A command-agnostic view of the three CLI-derived filter dimensions. All array
- * fields may be NULL when the corresponding count is zero.
+ * A command-agnostic view of the four CLI-derived dimensions, one raw array and
+ * its count each. All array fields may be NULL when the corresponding count is
+ * zero.
  *
  * Ownership: borrowed. scope_build deep-copies everything it needs; the caller
  * may free the backing arrays immediately after scope_build returns.
  */
 typedef struct scope_inputs {
-    char *const *profiles;          /* -p profile names (raw CLI) */
+    char *const *profiles;          /* Profile names on their own: -p, or a bare name (raw CLI) */
     size_t profile_count;
     char *const *paths;             /* Positional path arguments (raw CLI) */
     size_t path_count;
+    char *const *refspecs;          /* Positional profile:path arguments, each naming its profile (raw CLI) */
+    size_t refspec_count;
     char *const *exclude_patterns;  /* -e exclude patterns (raw CLI) */
     size_t exclude_count;
 } scope_inputs_t;
@@ -142,18 +159,26 @@ typedef struct scope_inputs {
  *   1. Borrow the enabled set off the view — the enabled rows whose branch the
  *      build found (core/manifest.h manifest_profiles) — which may be none (see
  *      "Empty-enabled policy" above).
- *   2. Check every CLI filter name against the enabled set (scope_filter): one
- *      not in it is refused, and a name given twice is one profile.
- *   3. Compile the positional arguments into the path filter (infra/pathspec):
- *      one matcher over the two keys a managed path has, each input read in the
- *      key its own shape names — none, every path in, where none was given.
- *   4. Compile the -e layer into `arena` (ignore_excludes_compile): a pattern
+ *   2. Read each profile:path argument whole (base/refspec.h refspec_parse):
+ *      its profile and its path. Its commit is the view's (core/manifest.h
+ *      manifest_build) and never read here, and the token is never cut at its
+ *      '@' first, which would read another commit. One that names no profile is
+ *      its caller's bug.
+ *   3. Check every profile the line names against the enabled set (scope_filter):
+ *      -p's names into the filter, the profile:path arguments' into theirs; one
+ *      not in the set is refused, and a name given twice is one profile.
+ *   4. Compile the paths: the positional arguments into the path filter
+ *      (infra/pathspec) — one matcher over the two keys a managed path has, each
+ *      input read in the key its own shape names, and none, every path in, where
+ *      none was given — and each profile:path profile's paths, in the order given,
+ *      into a matcher of its own.
+ *   5. Compile the -e layer into `arena` (ignore_excludes_compile): a pattern
  *      the grammar refuses refuses the build, under the flag's name.
- *   5. List the scope's face (scope_profiles): each enabled profile the line
+ *   6. List the scope's face (scope_profiles): each enabled profile the line
  *      names, in precedence order.
  *
- * @param repo   Repository: a -p name that is not enabled is asked of it, to tell
- *               a disabled profile from none here (must not be NULL)
+ * @param repo   Repository: a profile the line names that is not enabled is asked
+ *               of it, to tell a disabled profile from none here (must not be NULL)
  * @param view   The view the command reads, ctx->run.manifest or one it built
  *               (must not be NULL; borrowed for the scope's life, whose enabled
  *               set is the view's)
@@ -213,8 +238,8 @@ error_t scope_resolve_enabled(
 );
 
 /**
- * The filter -p's names make over the set a command reads: each name the set
- * holds, once
+ * The filter a line's profile names make over the set a command reads: each name
+ * the set holds, once
  *
  * Every name checked against `enabled`: one the set lacks is refused, whether
  * it names a profile not enabled ("is not enabled") or none here at all
@@ -222,13 +247,15 @@ error_t scope_resolve_enabled(
  * A name given twice is one profile, kept where it was first given. No name is
  * no filter: an empty one, which narrows nothing.
  *
- * Readers: scope_build, over the view's set; cmds/sync.c cmd_sync, over every
- * enabled row, its branch here or not.
+ * Readers: scope_build, over the view's set — -p's names, and the profiles the
+ * profile:path arguments name; cmds/sync.c cmd_sync, over every enabled row,
+ * its branch here or not.
  *
  * @param repo Repository: a name the set lacks is asked of it, to tell a profile
  *             not enabled from none here (must not be NULL)
  * @param enabled The set the command reads (must not be NULL)
- * @param names -p's names, raw (must not be NULL where count > 0)
+ * @param names The names, raw: -p's, or the profile:path arguments' profiles
+ *              (must not be NULL where count > 0)
  * @param count How many
  * @param arena Arena the filter lives in (must not be NULL)
  * @param out The filter, in the order its names were first given (must not be
@@ -469,9 +496,10 @@ const string_array_t *scope_enabled(const scope_t *s);
  * The scope's profiles — its display and hook face.
  *
  * The enabled profiles the line names, each once, in precedence order — the set's
- * own (scope_enabled), whatever order the line named them in — and every one
- * where it names none. Use this for hook context strings ("what the user asked
- * for") and for verbose output.
+ * own (scope_enabled), whatever order the line named them in: those it names on
+ * their own and by a profile:path, and every one where a word on its own reaches
+ * every one — a path named on its own, or a line naming nothing. Use this for
+ * hook context strings ("what the user asked for") and for verbose output.
  *
  * Always non-NULL. Borrowed from the scope.
  */
@@ -482,61 +510,80 @@ const string_array_t *scope_profiles(const scope_t *s);
 /* -------------------------------------------------------------------- */
 
 /**
- * Raw path filter (NULL when no positional path args were given).
+ * The paths named on their own, raw: the positional arguments' filter (NULL when
+ * none were given), never a profile:path's.
  *
  * Consumers that read the filter itself — diff (a commit range selected delta
- * by delta, a commit's view compared under it, the entries counted against the
- * coverage's misses: cmds/diff.c diff_select_delta_cb, diff_print_view,
- * diff_write_view, diff_print_coverage) and apply's count line (cmds/apply.c
- * cmd_apply), the last two through pathspec_count; and update's named
- * re-derivation, which hands it to the draft, which asks it of each rung of the
- * chains it climbs (cmds/update.c cmd_update, core/profiles.h
- * profile_derive_ancestors). Per-iteration checks of a path itself should use
- * scope_accepts_path instead, and of a place no look reached scope_accepts_beneath;
- * what each entry reached is the coverage's to answer (scope_coverage_t).
+ * by delta, a commit's view compared under it: cmds/diff.c diff_select_delta_cb,
+ * diff_print_view, diff_write_view) and update's named re-derivation, which hands
+ * it to the draft, which asks it of each rung of the chains it climbs
+ * (cmds/update.c cmd_update, core/profiles.h profile_derive_ancestors). Neither
+ * verb names a profile:path; one that does reads its paths through the per-item
+ * questions and the coverage, never here. Per-iteration checks of a path itself
+ * should use scope_accepts_path instead, and of a place no look reached
+ * scope_accepts_beneath; how many paths the line names is scope_path_count's
+ * answer, and what each entry reached the coverage's (scope_coverage_t).
  *
  * Borrowed from the scope.
  */
 const pathspec_t *scope_paths(const scope_t *s);
 
 /* -------------------------------------------------------------------- */
-/* Build-shape predicates                                               */
+/* The build's shape                                                    */
 /* -------------------------------------------------------------------- */
 
-/** True if a CLI profile filter was given (-p). */
+/** True if the line names a profile: -p, a bare name, or a profile:path. */
 bool scope_filters_profiles(const scope_t *s);
 
-/** True if CLI positional path arguments were given. */
+/** True if the line names a path: a positional path, or a profile:path. */
 bool scope_filters_paths(const scope_t *s);
+
+/**
+ * How many paths the line names: the entries of the paths named on their own,
+ * then of each profile:path profile's, each spelling of one path once
+ * (infra/pathspec.h pathspec_count) — more than scope_paths holds where the line
+ * names a profile:path.
+ *
+ * Readers: cmds/apply.c cmd_apply's -v count, cmds/diff.c diff_print_coverage,
+ * and the coverage, whose entries these are (scope_coverage_create).
+ */
+size_t scope_path_count(const scope_t *s);
 
 /* -------------------------------------------------------------------- */
 /* Per-iteration predicates                                             */
 /* -------------------------------------------------------------------- */
 
 /**
- * Profile dimension check.
+ * Profile dimension check: the profiles the words named on their own reach.
  *
- * When no CLI filter was given, every profile matches. The profile must not be
- * NULL: every subject a reader asks about has one.
+ * The CLI filter's names where it holds any; else every profile where a word on
+ * its own reaches every one — a path named on its own, or a line naming nothing
+ * — and none beside profile:path arguments alone, each of which names its own
+ * profile, asked through scope_accepts_path. The profile must not be NULL: every
+ * subject a reader asks about has one.
  *
- * Asked alone by cmds/status.c, whose scope names no path — status_print_profiles,
- * status_print_manifest, status_partition, status_write, status_print_summary —
- * and by the scope's own questions: scope_accepts_path, scope_accepts_beneath
- * and the coverage (scope_coverage_add). A site that holds a subject's path asks
- * the two as one.
+ * Asked alone by cmds/status.c — status_print_profiles, status_print_manifest,
+ * status_partition, status_write, status_print_summary — whose scope names no
+ * path and no profile:path, so every profile matches there where no CLI filter
+ * was given; and by the scope's own questions: scope_accepts_path,
+ * scope_accepts_beneath, the coverage (scope_coverage_add) and the face. A site
+ * that holds a subject's path asks the two as one.
  */
 bool scope_accepts_profile(const scope_t *s, const char *profile);
 
 /**
- * Profile and path dimension check, asked as one.
+ * Profile and path dimension check, asked as one: does the line take this profile's
+ * path?
  *
- * The profile in the profile filter (scope_accepts_profile), and the path in
- * the path filter. Both names of the subject: a filter entry reads the one in
- * its own vocabulary — a filesystem shape the filesystem path, a storage shape
- * or a bare pattern the name (pathspec_matches). When no path filter was built,
- * every path matches. A name the caller does not have is NULL and is read by no
- * entry of that vocabulary; a subject with neither name matches nothing under a
- * filter.
+ * The run takes what each word selects: a profile:path argument its profile's
+ * paths there, asked of that profile's own matcher; the words named on their
+ * own the paths of the profiles they reach (scope_accepts_profile) in the path
+ * filter, the profiles and the paths narrowing each other — every path of those
+ * profiles where no path filter was built. Both names of the subject: a filter
+ * entry reads the one in its own vocabulary — a filesystem shape the filesystem
+ * path, a storage shape or a bare pattern the name (pathspec_matches). A name
+ * the caller does not have is NULL and is read by no entry of that vocabulary;
+ * a subject with neither name matches nothing under a filter.
  *
  * `kind` is the manifest's kind of the path — PATH_KIND_DIRECTORY for a tracked
  * directory even when a file currently squats it on disk. State file rows are
@@ -555,10 +602,11 @@ bool scope_accepts_path(
  *
  * scope_accepts_path's twin: may a path of the profile at or beneath the place
  * be accepted? A place the scan could not look answers for every path beneath
- * it, so it is in scope wherever such a path could be: the profile in the profile
- * filter (scope_accepts_profile), and the place within the path filter's reach
- * (infra/pathspec.h pathspec_matches_beneath). When no path filter was built,
- * the profile alone answers.
+ * it, so it is in scope wherever such a path could be: within the reach of the
+ * profile's own profile:path matcher, or of the path filter where the words named
+ * on their own reach the profile (scope_accepts_profile) — each matcher asked
+ * of the place (infra/pathspec.h pathspec_matches_beneath), and every place of
+ * such a profile where no path filter was built.
  *
  * Reader: cmds/update.c update_partition, a place the scan could not look. A
  * reader not on this list is a bug.
@@ -623,21 +671,26 @@ bool scope_accepts_entry(
 );
 
 /* -------------------------------------------------------------------- */
-/* The path filter's coverage                                           */
+/* The coverage of the paths a line names                               */
 /* -------------------------------------------------------------------- */
 
 /**
- * A path filter's coverage: what each of its entries reached among the subjects
- * a verb hands it
+ * The coverage of the paths a line names: what each of their entries reached
+ * among the subjects a verb hands it
  *
- * One question per entry: did it reach a subject of the verb's universe? Each
- * entry is asked alone — an exact one by equality or ancestry, a rule at any
+ * One question per entry: did it reach a subject of the verb's universe? The
+ * entries are the paths named on their own, then each profile:path profile's,
+ * and each is asked alone — an exact one by equality or ancestry, a rule at any
  * rung, either polarity (infra/pathspec.h pathspec_entry_matches) — so no entry's
  * negation folds into another's answer, and a negation that left a subject out
- * has reached it. A subject of the run's profiles (scope_accepts_profile) answers
- * the entry; one of a profile -p leaves out answers nothing, and the first such
- * an entry reached is kept, so an entry whose subjects were all hidden says whose
- * the first was. -e plays no part: what a flag withholds counts as reached.
+ * has reached it. An entry is reached by a subject of a profile its word names
+ * — one the words named on their own reach (scope_accepts_profile), or the
+ * profile:path's own — or by any subject the run takes, by its own word or
+ * another's (scope_accepts_path): so a profile:path's entry, a negation's too,
+ * is reached by another profile's path the line takes by another word. Any other
+ * subject it matches is hidden, and the first such is kept, so an entry whose
+ * subjects were all hidden says whose the first was. -e plays no part: what a
+ * flag withholds counts as reached.
  *
  * Each verb names its universe, hands its subjects in one at a time, in the one
  * shape every subject has whatever the verb holds it as — a profile, two names
@@ -652,15 +705,17 @@ bool scope_accepts_entry(
 typedef struct scope_coverage scope_coverage_t;
 
 /**
- * An entry no subject of the run's profiles reached
+ * An entry no subject reached: none of a profile its word names, and none the
+ * run takes
  */
 typedef struct {
-    pathspec_entry_t entry;          /* The entry, as typed */
-    const char *hidden;              /* The profile -p left out whose subject it reached first; NULL: none reached */
+    pathspec_entry_t entry;          /* The entry as its word typed it, a profile:path's with its profile */
+    const char *hidden;              /* The first profile whose subject it matched, its word leaving it out; NULL: none */
 } scope_miss_t;
 
 /**
- * The misses, in the path filter's order
+ * The misses, in the coverage's order: the paths named on their own, then each
+ * profile:path profile's
  */
 typedef struct {
     const scope_miss_t *entries;
@@ -668,10 +723,10 @@ typedef struct {
 } scope_misses_t;
 
 /**
- * A coverage of the scope's path filter, no entry reached yet
+ * A coverage of the paths the line names, no entry reached yet
  *
- * Under no path filter there is nothing to reach: scope_coverage_add answers
- * false at once, and the misses are none.
+ * Where the line names no path there is nothing to reach: scope_coverage_add
+ * answers false at once, and the misses are none.
  *
  * @param s     The scope whose filters every subject is asked under (must not
  *              be NULL; borrowed for the coverage's life)
@@ -684,9 +739,9 @@ scope_coverage_t *scope_coverage_create(const scope_t *s, arena_t *arena);
  * Hand the coverage one subject of the verb's universe
  *
  * The subject in the shape scope_accepts_entry reads one: each entry no subject
- * of the run's profiles reached yet is asked of its names and kind, and one that
- * matches is reached where the profile is the run's, else keeps the profile where
- * it kept none before.
+ * reached yet is asked of its names and kind, and one that matches is reached
+ * where the profile is one its word names or the run takes the subject, else
+ * keeps the profile where it kept none before.
  *
  * @param c               The coverage (must not be NULL)
  * @param profile         The subject's profile (borrowed: a miss lends it on)
@@ -695,7 +750,7 @@ scope_coverage_t *scope_coverage_create(const scope_t *s, arena_t *arena);
  * @param storage_path    The subject's name (NULL: no storage entry reads it)
  * @param kind            What the subject is, as scope_accepts_path reads it
  * @return Whether an entry is left to reach — false once every one is, and at
- *         once under no filter, so a verb may stop handing subjects in
+ *         once where the line names no path, so a verb may stop handing subjects in
  */
 bool scope_coverage_add(
     scope_coverage_t *c,
@@ -706,10 +761,11 @@ bool scope_coverage_add(
 );
 
 /**
- * The entries no subject of the run's profiles reached, in the path filter's order
+ * The entries no subject reached, in the coverage's order, each as its word typed
+ * it
  *
  * @param c The coverage (must not be NULL)
- * @return The misses, in the coverage's arena; none under no filter
+ * @return The misses, in the coverage's arena; none where the line names no path
  */
 scope_misses_t scope_coverage_misses(const scope_coverage_t *c);
 

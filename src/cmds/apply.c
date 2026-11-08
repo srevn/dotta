@@ -2491,9 +2491,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *                    last profile, then apply" workflow.
      *   scope_profiles — operation face (the verbose listing, hook context).
      *
-     *   scope_filters_profiles / scope_filters_paths / scope_paths — the build's
-     *                    shape, for the verbose path count and the nothing-to-do
-     *                    exit.
+     *   scope_filters_profiles / scope_filters_paths / scope_path_count — the
+     *                    build's shape, for the verbose path count and the
+     *                    nothing-to-do exit.
      *   the coverage   — each path argument answered alone over the managed
      *                    paths, -p read beside it (scope_coverage_t).
      *
@@ -2530,7 +2530,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     if (scope_filters_paths(scope)) {
-        size_t filter_count = pathspec_count(scope_paths(scope));
+        size_t filter_count = scope_path_count(scope);
         output_gap(out, OUTPUT_VERBOSE);
         output_print(
             out, OUTPUT_VERBOSE, "Path filter: %zu path%s specified\n",

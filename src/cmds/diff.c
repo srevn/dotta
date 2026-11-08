@@ -1302,8 +1302,8 @@ static error_t diff_write_view(
  * a profile -p leaves out names the first one's profile.
  *
  * @param out Output context for the answers
- * @param scope The run's scope, whose path filter's entries the misses are counted
- *              against (must not be NULL)
+ * @param scope The run's scope, the entries of whose paths the misses are counted
+ *              against (core/scope.h scope_path_count; must not be NULL)
  * @param coverage The arm's coverage, its paths handed in (must not be NULL)
  * @param what What the arm's paths are on the screen (must not be NULL)
  * @return false where no entry reached a path — nothing under the filter can
@@ -1331,7 +1331,7 @@ static bool diff_print_coverage(
         }
     }
 
-    return misses.count == 0 || misses.count < pathspec_count(scope_paths(scope));
+    return misses.count == 0 || misses.count < scope_path_count(scope);
 }
 
 /**
@@ -1430,7 +1430,7 @@ static error_t diff_commit_to_workspace(
 
     /* The profiles the commit is looked for in: the enabled set, narrowed to
      * the ones -p names where it names any (the scope's face is exactly that
-     * set). */
+     * set, and its shape says whether it names any: diff names no profile:path). */
     const string_array_t *searched = scope_profiles(scope);
     const string_array_t *filter = scope_filters_profiles(scope) ? searched : NULL;
     const pathspec_t *path_filter = scope_paths(scope);
@@ -1681,7 +1681,8 @@ static error_t diff_commits(
     arena_t *arena = ctx->arena;
     output_t *out = ctx->out;
 
-    /* The profiles -p names, or NULL: every enabled one */
+    /* The profiles -p names, or NULL: every enabled one — the scope's face and
+     * its shape, diff naming no profile:path */
     const string_array_t *filter = scope_filters_profiles(scope)
         ? scope_profiles(scope) : NULL;
     const pathspec_t *path_filter = scope_paths(scope);

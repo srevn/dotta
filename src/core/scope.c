@@ -4,10 +4,13 @@
 
 #include "core/scope.h"
 
+#include <string.h>
+
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "base/refspec.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -21,17 +24,21 @@
  * Internal scope representation.
  *
  * A value of the arena scope_build is handed, as everything it holds is but the
- * enabled set, which is the view's own, borrowed: the filter's names, the path
- * filter, the exclude layer and the face's names. The excludes are the -e layer
- * core/ignore compiles (ignore_excludes_compile) — the rules add's builder takes
- * as its top layer, asked alone here (scope_is_excluded).
+ * enabled set, which is the view's own, borrowed: the names it lists and the
+ * filters it compiles. One field a dimension, a profile:path's two paired with
+ * the words named on their own — its profiles beside the filter, and beside the
+ * path filter one matcher a profile, aligned with them by index. The excludes
+ * are the -e layer core/ignore compiles (ignore_excludes_compile) — the rules
+ * add's builder takes as its top layer, asked alone here (scope_is_excluded).
  */
 struct scope {
-    const string_array_t *enabled;      /* Persistent enabled set, the view's; may be empty */
-    string_array_t filter;              /* CLI filter: every name -p gave, each enabled; empty without -p */
+    const string_array_t *enabled;               /* Persistent enabled set, the view's; may be empty */
+    string_array_t filter;                       /* Profiles named on their own, each enabled; empty: none named */
+    string_array_t refspec_profiles;             /* Each profile a profile:path names, once, each enabled */
+    pathspec_t *paths;                           /* Paths named on their own; NULL: none named */
+    pathspec_t **refspec_paths;                  /* refspec_profiles.entries[i]'s paths: one matcher a profile */
     const gitignore_ruleset_t *excludes_ruleset; /* The -e layer; NULL when no excludes */
-    pathspec_t *paths;                  /* CLI path filter; NULL when no positional args */
-    string_array_t profiles;            /* The face: the enabled profiles the line names, in precedence order */
+    string_array_t profiles;                     /* The face: the enabled profiles the line names, in precedence order */
 };
 
 /* -------------------------------------------------------------------- */
@@ -58,34 +65,76 @@ error_t scope_build(
      *    an empty scope is not an error ("Empty-enabled policy", scope.h). */
     s->enabled = manifest_profiles(view);
 
-    /* 2. The CLI filter, every name checked against that set (scope_filter):
-     *    the view read the branches on the way in, so a name in it is a branch. */
+    /* 2. The profile:path arguments, each read whole (base/refspec.h): its profile
+     *    and its path. Its commit is the view's (core/manifest.h manifest_build)
+     *    and never read here, and the token is never cut at its '@' first, which
+     *    would read another commit. One that names no profile is its caller's
+     *    bug. */
+    refspec_t *refspecs = arena_calloc(arena, in->refspec_count, sizeof(*refspecs));
+    string_array_t names;
+    string_array_init(&names, arena, in->refspec_count);
+    for (size_t i = 0; i < in->refspec_count; i++) {
+        error_t err = refspec_parse(arena, in->refspecs[i], &refspecs[i]);
+        if (err) return err;
+        CHECK_ARG(refspecs[i].profile != NULL, "a profile:path argument names its profile");
+        string_array_push(&names, refspecs[i].profile);
+    }
+
+    /* 3. The profiles the line names, every one checked against that set
+     *    (scope_filter): the view read the branches on the way in, so a name in
+     *    it is a branch. -p's names into the filter, the profile:path arguments'
+     *    into theirs. */
     error_t err = scope_filter(
         repo, s->enabled, in->profiles, in->profile_count, arena, &s->filter
     );
     if (err) return err;
+    err = scope_filter(
+        repo, s->enabled, names.entries, names.count, arena, &s->refspec_profiles
+    );
+    if (err) return err;
 
-    /* 3. The path filter: one matcher over both keys a managed path has, each
-     *    input read in the key its own shape names (infra/pathspec) — and none,
-     *    every path in, where no positional was given. */
+    /* 4. The paths. The positional ones into the path filter: one matcher over
+     *    both keys a managed path has, each input read in the key its own shape
+     *    names (infra/pathspec) — and none, every path in, where no positional
+     *    was given. Then each profile:path profile's, in the order given, into
+     *    a matcher of its own: a matcher is one ordered program, so no profile's
+     *    negation runs against another's paths. Each profile has a path at least
+     *    — refspec_parse refuses one naming no file — so none has the matcher
+     *    that takes every path. */
     err = pathspec_create(in->paths, in->path_count, arena, &s->paths);
     if (err) return err;
 
-    /* 4. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
+    s->refspec_paths = arena_calloc(arena, s->refspec_profiles.count, sizeof(*s->refspec_paths));
+    string_array_t inputs;
+    string_array_init(&inputs, arena, in->refspec_count);
+    for (size_t i = 0; i < s->refspec_profiles.count; i++) {
+        string_array_clear(&inputs);
+        for (size_t j = 0; j < in->refspec_count; j++) {
+            if (strcmp(refspecs[j].profile, s->refspec_profiles.entries[i]) == 0) {
+                string_array_push(&inputs, refspecs[j].file);
+            }
+        }
+
+        err = pathspec_create(inputs.entries, inputs.count, arena, &s->refspec_paths[i]);
+        if (err) return err;
+    }
+
+    /* 5. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
      *    refuses the scope, under the flag's name. */
     err = ignore_excludes_compile(
         in->exclude_patterns, in->exclude_count, arena, &s->excludes_ruleset
     );
     if (err) return err;
 
-    /* 5. The face, once every word is read — scope_profiles' answer: each enabled
-     *    profile the line names, in the set's order whatever order the line named
-     *    it in, so every screen that lists the scope's profiles lists them as
-     *    the view layers them. A list of the scope's own, whatever the line
-     *    named. */
+    /* 6. The face, once every word is read — scope_profiles' answer: each enabled
+     *    profile the line names, on its own or by a profile:path, in the set's
+     *    order whatever order the line named it in, so every screen that lists
+     *    the scope's profiles lists them as the view layers them. A list of the
+     *    scope's own, whatever the line named. */
     string_array_init(&s->profiles, arena, s->enabled->count);
     for (size_t i = 0; i < s->enabled->count; i++) {
-        if (scope_accepts_profile(s, s->enabled->entries[i])) {
+        if (scope_accepts_profile(s, s->enabled->entries[i]) ||
+            string_array_contains(&s->refspec_profiles, s->enabled->entries[i])) {
             string_array_push(&s->profiles, s->enabled->entries[i]);
         }
     }
@@ -154,14 +203,13 @@ error_t scope_filter(
     string_array_t filter;
     string_array_init(&filter, arena, count);
     for (size_t i = 0; i < count; i++) {
-        const char *name = names[i];
-        if (string_array_contains(&filter, name)) continue;
-        if (!string_array_contains(enabled, name)) {
-            error_t err = profile_require(repo, name);
+        if (string_array_contains(&filter, names[i])) continue;
+        if (!string_array_contains(enabled, names[i])) {
+            error_t err = profile_require(repo, names[i]);
             if (err) return err;
-            return error_create(ERR_INVALID_ARG, "Profile '%s' is not enabled", name);
+            return error_create(ERR_INVALID_ARG, "Profile '%s' is not enabled", names[i]);
         }
-        string_array_push(&filter, name);
+        string_array_push(&filter, names[i]);
     }
 
     *out = filter;
@@ -421,15 +469,24 @@ const pathspec_t *scope_paths(const scope_t *s) {
 }
 
 /* -------------------------------------------------------------------- */
-/* Build-shape predicates                                               */
+/* The build's shape                                                    */
 /* -------------------------------------------------------------------- */
 
 bool scope_filters_profiles(const scope_t *s) {
-    return s->filter.count > 0;
+    return s->filter.count > 0 || s->refspec_profiles.count > 0;
 }
 
 bool scope_filters_paths(const scope_t *s) {
-    return s->paths != NULL;
+    return s->paths != NULL || s->refspec_profiles.count > 0;
+}
+
+size_t scope_path_count(const scope_t *s) {
+    size_t count = pathspec_count(s->paths);
+    for (size_t i = 0; i < s->refspec_profiles.count; i++) {
+        count += pathspec_count(s->refspec_paths[i]);
+    }
+
+    return count;
 }
 
 /* -------------------------------------------------------------------- */
@@ -437,14 +494,26 @@ bool scope_filters_paths(const scope_t *s) {
 /* -------------------------------------------------------------------- */
 
 bool scope_accepts_profile(const scope_t *s, const char *profile) {
-    /* No CLI filter → every profile is in scope. */
-    return s->filter.count == 0 || string_array_contains(&s->filter, profile);
+    /* The CLI filter's names where it holds any; else every profile where a word
+     * on its own reaches every one — a path, or a line naming nothing — and none
+     * beside profile:path arguments alone, each of which names its own */
+    if (s->filter.count > 0) return string_array_contains(&s->filter, profile);
+    return s->paths != NULL || s->refspec_profiles.count == 0;
 }
 
 bool scope_accepts_path(
     const scope_t *s, const char *profile, const char *filesystem_path,
     const char *storage_path, path_kind_t kind
 ) {
+    /* A profile:path: its profile's paths there, by that profile's own matcher */
+    for (size_t i = 0; i < s->refspec_profiles.count; i++) {
+        if (strcmp(s->refspec_profiles.entries[i], profile) == 0 &&
+            pathspec_matches(s->refspec_paths[i], filesystem_path, storage_path, kind)) {
+            return true;
+        }
+    }
+
+    /* The words named on their own: the profiles and the paths narrow each other */
     return scope_accepts_profile(s, profile)
            && pathspec_matches(s->paths, filesystem_path, storage_path, kind);
 }
@@ -453,6 +522,15 @@ bool scope_accepts_beneath(
     const scope_t *s, const char *profile, const char *filesystem_path,
     const char *storage_path
 ) {
+    /* A profile:path: a path of its profile there may lie beneath the place */
+    for (size_t i = 0; i < s->refspec_profiles.count; i++) {
+        if (strcmp(s->refspec_profiles.entries[i], profile) == 0 &&
+            pathspec_matches_beneath(s->refspec_paths[i], filesystem_path, storage_path)) {
+            return true;
+        }
+    }
+
+    /* The words named on their own: one the path filter may select there */
     return scope_accepts_profile(s, profile)
            && pathspec_matches_beneath(s->paths, filesystem_path, storage_path);
 }
@@ -475,24 +553,25 @@ bool scope_accepts_entry(
 }
 
 /* -------------------------------------------------------------------- */
-/* The path filter's coverage                                           */
+/* The coverage of the paths a line names                               */
 /* -------------------------------------------------------------------- */
 
 /**
  * Internal coverage representation.
  *
- * Two answers per entry of the path filter, in its order — two arrays as long
- * as the filter is, none under no filter: whether a subject of the run's profiles
- * reached the entry, and else the profile -p left out whose subject it reached
- * first. A value of the arena it was made in, the misses made there too.
+ * Two answers per entry of the paths the line names, in the coverage's order —
+ * the paths named on their own, then each profile:path profile's — two arrays
+ * as long as the entries are, none where the line names no path: whether a subject
+ * reached the entry, and else the first profile whose subject it matched, its
+ * word leaving that profile out. A value of the arena it was made in, the misses
+ * made there too.
  */
 struct scope_coverage {
     const scope_t *scope;               /* The filters every subject is asked under */
     arena_t *arena;                     /* Where the misses are made */
-    bool *reached;                      /* Per entry: a subject of the run's profiles reached it */
-    const char **hidden;                /* Per entry: else the profile -p left out whose subject it reached first */
-    size_t count;                       /* How many entries: the path filter's */
-    size_t remaining;                   /* How many no subject of the run's profiles reached yet */
+    bool *reached;                      /* Per entry: a subject of a profile its word names, or one the run takes, reached it */
+    const char **hidden;                /* Per entry: else the first profile whose subject it matched */
+    size_t remaining;                   /* How many no subject reached yet: at birth, every one (scope_path_count) */
 };
 
 scope_coverage_t *scope_coverage_create(const scope_t *s, arena_t *arena) {
@@ -502,10 +581,9 @@ scope_coverage_t *scope_coverage_create(const scope_t *s, arena_t *arena) {
     scope_coverage_t *c = arena_calloc(arena, 1, sizeof(*c));
     c->scope = s;
     c->arena = arena;
-    c->count = pathspec_count(s->paths);
-    c->remaining = c->count;
-    c->reached = arena_calloc(arena, c->count, sizeof(*c->reached));
-    c->hidden = arena_calloc(arena, c->count, sizeof(*c->hidden));
+    c->remaining = scope_path_count(s);
+    c->reached = arena_calloc(arena, c->remaining, sizeof(*c->reached));
+    c->hidden = arena_calloc(arena, c->remaining, sizeof(*c->hidden));
 
     return c;
 }
@@ -516,22 +594,47 @@ bool scope_coverage_add(
 ) {
     CHECK_NULL(c);
 
-    /* Each entry alone, and only one no subject of the run's profiles reached
-     * yet: a match is the entry's work whatever the subject's profile, and -p
-     * decides whether it answers the entry or only names whose subject it
-     * reached */
-    for (size_t i = 0; i < c->count; i++) {
-        if (c->reached[i] || !pathspec_entry_matches(
+    /* Each entry alone, and only one no subject reached yet: a match is the entry's
+     * work whatever the subject's profile, and the profile decides whether it
+     * answers the entry or only names whose subject it reached. The entries run
+     * on through both loops, in the coverage's order. */
+    size_t entry = 0;
+
+    /* The paths named on their own: answered by a subject of a profile the words
+     * on their own reach, or one the run takes by another word */
+    for (size_t i = 0; i < pathspec_count(c->scope->paths); i++, entry++) {
+        if (c->reached[entry] || !pathspec_entry_matches(
             c->scope->paths, i, filesystem_path, storage_path, kind
             )) {
             continue;
         }
 
-        if (scope_accepts_profile(c->scope, profile)) {
-            c->reached[i] = true;
+        if (scope_accepts_profile(c->scope, profile) ||
+            scope_accepts_path(c->scope, profile, filesystem_path, storage_path, kind)) {
+            c->reached[entry] = true;
             c->remaining--;
-        } else if (!c->hidden[i]) {
-            c->hidden[i] = profile;
+        } else if (!c->hidden[entry]) {
+            c->hidden[entry] = profile;
+        }
+    }
+
+    /* Each profile:path profile's: answered by a subject of that profile, or
+     * one the run takes by another word */
+    for (size_t i = 0; i < c->scope->refspec_profiles.count; i++) {
+        for (size_t j = 0; j < pathspec_count(c->scope->refspec_paths[i]); j++, entry++) {
+            if (c->reached[entry] || !pathspec_entry_matches(
+                c->scope->refspec_paths[i], j, filesystem_path, storage_path, kind
+                )) {
+                continue;
+            }
+
+            if (strcmp(c->scope->refspec_profiles.entries[i], profile) == 0 ||
+                scope_accepts_path(c->scope, profile, filesystem_path, storage_path, kind)) {
+                c->reached[entry] = true;
+                c->remaining--;
+            } else if (!c->hidden[entry]) {
+                c->hidden[entry] = profile;
+            }
         }
     }
 
@@ -541,14 +644,29 @@ bool scope_coverage_add(
 scope_misses_t scope_coverage_misses(const scope_coverage_t *c) {
     CHECK_NULL(c);
 
-    /* Each entry left unreached, as typed and with the profile kept for it */
+    /* Each entry left unreached, with the profile kept for it, in the coverage's
+     * order: the paths named on their own as typed, then each profile:path
+     * profile's as its word typed it — its profile and its path, the commit being
+     * the view's */
     scope_miss_t *misses = arena_calloc(c->arena, c->remaining, sizeof(*misses));
     size_t count = 0;
-    for (size_t i = 0; i < c->count; i++) {
-        if (c->reached[i]) continue;
+    size_t entry = 0;
+    for (size_t i = 0; i < pathspec_count(c->scope->paths); i++, entry++) {
+        if (c->reached[entry]) continue;
         misses[count++] = (scope_miss_t){
-            .entry = pathspec_entry(c->scope->paths, i), .hidden = c->hidden[i]
+            .entry = pathspec_entry(c->scope->paths, i), .hidden = c->hidden[entry]
         };
+    }
+
+    for (size_t i = 0; i < c->scope->refspec_profiles.count; i++) {
+        for (size_t j = 0; j < pathspec_count(c->scope->refspec_paths[i]); j++, entry++) {
+            if (c->reached[entry]) continue;
+            pathspec_entry_t typed = pathspec_entry(c->scope->refspec_paths[i], j);
+            typed.text = arena_str_format(
+                c->arena, "%s:%s", c->scope->refspec_profiles.entries[i], typed.text
+            );
+            misses[count++] = (scope_miss_t){ .entry = typed, .hidden = c->hidden[entry] };
+        }
     }
 
     return (scope_misses_t){ .entries = misses, .count = count };

@@ -622,10 +622,10 @@ static error_t export_collect_filesystem(
 ) {
     arena_t *arena = ctx->arena;
 
-    /* The view's failure names the profile already, in the loader's words or
-     * the walk's (core/profiles.h); what the build was not handed is the path,
-     * which the refusal names in export's own lead for an argument it cannot
-     * copy */
+    /* The view's failure names the profile at its commit already, in the loader's
+     * words or the walk's (core/profiles.h); what the build was not handed is
+     * the path, which the refusal names in export's own lead for an argument it
+     * cannot copy */
     manifest_t *view = NULL;
     error_t err = manifest_build_profile(profile, ctx->run.mounts, arena, &view);
     if (err) {
@@ -1252,7 +1252,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
      * out right, though no longer all-or-nothing under a key that will not open
      * them. The bytes are the tree's own and an export is often the repair, so
      * the copy goes on at Git's floors and says what it lost, in the loader's
-     * line, which names the profile */
+     * line, which names the profile at its commit */
     err = profile_load_sheet(profile);
     if (err) {
         output_warning(

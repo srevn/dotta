@@ -65,23 +65,25 @@
  * shows every entry as stored. Over a tree a hand wrote otherwise, both can miss
  * a name the walk shows; the decode states it rather than repairs it.
  *
- * Failures are worded here, once, naming the profile: a sheet that will not load
- * in the loader's words, profile_load_sheet's "Failed to load metadata for profile
- * '%s'" over the step that refused (core/metadata.h metadata_load_from_tree);
- * the tree's under "Cannot read profile '%s' at commit %s" where the open cannot
- * read the commit's (profile_open), "Cannot read profile '%s'" for a walk, and
- * "Cannot read '%s' in profile '%s'" for a question asked at one name — a point
- * question's, or the classification's on the way to a directory claim's name —
- * which names the name it was asked. No reader says the profile again. A removal
- * a profile's draft cannot make is refused in its own document's words
- * (profile_remove), a name, a capture or a restore it cannot admit under "Cannot
- * stage '%s'" (profile_admit, profile_capture_file, profile_restore_file,
- * profile_restore_directory), and a merge whose conflicts no side settles under
- * "Merging profile '%s' met %zu conflict%s" (profile_draft_merge). A restore's
- * own refusal names the claim by the commit's name for it — "in profile" would
- * read as the head's, which the writer names — beside the name it writes where
- * the two part: "Cannot restore '%s'", "Cannot restore '%s' as '%s'"
- * (profile_restore_file).
+ * Failures are worded here, once, naming the profile at the commit it was opened
+ * at — the commit unsaid where the handle names none: a draft's base and a merge's
+ * two sides, at the trees their stage lends (core/profiles.c profile_subject):
+ * a sheet that will not load in the loader's words, profile_load_sheet's "Failed
+ * to load metadata for profile '%s' at commit %s" over the step that refused
+ * (core/metadata.h metadata_load_from_tree); the tree's under "Cannot read profile
+ * '%s' at commit %s", the open's and a walk's alike (profile_open, profile_walk),
+ * and "Cannot read '%s' in profile '%s' at commit %s" for a question asked at
+ * one name — a point question's, or the classification's on the way to a directory
+ * claim's name — which names the name it was asked. No reader says the profile
+ * or its commit again. A removal a profile's draft cannot make is refused in
+ * its own document's words (profile_remove), a name, a capture or a restore it
+ * cannot admit under "Cannot stage '%s'" (profile_admit, profile_capture_file,
+ * profile_restore_file, profile_restore_directory), and a merge whose conflicts
+ * no side settles under "Merging profile '%s' met %zu conflict%s"
+ * (profile_draft_merge). A restore's own refusal names the claim by the commit's
+ * name for it — "in profile" would read as the head's, which the writer names —
+ * beside the name it writes where the two part: "Cannot restore '%s'", "Cannot
+ * restore '%s' as '%s'" (profile_restore_file).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -385,18 +387,17 @@ typedef enum {
  * and copies it for a writer's commit (profile_draft_open, profile_draft_orphan),
  * or a commit's, whole, for one (profile_restore_tree); a merge, which reads
  * theirs' and the merge base's at its open, strictly, each said by theirs' commit
- * (profile_draft_merge); cmds/revert.c cmd_revert, which reads its target commit's
- * before any question of it, its failure said as the commit's; cmds/show.c
- * show_file, whose header says what its tolerant read lost; cmds/list.c list_files,
- * whose verbose rows say what its tolerant walk lost; cmds/export.c cmd_export,
- * which says what a tolerant arm's collection lost, once, beside the two arms
- * whose copy came out empty, where the failure is the answer
- * (export_collect_profile, export_collect_storage); and cmds/remove.c
+ * (profile_draft_merge); cmds/show.c show_file, whose header says what its tolerant
+ * read lost; cmds/list.c list_files, whose verbose rows say what its tolerant
+ * walk lost; cmds/export.c cmd_export, which says what a tolerant arm's collection
+ * lost, once, beside the two arms whose copy came out empty, where the failure
+ * is the answer (export_collect_profile, export_collect_storage); and cmds/remove.c
  * remove_profile, which says before its preview what its hooks' tolerant list lost.
  *
  * @param profile Handle (must not be NULL)
- * @return The sheet's failure, "Failed to load metadata for profile '%s'" over
- *         the step that refused (core/metadata.h metadata_load_from_tree), or NULL
+ * @return The sheet's failure, "Failed to load metadata for profile '%s' at commit
+ *         %s" over the step that refused (core/metadata.h metadata_load_from_tree),
+ *         or NULL
  */
 error_t profile_load_sheet(profile_t *profile);
 
@@ -448,9 +449,10 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * @param visit The visitor (must not be NULL)
  * @param payload Handed to the visitor untouched
  * @return NULL; the sheet's failure (STRICT), in the loader's words; the tree's,
- *         under "Cannot read profile '%s'" — or, on the way to a directory claim's
- *         name, under "Cannot read '%s' in profile '%s'", which needs a store
- *         that changed beneath the walk; or the visitor's, as it made it
+ *         under "Cannot read profile '%s' at commit %s" — or, on the way to a
+ *         directory claim's name, under "Cannot read '%s' in profile '%s' at
+ *         commit %s", which needs a store that changed beneath the walk; or the
+ *         visitor's, as it made it
  */
 error_t profile_walk(
     profile_t *profile,
@@ -493,8 +495,8 @@ error_t profile_walk(
  * @param visit The visitor (must not be NULL)
  * @param payload Handed to the visitor untouched
  * @return NULL; the sheet's failure (STRICT), in the loader's words; the tree's,
- *         under "Cannot read '%s' in profile '%s'", naming the claim's name; or
- *         the visitor's, as it made it
+ *         under "Cannot read '%s' in profile '%s' at commit %s", naming the claim's
+ *         name; or the visitor's, as it made it
  */
 error_t profile_contradicted(
     profile_t *profile,
@@ -556,7 +558,7 @@ typedef struct {
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param out The counts (must not be NULL; written on success alone)
  * @return Error or NULL on success: the sheet's, in the loader's words; the tree's,
- *         under "Cannot read profile '%s'"
+ *         under "Cannot read profile '%s' at commit %s"
  */
 error_t profile_counts(profile_t *profile, profile_counts_t *out);
 
@@ -619,7 +621,7 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out);
  *                     binding-less table has no root of (must not be NULL; false
  *                     after an error)
  * @return Error or NULL on success: the sheet's, in the loader's words; the tree's,
- *         under "Cannot read profile '%s'"
+ *         under "Cannot read profile '%s' at commit %s"
  */
 error_t profile_needs_target(profile_t *profile, bool *needs_target);
 
@@ -707,7 +709,7 @@ typedef struct {
  *                     answers alike (must not be NULL)
  * @param out The answer (must not be NULL; written on success alone)
  * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
- *         '%s'"
+ *         '%s' at commit %s"
  */
 error_t profile_entry(profile_t *profile, const char *storage_path, profile_held_t *out);
 
@@ -763,7 +765,7 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * @param storage_path A validated storage path (must not be NULL)
  * @param out The answer (must not be NULL; written on success alone)
  * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
- *         '%s'"; the sheet's, in the loader's words
+ *         '%s' at commit %s"; the sheet's, in the loader's words
  */
 error_t profile_holds(profile_t *profile, const char *storage_path, profile_held_t *out);
 
@@ -803,7 +805,7 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  * @param out The claim, or NULL where the profile makes none of that kind there
  *            (must not be NULL; NULL after an error)
  * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
- *         '%s'"; the sheet's (STRICT), in the loader's words
+ *         '%s' at commit %s"; the sheet's (STRICT), in the loader's words
  */
 error_t profile_find(
     profile_t *profile,
@@ -837,7 +839,7 @@ error_t profile_find(
  * @param storage_path A validated storage path (must not be NULL)
  * @param out Whether the name is sealed (must not be NULL; false after an error)
  * @return Error or NULL on success: the tree's or the blob's, under "Cannot read
- *         '%s' in profile '%s'"; the sheet's, in the loader's words
+ *         '%s' in profile '%s' at commit %s"; the sheet's, in the loader's words
  */
 error_t profile_sealed(profile_t *profile, const char *storage_path, bool *out);
 
@@ -1151,13 +1153,13 @@ typedef struct {
  * ERR_CONFLICT, "Merging profile '%s' met %zu conflict%s", and no draft is made.
  *
  * Every sheet is read strictly: ours' as every writer's base, in the loader's
- * words; theirs' and the merge base's said by theirs' commit over them — "Failed
- * to load metadata from commit %s, merged in", "Failed to load metadata from
- * the merge base with commit %s" — as revert says its target's (cmds/revert.c
- * cmd_revert). A refused open leaves the blobs its merge and its union wrote,
- * loose, and nothing else. The draft holds no conflict, and its commit always
- * moves the branch — its stage's second parent records the integration — its
- * writer's words its message (profile_commit).
+ * words; theirs' and the merge base's by the role each plays, said by theirs'
+ * commit over the loader's words, which name the profile alone at a stage's tree
+ * — "Failed to load metadata from commit %s, merged in", "Failed to load metadata
+ * from the merge base with commit %s". A refused open leaves the blobs its merge
+ * and its union wrote, loose, and nothing else. The draft holds no conflict,
+ * and its commit always moves the branch — its stage's second parent records
+ * the integration — its writer's words its message (profile_commit).
  *
  * Reader: cmds/sync.c sync_decide, at the run's decision.
  *
@@ -1612,15 +1614,13 @@ error_t profile_restore_directory(
  * tree's cache (sys/stage.h stage_read_tree).
  *
  * The commit's sheet is read first and strictly, so its refusal moves nothing,
- * in the loader's words (profile_load_sheet): a writer that reads it before says
- * it as the commit's.
+ * in the loader's words, which name the commit (profile_load_sheet).
  *
- * Reader: cmds/revert.c cmd_revert, a whole profile's revert, which reads the
- * commit's sheet before it, said as the commit's.
+ * Reader: cmds/revert.c cmd_revert, a whole profile's revert.
  *
  * @param draft The draft (must not be NULL)
- * @param from The profile at the commit's tree (must not be NULL; its tree one
- *             the draft's repository holds)
+ * @param from The profile at the commit (must not be NULL; its tree one the draft's
+ *             repository holds)
  * @return Error or NULL on success: the sheet's, in the loader's words; or the
  *         tree's, which will not read whole
  */

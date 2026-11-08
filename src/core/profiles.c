@@ -246,6 +246,7 @@ mode_t profile_claim_mode(const profile_claim_t *claim) {
 struct profile {
     arena_t *arena;         /* The handle's own: the handle, its name, the claims it lends */
     const char *name;       /* Whose claims these are, named over every failure */
+    git_oid commit;         /* The commit it was opened at, which every failure names; zero: none */
     const git_tree *tree;   /* `own`, or a stage's */
     git_tree *own;          /* The commit's tree, read at the open; NULL at a stage's */
     metadata_t *sheet;      /* In the arena; NULL until a question loads it, and beside a failure */
@@ -262,9 +263,12 @@ struct profile {
  *
  * @param name Whose claims these are (copied)
  * @param tree The tree (borrowed)
+ * @param commit The commit whose tree it is, which every failure names (copied);
+ *               NULL where the handle names none — a draft's base, and a merge's
+ *               merge base and theirs (profile_subject)
  * @return The handle; never NULL
  */
-static profile_t *profile_seed(const char *name, const git_tree *tree) {
+static profile_t *profile_seed(const char *name, const git_tree *tree, const git_oid *commit) {
     /* The handle in an arena of its own, made here and freed with it, beside
      * the name it copies and every claim it lends; the tree borrowed, and nothing
      * read: the sheet waits for the first question that needs it
@@ -273,9 +277,42 @@ static profile_t *profile_seed(const char *name, const git_tree *tree) {
     profile_t *profile = arena_calloc(arena, 1, sizeof(*profile));
     profile->arena = arena;
     profile->name = arena_strdup(arena, name);
+    if (commit) git_oid_cpy(&profile->commit, commit);
     profile->tree = tree;
 
     return profile;
+}
+
+/**
+ * What every failure the handle words is said of: the profile at the commit it
+ * was opened at, or the profile alone where it names none — a draft's base, and
+ * a merge's merge base and theirs, whose sheets the merge says by their role
+ * (profile_draft_merge)
+ *
+ * Spelled where a failure is said, in the handle's arena, so a handle that fails
+ * nowhere spells nothing. Called among error_git's arguments (profile_blob_above,
+ * profile_entry), so it calls nothing into libgit2 that sets an error: the id
+ * is tested and spelled by git_oid_is_zero and git_oid_tostr, which set none
+ * but for an oid of no type this build knows (lib/libgit2/src/libgit2/oid.c
+ * git_oid_is_zero, git_oid_tostr, git_oid_nfmt).
+ *
+ * Readers: the handle's failures — the sheet's (profile_load_sheet), the walk's
+ * (profile_walk), and a question's at one name (profile_blob_above, profile_entry,
+ * profile_sealed).
+ *
+ * @param profile Handle
+ * @return The words, in the handle's arena
+ */
+static const char *profile_subject(const profile_t *profile) {
+    if (git_oid_is_zero(&profile->commit)) {
+        return arena_str_format(profile->arena, "profile '%s'", profile->name);
+    }
+
+    char id[8];
+    git_oid_tostr(id, sizeof(id), &profile->commit);
+    return arena_str_format(
+        profile->arena, "profile '%s' at commit %s", profile->name, id
+    );
 }
 
 error_t profile_open(const char *name, const git_commit *commit, profile_t **out) {
@@ -298,8 +335,9 @@ error_t profile_open(const char *name, const git_commit *commit, profile_t **out
         return error_git(rc, "Cannot read profile '%s' at commit %s", name, id);
     }
 
-    /* The profile at it, the tree the handle's own and released with it */
-    profile_t *profile = profile_seed(name, tree);
+    /* The profile at it, named by it, the tree the handle's own and released
+     * with it */
+    profile_t *profile = profile_seed(name, tree, git_commit_id(commit));
     profile->own = tree;
 
     *out = profile;
@@ -346,13 +384,16 @@ error_t profile_load_sheet(profile_t *profile) {
      * an empty one, never NULL — so a handle holding neither has not asked yet;
      * and a failure leaves the sheet as it was, NULL beside it (core/metadata.h
      * metadata_load_from_tree, untouched on failure). The sheet is the handle's
-     * own, in its arena, read off its tree, and a failure is said here as the
-     * profile's, over the step the loader names: the loader names no profile */
+     * own, in its arena, read off its tree, and a failure is said here, of the
+     * profile at its commit, over the step the loader names: the loader names
+     * neither */
     if (!profile->sheet && !profile->sheet_failure) {
         error_t err = metadata_load_from_tree(profile->tree, profile->arena, &profile->sheet);
-        profile->sheet_failure = error_wrap(
-            err, "Failed to load metadata for profile '%s'", profile->name
-        );
+        if (err) {
+            profile->sheet_failure = error_wrap(
+                err, "Failed to load metadata for %s", profile_subject(profile)
+            );
+        }
     }
 
     return profile->sheet_failure;
@@ -520,7 +561,7 @@ static error_t profile_blob_above(
         int rc = git_tree_lookup(&next, git_tree_owner(tree), git_tree_entry_id(entry));
         if (rc < 0) {
             err = error_git(
-                rc, "Cannot read '%s' in profile '%s'", storage_path, profile->name
+                rc, "Cannot read '%s' in %s", storage_path, profile_subject(profile)
             );
             break;
         }
@@ -691,22 +732,23 @@ error_t profile_walk(
 
     /* The sheet first, so a strict walk the sheet refuses shows no claim, and a
      * tolerant one goes on without it, the sheet's half alone lost. The failure
-     * is the loader's, which names the profile, and comes back as it is. */
+     * is the loader's, which names the profile at its commit, and comes back as
+     * it is. */
     error_t err = profile_load_sheet(profile);
     if (err && read == PROFILE_READ_STRICT) return err;
 
     /* The blobs, in the tree's pre-order (profile_step). What the tree walk answers
      * is the tree's — a name its grammar refused, a subtree that would not load
-     * — and each names a path in the tree, so the profile is the where neither
-     * says. The visitor's own failure stopped the walk and comes back as it was
-     * made. */
+     * — and each names a path in the tree, so the profile at its commit is the
+     * where neither says. The visitor's own failure stopped the walk and comes
+     * back as it was made. */
     profile_walk_t walk = {
         .sheet   = profile->sheet,
         .visit   = visit,
         .payload = payload,
     };
     err = gitops_tree_walk(profile->tree, profile_step, &walk);
-    if (err) return error_wrap(err, "Cannot read profile '%s'", profile->name);
+    if (err) return error_wrap(err, "Cannot read %s", profile_subject(profile));
     if (walk.failure) return walk.failure;
 
     /* The directory claims the tree leaves standing: every DIRECTORY item the
@@ -741,8 +783,8 @@ error_t profile_contradicted(
 
     /* The sheet first, as the walk reads it: a strict question the sheet refuses
      * shows no claim, and a tolerant one shows none past it, the failure kept
-     * for the reader to say. The failure is the loader's, which names the profile,
-     * and comes back as it is. */
+     * for the reader to say. The failure is the loader's, which names the profile
+     * at its commit, and comes back as it is. */
     error_t err = profile_load_sheet(profile);
     if (err && read == PROFILE_READ_STRICT) return err;
 
@@ -801,9 +843,9 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out) {
 
     /* The claims the walk shows, read strictly, tallied in a value of the call's
      * own and handed out whole: a walk that stopped short leaves the caller's
-     * as it was. The walk's failures name the profile already — the loader's
-     * words for the sheet, "Cannot read profile" over the tree's — so nothing
-     * is said over them. */
+     * as it was. The walk's failures name the profile at its commit already —
+     * the loader's words for the sheet, "Cannot read profile" over the tree's —
+     * so nothing is said over them. */
     profile_counts_t counts = { 0 };
     error_t err = profile_walk(
         profile, PROFILE_READ_STRICT, profile_count_claim, &counts
@@ -884,8 +926,7 @@ error_t profile_entry(
     }
     if (rc < 0) {
         return error_git(
-            rc, "Cannot read '%s' in profile '%s'",
-            storage_path, profile->name
+            rc, "Cannot read '%s' in %s", storage_path, profile_subject(profile)
         );
     }
 
@@ -1046,7 +1087,7 @@ error_t profile_sealed(profile_t *profile, const char *storage_path, bool *out) 
     );
     if (err) {
         return error_wrap(
-            err, "Cannot read '%s' in profile '%s'", storage_path, profile->name
+            err, "Cannot read '%s' in %s", storage_path, profile_subject(profile)
         );
     }
 
@@ -1155,7 +1196,7 @@ static error_t profile_draft_seed(const char *name, stage_t *stage, profile_draf
     profile_draft_t *draft = arena_calloc(arena, 1, sizeof(*draft));
     draft->arena = arena;
     draft->stage = stage;
-    draft->base = profile_seed(name, stage_tree(stage));
+    draft->base = profile_seed(name, stage_tree(stage), NULL);
 
     error_t err = profile_load_sheet(draft->base);
     if (err) {
@@ -2093,8 +2134,7 @@ error_t profile_restore_tree(profile_draft_t *draft, profile_t *from) {
     CHECK_NULL(from);
 
     /* The commit's sheet first, strictly, so a refusal moves nothing: read once
-     * and kept, the failure a writer that read it first said as the commit's
-     * (profile_load_sheet) */
+     * and kept, its failure naming the commit (profile_load_sheet) */
     error_t err = profile_load_sheet(from);
     if (err) return err;
 
@@ -2808,8 +2848,8 @@ error_t profile_draft_merge(
      * for the content and for each kind of claim */
     profile_merge_t merge = {
         .draft      = draft,
-        .merge_base = profile_seed(name, stage_merge_base(stage)),
-        .theirs     = profile_seed(name, stage_theirs(stage)),
+        .merge_base = profile_seed(name, stage_merge_base(stage), NULL),
+        .theirs     = profile_seed(name, stage_theirs(stage), NULL),
         .side       = side,
         .sheet      = metadata_create(draft->arena),
         .arena      = arena,
@@ -2819,9 +2859,9 @@ error_t profile_draft_merge(
     ptr_array_init(&merge.directory_conflicts, arena, 0);
 
     /* Every sheet read strictly: ours' by the seed, in the loader's words; theirs'
-     * and the merge base's said by theirs' commit, seven characters as every
-     * screen spells a commit, over the loader's words, as revert says its target's
-     * (cmds/revert.c cmd_revert) */
+     * and the merge base's by the role each plays, said by theirs' commit, seven
+     * characters as every screen spells a commit, over the loader's words, which
+     * name the profile alone at a stage's tree (profile_subject) */
     char commit[8];
     git_oid_tostr(commit, sizeof(commit), theirs);
     err = profile_load_sheet(merge.theirs);

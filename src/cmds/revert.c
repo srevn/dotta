@@ -1099,22 +1099,15 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     if (err) goto cleanup;
 
     /* The profile at the commit, opened once and lent to everything below that
-     * reads the commit — a tree that will not read refused here, naming the commit
-     * (core/profiles.h profile_open) — whose sheet is read once, strictly, and
-     * said as the commit's: every later read of the commit — its claims at a
-     * path, the way a restore brings back, the whole tree — reads it through
-     * the profile at the commit, so a sheet that will not load is refused here,
-     * naming the commit, whichever read would have met it first. A corrupt source
-     * sheet would invent attributes while claiming to restore them. A commit
-     * without a sheet loads as an empty one (the tree loader's contract). */
+     * reads the commit — its claims at a path, the way a restore brings back,
+     * the whole tree — so every failure of it names the commit, whichever read
+     * meets it first (core/profiles.h profile_open): a tree that will not read
+     * refused here, and a sheet that will not load by the first read of it,
+     * strictly, before the preview. A corrupt source sheet would invent attributes
+     * while claiming to restore them. A commit without a sheet loads as an empty
+     * one (the tree loader's contract). */
     err = profile_open(profile, target_commit, &target_profile);
     if (err) goto cleanup;
-
-    err = profile_load_sheet(target_profile);
-    if (err) {
-        err = error_wrap(err, "Failed to load metadata from target commit %s", oid_str);
-        goto cleanup;
-    }
 
     /* The revert, onto the draft, and nothing written to the repository: the
      * path's claims made the commit's — every claim the commit's view stands at

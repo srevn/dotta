@@ -138,8 +138,9 @@ static error_t remove_list_claims(
     *out_count = 0;
 
     /* What stands, then what the tree contradicts, through the one visitor. The
-     * walk's failures name the profile already — the loader's words for the sheet,
-     * "Cannot read profile" over the tree's — so nothing is said over them. */
+     * walk's failures name the profile at its commit already — the loader's words
+     * for the sheet, "Cannot read profile" over the tree's — so nothing is said
+     * over them. */
     remove_walk_t walk = {
         .arena = ctx->arena, .mounts = ctx->run.mounts, .profile = profile_name(profile),
     };
@@ -1131,10 +1132,10 @@ static error_t remove_profile(
 
     /* What the tolerant read lost, said where it was read, so the dry run says
      * it too: the directory claims the hooks are not handed, and the count below,
-     * in the loader's line, which names the profile. The record phase loses them
-     * too, unsaid (stated): a record of one is never reclaimed, the next apply's
-     * as every let-go — released where it holds what no apply removes, pruned
-     * once empty where dotta created it */
+     * in the loader's line, which names the profile at its commit. The record
+     * phase loses them too, unsaid (stated): a record of one is never reclaimed,
+     * the next apply's as every let-go — released where it holds what no apply
+     * removes, pruned once empty where dotta created it */
     err = profile_load_sheet(profile);
     if (err) {
         output_gap(out, OUTPUT_NORMAL);

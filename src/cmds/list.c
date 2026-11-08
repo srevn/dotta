@@ -540,8 +540,8 @@ static error_t list_files(
          * above read tolerantly, its failure the one the handle kept
          * (core/profiles.h profile_load_sheet). Which is why the refusal is
          * rendered from its root — between it and here the loader names the profile
-         * once more and nothing else, and this line names it already (base/error.h
-         * error_root). */
+         * once more and the head's commit, and this line names the profile already,
+         * its head being the listing's own (base/error.h error_root). */
         profile_counts_t count = { 0 };
         err = profile_counts(profile, &count);
         if (err) {

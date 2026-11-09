@@ -177,16 +177,21 @@ static const char *apply_route_label(const workspace_item_t *item) {
  * squatter the run gives no fate (the skip's ancestry), and the read a line names.
  * No line says "by hand" alone: an incapacity's row already names the path a
  * hand would open, as a refused prune's does (apply_print_cleanup_refused), so
- * the hand is named only beside a second way out the row does not name. Beyond
- * the verdicts the block asks two facts of the run: whether it holds root
- * (identity()->privileged) and whether encryption is on
- * (config->encryption_enabled). '-e' is how to ignore a skip, not how to remedy
- * one. The block sits between the deploy preview and cleanup's, so each engine
- * tells its story the same way — what it will do, then what it will not and why.
- * No total-count line: the exit error's message is the count's one home.
+ * the hand is named only beside a second way out the row does not name. A row
+ * read at a commit names apply's own way at that commit, and no verb that commits
+ * to the head the run did not read: at a head the run's view is every verb's,
+ * at a commit only the line's. Beyond the verdicts the block asks three facts
+ * of the run: whether it holds root (identity()->privileged), whether encryption
+ * is on (config->encryption_enabled), and the commit each profile was read at
+ * (revisions, cmds/apply.h cmd_apply_options_t). '-e' is how to ignore a skip,
+ * not how to remedy one. The block sits between the deploy preview and cleanup's,
+ * so each engine tells its story the same way — what it will do, then what it
+ * will not and why. No total-count line: the exit error's message is the count's
+ * one home.
  */
 static void apply_print_deploy_skips(
-    output_t *out, const config_t *config, const deploy_preflight_t *verdicts
+    output_t *out, const config_t *config, const deploy_preflight_t *verdicts,
+    const hashmap_t *revisions
 ) {
     if (verdicts->skipped.count == 0) return;
 
@@ -408,8 +413,24 @@ static void apply_print_deploy_skips(
      * contract reads, deploy_skip_needs_force): Git's direction, taught at a
      * path — a bare --force lifts every consent skip of the run, the edited copies
      * other machines' deletions left among them — and naming its cost the way
-     * cleanup's does: --force keeps Git's and discards what stands there */
-    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+     * cleanup's does: --force keeps Git's and discards what stands there. It
+     * reads the path where the run read it: at its commit where any such row's
+     * profile was read at one, the form true of a row at its head too, whose
+     * commit is HEAD; else at the path, its loop guarded by that scan */
+    size_t r = 0;
+    for (; r < verdicts->skipped.count; r++) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[r];
+
+        if (deploy_skip_needs_force(s->reason) && hashmap_get(revisions, s->item->profile)) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  Use 'dotta apply --force <profile>:<path>@<commit>' to overwrite or "
+                "replace one (discards what stands there)"
+            );
+            break;
+        }
+    }
+    for (size_t i = 0; r == verdicts->skipped.count && i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
                 out, OUTPUT_NORMAL,
@@ -425,20 +446,24 @@ static void apply_print_deploy_skips(
      * (core/workspace.h workspace_capturable) — none for a kind no capture commits,
      * whether Git moved too (CONFLICT) or not (KIND), none where Git alone moved
      * (STALE), where keeping disk is no capture, none beneath a squatter, whose
-     * own line carries the remedy, and none at dotta's node, which no row routes.
-     * One line closes the family, its verb true of every row it names: update
-     * --force's where any is both sides' (workspace_item_route), which commits
-     * what disk holds over a conflict, a plain update skipping it (cmds/update.c
-     * update_partition), and the capture's rows as a plain update does; else
-     * update's, where each is the user's own over a base (the route's CAPTURE:
-     * an edit, or a link where the row holds a file or the reverse, which the
-     * capture commits as the new kind), its loop guarded by that scan as the
-     * sudo line's is by the identity */
+     * own line carries the remedy, none at dotta's node, which no row routes,
+     * and none at a row read at a commit: update commits disk's bytes to the
+     * head's claim, which the run did not read, so the commit still differs from
+     * disk after it — status offers it there, over the head. One line closes
+     * the family, its verb true of every row it names: update --force's where
+     * any is both sides' (workspace_item_route), which commits what disk holds
+     * over a conflict, a plain update skipping it (cmds/update.c update_partition),
+     * and the capture's rows as a plain update does; else update's, where each
+     * is the user's own over a base (the route's CAPTURE: an edit, or a link
+     * where the row holds a file or the reverse, which the capture commits as
+     * the new kind), its loop guarded by that scan as the sudo line's is by the
+     * identity */
     size_t c = 0;
     for (; c < verdicts->skipped.count; c++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[c];
 
         if (deploy_skip_needs_force(s->reason) && s->item->row &&
+            !hashmap_get(revisions, s->item->profile) &&
             workspace_item_route(s->item) == WORKSPACE_ROUTE_CONFLICT &&
             workspace_capturable(s->item)) {
             output_info(
@@ -452,6 +477,7 @@ static void apply_print_deploy_skips(
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
         if (deploy_skip_needs_force(s->reason) && s->item->row &&
+            !hashmap_get(revisions, s->item->profile) &&
             workspace_item_route(s->item) == WORKSPACE_ROUTE_CAPTURE) {
             output_info(
                 out, OUTPUT_NORMAL,
@@ -507,9 +533,15 @@ static void apply_print_deploy_skips(
 
     /* The user's own node at a rung, which is never planned, so no scope and no
      * flag helps: its way out is the named re-derivation, which retires a claim
-     * the disk contradicts and leaves the arrangement the user's */
+     * the disk contradicts and leaves the arrangement the user's — none beneath
+     * a row read at a commit: the re-derivation reads the head's chain, the
+     * commit's claim stands after it, and with no second way out the line goes
+     * whole, the row naming its squatter already */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
-        if (verdicts->skipped.entries[i].ancestry == WORKSPACE_DISPLACED_DERIVED) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
+
+        if (s->ancestry == WORKSPACE_DISPLACED_DERIVED &&
+            !hashmap_get(revisions, s->item->profile)) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or 'dotta update <dir>' to re-derive the way there"
@@ -2007,26 +2039,28 @@ static void apply_print_cleanup_preview(
  *
  * Each is named with its reason, then the ways out its rows have, closed as the
  * deploy block closes its own (apply_print_deploy_skips): the line the deploy-side
- * conflict block also ends with — --force overrides every skip here — and, where
- * a row names a read that failed, what lifts the read — sudo where the bits refused
- * it, for a run that holds none, and the key where none opened it, the switch
- * first where encryption is off (config->encryption_enabled). The header names
- * the fate in the receipt's own words for this bucket — the two blocks that map
- * one-to-one onto a receipt section, this and "Released files", name it identically
- * there and here — which also keeps it clear of the deploy block's "Skipped paths"
- * above, whose rows carry the same shape. The labels name the reasons, because
- * no one reason covers the block — a skipped relocation is byte-clean and an
- * unverifiable copy may be — and the --force line names the cost the same way:
- * what stands there, whatever its state. The ways to keep a skipped file are
- * the inverse of the command that orphaned it (profile enable, add) or a move
- * aside, and every line names the profile; they are not spelled out.
+ * conflict block also ends with — --force overrides every skip here, at the commit
+ * an orphan's profile was read at where the line names one (revisions) — and,
+ * where a row names a read that failed, what lifts the read — sudo where the
+ * bits refused it, for a run that holds none, and the key where none opened it,
+ * the switch first where encryption is off (config->encryption_enabled). The
+ * header names the fate in the receipt's own words for this bucket — the two
+ * blocks that map one-to-one onto a receipt section, this and "Released files",
+ * name it identically there and here — which also keeps it clear of the deploy
+ * block's "Skipped paths" above, whose rows carry the same shape. The labels
+ * name the reasons, because no one reason covers the block — a skipped relocation
+ * is byte-clean and an unverifiable copy may be — and the --force line names
+ * the cost the same way: what stands there, whatever its state. The ways to keep
+ * a skipped file are the inverse of the command that orphaned it (profile enable,
+ * add) or a move aside, and every line names the profile; they are not spelled out.
  *
  * The previews end with it and the refusals (apply_print_cleanup_refused), so
  * that guidance is what the user is looking at when the confirmation prompt
  * arrives.
  */
 static void apply_print_cleanup_skips(
-    output_t *out, const config_t *config, const cleanup_preflight_t *verdicts
+    output_t *out, const config_t *config, const cleanup_preflight_t *verdicts,
+    const hashmap_t *revisions
 ) {
     if (verdicts->skipped_files.count == 0) return;
 
@@ -2085,11 +2119,29 @@ static void apply_print_cleanup_skips(
         output_colored(out, OUTPUT_NORMAL, color, ")\n");
     }
 
-    output_info(
-        out, OUTPUT_NORMAL,
-        "  Use 'dotta apply --force <path>' to prune one anyway (discards what "
-        "stands there)"
-    );
+    /* The --force line, which every skip here is the flag's to lift, reading
+     * the path where the run read it: at its commit where any orphan's profile,
+     * its record's, was read at one — the head may claim what the commit left
+     * out, and the plain form would deploy over the copy it promised to prune;
+     * else at the path, where that scan ran out */
+    size_t r = 0;
+    for (; r < verdicts->skipped_files.count; r++) {
+        if (hashmap_get(revisions, verdicts->skipped_files.entries[r]->profile)) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  Use 'dotta apply --force <profile>:<path>@<commit>' to prune one anyway "
+                "(discards what stands there)"
+            );
+            break;
+        }
+    }
+    if (r == verdicts->skipped_files.count) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Use 'dotta apply --force <path>' to prune one anyway (discards what "
+            "stands there)"
+        );
+    }
 
     /* A row's fault is the read its label names: a fault ranks first
      * (cleanup_skip_reason), so a skipped file that carries one is labelled by
@@ -3535,9 +3587,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * run. */
     apply_print_reassignments(out, pending_reassignments, pending_reassignment_count);
     apply_print_deploy_preview(out, deploy_verdicts);
-    apply_print_deploy_skips(out, config, deploy_verdicts);
+    apply_print_deploy_skips(out, config, deploy_verdicts, opts->revisions);
     apply_print_cleanup_preview(out, cleanup_verdicts);
-    apply_print_cleanup_skips(out, config, cleanup_verdicts);
+    apply_print_cleanup_skips(out, config, cleanup_verdicts, opts->revisions);
     apply_print_cleanup_refused(out, cleanup_verdicts);
 
     /* Neither engine's skips abort: what can be deployed is deployed, what can
@@ -3858,13 +3910,15 @@ static args_class_t apply_classify(const char *tok) {
  * commit it carries, or the profile's head where it carries none — and a negation,
  * which reads none, names one only where it carries a commit. A profile is read
  * at one (core/manifest.h manifest_build, its map): one named at two is refused
- * before anything is read. The word a commit leaves selects what it would select
- * alone, read by the classifier's own rungs: a profile:path the scope's, the
- * token raw (core/scope.h scope_inputs_t); a profile's name a profile named on
- * its own, so `apply p@C X` is p's X; and a path, at a commit, is refused. The
- * profiles and the refspecs are laid out anew in `arena`, the profiles named on
- * their own first and each word after them in the line's order: the options point
- * at the new arrays, and the engine's are never written.
+ * before anything is read. The map's readers are the build and the skips' remedies,
+ * which name apply's own way at a commit (apply_print_deploy_skips,
+ * apply_print_cleanup_skips). The word a commit leaves selects what it would
+ * select alone, read by the classifier's own rungs: a profile:path the scope's,
+ * the token raw (core/scope.h scope_inputs_t); a profile's name a profile named
+ * on its own, so `apply p@C X` is p's X; and a path, at a commit, is refused.
+ * The profiles and the refspecs are laid out anew in `arena`, the profiles named
+ * on their own first and each word after them in the line's order: the options
+ * point at the new arrays, and the engine's are never written.
  */
 static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command_t *cmd) {
     (void) cmd;

@@ -35,9 +35,9 @@
  *
  * Two questions stand before any reading, over the spelling alone and the caller's
  * to ask first: whether a positional announces a path at all, where a verb's
- * slot could hold a profile instead (input_announces_path), and whether it names
- * its profile before a ':' (input_announces_profile). Neither resolves anything,
- * and neither is the resolver's own reading, which is wider.
+ * slot could hold a profile instead (input_announces_path), and whether it sets
+ * a profile apart at its first ':' (input_announces_profile). Neither resolves
+ * anything, and neither is the resolver's own reading, which is wider.
  */
 
 #ifndef DOTTA_INPUT_H
@@ -128,18 +128,18 @@ typedef struct {
 bool input_announces_path(const char *input);
 
 /**
- * Does the positional name its profile before a ':'?
+ * Does the positional set a profile apart at its first ':'?
  *
  * The profile:path grammar's question (base/refspec.h refspec_parse: the profile
  * is what precedes the first ':'), asked of a token whose slot is undecided and
  * before a pattern is read in it — so `p:*.conf` is p's pattern, never a path
- * holding a ':'. What stands before the first ':' is a profile's name unless
- * the token announces a path there: a place in its first byte, a label opening
- * it, or a rule — a negation, or a wildcard ahead of the ':', one after it being
- * the profile's own pattern. So a path holding a ':' keeps its reading — `~/a:b`,
- * `home/a:b`, `*a:b*`, `./a:b`, `!a:b` — and nothing before the ':' names no
- * profile: `:x` announces nothing, and is read as input_announces_path reads
- * it. A label's word alone before the ':' is a profile's name, the one spelling
+ * holding a ':'. The first ':' sets a profile apart unless the token announces
+ * a path before it: a place in its first byte, a label opening it, or a rule —
+ * a negation, or a wildcard ahead of the ':', one after it being the profile's
+ * own pattern. So a path holding a ':' keeps its reading — `~/a:b`, `home/a:b`,
+ * `*a:b*`, `./a:b`, `!a:b` — and a ':' opening the token sets apart a profile
+ * it does not name, which the parse refuses: `:x` names no profile before its
+ * ':'. A label's word alone before the ':' is a profile's name, the one spelling
  * a positional has for a profile so named (`home:~/.x`), `home` alone being the
  * namespace's own directory (input_announces_path).
  *
@@ -152,8 +152,9 @@ bool input_announces_path(const char *input);
  * alone: the verbs that take a refspec in a slot of their own parse it there
  * (base/refspec.h refspec_parse).
  *
- * @param input The positional (may be NULL, which names none)
- * @return true iff a profile's name stands before the input's first ':'
+ * @param input The positional (may be NULL, which sets none apart)
+ * @return true iff the input's first ':' sets a profile apart, a name before it
+ *         or none
  */
 bool input_announces_profile(const char *input);
 

@@ -3896,13 +3896,14 @@ enum apply_class { APPLY_CLASS_PATH = 1, APPLY_CLASS_PROFILE, APPLY_CLASS_REFSPE
  * Positional classifier, from the token alone — completion runs it and never
  * apply_post_parse (base/args.h args_completion_t), and apply_complete asks it
  * of the word before an `@` being typed: a token carrying a commit (base/refspec.h
- * refspec_commit) or naming its profile before a ':' (infra/input.h
- * input_announces_profile) goes to refspecs[], for apply_post_parse to read;
- * one that announces a path to paths[] (input_announces_path); and what announces
- * nothing is a profile name. The commit is asked first, since a commit may hold
- * a ':' or a glob's bytes, and the profile's name before the pattern, so
- * `p:'*.conf'` is p's; every token neither question takes keeps the class it
- * had, a path or a profile's name.
+ * refspec_commit) or setting a profile apart at its first ':' (infra/input.h
+ * input_announces_profile) goes to refspecs[], for apply_post_parse to read —
+ * one with no name before its ':' among them, which the parse refuses as every
+ * verb's does; one that announces a path to paths[] (input_announces_path); and
+ * what announces nothing is a profile name. The commit is asked first, since a
+ * commit may hold a ':' or a glob's bytes, and the profile's name before the
+ * pattern, so `p:'*.conf'` is p's; every token neither question takes keeps the
+ * class it had, a path or a profile's name.
  */
 static args_class_t apply_classify(const char *tok) {
     if (refspec_commit(tok) || input_announces_profile(tok)) return APPLY_CLASS_REFSPEC;
@@ -3956,7 +3957,8 @@ static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command
         char *token = o->refspecs[i];
 
         /* The whole token first: one that names no file — `p:`, `p:@C`, `@HEAD`,
-         * `:@HEAD` — is refused before its word is asked anything */
+         * `:@HEAD` — or no profile before its ':' — `:x` — is refused before
+         * its word is asked anything */
         refspec_t rs = { 0 };
         error_t err = refspec_parse(arena, token, &rs);
         if (err) return error_wrap(err, "Failed to parse file specification");
@@ -4020,8 +4022,9 @@ static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command
  * only apply_post_parse reads as one named on its own and so narrows nothing
  * here — or a filesystem path. An `@` in the token being typed completes its
  * commit part where the word before it names a profile, as apply_classify reads
- * that word, a path's `@` being its own (completion_commits_at); a profile's
- * ':' being typed, every profile's files as `profile:path` (completion_refspecs).
+ * that word, a path's `@` being its own (completion_commits_at); a ':' being
+ * typed that sets a profile apart, with its name before it or none, every profile's
+ * files as `profile:path` (completion_refspecs).
  */
 static args_want_t apply_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -4051,8 +4054,8 @@ static args_want_t apply_complete(
         }
     }
 
-    /* A profile's ':' being typed: every profile's files as `profile:path`, the
-     * shell matching the one typed */
+    /* A ':' being typed that sets a profile apart, its name before it or none:
+     * every profile's files as `profile:path`, the shell matching what it will */
     if (input_announces_profile(at->current)) {
         completion_refspecs(ctx, out, NULL);
         return ARGS_WANT_NONE;

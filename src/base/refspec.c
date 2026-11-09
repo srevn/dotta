@@ -131,16 +131,14 @@ error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
         end = commit - 1;
     }
 
-    /* Then the profile, at the first ':' before the commit (a sub-profile like
-     * darwin/work keeps its own separator): a ':' the commit carries — a pattern's,
-     * `^{/fix: typo}` — is the commit's, and no profile holds one
-     * (git-check-ref-format). */
+    /* Then the profile, whatever precedes the first ':' before the commit (a
+     * sub-profile like darwin/work keeps its own separator): a ':' the commit
+     * carries — a pattern's, `^{/fix: typo}` — is the commit's, and no profile
+     * holds one (git-check-ref-format). */
     const char *remainder = input;
     const char *colon = memchr(input, ':', (size_t) (end - input));
     if (colon) {
-        if (colon > input) {
-            rs.profile = arena_strndup(arena, input, (size_t) (colon - input));
-        }
+        rs.profile = arena_strndup(arena, input, (size_t) (colon - input));
         remainder = colon + 1;
     }
 
@@ -150,6 +148,13 @@ error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
      * — a path, or export's profile — the empty one among them. */
     if (remainder == end && (colon || rs.commit)) {
         return error_create(ERR_INVALID_ARG, "'%s' names no file", input);
+    }
+
+    /* The profile is what the ':' sets apart on its other side, and a ':' opening
+     * the token leaves nothing there: the spelling names no profile. Asked after
+     * the file, so one that names neither — `:`, `:@HEAD` — names no file. */
+    if (colon == input) {
+        return error_create(ERR_INVALID_ARG, "'%s' names no profile before its ':'", input);
     }
     rs.file = arena_strndup(arena, remainder, (size_t) (end - remainder));
 

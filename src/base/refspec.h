@@ -115,16 +115,17 @@ typedef struct {
  * commit follows is the name's own, and a commit that carries an '@' of its own
  * — `@` alone, `HEAD@{1}` — is split before it. The profile is then what precedes
  * the first ':' before the commit, and is optional — NULL where no ':' stands
- * there, and where nothing precedes it, `:home/.bashrc` naming a file alone. A
- * ':' the commit carries — `HEAD^{/fix: typo}` — is the commit's, and no profile
- * holds one (git-check-ref-format). The names this order reads otherwise are a
- * profile's holding an '@' with a commit's shape after it — `x@HEAD@y:home/f`,
- * or one ending in `@HEAD` or `@@` — each read as a file at a commit the resolver
- * then refuses.
+ * there. A ':' the commit carries — `HEAD^{/fix: typo}` — is the commit's, and
+ * no profile holds one (git-check-ref-format). The names this order reads otherwise
+ * are a profile's holding an '@' with a commit's shape after it —
+ * `x@HEAD@y:home/f`, or one ending in `@HEAD` or `@@` — each read as a file at
+ * a commit the resolver then refuses.
  *
  * A spelling whose ':' or commit sets a file apart and leaves nothing in its
  * place — `p:`, `p:@HEAD`, `@HEAD` — names no file, and is refused quoted as it
- * was read.
+ * was read; so is one whose ':' leaves nothing before it, which names no profile
+ * — `:home/.bashrc`, with a commit or without — asked once the file is: `:` and
+ * `:@HEAD` name no file.
  *
  * Output slices are bump-allocated in the provided arena and share its lifetime.
  * On error, *out is left unchanged; callers should only read *out after the
@@ -133,7 +134,7 @@ typedef struct {
  * Examples:
  *   "home/.bashrc"                  -> {NULL,         "home/.bashrc", NULL}
  *   "global:home/.bashrc"           -> {"global",     "home/.bashrc", NULL}
- *   ":home/.bashrc"                 -> {NULL,         "home/.bashrc", NULL}
+ *   ":home/.bashrc"                 -> refused: names no profile before its ':'
  *   "home/.bashrc@a4f2c8e"          -> {NULL,         "home/.bashrc", "a4f2c8e"}
  *   "home/.bashrc@HEAD~1"           -> {NULL,         "home/.bashrc", "HEAD~1"}
  *   "home/.bashrc@@"                -> {NULL,         "home/.bashrc", "@"}

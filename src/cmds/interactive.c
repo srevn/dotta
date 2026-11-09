@@ -29,7 +29,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
 
@@ -353,16 +353,15 @@ static error_t plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) 
         }
 
         /* Every text but the row's own spelling goes through the binders' one
-         * reading now (infra/path.h path_input_target), at the moment the target
-         * is written: a refusal is the spelling's or the rules' in their own
-         * words, and the item takes the spelling it read, the one the store keeps.
-         * The row's own spelling is the binding the store holds and is not read
-         * again, so a save that touches no target stands over a directory gone
-         * since. */
+         * reading now (infra/input.h input_target), at the moment the target is
+         * written: a refusal is the spelling's or the rules' in their own words,
+         * and the item takes the spelling it read, the one the store keeps. The
+         * row's own spelling is the binding the store holds and is not read again,
+         * so a save that touches no target stands over a directory gone since. */
         if (it->target != NULL &&
             (persisted_target == NULL || strcmp(it->target, persisted_target) != 0)) {
             const char *target = NULL;
-            error_t err = path_input_target(it->target, view->arena, &target);
+            error_t err = input_target(it->target, view->arena, &target);
             if (err) {
                 return error_wrap(
                     err, "Invalid deployment target for profile '%s'", it->name

@@ -1,37 +1,34 @@
 /**
- * path.c - The key a CLI path argument names
+ * input.c - The key a CLI path argument names
  *
  * The readings of a flexible CLI path argument:
  *
- *   path_input_resolve      - the key the input names: a filesystem path (a
+ *   input_resolve           - the key the input names: a filesystem path (a
  *                             filesystem shape, normalized) or a storage path
  *                             (validated, as typed) — the pathspec, and every
  *                             verb that takes a path from the command line
  *
- *   path_input_filesystem_path
- *                           - that key alone, in the arena: filesystem path ->
+ *   input_filesystem_path   - that key alone, in the arena: filesystem path ->
  *                             absolute filesystem path, a relative one's working
  *                             directory spelled under HOME, for a caller whose
  *                             grammar has no storage arm to dispatch to (add, a
  *                             target, ignore --test, the completion, a filesystem
  *                             rule's anchor)
  *
- *   path_input_target       - that key, held to a target's rules (infra/mount.h
+ *   input_target            - that key, held to a target's rules (infra/mount.h
  *                             mount_validate_target), for the three binders:
  *                             the --target flags and the editor's save
  *
- *   path_input_announces_path
- *                           - the grammars' question, asked of a positional whose
+ *   input_announces_path    - the grammars' question, asked of a positional whose
  *                             slot is still undecided: a path, or a name (list,
  *                             diff, apply, update)
  *
- *   path_input_announces_profile
+ *   input_announces_profile
  *                           - the profile:path grammar's, asked of the same
  *                             positional: a profile's name before its ':', or a
  *                             path holding one (apply)
  *
- *   path_input_announces_rule
- *                           - the filter's question: a rule, or a path named
+ *   input_announces_rule    - the filter's question: a rule, or a path named
  *                             exactly (the pathspec's gate, and the pattern a
  *                             positional announces above)
  *
@@ -42,12 +39,12 @@
  * fs_working_directory), the path's algebra (base/string.h: str_path_join,
  * str_path_fold) and HOME's two spellings (sys/identity) are delegated to the
  * layers below. The table of roots is not among them: no root's spelling is read
- * here and no root's noun, so this file names no place (infra/path.h). A target's
+ * here and no root's noun, so this file names no place (infra/input.h). A target's
  * rules are mount's (the place a binding means), asked of the argument's spelling
  * and of nothing the table holds.
  */
 
-#include "infra/path.h"
+#include "infra/input.h"
 
 #include <string.h>
 
@@ -59,44 +56,42 @@
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
-#define PATH_WILDCARDS "*?["   /* a rule's alphabet: the filter's wildcards (path_input_announces_rule) */
+#define PATH_WILDCARDS "*?["   /* a rule's alphabet: the filter's wildcards (input_announces_rule) */
 
-bool path_input_announces_path(const char *input) {
+bool input_announces_path(const char *input) {
     if (!input || input[0] == '\0') return false;
 
     /* A place, in the first byte; a name, under a label; or a pattern that selects
      * either. A separator alone announces nothing — that is a profile's own shape,
      * and the reason this is not the resolver's reading of the same string
-     * (infra/path.h). */
+     * (infra/input.h). */
     return input[0] == '/' || input[0] == '~' || input[0] == '.' ||
-           label_prefixes(input) || path_input_announces_rule(input);
+           label_prefixes(input) || input_announces_rule(input);
 }
 
-bool path_input_announces_profile(const char *input) {
+bool input_announces_profile(const char *input) {
     const char *colon = input ? strchr(input, ':') : NULL;
     if (colon == NULL || colon == input) return false;   /* no ':', or no name before it */
 
-    /* path_input_announces_path's tests, a rule's bounded at the ':' — a wildcard
+    /* input_announces_path's tests, a rule's bounded at the ':' — a wildcard
      * after it is the profile's own pattern — and the label's asked of the whole
      * token, which a label's word alone before the ':' does not open */
     return !(input[0] == '/' || input[0] == '~' || input[0] == '.' || input[0] == '!' ||
            label_prefixes(input) || strcspn(input, PATH_WILDCARDS) < (size_t) (colon - input));
 }
 
-bool path_input_announces_rule(const char *input) {
+bool input_announces_rule(const char *input) {
     CHECK_NULL(input);
 
     return input[0] == '!' || strpbrk(input, PATH_WILDCARDS) != NULL;
 }
 
-error_t path_input_resolve(
-    const char *input, arena_t *arena, path_input_t *out
-) {
+error_t input_resolve(const char *input, arena_t *arena, input_path_t *out) {
     CHECK_NULL(input);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    *out = (path_input_t){ 0 };
+    *out = (input_path_t){ 0 };
 
     /* The same sentence the argument's reading gives, said here because the storage
      * arm below never reaches it at all. */
@@ -120,7 +115,7 @@ error_t path_input_resolve(
         char *storage = arena_strndup(arena, input, len);
         error_t err = label_validate_storage(storage);
         if (err) return err;
-        out->key = PATH_KEY_STORAGE;
+        out->key = INPUT_KEY_STORAGE;
         out->storage_path = storage;
         return NULL;
     }
@@ -147,9 +142,9 @@ error_t path_input_resolve(
      * the answer because the zeroed key is already this one: a read that fails
      * leaves a NULL beneath it, which is what this function promises after an
      * error. */
-    out->key = PATH_KEY_FILESYSTEM;
+    out->key = INPUT_KEY_FILESYSTEM;
 
-    return path_input_filesystem_path(input, arena, &out->filesystem_path);
+    return input_filesystem_path(input, arena, &out->filesystem_path);
 }
 
 /**
@@ -176,7 +171,7 @@ error_t path_input_resolve(
  * test, the rule's spelling under the kernel's (base/string.h str_path_under).
  * In each, the directory stands as the shell spelled it.
  */
-static error_t path_working_directory(arena_t *arena, const char **out) {
+static error_t input_working_directory(arena_t *arena, const char **out) {
     const char *cwd = NULL;
     error_t err = fs_working_directory(arena, &cwd);
     if (err) return err;
@@ -200,7 +195,7 @@ static error_t path_working_directory(arena_t *arena, const char **out) {
     return NULL;
 }
 
-error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out) {
+error_t input_filesystem_path(const char *input, arena_t *arena, const char **out) {
     CHECK_NULL(input);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -224,7 +219,7 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
      * join so that the tail stays the user's own too. */
     if (path[0] != '/') {
         const char *cwd = NULL;
-        err = path_working_directory(arena, &cwd);
+        err = input_working_directory(arena, &cwd);
         if (err) return err;
         path = str_path_join(arena, cwd, path);
     }
@@ -234,7 +229,7 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
     return NULL;
 }
 
-error_t path_input_target(const char *input, arena_t *arena, const char **out) {
+error_t input_target(const char *input, arena_t *arena, const char **out) {
     CHECK_NULL(input);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -244,7 +239,7 @@ error_t path_input_target(const char *input, arena_t *arena, const char **out) {
     /* The spelling the row stores, then the place it names: each refusal is its
      * step's own, in its own words */
     const char *target = NULL;
-    error_t err = path_input_filesystem_path(input, arena, &target);
+    error_t err = input_filesystem_path(input, arena, &target);
     if (!err) err = mount_validate_target(target);
     if (err) return err;
 

@@ -38,9 +38,9 @@ label_split_t label_split(const char *s) {
          * ("home/x"), or the word alone ("home"), which is the namespace's own
          * directory and a name like any other. A directory spelling ("home/")
          * is the word with an empty tail too, and the shed is the reader's
-         * (infra/path.c path_input_resolve). "homework" stands under none. The
-         * word is read as the directory it names, under which a path lies as
-         * under any (base/string.h str_path_under). */
+         * (infra/input.c input_resolve). "homework" stands under none. The word
+         * is read as the directory it names, under which a path lies as under
+         * any (base/string.h str_path_under). */
         const char *tail = str_path_under(s, word, strlen(word));
         if (tail) return (label_split_t){ .label = label, .tail = tail };
     }
@@ -100,7 +100,7 @@ error_t label_validate_storage(const char *storage_path) {
 
     /* A key never carries the directory marker: the label's own directory is
      * spelled by the word alone, as every directory is by its name, and a reader
-     * of a directory spelling sheds it first (infra/path.c path_input_resolve). */
+     * of a directory spelling sheds it first (infra/input.c input_resolve). */
     if (storage_path[strlen(storage_path) - 1] == '/') {
         return error_create(
             ERR_INVALID_ARG, "Storage path must not end with '/': '%s'",

@@ -4,7 +4,7 @@
  * A prelude, not a module: four opaque handles, base's error codes and transparent
  * containers, a managed path's kind and type, the mode a claim does not make
  * and a directory's floor, and what a look finds standing at a path — not its
- * two keys, which are strings and declare nothing (infra/path.h). include/config.h
+ * two keys, which are strings and declare nothing (infra/input.h). include/config.h
  * is the second prelude — the config layout, read by core without including utils/.
  * base/args.h re-declares the handles it needs instead of including this, staying
  * a standalone engine; every other base header includes it, or no header of dotta's

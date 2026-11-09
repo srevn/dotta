@@ -50,11 +50,11 @@ typedef struct {
  * `p X C`, `X@C` and `X C` the path X, in p or in the one profile holding it, a
  * commit written after its path's word read by position, a tag or a branch among
  * them. A word that announces a path is one, and any other is a profile
- * (infra/path.h path_input_announces_path): `src/config@C` is the profile
- * src/config, and `./src/config@C` the path. A typed name is a path like any
- * other: the place this machine puts it at — or, where it places it nowhere,
- * the name itself (revert_restore_path) — so the revert writes the name the profile
- * holds and authors none.
+ * (infra/input.h input_announces_path): `src/config@C` is the profile src/config,
+ * and `./src/config@C` the path. A typed name is a path like any other: the place
+ * this machine puts it at — or, where it places it nowhere, the name itself
+ * (revert_restore_path) — so the revert writes the name the profile holds and
+ * authors none.
  *
  * The profile is the one named — a refspec's, -p's, a whole profile's own word
  * — or the one local profile holding the path (revert_select_profile). Everything

@@ -157,9 +157,8 @@ source_filter_t *source_filter_create(arena_t *arena);
  * failure, never this answer's: the directory is where it is either way.
  *
  * Preconditions: `path` is absolute. Callers with possibly-relative input resolve
- * it first (path_input_filesystem_path, path_input_resolve, realpath, or a state
- * filesystem path), and the directory a path stands in is its spelling through
- * its last '/'.
+ * it first (input_filesystem_path, input_resolve, realpath, or a state filesystem
+ * path), and the directory a path stands in is its spelling through its last '/'.
  *
  * Readers: core/ignore.c ignore_verdict, the place it climbs, and ignore_reopened,
  * which directory a rung of a name is; tests/test-source.c,

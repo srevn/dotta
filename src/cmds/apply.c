@@ -27,7 +27,7 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/identity.h"
 #include "utils/hooks.h"
 
@@ -3896,17 +3896,17 @@ enum apply_class { APPLY_CLASS_PATH = 1, APPLY_CLASS_PROFILE, APPLY_CLASS_REFSPE
  * Positional classifier, from the token alone — completion runs it and never
  * apply_post_parse (base/args.h args_completion_t), and apply_complete asks it
  * of the word before an `@` being typed: a token carrying a commit (base/refspec.h
- * refspec_commit) or naming its profile before a ':' (infra/path.h
- * path_input_announces_profile) goes to refspecs[], for apply_post_parse to read;
- * one that announces a path to paths[] (path_input_announces_path); and what
- * announces nothing is a profile name. The commit is asked first, since a commit
- * may hold a ':' or a glob's bytes, and the profile's name before the pattern,
- * so `p:'*.conf'` is p's; every token neither question takes keeps the class it
+ * refspec_commit) or naming its profile before a ':' (infra/input.h
+ * input_announces_profile) goes to refspecs[], for apply_post_parse to read;
+ * one that announces a path to paths[] (input_announces_path); and what announces
+ * nothing is a profile name. The commit is asked first, since a commit may hold
+ * a ':' or a glob's bytes, and the profile's name before the pattern, so
+ * `p:'*.conf'` is p's; every token neither question takes keeps the class it
  * had, a path or a profile's name.
  */
 static args_class_t apply_classify(const char *tok) {
-    if (refspec_commit(tok) || path_input_announces_profile(tok)) return APPLY_CLASS_REFSPEC;
-    return path_input_announces_path(tok) ? APPLY_CLASS_PATH : APPLY_CLASS_PROFILE;
+    if (refspec_commit(tok) || input_announces_profile(tok)) return APPLY_CLASS_REFSPEC;
+    return input_announces_path(tok) ? APPLY_CLASS_PATH : APPLY_CLASS_PROFILE;
 }
 
 /**
@@ -3968,11 +3968,11 @@ static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command
         char *word = commit ? arena_strndup(arena, token, (size_t) (commit - 1 - token)) : token;
 
         const char *profile = rs.profile;
-        if (path_input_announces_profile(word)) {
+        if (input_announces_profile(word)) {
             /* A profile:path, its profile the parse's: the search that cut the
              * word found the parse's commit, so the ':' before it is the rung's */
             refspecs[refspec_count++] = token;
-        } else if (path_input_announces_path(word)) {
+        } else if (input_announces_path(word)) {
             /* A path, here only at a commit: no profile to read it at, whatever
              * -p names (show reads one profile, apply's -p filters any number) */
             return error_create(
@@ -4053,7 +4053,7 @@ static args_want_t apply_complete(
 
     /* A profile's ':' being typed: every profile's files as `profile:path`, the
      * shell matching the one typed */
-    if (path_input_announces_profile(at->current)) {
+    if (input_announces_profile(at->current)) {
         completion_refspecs(ctx, out, NULL);
         return ARGS_WANT_NONE;
     }

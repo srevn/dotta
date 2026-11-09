@@ -30,7 +30,7 @@
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/gitops.h"
 #include "sys/remote.h"
 #include "sys/stats.h"
@@ -775,12 +775,12 @@ static error_t list_path_history(
     error_t err = NULL;
 
     /* The argument first, above the profile question and above anything read
-     * under either: reading one asks no topology (infra/path.h), so every refusal
+     * under either: reading one asks no topology (infra/input.h), so every refusal
      * it earns is said before a profile is opened or a view built. Read once
      * for both arms, which differ in where each key's answer comes from and not
      * in which keys they take. */
-    path_input_t arg;
-    err = path_input_resolve(opts->path, ctx->arena, &arg);
+    input_path_t arg;
+    err = input_resolve(opts->path, ctx->arena, &arg);
     if (err) return err;
 
     if (opts->profile) {
@@ -802,7 +802,7 @@ static error_t list_path_history(
         if (err) {
             return error_wrap(
                 err, "Cannot search for '%s'; -p searches a profile by name",
-                arg.key == PATH_KEY_FILESYSTEM ? arg.filesystem_path : arg.storage_path
+                arg.key == INPUT_KEY_FILESYSTEM ? arg.filesystem_path : arg.storage_path
             );
         }
 
@@ -1020,8 +1020,8 @@ error_t cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
  *     2 positionals -> error: only one path may accompany -p
  *
  *   Inference form (no -p): the leading positional is a profile or a path,
- *   disambiguated by whether it announces a path (infra/path.h
- *   path_input_announces_path).
+ *   disambiguated by whether it announces a path (infra/input.h
+ *   input_announces_path).
  *     0 positionals -> LIST_PROFILES
  *     1 positional  -> path? LIST_PATH_HISTORY (profile inferred)
  *                      name? LIST_FILES
@@ -1053,7 +1053,7 @@ static error_t list_post_parse(
 
     if (o->positional_count == 1) {
         const char *arg = o->positional_args[0];
-        if (path_input_announces_path(arg)) {
+        if (input_announces_path(arg)) {
             o->mode = LIST_PATH_HISTORY;
             o->path = arg;
         } else {
@@ -1103,7 +1103,7 @@ static args_want_t list_complete(
         completion_profiles(ctx, out, COMPLETION_LOCAL);
         completion_files(ctx, out, NULL, 0);
     } else if (o->positional_count == 1 &&
-        !path_input_announces_path(o->positional_args[0])) {
+        !input_announces_path(o->positional_args[0])) {
         completion_refspecs(ctx, out, o->positional_args[0]);
         completion_directories(ctx, out, o->positional_args[0]);
     }

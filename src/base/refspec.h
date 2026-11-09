@@ -41,8 +41,8 @@
  * second word beside a profile's, each deciding by this alone whether a token
  * is its commit slot's; and diff's classifier, which asks this first — a token
  * shaped like a commit is never read as a path, and the two shapes meet only in
- * a revision whose pattern holds a glob's bytes (infra/path.h
- * path_input_announces_path).
+ * a revision whose pattern holds a glob's bytes (infra/input.h
+ * input_announces_path).
  *
  * @param token The token to read (may be NULL, which looks like nothing)
  * @return true iff the token has a commit reference's shape

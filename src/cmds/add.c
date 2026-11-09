@@ -31,7 +31,7 @@
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
@@ -221,14 +221,14 @@ typedef struct {
  * inside and named for where it lands.
  *
  * Every prefix is folded before it is asked, because the target is folded — its
- * binder spelled it by the target's reading (infra/path.h path_input_target),
- * and a row holds no other shape (core/state.c), so `bound` is folded too — and
- * `/a/..` is a spelling of nowhere. The boundary is not always found before the
- * first `..`, and does not need to be: `/a/../<target>/x` meets one first, and
- * the fold is per prefix, not per argument. The root the walk starts from is
- * asked like every other prefix, which is what makes a target at "/" a prefix
- * of every absolute argument; a `.` leaves the prefix as it was and a `..` returns
- * it to one the walk already stood on, so neither can be the first answer.
+ * binder spelled it by the target's reading (infra/input.h input_target), and a
+ * row holds no other shape (core/state.c), so `bound` is folded too — and `/a/..`
+ * is a spelling of nowhere. The boundary is not always found before the first
+ * `..`, and does not need to be: `/a/../<target>/x` meets one first, and the
+ * fold is per prefix, not per argument. The root the walk starts from is asked
+ * like every other prefix, which is what makes a target at "/" a prefix of every
+ * absolute argument; a `.` leaves the prefix as it was and a `..` returns it to
+ * one the walk already stood on, so neither can be the first answer.
  *
  * `input` is absolute: the caller's grammar decides who is asked at all, and a
  * bare relative path is the jail's without a question (add_spell). The scratch
@@ -357,15 +357,15 @@ static error_t add_spell(
     /* The answer is the arena's, as the composition it reads is: the caller keys,
      * names and walks from it, and the refusal below simply returns. */
     const char *spelled = NULL;
-    error_t err = path_input_filesystem_path(composed, arena, &spelled);
+    error_t err = input_filesystem_path(composed, arena, &spelled);
     if (err) return err;
 
     /* One check for every escape, whatever the shape: `..` walked out of a path
      * that started inside, or a path spelled from here while the user stands
-     * outside. The subject is folded (path_input_filesystem_path), so the whole
-     * test is a string's, where the boundary above had to be asked per prefix
-     * on the bytes as typed. A tilde path is HOME's and is read against no target,
-     * even one beneath HOME. Every absolute path lies under a target of "/"
+     * outside. The subject is folded (input_filesystem_path), so the whole test
+     * is a string's, where the boundary above had to be asked per prefix on the
+     * bytes as typed. A tilde path is HOME's and is read against no target, even
+     * one beneath HOME. Every absolute path lies under a target of "/"
      * (base/string.h str_path_under). */
     if (target && input[0] != '~' && !str_path_under(spelled, target, strlen(target))) {
         return error_create(
@@ -1817,10 +1817,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The target, when the run brought one: a filesystem-shaped argument —
      * absolute, tilde, or relative to the working directory — spelled by the
-     * target's reading (infra/path.h path_input_target): the absolute path the
-     * row stores, held to the target's rules. */
+     * target's reading (infra/input.h input_target): the absolute path the row
+     * stores, held to the target's rules. */
     if (opts->target) {
-        err = path_input_target(opts->target, ctx->arena, &target);
+        err = input_target(opts->target, ctx->arena, &target);
         if (err) goto cleanup;
 
         /* Refuse a silent move, before the commit it would have shaped. A branch
@@ -1962,19 +1962,19 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * here. It validates the shape and sheds a trailing slash, so `add
              * p home/dir/` is the spelling every other consumer already accepts,
              * and `add p home/` names the namespace's own directory as `add p
-             * ~` names the same place by its spelling (infra/path.h). */
-            path_input_t arg;
-            err = path_input_resolve(path, ctx->arena, &arg);
+             * ~` names the same place by its spelling (infra/input.h). */
+            input_path_t arg;
+            err = input_resolve(path, ctx->arena, &arg);
             if (err) goto cleanup;
 
             /* The keys the predicate above can hand this head, and what each is
-             * to a capture (infra/path.h). */
+             * to a capture (infra/input.h). */
             switch (arg.key) {
-                case PATH_KEY_STORAGE:
+                case INPUT_KEY_STORAGE:
                     typed = arg.storage_path;
                     break;
 
-                case PATH_KEY_FILESYSTEM:
+                case INPUT_KEY_FILESYSTEM:
                     /* The shape predicate above dispatched here, so the resolver
                      * answered the storage key and never this one: a filesystem
                      * spelling is add's own grammar and reaches add_spell instead.

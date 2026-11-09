@@ -104,7 +104,7 @@
 #include "core/profiles.h"
 #include "infra/content.h"
 #include "infra/label.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/filesystem.h"
 #include "sys/revision.h"
 
@@ -449,8 +449,8 @@ static error_t export_collect_profile(
  * it.
  *
  * `storage_path` is a key in the profile's own namespace, validated where the
- * argument was read (infra/path.h) — a name beneath a label, or the label's word
- * alone, which is the namespace's own directory and a key like any other.
+ * argument was read (infra/input.h) — a name beneath a label, or the label's
+ * word alone, which is the namespace's own directory and a key like any other.
  *
  * A blob at the name is the single-entry copy, its destination the user's own
  * path (cp semantics). Anything else is a directory's shape: the copy's root is
@@ -1209,7 +1209,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
     if (opts->file_path) {
         /* Read the argument in the key the user named — a path or a storage path,
-         * neither manufactured from the other (infra/path.h) — and hand it to
+         * neither manufactured from the other (infra/input.h) — and hand it to
          * the arm that answers in that key. A storage shape was validated as
          * typed and carries no trailing slash; a filesystem shape was normalized.
          *
@@ -1221,18 +1221,18 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
          * does, so export says nothing of its own about one. The branch's own
          * files beside the labels are not content and `dotta git` reads them
          * (the help). */
-        path_input_t arg;
-        err = path_input_resolve(opts->file_path, arena, &arg);
+        input_path_t arg;
+        err = input_resolve(opts->file_path, arena, &arg);
         if (err) goto cleanup;
 
         switch (arg.key) {
-            case PATH_KEY_FILESYSTEM:
+            case INPUT_KEY_FILESYSTEM:
                 err = export_collect_filesystem(
                     ctx, profile, arg.filesystem_path, commit_suffix, &list
                 );
                 break;
 
-            case PATH_KEY_STORAGE:
+            case INPUT_KEY_STORAGE:
                 err = export_collect_storage(
                     ctx, profile, arg.storage_path, commit_suffix, &list
                 );

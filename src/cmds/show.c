@@ -24,7 +24,7 @@
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/gitops.h"
 #include "sys/revision.h"
 
@@ -595,12 +595,12 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(opts->file_path);
 
     /* The argument first, above the profile question and above anything opened
-     * or announced under either: reading one asks no topology (infra/path.h),
+     * or announced under either: reading one asks no topology (infra/input.h),
      * so every refusal it earns is said with nothing of the repository standing
      * on screen above it. Read once for both arms, which differ in where each
      * key's answer comes from and not in which keys they take. */
-    path_input_t arg;
-    err = path_input_resolve(opts->file_path, ctx->arena, &arg);
+    input_path_t arg;
+    err = input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
 
     if (opts->profile) {
@@ -652,7 +652,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     if (err) {
         err = error_wrap(
             err, "Cannot search for '%s'; -p searches a profile by name",
-            arg.key == PATH_KEY_FILESYSTEM ? arg.filesystem_path : arg.storage_path
+            arg.key == INPUT_KEY_FILESYSTEM ? arg.filesystem_path : arg.storage_path
         );
         goto cleanup;
     }

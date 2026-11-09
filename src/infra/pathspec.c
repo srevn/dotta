@@ -14,7 +14,7 @@
 #include "base/string.h"
 #include "base/wildmatch.h"
 #include "infra/label.h"
-#include "infra/path.h"
+#include "infra/input.h"
 
 /* The ascent's copy of a subject: the stack covers the common case, the heap
  * the rest, so a long path is walked and never silently skipped. The same constant
@@ -32,7 +32,7 @@
  * none. Every byte is the arena's. */
 typedef struct {
     const char *text;                /* the input as typed: what a coverage line prints */
-    path_key_t key;                  /* the vocabulary its subject is read in: FILESYSTEM or STORAGE */
+    input_key_t key;                 /* the vocabulary its subject is read in: FILESYSTEM or STORAGE */
     gitignore_rule_t *rule;          /* the rule; NULL for an exact entry */
     gitignore_rule_t *literal;       /* the rule's own spelling (base/gitignore.h gitignore_rule_literal); NULL for an exact entry */
     const char *prefix;              /* an exact entry's spelling, or a filesystem rule's anchor; NULL for a storage rule */
@@ -52,7 +52,7 @@ struct pathspec {
  * there reads past it as past any anchor (base/string.h str_path_under,
  * str_path_beneath). */
 static void prefix_filesystem(entry_t *e, const char *filesystem_path) {
-    e->key = PATH_KEY_FILESYSTEM;
+    e->key = INPUT_KEY_FILESYSTEM;
     e->prefix = filesystem_path;
     e->prefix_len = strlen(filesystem_path);
 }
@@ -63,7 +63,7 @@ static void prefix_filesystem(entry_t *e, const char *filesystem_path) {
  * vocabulary, and the matcher and the attribution ask only which of the two
  * subjects to read (own_subject). */
 static void prefix_storage(entry_t *e, const char *name) {
-    e->key = PATH_KEY_STORAGE;
+    e->key = INPUT_KEY_STORAGE;
     e->prefix = name;
     e->prefix_len = strlen(name);
 }
@@ -97,7 +97,7 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
     const char *body = input + (negated ? 1 : 0);
     const char *line = input; /* what gitignore parses: the input, or the anchored tail */
 
-    *out = (entry_t){ .key = PATH_KEY_STORAGE };
+    *out = (entry_t){ .key = INPUT_KEY_STORAGE };
 
     if (strchr(body, '/') != NULL &&
         !label_prefixes(body) &&
@@ -106,10 +106,9 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
         /* The tail starts at the component holding the first byte the matcher
          * reads as more than itself (base/wildmatch.h wildmatch_literal_length),
          * or at the last component where none does — which only a negation reaches
-         * (infra/path.h path_input_announces_rule) — a directory's marker kept
-         * behind it; the head is what stands before that component's slash —
-         * or, when nothing does, the root or the working directory the first
-         * byte names. */
+         * (infra/input.h input_announces_rule) — a directory's marker kept behind
+         * it; the head is what stands before that component's slash — or, when
+         * nothing does, the root or the working directory the first byte names. */
         const char *tail = body + wildmatch_literal_length(body);
         if (*tail == '\0') {
             while (tail > body && tail[-1] == '/') tail--;
@@ -144,9 +143,9 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
          * the gate above entered only for a body no label prefixes, and the guard
          * refused every first byte but '/', '~' and '.'. So it is read as the
          * path it names, by the argument's reading, which answers no key to
-         * disagree with (infra/path.h path_input_filesystem_path). */
+         * disagree with (infra/input.h input_filesystem_path). */
         const char *filesystem_path = NULL;
-        error_t err = path_input_filesystem_path(head, arena, &filesystem_path);
+        error_t err = input_filesystem_path(head, arena, &filesystem_path);
         if (err) {
             return error_wrap(err, "Invalid pattern '%s'", input);
         }
@@ -223,7 +222,7 @@ error_t pathspec_create(
         const char *input = inputs[i];
         entry_t entry = { 0 };
 
-        if (path_input_announces_rule(input)) {
+        if (input_announces_rule(input)) {
             error_t err = compile_rule(input, arena, &entry);
             if (err) return err;
             spec->rule_count++;
@@ -232,15 +231,15 @@ error_t pathspec_create(
              * many inputs spell it. A namespace's own directory is a name like
              * any other, and naming it selects every name beneath it — the only
              * reading that reaches a claim standing nowhere on this machine. */
-            path_input_t arg;
-            error_t err = path_input_resolve(input, arena, &arg);
+            input_path_t arg;
+            error_t err = input_resolve(input, arena, &arg);
             if (err) return err;
             switch (arg.key) {
-                case PATH_KEY_FILESYSTEM:
+                case INPUT_KEY_FILESYSTEM:
                     prefix_filesystem(&entry, arg.filesystem_path);
                     break;
 
-                case PATH_KEY_STORAGE:
+                case INPUT_KEY_STORAGE:
                     prefix_storage(&entry, arg.storage_path);
                     break;
             }
@@ -264,7 +263,7 @@ error_t pathspec_create(
 static const char *own_subject(
     const entry_t *e, const char *filesystem_path, const char *storage_path
 ) {
-    return e->key == PATH_KEY_FILESYSTEM ? filesystem_path : storage_path;
+    return e->key == INPUT_KEY_FILESYSTEM ? filesystem_path : storage_path;
 }
 
 /* What a rule reads at a rung of its own subject: a storage rule the rung itself;
@@ -274,7 +273,7 @@ static const char *rule_subject(const entry_t *e, const char *rung) {
     if (!rung) {
         return NULL;
     }
-    if (e->key == PATH_KEY_STORAGE) {
+    if (e->key == INPUT_KEY_STORAGE) {
         return rung;
     }
     return str_path_beneath(rung, e->prefix, e->prefix_len);
@@ -423,7 +422,7 @@ bool pathspec_matches_beneath(
 
         /* A storage rule keeps no head to rule the directory out: its pattern
          * may match at any depth */
-        if (e->rule && e->key == PATH_KEY_STORAGE) return true;
+        if (e->rule && e->key == INPUT_KEY_STORAGE) return true;
 
         /* An exact entry's spelling, or a filesystem rule's anchor, on one line
          * with the directory: either at or beneath the other (base/string.h

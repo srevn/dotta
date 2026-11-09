@@ -95,8 +95,8 @@ extern const char *const label_words[LABEL_COUNT];
  * ("home"), which is the key of the namespace's own directory, and the word spelled
  * as a directory ("home/"), which is an input and never a key. Nothing here folds
  * — a caller that reads a directory spelling as the key sheds its own separators
- * first (infra/path.c path_input_resolve), and "home//" is a tail of separators
- * — and the tail aliases the input, so the two share a lifetime.
+ * first (infra/input.c input_resolve), and "home//" is a tail of separators —
+ * and the tail aliases the input, so the two share a lifetime.
  */
 typedef struct {
     label_t label;       /* Which namespace the string is in */
@@ -168,10 +168,10 @@ label_split_t label_split(const char *s);
  * diff_select_delta_cb) and sync's of a tree diff's deletions (cmds/sync.c
  * sync_disagreements), the rule compiler (infra/pathspec.c compile_rule), the
  * resolver's storage arm and the question its neighbour asks of a positional
- * whose slot is undecided (infra/path.c path_input_resolve,
- * path_input_announces_path), the two input heads that dispatch on shape before
- * reading it (cmds/add.c cmd_add, cmds/ignore.c ignore_test) and export's profile
- * slot's own grammar (cmds/export.c export_post_parse).
+ * whose slot is undecided (infra/input.c input_resolve, input_announces_path),
+ * the two input heads that dispatch on shape before reading it (cmds/add.c cmd_add,
+ * cmds/ignore.c ignore_test) and export's profile slot's own grammar (cmds/export.c
+ * export_post_parse).
  */
 bool label_prefixes(const char *s);
 
@@ -183,8 +183,8 @@ bool label_prefixes(const char *s);
  * root's label (core/manifest.h manifest_name), a row's, validated where the
  * tree or the sheet was read (label_validate_storage), a record's, which the
  * store refuses to keep otherwise (core/state.c STORAGE_SPELLING), or an argument
- * the resolver's first arm dispatched on that very test (infra/path.c
- * path_input_resolve). Checked, never answered: a path under no label is a caller's
+ * the resolver's first arm dispatched on that very test (infra/input.c
+ * input_resolve). Checked, never answered: a path under no label is a caller's
  * bug, and no label may stand in for it — least of all LABEL_ROOT in silence.
  *
  * Readers: the two that derive a consequence from the namespace, each an exhaustive
@@ -264,7 +264,7 @@ const char *label_tail(const char *storage_path);
  * (core/metadata.c metadata_from_json) and a tree diff's deletions, where sync
  * asks what a resolution's two sides took (cmds/sync.c sync_disagreements) —
  * and the resolver's storage arm, where the name is one the user typed
- * (infra/path.c path_input_resolve). The store holds a record's name to the same
+ * (infra/input.c input_resolve). The store holds a record's name to the same
  * checks in its own language (core/state.c STORAGE_SPELLING), and
  * tests/test-state.c drives one list of shapes through both.
  *

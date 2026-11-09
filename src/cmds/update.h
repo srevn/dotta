@@ -18,8 +18,8 @@
  *
  * `paths` and `profiles` are populated from the raw positional bucket by
  * `update_post_parse`. The first positional is a path or a profile name by whether
- * it announces a path (infra/path.h path_input_announces_path); remaining
- * positionals are always paths.
+ * it announces a path (infra/input.h input_announces_path); remaining positionals
+ * are always paths.
  */
 typedef struct {
     /* User-facing (read by cmd_update). */

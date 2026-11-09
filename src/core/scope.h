@@ -108,7 +108,7 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "infra/path.h"
+#include "infra/input.h"
 #include "infra/pathspec.h"
 
 /* Forward decls: the view's, the profile's, the table's and the state's full
@@ -405,7 +405,7 @@ error_t scope_resolve_range(
  * The claim a file argument names in the enabled set: the view's row for it
  *
  * Asked of the set's view (core/manifest.h manifest_build) — every enabled profile
- * at its head, precedence resolved — in the key the argument names (infra/path.h):
+ * at its head, precedence resolved — in the key the argument names (infra/input.h):
  * a path is the row standing there, whatever its name and whoever holds it, the
  * layer's rung among them, a directory no document holds (core/manifest.c
  * manifest_layer); a name keys within one profile, so the view holds it once —
@@ -427,7 +427,7 @@ error_t scope_resolve_range(
  * a profile. With one, the profile names the argument (scope_resolve_name).
  *
  * @param view The enabled set's view (must not be NULL)
- * @param arg The argument, read (must not be NULL; infra/path.h path_input_resolve)
+ * @param arg The argument, read (must not be NULL; infra/input.h input_resolve)
  * @param arena Arena a refusal's holders are joined in (must not be NULL)
  * @param out_row The row, borrowed from the view (must not be NULL; NULL beside
  *                a refusal)
@@ -435,7 +435,7 @@ error_t scope_resolve_range(
  */
 error_t scope_resolve_claim(
     const manifest_t *view,
-    const path_input_t *arg,
+    const input_path_t *arg,
     arena_t *arena,
     const manifest_row_t **out_row
 );
@@ -445,12 +445,12 @@ error_t scope_resolve_claim(
  *
  * scope_resolve_claim's twin, for a verb whose argument names its profile: no
  * set is read and no precedence asked, so the profile need not be enabled. In
- * the key the argument names (infra/path.h): a name is Git's key already and is
- * the answer as typed — whether the profile holds it is the reader's own question
- * (core/profiles.h profile_holds), so nothing is built and no sheet is read; a
- * path is the profile's to name, asked of its own view at the tree the handle
- * is open at (core/manifest.h manifest_build_profile, strict about its sheet):
- * the claim it holds there, else the name a claim there would take
+ * the key the argument names (infra/input.h): a name is Git's key already and
+ * is the answer as typed — whether the profile holds it is the reader's own
+ * question (core/profiles.h profile_holds), so nothing is built and no sheet is
+ * read; a path is the profile's to name, asked of its own view at the tree the
+ * handle is open at (core/manifest.h manifest_build_profile, strict about its
+ * sheet): the claim it holds there, else the name a claim there would take
  * (manifest_claim_name). So a name that changed since a commit is found as of
  * that commit, where the reader opened the profile there.
  *
@@ -464,7 +464,7 @@ error_t scope_resolve_claim(
  *                for a path, its sheet is read through it)
  * @param mounts This machine's table, which places the profile's claims (must
  *               not be NULL)
- * @param arg The argument, read (must not be NULL; infra/path.h path_input_resolve)
+ * @param arg The argument, read (must not be NULL; infra/input.h input_resolve)
  * @param arena Arena a path's view and its name live in (must not be NULL)
  * @param out_name The name: the argument's own for a name, the arena's for a
  *                 path (must not be NULL; left as it was on a failure)
@@ -473,7 +473,7 @@ error_t scope_resolve_claim(
 error_t scope_resolve_name(
     profile_t *profile,
     const mount_table_t *mounts,
-    const path_input_t *arg,
+    const input_path_t *arg,
     arena_t *arena,
     const char **out_name
 );

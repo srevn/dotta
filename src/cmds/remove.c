@@ -25,7 +25,7 @@
 #include "core/state.h"
 #include "infra/commit.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/remote.h"
@@ -383,7 +383,7 @@ static bool remove_contradicted(
  * one head; the arguments mark what they take, and the array compacts to just that.
  *
  * Where each claim stands is established before the match, not after it, because
- * the match is by the key the argument named (infra/path.h) and neither key is
+ * the match is by the key the argument named (infra/input.h) and neither key is
  * manufactured from the other. A storage argument matches over the claims' names;
  * a path argument matches over the paths they were placed at — so `remove web
  * ~/jail/etc/x` takes the claim standing there under whatever name, and a root
@@ -457,8 +457,8 @@ static error_t remove_resolve(
 
     /* Match each argument, marking the claims it takes */
     for (size_t i = 0; i < opts->path_count; i++) {
-        path_input_t arg;
-        err = path_input_resolve(opts->paths[i], ctx->arena, &arg);
+        input_path_t arg;
+        err = input_resolve(opts->paths[i], ctx->arena, &arg);
         if (err) return err;
 
         /* The sum type, read at the use site and read once: a storage argument
@@ -470,11 +470,11 @@ static error_t remove_resolve(
         bool by_name = false;
 
         switch (arg.key) {
-            case PATH_KEY_FILESYSTEM:
+            case INPUT_KEY_FILESYSTEM:
                 subject = arg.filesystem_path;
                 break;
 
-            case PATH_KEY_STORAGE:
+            case INPUT_KEY_STORAGE:
                 subject = arg.storage_path;
                 by_name = true;
                 break;

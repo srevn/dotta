@@ -4,7 +4,7 @@
  * Helper functions for common string operations. Strings are read here as strings:
  * no product's grammar lives in this file, so a question whose answer turns on
  * what a word *means* to dotta or to Git belongs with the module that owns the
- * words — a storage name's shape with the labels (infra/label.h, infra/path.h),
+ * words — a storage name's shape with the labels (infra/label.h, infra/input.h),
  * a commit's with the syntax that spells one (base/refspec.h).
  */
 
@@ -215,9 +215,8 @@ char *str_path_fold(
  * is one, and so is a root's spelling joined with a tail. A relative path answers
  * no whatever it spells — the fold keeps a leading `..` on one, and every reader
  * here asks of an absolute path, which the fold joins a relative one onto first
- * (sys/filesystem.h fs_make_absolute, infra/path.h path_input_filesystem_path).
- * NULL answers no: getenv's answer flows in (sys/filesystem.h
- * fs_working_directory).
+ * (sys/filesystem.h fs_make_absolute, infra/input.h input_filesystem_path). NULL
+ * answers no: getenv's answer flows in (sys/filesystem.h fs_working_directory).
  *
  * Pure: no allocation, no filesystem. Readers: the working directory's pwd -L
  * rule (sys/filesystem.h fs_working_directory); a deployment target's shape at

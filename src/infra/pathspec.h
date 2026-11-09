@@ -2,7 +2,7 @@
  * pathspec.h - The positional path filter
  *
  * Every input compiled into one matcher over the two keys a managed path has
- * (infra/path.h) — its filesystem path and its storage path — each entry read
+ * (infra/input.h) — its filesystem path and its storage path — each entry read
  * against the subject of its own vocabulary. The vocabulary is the input's shape,
  * never an asker's: a filesystem shape is a filesystem path, a storage shape or
  * a bare pattern is a name. An exact entry selects the path it names and everything
@@ -54,18 +54,18 @@ typedef struct {
 /**
  * Compile a pathspec from a list of user-provided inputs.
  *
- * An input that announces a rule (infra/path.h path_input_announces_rule) — a
- * wildcard ('*', '?', '[') anywhere, or a leading '!' — is one, and a negation
- * is one whatever it holds: `!~/.config/secret` leaves out that path. Any other
- * is an exact entry in the key it names (path_input_resolve: a filesystem shape
- * normalized, a storage path validated and kept as typed). A label selects
- * everything of its kind — `custom/` is the namespace's own directory and every
- * custom/ claim beneath it, including those of a profile bound nowhere here,
- * which no filesystem path can reach — and is matched in the storage vocabulary
- * like any name, which after the shed it is. Two inputs naming one key — two
- * spellings of one path, one storage path typed twice — are one exact entry; a
- * name beside a path is two, since they are two keys. Rules are never collapsed:
- * their order is their meaning.
+ * An input that announces a rule (infra/input.h input_announces_rule) — a wildcard
+ * ('*', '?', '[') anywhere, or a leading '!' — is one, and a negation is one
+ * whatever it holds: `!~/.config/secret` leaves out that path. Any other is an
+ * exact entry in the key it names (input_resolve: a filesystem shape normalized,
+ * a storage path validated and kept as typed). A label selects everything of
+ * its kind — `custom/` is the namespace's own directory and every custom/ claim
+ * beneath it, including those of a profile bound nowhere here, which no filesystem
+ * path can reach — and is matched in the storage vocabulary like any name, which
+ * after the shed it is. Two inputs naming one key — two spellings of one path,
+ * one storage path typed twice — are one exact entry; a name beside a path is
+ * two, since they are two keys. Rules are never collapsed: their order is their
+ * meaning.
  *
  * Rules:
  *   - Basename-only rules ("*.vim", "!.a") match at any depth

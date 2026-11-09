@@ -785,8 +785,8 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  *
  * `storage_path` is validated. The walk checks the shape of every name it meets,
  * because Git's names arrive unchecked; a point question trusts the one it is
- * handed, checked where it was read (infra/path.h path_input_resolve) or kept
- * (a record's, which the store holds to the grammar: core/state.h).
+ * handed, checked where it was read (infra/input.h input_resolve) or kept (a
+ * record's, which the store holds to the grammar: core/state.h).
  *
  * Lent for the handle's life, kept in its arena; its strings are the sheet's,
  * or the handle's copy of the storage path.
@@ -1082,7 +1082,7 @@ typedef enum {
  * for a claim's axis, the side's claim, decoded as the walk decodes it over that
  * side's own tree
  *
- * A sum type, spelled as infra/path.h path_input_t spells one: the axis says
+ * A sum type, spelled as infra/input.h input_path_t spells one: the axis says
  * which pair is set, and a reader asks it before reading either.
  */
 typedef struct {

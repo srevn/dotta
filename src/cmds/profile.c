@@ -23,7 +23,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/remote.h"
@@ -540,15 +540,15 @@ static error_t profile_enable(
 
     /* Fatal up-front: the target itself. A target is a filesystem-shaped argument
      * — absolute, tilde, or relative to the working directory, the spelling
-     * completion offers — spelled by the target's reading (infra/path.h
-     * path_input_target): the absolute path the row stores, held to the target's
-     * rules. Validating inside the per-profile loop would refuse a bad target
-     * as a profile's skip, which mislabels a CLI input problem as a missing
-     * profile. A target binds the one profile the line names, never --all
+     * completion offers — spelled by the target's reading (infra/input.h
+     * input_target): the absolute path the row stores, held to the target's rules.
+     * Validating inside the per-profile loop would refuse a bad target as a
+     * profile's skip, which mislabels a CLI input problem as a missing profile.
+     * A target binds the one profile the line names, never --all
      * (profile_enable_post_parse), so a single validation here covers every path
      * that can reach Phase 2. */
     if (opts->target) {
-        err = path_input_target(opts->target, ctx->arena, &target);
+        err = input_target(opts->target, ctx->arena, &target);
         if (err) return error_wrap(err, "Invalid --target value");
     }
 

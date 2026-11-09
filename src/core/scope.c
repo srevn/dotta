@@ -390,7 +390,7 @@ error_t scope_resolve_range(
 }
 
 error_t scope_resolve_claim(
-    const manifest_t *view, const path_input_t *arg, arena_t *arena,
+    const manifest_t *view, const input_path_t *arg, arena_t *arena,
     const manifest_row_t **out_row
 ) {
     CHECK_NULL(view);
@@ -402,11 +402,11 @@ error_t scope_resolve_claim(
      * name its one holder — or, held once per binding, the refusal naming each */
     error_t err = NULL;
     switch (arg->key) {
-        case PATH_KEY_FILESYSTEM:
+        case INPUT_KEY_FILESYSTEM:
             *out_row = manifest_lookup(view, arg->filesystem_path);
             break;
 
-        case PATH_KEY_STORAGE:
+        case INPUT_KEY_STORAGE:
             err = manifest_holder(arena, view, arg->storage_path, out_row);
             break;
     }
@@ -415,12 +415,12 @@ error_t scope_resolve_claim(
     /* None: the view's absence, every enabled profile's, the argument in its key */
     return error_create(
         ERR_NOT_FOUND, "'%s' not found in any enabled profile",
-        arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path
+        arg->key == INPUT_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path
     );
 }
 
 error_t scope_resolve_name(
-    profile_t *profile, const mount_table_t *mounts, const path_input_t *arg,
+    profile_t *profile, const mount_table_t *mounts, const input_path_t *arg,
     arena_t *arena, const char **out_name
 ) {
     CHECK_NULL(profile);
@@ -435,7 +435,7 @@ error_t scope_resolve_name(
     error_t err = NULL;
     manifest_t *view = NULL;
     switch (arg->key) {
-        case PATH_KEY_FILESYSTEM:
+        case INPUT_KEY_FILESYSTEM:
             err = manifest_build_profile(profile, mounts, arena, &view);
             if (!err) {
                 *out_name = manifest_claim_name(
@@ -444,7 +444,7 @@ error_t scope_resolve_name(
             }
             break;
 
-        case PATH_KEY_STORAGE:
+        case INPUT_KEY_STORAGE:
             *out_name = arg->storage_path;
             break;
     }

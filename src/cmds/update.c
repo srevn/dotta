@@ -25,7 +25,7 @@
 #include "core/workspace.h"
 #include "infra/commit.h"
 #include "infra/content.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "infra/pathspec.h"
 #include "sys/filesystem.h"
 #include "utils/hooks.h"
@@ -1925,8 +1925,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
  *
  * Positional rule (differs from add — position-dependent):
  *   - First positional: a path or a profile name, by whether it announces a path
- *     (infra/path.h path_input_announces_path). A path lands in `paths`; a name
- *     lands in `profiles`.
+ *     (infra/input.h input_announces_path). A path lands in `paths`; a name lands
+ *     in `profiles`.
  *   - Remaining positionals: always paths.
  *
  * Profiles from `-p` are already populated in `profiles` by the APPEND row; a
@@ -1961,7 +1961,7 @@ static error_t update_post_parse(
         /* Only the first positional is ambiguous (profile or path). It becomes
          * a profile only if -p was not given AND it announces no path. */
         if (i == 0 && o->profile_count == 0 &&
-            !path_input_announces_path(arg)) {
+            !input_announces_path(arg)) {
             /* Arena-backed 1-slot profile array for the positional. */
             char **profiles = arena_calloc(arena, 1, sizeof(*profiles));
             profiles[0] = arg;
@@ -2006,7 +2006,7 @@ static args_want_t update_complete(
     if (o->profile_count == 0) {
         if (o->positional_count == 0) {
             completion_profiles(ctx, out, COMPLETION_ENABLED);
-        } else if (!path_input_announces_path(o->positional_args[0])) {
+        } else if (!input_announces_path(o->positional_args[0])) {
             winners = o->positional_args;   /* the profile slot was taken */
             winner_count = 1;
         }

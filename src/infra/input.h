@@ -1,5 +1,5 @@
 /**
- * path.h - The key a CLI path argument names
+ * input.h - The key a CLI path argument names
  *
  * A filesystem path keys across profiles — the view's rows, the record, every
  * screen — and a storage path keys within one (infra/label.h). The resolver answers
@@ -35,13 +35,13 @@
  *
  * Two questions stand before any reading, over the spelling alone and the caller's
  * to ask first: whether a positional announces a path at all, where a verb's
- * slot could hold a profile instead (path_input_announces_path), and whether it
- * names its profile before a ':' (path_input_announces_profile). Neither resolves
- * anything, and neither is the resolver's own reading, which is wider.
+ * slot could hold a profile instead (input_announces_path), and whether it names
+ * its profile before a ':' (input_announces_profile). Neither resolves anything,
+ * and neither is the resolver's own reading, which is wider.
  */
 
-#ifndef DOTTA_PATH_H
-#define DOTTA_PATH_H
+#ifndef DOTTA_INPUT_H
+#define DOTTA_INPUT_H
 
 #include <types.h>
 
@@ -49,9 +49,9 @@
  * The key an argument names.
  */
 typedef enum {
-    PATH_KEY_FILESYSTEM,        /* a filesystem shape: absolute, tilde, relative */
-    PATH_KEY_STORAGE,           /* a storage shape: home/…, root/…, custom/…, or the word alone */
-} path_key_t;
+    INPUT_KEY_FILESYSTEM,        /* a filesystem shape: absolute, tilde, relative */
+    INPUT_KEY_STORAGE,           /* a storage shape: home/…, root/…, custom/…, or the word alone */
+} input_key_t;
 
 /**
  * A CLI path argument, read: the key, and the one name it is in.
@@ -70,12 +70,12 @@ typedef enum {
  * Both members are the arena's.
  */
 typedef struct {
-    path_key_t key;
+    input_key_t key;
     union {
-        const char *filesystem_path; /* PATH_KEY_FILESYSTEM: absolute, normalized */
-        const char *storage_path;    /* PATH_KEY_STORAGE: validated, the directory spelling shed */
+        const char *filesystem_path; /* INPUT_KEY_FILESYSTEM: absolute, normalized */
+        const char *storage_path;    /* INPUT_KEY_STORAGE: validated, the directory spelling shed */
     };
-} path_input_t;
+} input_path_t;
 
 /**
  * Does the positional announce a path, or is it a name?
@@ -92,8 +92,8 @@ typedef struct {
  * A profile whose own name announces a path is named with -p, which is what each
  * of them calls that flag at its own slot.
  *
- * A pattern is what the filter compiles as a rule (path_input_announces_rule),
- * so a token answered here as one never lands in a bucket that cannot read it.
+ * A pattern is what the filter compiles as a rule (input_announces_rule), so a
+ * token answered here as one never lands in a bucket that cannot read it.
  *
  * This is not the resolver's own reading of the same string, and neither implies
  * the other: this one is asked before a slot is decided, and the resolver's
@@ -125,7 +125,7 @@ typedef struct {
  * @param input The positional (may be NULL, which announces nothing)
  * @return true iff the input announces a path, or a pattern that selects one
  */
-bool path_input_announces_path(const char *input);
+bool input_announces_path(const char *input);
 
 /**
  * Does the positional name its profile before a ':'?
@@ -138,10 +138,10 @@ bool path_input_announces_path(const char *input);
  * it, or a rule — a negation, or a wildcard ahead of the ':', one after it being
  * the profile's own pattern. So a path holding a ':' keeps its reading — `~/a:b`,
  * `home/a:b`, `*a:b*`, `./a:b`, `!a:b` — and nothing before the ':' names no
- * profile: `:x` announces nothing, and is read as path_input_announces_path reads
+ * profile: `:x` announces nothing, and is read as input_announces_path reads
  * it. A label's word alone before the ':' is a profile's name, the one spelling
  * a positional has for a profile so named (`home:~/.x`), `home` alone being the
- * namespace's own directory (path_input_announces_path).
+ * namespace's own directory (input_announces_path).
  *
  * A basename pattern holding a ':' ahead of its first wildcard reads as a profile
  * and its path (`foo:*.conf`); a leading `**` component names the same paths as
@@ -155,7 +155,7 @@ bool path_input_announces_path(const char *input);
  * @param input The positional (may be NULL, which names none)
  * @return true iff a profile's name stands before the input's first ':'
  */
-bool path_input_announces_profile(const char *input);
+bool input_announces_profile(const char *input);
 
 /**
  * Does the input announce a rule — a pattern in the filter's grammar — rather
@@ -166,14 +166,14 @@ bool path_input_announces_profile(const char *input);
  * alphabet is the wildcards' and not the matcher's whole (base/wildmatch.h).
  *
  * Readers: infra/pathspec.c pathspec_create (the filter's gate) and
- * path_input_announces_path (a pattern announces a path) — the one alphabet, so
- * a pattern never lands in a bucket that cannot read it, and the one
- * path_input_announces_profile reads ahead of a ':'.
+ * input_announces_path (a pattern announces a path) — the one alphabet, so a
+ * pattern never lands in a bucket that cannot read it, and the one
+ * input_announces_profile reads ahead of a ':'.
  *
  * @param input The input (must not be NULL)
  * @return true iff the input announces a rule
  */
-bool path_input_announces_rule(const char *input);
+bool input_announces_rule(const char *input);
 
 /**
  * Read a CLI path argument: the shape dispatch, and nothing else.
@@ -183,7 +183,7 @@ bool path_input_announces_rule(const char *input);
  * its own in its fold; the two surface forms resolve alike): a name beneath a
  * label, or the word alone, which is the namespace's own directory and a key
  * like any name. A filesystem shape is read as the shell reads it
- * (path_input_filesystem_path: tilde, the working directory, `.`/`..`/`//` folded),
+ * (input_filesystem_path: tilde, the working directory, `.`/`..`/`//` folded),
  * and that spelling is the key: a filesystem path is a string of its own, a link
  * in it a component, so the answer keys against the view's rows by strcmp when
  * it was spelled the way the rows were (infra/mount.h). No profile, no name, no
@@ -193,8 +193,8 @@ bool path_input_announces_rule(const char *input);
  * verb decides what to do with each. A word standing alone that is none of the
  * three is refused, because a caller's path slot may hold a profile and the
  * resolver cannot see whose does: add's grammar reads one as the jail's or the
- * working directory's and reads it through path_input_filesystem_path too
- * (cmds/add.c add_spell).
+ * working directory's and reads it through input_filesystem_path too (cmds/add.c
+ * add_spell).
  *
  *   ~/.bashrc                 -> FILESYSTEM $HOME/.bashrc   (HOME as the identity spells it)
  *   ./config    (in /etc)     -> FILESYSTEM /etc/config
@@ -211,7 +211,7 @@ bool path_input_announces_rule(const char *input);
  *
  * `*out` is zeroed on entry: after an error it is no answer, and a reader that
  * ignores the error meets a NULL rather than a stale string — the zeroed key is
- * PATH_KEY_FILESYSTEM, whose member is then NULL.
+ * INPUT_KEY_FILESYSTEM, whose member is then NULL.
  *
  * Readers, and what each does with the two keys — a reader not on this list is
  * a bug. A verb that admits only some of them says so in a switch, where -Wswitch
@@ -260,7 +260,7 @@ bool path_input_announces_rule(const char *input);
  * @param out   The key and its name (must not be NULL)
  * @return Error or NULL on success
  */
-error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out);
+error_t input_resolve(const char *input, arena_t *arena, input_path_t *out);
 
 /**
  * The filesystem path a filesystem-shaped argument names, in the arena
@@ -300,13 +300,13 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
  *
  * One grammar, not three: every input is read as a filesystem spelling, so `home/x`
  * is the working directory's `home/x` and never a name, and a bare `config` is
- * the working directory's too where path_input_resolve refuses it. Which of the
- * two a verb asks is its own positional grammar's answer — one whose first
- * positional may be a profile reads the key, and one that has ruled the storage
- * vocabulary out already, or never had one, reads the path here — so a name handed
- * here comes back as a filesystem reading of itself, which is the whole reason
- * the two are named apart. Storage-path inputs ("home/", "root/", "custom/")
- * are not this function's — they are validated and placed at the call site
+ * the working directory's too where input_resolve refuses it. Which of the two
+ * a verb asks is its own positional grammar's answer — one whose first positional
+ * may be a profile reads the key, and one that has ruled the storage vocabulary
+ * out already, or never had one, reads the path here — so a name handed here
+ * comes back as a filesystem reading of itself, which is the whole reason the
+ * two are named apart. Storage-path inputs ("home/", "root/", "custom/") are
+ * not this function's — they are validated and placed at the call site
  * (infra/label.h label_validate_storage, infra/mount.h mount_resolve). add's
  * re-rooting under --target is add's own grammar, spelled around this function
  * (cmds/add.c add_spell). A target given as an absolute or tilde path is the
@@ -316,12 +316,12 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
  * Readers, and why each reads the path here and not the key — a reader not on
  * this list is a bug:
  *
- *   - path_input_resolve's own filesystem arm: this is that arm.
+ *   - input_resolve's own filesystem arm: this is that arm.
  *   - add's argument grammar (cmds/add.c add_spell) and `ignore --test`'s
  *     filesystem arm (cmds/ignore.c): both dispatched on the storage shape
  *     themselves, and both read a bare name as a path where the resolver will not.
- *   - the binders' targets, through path_input_target — the two --target flags
- *     and the target the editor's save reads — and the root the completion offers
+ *   - the binders' targets, through input_target — the two --target flags and
+ *     the target the editor's save reads — and the root the completion offers
  *     beneath (cmds/completion.c): a target names a directory on this machine
  *     and has no storage vocabulary to dispatch on.
  *   - a filesystem rule's anchor (infra/pathspec.c compile_rule): the components
@@ -335,18 +335,17 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
  *              NULL)
  * @return Error or NULL on success
  */
-error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out);
+error_t input_filesystem_path(const char *input, arena_t *arena, const char **out);
 
 /**
  * The target a typed argument binds: its spelling, held to the target's rules
  *
  * The one reading of a target for the binders that read one: the spelling
- * path_input_filesystem_path makes of it — absolute, folded, the key the row
- * stores — then the directory infra/mount.h mount_validate_target says it must
- * be. A refusal is the step's own, in its own words: the spelling's (an empty
- * path, a user this system does not know) or the rules' (nothing there, a link
- * to nothing, not a directory). `*out` is the spelling on success and NULL after
- * an error.
+ * input_filesystem_path makes of it — absolute, folded, the key the row stores
+ * — then the directory infra/mount.h mount_validate_target says it must be. A
+ * refusal is the step's own, in its own words: the spelling's (an empty path, a
+ * user this system does not know) or the rules' (nothing there, a link to nothing,
+ * not a directory). `*out` is the spelling on success and NULL after an error.
  *
  * Readers: the three binders — the two --target flags (cmds/add.c cmd_add,
  * cmds/profile.c profile_enable) and the editor's save, which reads the text a
@@ -358,6 +357,6 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
  *              (must not be NULL)
  * @return Error or NULL on success
  */
-error_t path_input_target(const char *input, arena_t *arena, const char **out);
+error_t input_target(const char *input, arena_t *arena, const char **out);
 
-#endif /* DOTTA_PATH_H */
+#endif /* DOTTA_INPUT_H */

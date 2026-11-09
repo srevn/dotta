@@ -235,7 +235,7 @@ typedef enum dotta_verbosity {
  * asks the profile's name for it), or a claim's ancestors climbed
  * (`profile_capture_ancestors`, `profile_derive_ancestors`: update). Reading a
  * CLI path is not one of those verbs: an argument's key is the normalizer's own
- * string and no root's spelling is read to make it (`infra/path.h`), so apply,
+ * string and no root's spelling is read to make it (`infra/input.h`), so apply,
  * whose path filter is those strings, and status and sync, which filter by profile
  * alone and compile none, declare no table. add asks the verbs and declares none:
  * it brings a binding no row need hold (`add --target`) and builds the same table
@@ -300,7 +300,7 @@ typedef enum dotta_verbosity {
  * an enable naming that profile warns of — and whose build gates the set it adds
  * to: each profile it adds is read as strictly as the build reads one
  * (`core/profiles.h` `profile_needs_target`), its binding by the target's reading
- * (`infra/path.h` `path_input_target`), so no enable completes on a set the build
+ * (`infra/input.h` `input_target`), so no enable completes on a set the build
  * refuses. A build that fails ends dispatch with the builder's message — a tree
  * that will not load, metadata that will not parse — on every path of the command,
  * including the ones that would not have read the view; such a set is broken as

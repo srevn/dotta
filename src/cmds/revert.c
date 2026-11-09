@@ -30,7 +30,7 @@
 #include "infra/commit.h"
 #include "infra/content.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
@@ -79,7 +79,7 @@
  * @return Error or NULL on success
  */
 static error_t revert_select_profile(
-    const dotta_ctx_t *ctx, const path_input_t *arg, const char **out_profile
+    const dotta_ctx_t *ctx, const input_path_t *arg, const char **out_profile
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(arg);
@@ -94,7 +94,7 @@ static error_t revert_select_profile(
      * so */
     char spelled[PATH_MAX];
     const char *subject = NULL;
-    if (arg->key == PATH_KEY_FILESYSTEM) {
+    if (arg->key == INPUT_KEY_FILESYSTEM) {
         output_format_path(arg->filesystem_path, identity()->home, spelled, sizeof(spelled));
         subject = spelled;
     } else {
@@ -122,7 +122,7 @@ static error_t revert_select_profile(
         if (err) break;
 
         const char *name = NULL;
-        if (arg->key == PATH_KEY_FILESYSTEM) {
+        if (arg->key == INPUT_KEY_FILESYSTEM) {
             /* A path: any row at or beneath it, the profile's name for the path
              * itself said, in the command's arena, of the view the frame holds */
             arena_t *frame = arena_create(0);
@@ -213,7 +213,7 @@ typedef struct {
     manifest_t *head;                /* The head's view: the name each write takes */
     const mount_table_t *mounts;     /* This machine's table: where each claim stands */
     const char *profile;             /* The profile's name: the views' asker, each claim's placer */
-    path_key_t key;                  /* What a claim is selected by: where it stands, or its name */
+    input_key_t key;                 /* What a claim is selected by: where it stands, or its name */
     const char *path;                /* The place the argument reaches, or a name placed nowhere */
     size_t path_len;                 /* strlen(path), asked once */
     ptr_array_t writes;              /* Each write chosen (revert_write_t), in the view's order */
@@ -240,7 +240,7 @@ typedef struct {
 static bool revert_reaches(
     const revert_restore_t *r, const char *filesystem_path, const char *storage_path
 ) {
-    const char *key = r->key == PATH_KEY_FILESYSTEM ? filesystem_path : storage_path;
+    const char *key = r->key == INPUT_KEY_FILESYSTEM ? filesystem_path : storage_path;
 
     return key && str_path_under(key, r->path, r->path_len);
 }
@@ -400,7 +400,7 @@ static error_t revert_take_claim(const profile_claim_t *claim, void *payload) {
  * @return Error or NULL on success
  */
 static error_t revert_restore_path(
-    const dotta_ctx_t *ctx, profile_draft_t *draft, const path_input_t *arg,
+    const dotta_ctx_t *ctx, profile_draft_t *draft, const input_path_t *arg,
     const char *place, profile_t *from, size_t *out_found
 ) {
     CHECK_NULL(ctx);
@@ -428,7 +428,7 @@ static error_t revert_restore_path(
         .from     = from,
         .mounts   = ctx->run.mounts,
         .profile  = profile_name(base),
-        .key      = place ? PATH_KEY_FILESYSTEM : PATH_KEY_STORAGE,
+        .key      = place ? INPUT_KEY_FILESYSTEM : INPUT_KEY_STORAGE,
         .path     = path,
         .path_len = strlen(path),
         .frame    = frame,
@@ -1046,18 +1046,18 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     profile_t *target_profile = NULL;
 
     /* The path, where one is given, in the key the user named — a path or a storage
-     * path, neither manufactured from the other (infra/path.h) — and what the
+     * path, neither manufactured from the other (infra/input.h) — and what the
      * revert is said of: what was typed, the argument as the shell spells it, a
      * name as typed (base/output.h output_format_path), every sentence below
      * naming it so; with no path, the profile whole. */
-    path_input_t arg = { 0 };
+    input_path_t arg = { 0 };
     char spelled[PATH_MAX];
     const char *subject = NULL;
     if (opts->path) {
-        err = path_input_resolve(opts->path, ctx->arena, &arg);
+        err = input_resolve(opts->path, ctx->arena, &arg);
         if (err) goto cleanup;
 
-        if (arg.key == PATH_KEY_FILESYSTEM) {
+        if (arg.key == INPUT_KEY_FILESYSTEM) {
             output_format_path(arg.filesystem_path, identity()->home, spelled, sizeof(spelled));
             subject = spelled;
         } else {
@@ -1131,7 +1131,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
          * for the one-file preview below: a path is its own place, and a name
          * the place this machine puts it at — none for a name it places nowhere,
          * which the restore reaches by name */
-        place = arg.key == PATH_KEY_FILESYSTEM
+        place = arg.key == INPUT_KEY_FILESYSTEM
             ? arg.filesystem_path
             : mount_resolve(ctx->arena, mounts, profile, arg.storage_path);
 
@@ -1456,15 +1456,15 @@ cleanup:
  * One reading, left to right, each word that can carry a profile or a commit of
  * its own read as a refspec (base/refspec.h refspec_parse). The first word is
  * the path's where it names its own profile, under -p whatever its shape, or
- * where it announces a path (infra/path.h path_input_announces_path), and the
- * profile's otherwise — the shape rule, as list reads its first word, and -p
- * making it the path's slot (cmds/list.c list_post_parse), so `-p q w@C` reads
- * the path w, which the resolver refuses as a bare word. A profile's word names
- * the profile whole where it holds its commit, stands alone, or stands beside a
- * second and last word with a commit's shape (refspec_looks_like_commit); else
- * the next word is the path's, its own profile over the first. Every word left
- * is the commit, by position — a tag or a branch among them — and one past a
- * commit already read is a commit given twice:
+ * where it announces a path (infra/input.h input_announces_path), and the profile's
+ * otherwise — the shape rule, as list reads its first word, and -p making it
+ * the path's slot (cmds/list.c list_post_parse), so `-p q w@C` reads the path
+ * w, which the resolver refuses as a bare word. A profile's word names the profile
+ * whole where it holds its commit, stands alone, or stands beside a second and
+ * last word with a commit's shape (refspec_looks_like_commit); else the next
+ * word is the path's, its own profile over the first. Every word left is the
+ * commit, by position — a tag or a branch among them — and one past a commit
+ * already read is a commit given twice:
  *
  *   typed               profile                path                  commit
  *   p@C, p C            p                      none: the whole one   C
@@ -1502,7 +1502,7 @@ static error_t revert_post_parse(
         return error_wrap(err, "Failed to parse file specification");
     }
 
-    if (rs.profile != NULL || o->profile != NULL || path_input_announces_path(rs.file)) {
+    if (rs.profile != NULL || o->profile != NULL || input_announces_path(rs.file)) {
         /* The path's word: its own profile, over -p's */
         if (rs.profile != NULL) o->profile = rs.profile;
         o->path = rs.file;
@@ -1561,13 +1561,13 @@ static const char *revert_holder(const dotta_ctx_t *ctx, const char *word) {
 
     refspec_t rs = { 0 };
     if (refspec_parse(ctx->arena, word, &rs) != NULL || rs.profile != NULL ||
-        !path_input_announces_path(rs.file)) {
+        !input_announces_path(rs.file)) {
         return NULL;
     }
 
-    path_input_t arg;
+    input_path_t arg;
     const char *holder = NULL;
-    if (path_input_resolve(rs.file, ctx->arena, &arg) != NULL ||
+    if (input_resolve(rs.file, ctx->arena, &arg) != NULL ||
         revert_select_profile(ctx, &arg, &holder) != NULL) {
         return NULL;
     }

@@ -832,9 +832,8 @@ error_t fs_ensure_parent_dirs(const char *path);
  * only where nothing spelled it — a sudo that dropped $PWD, a cron, an env -i.
  *
  * Readers: fs_make_absolute, which joins a relative path onto it; and the
- * argument's reading (infra/path.h path_input_filesystem_path), which spells it
- * under HOME before it joins — the one reader that reads the kernel's spelling
- * back.
+ * argument's reading (infra/input.h input_filesystem_path), which spells it under
+ * HOME before it joins — the one reader that reads the kernel's spelling back.
  *
  * @param arena Arena the directory is spelled into (must not be NULL)
  * @param out The directory, the arena's (must not be NULL)
@@ -883,7 +882,7 @@ const char *fs_tmpdir(void);
  * own file, settled before the load reads it, so a child of the run handed it
  * reads the same file from any directory (utils/config.h config_child_env). A
  * CLI argument that names a key goes to the argument's reading instead
- * (infra/path.h), which spells the working directory for a key before it joins
+ * (infra/input.h), which spells the working directory for a key before it joins
  * and folds by the string alone.
  *
  * Examples:

@@ -1369,7 +1369,7 @@ const char *manifest_name(
  * holds there, or the name a claim there would take
  *
  * A filesystem key, and the only one. The resolver answers two and the other is
- * already settled where the argument was read (infra/path.h): a name the user
+ * already settled where the argument was read (infra/input.h): a name the user
  * typed is Git's key, so the caller's own question decides whether the profile
  * holds it (core/profiles.h profile_holds) and there is nothing here to ask — a
  * name no claim sheet mentions, a bare subtree, a name the view did not keep,

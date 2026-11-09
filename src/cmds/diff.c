@@ -26,7 +26,7 @@
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "infra/pathspec.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -2003,15 +2003,15 @@ enum diff_class { DIFF_CLASS_PATH = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, }
  * The commit's shape is asked first, so a revision whose pattern holds a glob's
  * bytes — `HEAD^{/fix.*}` — is never read as a path filter. The two shapes meet
  * nowhere else: a token shaped like a commit opens on no '/', '~' or '.' and
- * under no label (base/refspec.h refspec_looks_like_commit, infra/path.h
- * path_input_announces_path).
+ * under no label (base/refspec.h refspec_looks_like_commit, infra/input.h
+ * input_announces_path).
  *
  * Mode (workspace vs commit-to-workspace vs commit-to-commit) is inferred from
  * the number of git refs in diff_post_parse.
  */
 static args_class_t diff_classify(const char *tok) {
     if (refspec_looks_like_commit(tok)) return DIFF_CLASS_GIT_REF;
-    if (path_input_announces_path(tok)) return DIFF_CLASS_PATH;
+    if (input_announces_path(tok)) return DIFF_CLASS_PATH;
     return DIFF_CLASS_PROFILE;
 }
 

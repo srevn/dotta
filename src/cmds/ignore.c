@@ -27,7 +27,7 @@
 #include "infra/commit.h"
 #include "infra/label.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/editor.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -547,7 +547,7 @@ static path_kind_t ignore_kind(
  * Test whether a path is ignored, one profile at a time
  *
  * The argument is one of the two keys a managed path has, and every profile the
- * verdict covers answers the other (infra/path.h — neither is manufactured from
+ * verdict covers answers the other (infra/input.h — neither is manufactured from
  * the other):
  *
  *   - a storage path is the contract itself: its own tail is the subject, for
@@ -567,8 +567,8 @@ static path_kind_t ignore_kind(
  * The *shape* is read by label_prefixes and not by the resolver, because a bare
  * name that is none of the three words is a filesystem argument here — `dotta
  * ignore --test foo.log` reads it against the working directory, as add's grammar
- * does — and path_input_resolve refuses one, its callers' first positional being
- * a profile. What the shape dispatches to *is* the resolver for a storage spelling,
+ * does — and input_resolve refuses one, its callers' first positional being a
+ * profile. What the shape dispatches to *is* the resolver for a storage spelling,
  * which sheds the directory slash; the filesystem arm is the argument's reading
  * alone, whose answer is what the view's rows are keyed by too (infra/mount.h).
  * Both are read before the view is built, so a refusal is a plain return.
@@ -644,7 +644,7 @@ static error_t ignore_test(
      * own reading. The table is the run's until a view is built, and then the
      * view's own — the one its rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
-    path_input_t arg;                         /* the key: a name or a path */
+    input_path_t arg;                         /* the key: a name or a path */
     manifest_t *view = NULL;                  /* a path's: where each asker names it */
 
     if (label_prefixes(opts->test_path)) {
@@ -653,26 +653,26 @@ static error_t ignore_test(
          * (cmds/add.c's storage head is the other). A bare name that is none of
          * the three words never arrives: that is this command's own filesystem
          * grammar, and the predicate above let it past. */
-        err = path_input_resolve(opts->test_path, ctx->arena, &arg);
+        err = input_resolve(opts->test_path, ctx->arena, &arg);
         if (err) return err;
     } else {
         /* The key as the argument's reading spells it: absolute, folded, nothing
          * read through — the resolver's own filesystem arm, read here because
-         * the resolver refuses the bare name this grammar reads (infra/path.h
-         * path_input_filesystem_path). */
-        arg.key = PATH_KEY_FILESYSTEM;
-        err = path_input_filesystem_path(opts->test_path, ctx->arena, &arg.filesystem_path);
+         * the resolver refuses the bare name this grammar reads (infra/input.h
+         * input_filesystem_path). */
+        arg.key = INPUT_KEY_FILESYSTEM;
+        err = input_filesystem_path(opts->test_path, ctx->arena, &arg.filesystem_path);
         if (err) return err;
     }
 
     /* What each key owes before there is an asker to ask — the reading above,
-     * and the two keys this command answers (infra/path.h). */
+     * and the two keys this command answers (infra/input.h). */
     switch (arg.key) {
-        case PATH_KEY_STORAGE:
+        case INPUT_KEY_STORAGE:
             /* The name is the one the rules read, for every asker alike. */
             break;
 
-        case PATH_KEY_FILESYSTEM:
+        case INPUT_KEY_FILESYSTEM:
             /* Each asker names the path from its own claims and its own roots,
              * so a view is built and the table the rows were placed by is the
              * view's from here on — the named profile's arm hands in the very
@@ -742,7 +742,7 @@ static error_t ignore_test(
      * than where the key was read, so the note it may print stands in the trace
      * beneath the warning, where the per-asker notes of a storage name stand —
      * one command saying one thing in one order. */
-    const path_kind_t argument_kind = arg.key == PATH_KEY_FILESYSTEM
+    const path_kind_t argument_kind = arg.key == INPUT_KEY_FILESYSTEM
         ? ignore_kind("", opts->test_path, arg.filesystem_path, hint, out) : hint;
 
     /* Each asker's verdict, a line of the summary: every asker is asked first,
@@ -769,7 +769,7 @@ static error_t ignore_test(
         const char *filesystem_path;
         path_kind_t kind;
         switch (arg.key) {
-            case PATH_KEY_STORAGE:
+            case INPUT_KEY_STORAGE:
                 /* One name for every asker alike, placed where this asker's target
                  * puts it, and what stands there: a custom/ name places only
                  * under a profile with a target. */
@@ -778,7 +778,7 @@ static error_t ignore_test(
                 kind = ignore_kind(who, opts->test_path, filesystem_path, argument_kind, out);
                 break;
 
-            case PATH_KEY_FILESYSTEM:
+            case INPUT_KEY_FILESYSTEM:
                 /* The machine's one reading and the kind observed there once,
                  * and what this asker calls the path: the claims it holds above
                  * it, else its own roots — the word alone at one of them, whose

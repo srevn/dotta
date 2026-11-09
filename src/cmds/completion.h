@@ -173,11 +173,11 @@ bool completion_path_history(
  * The commit part of a `<prefix>@<commit>` token being typed, each candidate as
  * `<prefix>@<candidate>`: the prefix read as completion_path_history reads its
  * word. A profile and a path: the path's own changes. A prefix that announces
- * no path (infra/path.h path_input_announces_path) is a profile alone: the
- * reference forms, then its history alone, never the enabled histories in its
- * place, so a name that is no branch offers nothing. A path no profile names
- * offers nothing: show refuses a file at a commit with no profile, and revert
- * finds one by its own search first (cmds/revert.c revert_complete).
+ * no path (infra/input.h input_announces_path) is a profile alone: the reference
+ * forms, then its history alone, never the enabled histories in its place, so a
+ * name that is no branch offers nothing. A path no profile names offers nothing:
+ * show refuses a file at a commit with no profile, and revert finds one by its
+ * own search first (cmds/revert.c revert_complete).
  *
  * @param pinned The profile the line names for the token, or NULL
  * @return true when `current` carried an `@` and was answered; false when it

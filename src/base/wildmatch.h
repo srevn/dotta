@@ -37,7 +37,7 @@ int wildmatch(const char *pattern, const char *text, unsigned int flags);
  * gitignore_literal (the bytes a literal escapes), and infra/pathspec.c
  * compile_rule (where a filesystem rule's pattern starts) — a second copy of
  * the alphabet anywhere else is a bug. The filter's gate is no copy of it:
- * infra/path.c path_input_announces_rule asks for the wildcards alone, a backslash
+ * infra/input.c input_announces_rule asks for the wildcards alone, a backslash
  * making no rule there, since a name that holds one is its own.
  *
  * @param pattern NUL-terminated pattern (must not be NULL)

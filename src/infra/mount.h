@@ -28,12 +28,12 @@
  *
  * A filesystem path — where a claim stands on this machine: the key the view's
  * rows, the record and every screen share, `filesystem_path` in every identifier
- * that holds one (infra/path.h, the rule) — is a root's spelling joined with a
+ * that holds one (infra/input.h, the rule) — is a root's spelling joined with a
  * tail. A key is the spelling its writer typed, and the four producers of one
  * agree because they read the same strings: mount_resolve (a root's spelling
- * and a claim's tail), the argument's reading (an argument, folded; infra/path.h
- * path_input_filesystem_path), a walk's join (a parent and a name) and a climb's
- * cut — a key cut short at a separator, which is a root's spelling and a shorter
+ * and a claim's tail), the argument's reading (an argument, folded; infra/input.h
+ * input_filesystem_path), a walk's join (a parent and a name) and a climb's cut
+ * — a key cut short at a separator, which is a root's spelling and a shorter
  * tail whichever label named it, so an ancestor's key is never manufactured a
  * second way (core/manifest.c manifest_ascend and manifest_blob_above,
  * core/cleanup.c, infra/pathspec.c). So two spellings are one path iff they are
@@ -51,7 +51,7 @@
  * the row keeps the spelling it has), which add's path completion asks once more
  * so its offer stands under the spelling the command will read its arguments
  * under (cmds/completion.c), and the working directory the argument's reading
- * spells (infra/path.h). And where acting on a string alone would duplicate or
+ * spells (infra/input.h). And where acting on a string alone would duplicate or
  * destroy: the scan's roots and its leaf probe, and cleanup's guard
  * (core/workspace.c).
  *
@@ -59,7 +59,7 @@
  * each established where it is made: the sentinel's is the literal "/", HOME's
  * is the identity's (sys/identity, normalized at identity_init), and a row's
  * target is normalized and validated where it is written (the binders, through
- * infra/path.h path_input_target) over a column that holds no other shape
+ * infra/input.h input_target) over a column that holds no other shape
  * (core/state.c: a target no binder would write is refused where a hand makes
  * the edit). So the build meets only spellings that are keys, keeps each as it
  * stands, and refuses any other as a caller's bug (mount_table_build). A row
@@ -113,9 +113,9 @@
  *
  * Traversal is refused or folded away at the boundary and trusted below it: a
  * storage path refused where a tree, a sheet or an argument is read (infra/label.h
- * label_validate_storage), a target folded where a binding is written (infra/path.h
- * path_input_target). The verbs over the table join a tail on that strength and
- * validate nothing themselves.
+ * label_validate_storage), a target folded where a binding is written
+ * (infra/input.h input_target). The verbs over the table join a tail on that
+ * strength and validate nothing themselves.
  */
 
 #ifndef DOTTA_MOUNT_H
@@ -130,7 +130,7 @@
 /**
  * Validate a deployment target as the row will hold it: the place it names
  *
- * Its one caller is the target's reading (infra/path.h path_input_target), which
+ * Its one caller is the target's reading (infra/input.h input_target), which
  * reads every typed target — the two --target flags' and the editor's — as any
  * argument is read first (tilde, the working directory, `.`, `..`, `//`), so
  * what reaches here is the absolute, folded path the row stores: the shape every
@@ -169,7 +169,7 @@ error_t mount_validate_target(const char *target);
  * that directory). One that does not stand — a stale row, its directory gone —
  * is named by its spelling, and a differing one is a move. One of the two places
  * identity is read where a spelling is made (the other is the working directory
- * the argument's reading spells, infra/path.h); the two CLI binders say at NORMAL
+ * the argument's reading spells, infra/input.h); the two CLI binders say at NORMAL
  * which spelling they kept (cmds/profile.c, cmds/add.c), the interactive save,
  * which has no line to say it in, puts the kept spelling back on the item its
  * next screen renders (cmds/interactive.c plan_classify), and add's path
@@ -227,10 +227,10 @@ typedef struct {
  * that is a key. Both invariants are established here so the readers need no
  * per-read check (mount_t above), and both hold of every input by construction
  * — the store's column for a row (core/state.c), the target's reading for a
- * command's own binding (infra/path.h path_input_target). A target of "/" is a
- * root like any other and takes the tie from the sentinel: every path of that
- * profile outside a deeper root is custom/. A NULL or empty target contributes
- * nothing: the profile is bound nowhere, which the view records (core/manifest.h
+ * command's own binding (infra/input.h input_target). A target of "/" is a root
+ * like any other and takes the tie from the sentinel: every path of that profile
+ * outside a deeper root is custom/. A NULL or empty target contributes nothing:
+ * the profile is bound nowhere, which the view records (core/manifest.h
  * manifest_unbound) and a re-bind repairs. A store a hand still got a malformed
  * row into — its constraints switched off, or its marker bumped without the table
  * — fails every command that builds the view but one: `profile disable`, whose
@@ -280,7 +280,7 @@ error_t mount_table_build(
  * One of the asker's roots, as the table holds it.
  *
  * `filesystem_path` is where the root stands: every reader prints it, compares
- * it to an argument's spelling (infra/path.h), or measures a rung against it —
+ * it to an argument's spelling (infra/input.h), or measures a rung against it —
  * and the one root that is its own separator, "/", is spelled so here like any
  * other (the table's paragraph above). `profile` is the whole of whose a root
  * is — the one that bound it: the build refuses a binding that names none
@@ -427,9 +427,9 @@ const mount_root_t *mount_root_of(
  * where it is read, not only where it was written (infra/label.h
  * label_validate_storage): a sheet's keys at its parse (core/metadata.c
  * metadata_from_json), a tree's entries at their walk (core/profiles.c
- * profile_step), an argument at its resolver (infra/path.h path_input_resolve),
- * and the state's column by its own constraint (core/state.c storage_spelling).
- * Two readers join a tree's name no shape rule read, past the content gate alone
+ * profile_step), an argument at its resolver (infra/input.h input_resolve), and
+ * the state's column by its own constraint (core/state.c storage_spelling). Two
+ * readers join a tree's name no shape rule read, past the content gate alone
  * (infra/label.h label_prefixes) — a commit range's names under a path filter,
  * its deltas and its two trees' entries (cmds/diff.c diff_select_delta_cb,
  * diff_cover_entry_cb) — and may: the path they join is only matched against

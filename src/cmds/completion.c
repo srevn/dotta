@@ -32,7 +32,7 @@
 #include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "infra/input.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/remote.h"
@@ -438,10 +438,10 @@ static void changes_emit(
     const mount_table_t *mounts = ctx->run.mounts;
     if (repo == NULL || mounts == NULL) return;
 
-    /* The argument first, in the key it names (infra/path.h): one the commands
+    /* The argument first, in the key it names (infra/input.h): one the commands
      * refuse offers nothing, and nothing is read for it */
-    path_input_t arg;
-    error_t err = path_input_resolve(path, ctx->arena, &arg);
+    input_path_t arg;
+    error_t err = input_resolve(path, ctx->arena, &arg);
     if (err) return;
 
     /* The branch's head, read once, as commits_walk reads it: the name the path
@@ -564,7 +564,7 @@ bool completion_commits_at(
     const char *profile = rs.profile ? rs.profile : pinned;
     if (profile) {
         changes_emit(ctx, out, prefix, profile, rs.file);
-    } else if (!path_input_announces_path(rs.file)) {
+    } else if (!input_announces_path(rs.file)) {
         if (commits_walk(ctx, out, prefix, rs.file, false) > 0) {
             commits_references(out, prefix);
         }
@@ -590,7 +590,7 @@ bool completion_paths_under(
     }
 
     /* The flag as the command reads it — absolute, or relative to the working
-     * directory the shell completes in (infra/path.h) — so the token is compared
+     * directory the shell completes in (infra/input.h) — so the token is compared
      * against an absolute root, and the row's spelling against the flag's as
      * the binders compare them. The arena's, as every reader of a filesystem
      * key is, so the two spellings the root may take are one borrowed pointer
@@ -598,7 +598,7 @@ bool completion_paths_under(
      * completion with no root of its own to offer beneath, so the shell's own
      * files stand. */
     const char *root = NULL;
-    error_t err = path_input_filesystem_path(target, ctx->arena, &root);
+    error_t err = input_filesystem_path(target, ctx->arena, &root);
     if (err) {
         return false;
     }

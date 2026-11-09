@@ -37,9 +37,6 @@
 #include <stdint.h>
 #include <types.h>
 
-/* Forward declarations */
-typedef struct hashmap hashmap_t;
-
 /**
  * Value destructor callback
  *

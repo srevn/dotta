@@ -141,7 +141,6 @@
 #include <sys/stat.h>
 #include <types.h>
 
-#include "base/hashmap.h"
 #include "infra/mount.h"
 
 /* manifest_build reads the enabled set from the state handle and manifest_diff

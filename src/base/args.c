@@ -10,7 +10,7 @@
  *   1) internal cursor + token classifier,
  *   2) names — the space-separated lists a spec is written in — and the matchers
  *      over them,
- *   3) typed-int parser, and the flag readers for a caller without the options
+ *   3) typed-int parser, and the field readers for a caller without the options
  *      struct's type,
  *   4) field writers, the per-kind "apply" routines that write into the options
  *      struct and the positional rows' counts, each answering what it refuses,
@@ -231,7 +231,7 @@ error_t args_parse_long(const char *text, long min, long max, long *out) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
- * Flag access (public — for a caller without the options struct's type)
+ * Field access (public — for a caller without the options struct's type)
  * ══════════════════════════════════════════════════════════════════ */
 
 const bool *args_flag_value(
@@ -263,6 +263,24 @@ const int *args_flag_set_value(
     if (opt == NULL || opt->kind != ARGS_KIND_FLAG_SET) return NULL;
 
     return (const int *) ((const char *) opts + opt->offset);
+}
+
+const hashmap_t *args_map_value(
+    const args_command_t *cmd, const void *opts, const char *name
+) {
+    if (cmd == NULL || opts == NULL || name == NULL) return NULL;
+
+    /* By the row's own name, which no token spells, so no walk of the token stream
+     * finds the row (find_long, find_short); the field is read through its own
+     * type, the pointer post_parse stored or the zeroed buffer's NULL */
+    for (const args_opt_t *o = cmd->opts; o && o->kind != ARGS_KIND_END; o++) {
+        if (o->kind == ARGS_KIND_MAP && o->value_label != NULL &&
+            strcmp(o->value_label, name) == 0) {
+            return *(const hashmap_t *const *) ((const char *) opts + o->offset);
+        }
+    }
+
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -329,6 +347,7 @@ static bool opt_takes_value(const args_opt_t *o) {
             return true;
         case ARGS_KIND_END:
         case ARGS_KIND_GROUP:
+        case ARGS_KIND_MAP:
         case ARGS_KIND_FLAG:
         case ARGS_KIND_FLAG_SET:
         case ARGS_KIND_POSITIONAL:
@@ -347,8 +366,8 @@ static bool opt_takes_value(const args_opt_t *o) {
  *
  * The one place a kind is told positional or not, so a new kind says which where
  * -Wswitch stops it, and every reader of the question asks here: the token's
- * row selection (apply_positional), the help's Arguments and Options sections
- * (render_arguments, args_render_help) and the fish exporter (emit_complete_line).
+ * row selection (apply_positional) and the help's Arguments section
+ * (render_arguments). Whether a row is an option is is_option_kind's.
  */
 static bool is_positional_kind(args_kind_t k) {
     switch (k) {
@@ -358,6 +377,7 @@ static bool is_positional_kind(args_kind_t k) {
             return true;
         case ARGS_KIND_END:
         case ARGS_KIND_GROUP:
+        case ARGS_KIND_MAP:
         case ARGS_KIND_FLAG:
         case ARGS_KIND_FLAG_SET:
         case ARGS_KIND_STRING:
@@ -367,8 +387,40 @@ static bool is_positional_kind(args_kind_t k) {
     }
 
     /* A kind no enumerator names, which only a cast can make. False is no answer
-     * that does nothing here: the help would list the row as an option and the
-     * exporter emit it as a flag (base/error.h CHECK_ARG) */
+     * that does nothing here: the token's row selection would pass the row over
+     * and the help's Arguments leave it out (base/error.h CHECK_ARG) */
+    CHECK_ARG(false, "an option kind no enumerator names");
+}
+
+/**
+ * True if this row is an option: one a flag names, which the help lists under
+ * its group and the fish exporter emits as a flag
+ *
+ * The one place a kind is told an option or not, beside is_positional_kind, so
+ * a new kind says which where -Wswitch stops it, and every reader of the question
+ * asks here: the help's Options section (args_render_help) and the fish exporter
+ * (emit_complete_line). A group's title, a map and a positional are none.
+ */
+static bool is_option_kind(args_kind_t k) {
+    switch (k) {
+        case ARGS_KIND_FLAG:
+        case ARGS_KIND_FLAG_SET:
+        case ARGS_KIND_STRING:
+        case ARGS_KIND_APPEND:
+        case ARGS_KIND_INT:
+            return true;
+        case ARGS_KIND_END:
+        case ARGS_KIND_GROUP:
+        case ARGS_KIND_MAP:
+        case ARGS_KIND_POSITIONAL:
+        case ARGS_KIND_POSITIONAL_ARG:
+        case ARGS_KIND_POSITIONAL_RAW:
+            return false;
+    }
+
+    /* A kind no enumerator names, which only a cast can make. False is no answer
+     * that does nothing here: the help would leave the row out of its options
+     * and the exporter emit no rule for it (base/error.h CHECK_ARG) */
     CHECK_ARG(false, "an option kind no enumerator names");
 }
 
@@ -418,6 +470,7 @@ static error_t apply_value_opt(
 
         case ARGS_KIND_END:
         case ARGS_KIND_GROUP:
+        case ARGS_KIND_MAP:
         case ARGS_KIND_FLAG:
         case ARGS_KIND_FLAG_SET:
         case ARGS_KIND_POSITIONAL:
@@ -501,6 +554,7 @@ static error_t apply_long_opt(
 
         case ARGS_KIND_END:
         case ARGS_KIND_GROUP:
+        case ARGS_KIND_MAP:
         case ARGS_KIND_POSITIONAL:
         case ARGS_KIND_POSITIONAL_ARG:
         case ARGS_KIND_POSITIONAL_RAW:
@@ -535,6 +589,7 @@ static error_t apply_short_opt(
             return apply_value_opt(opt, tok, NULL, cur, opts, arena);
         case ARGS_KIND_END:
         case ARGS_KIND_GROUP:
+        case ARGS_KIND_MAP:
         case ARGS_KIND_POSITIONAL:
         case ARGS_KIND_POSITIONAL_ARG:
         case ARGS_KIND_POSITIONAL_RAW:
@@ -651,6 +706,7 @@ static error_t check_positional_counts(const args_command_t *cmd, void *opts) {
 
             case ARGS_KIND_END:
             case ARGS_KIND_GROUP:
+            case ARGS_KIND_MAP:
             case ARGS_KIND_FLAG:
             case ARGS_KIND_FLAG_SET:
             case ARGS_KIND_STRING:
@@ -1336,10 +1392,10 @@ void args_render_help(
                 opened = true;
                 continue;
             }
-            /* Positional rows are rendered separately (see render_arguments above)
-             * — skip them here, since they lack the flag syntax that
+            /* Positional rows are rendered separately (see render_arguments above),
+             * and a map is dispatch's alone: neither has the flag syntax that
              * render_option_row emits. */
-            if (is_positional_kind(o->kind)) continue;
+            if (!is_option_kind(o->kind)) continue;
 
             if (!opened) {
                 fputc('\n', out);
@@ -1552,9 +1608,9 @@ static void emit_complete_line(
 ) {
     if (opt->hidden) return;
 
-    /* An option is a row a flag names: never a group's title, nor a positional
+    /* An option is a row a flag names: never a group's title, a map or a positional
      * (the callers stop at END) */
-    if (opt->kind == ARGS_KIND_GROUP || is_positional_kind(opt->kind)) return;
+    if (!is_option_kind(opt->kind)) return;
 
     fprintf(out, "complete -c %s", prog);
     emit_guard(out, prog, guard);

@@ -12,8 +12,6 @@
 #include <runtime.h>
 #include <types.h>
 
-#include "base/hashmap.h"
-
 /**
  * Command options
  */

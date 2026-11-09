@@ -52,6 +52,13 @@
  *                          naming different values is a contradiction in the
  *                          grammar, and the engine refuses it.
  *
+ *   Map rows               A field no token fills: the map post_parse derives
+ *                          (args_postparse), which a MAP row names so that a
+ *                          caller holding the options untyped reads it by the
+ *                          row's name (args_map_value). Dispatch is its one
+ *                          projection, as help is a GROUP's: no token names it,
+ *                          and neither the help nor the completion export lists it.
+ *
  *   Subcommand trees       Parent has `subcommands`. Every subcommand in a
  *                          tree MUST share the parent's options struct type (so
  *                          `opts_size` allocates enough for any sub). Each sub's
@@ -117,6 +124,7 @@
  * compile as a standalone parser engine. */
 typedef const struct error *error_t __attribute__((warn_unused_result));
 typedef struct arena arena_t;
+typedef struct hashmap hashmap_t;
 
 /* Forward declarations for types fully defined below. */
 typedef struct args_opt args_opt_t;
@@ -133,6 +141,7 @@ typedef struct args_subcommand args_subcommand_t;
 typedef enum args_kind {
     ARGS_KIND_END,             /* Sentinel. Terminates an opts[] table */
     ARGS_KIND_GROUP,           /* Help-only: section title for render */
+    ARGS_KIND_MAP,             /* Dispatch-only: a map post_parse derives */
     ARGS_KIND_FLAG,            /* bool field → true when flag is seen */
     ARGS_KIND_FLAG_SET,        /* int  field → `set_value`; 0 = no flag given */
     ARGS_KIND_STRING,          /* const char * field → next token */
@@ -309,7 +318,7 @@ struct args_opt {
 
     /* Vocabulary */
     const char *flags;          /* "force f" or "yes y no-confirm"; GROUP/END rows: unused */
-    const char *value_label;    /* "<name>", "<pattern>", "<N>" — shown after last flag in help */
+    const char *value_label;    /* "<name>", "<N>": shown after the flags in help; MAP: its name */
     const char *help;           /* Description text, or GROUP title */
 
     /* Target offsets (set via offsetof in macros) */
@@ -317,7 +326,7 @@ struct args_opt {
     size_t count_offset;        /* APPEND/POSITIONAL/POSITIONAL_RAW: offset of size_t count field */
 
     /* Per-kind details */
-    args_class_t class_accept;  /* POSITIONAL[_ONE]: command-local class ID; 0 = unclassified */
+    args_class_t class_accept;  /* POSITIONAL[_ARG]: command-local class ID; 0 = unclassified */
     int set_value;              /* FLAG_SET: value assigned to the int field (non-zero) */
     long int_min;               /* INT: inclusive lower bound */
     long int_max;               /* INT: inclusive upper bound */
@@ -741,6 +750,29 @@ const int *args_flag_set_value(
 );
 
 /**
+ * The map a MAP row names, in a parsed options buffer
+ *
+ * args_flag_value's twin for a field no token fills ("Map rows" above): the map
+ * post_parse derived from the line, found by the row's name, which no token spells.
+ * The answer is the map itself, borrowed for as long as `opts` lives: a pointer
+ * field says none with its own NULL, which its twins' bool and int cannot, so
+ * no address is lent to tell the two apart — NULL where no MAP row of this command
+ * carries the name, and NULL where post_parse made no map, as the zeroed buffer
+ * holds it.
+ *
+ * Reader: main.c open_run, the revisions a line names (include/runtime.h, the
+ * view).
+ *
+ * @param cmd  Command whose table holds the row (must not be NULL)
+ * @param opts The buffer `args_parse` filled for that command (must not be NULL)
+ * @param name The row's name (must not be NULL)
+ * @return Borrowed map, or NULL: no MAP row carries the name, or none was made
+ */
+const hashmap_t *args_map_value(
+    const args_command_t *cmd, const void *opts, const char *name
+);
+
+/**
  * For a completion hook: true when the cursor is the value of the option row
  * that targets `field` of the options struct `type`. A row's identity is the
  * field it writes — no two value-taking rows of one command share one.
@@ -761,6 +793,17 @@ const int *args_flag_set_value(
 
 #define ARGS_GROUP(title_s) \
     { .kind = ARGS_KIND_GROUP, .help = (title_s) }
+
+/**
+ * A map post_parse derives, named for a caller holding the options untyped
+ * (args_map_value): no token fills it, the help lists nothing for it and the
+ * completion export skips it. Field type: `const hashmap_t *`, NULL until
+ * post_parse makes one.
+ */
+#define ARGS_MAP(name_s, type, field) \
+    { .kind        = ARGS_KIND_MAP, \
+      .value_label = (name_s), \
+      .offset      = offsetof(type, field) }
 
 /**
  * Flag → bool field is set to true when any listed name is seen. Field type: bool.

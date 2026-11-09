@@ -1,7 +1,7 @@
 /**
  * types.h - The vocabulary every layer may assume
  *
- * A prelude, not a module: four opaque handles, base's error codes and transparent
+ * A prelude, not a module: five opaque handles, base's error codes and transparent
  * containers, a managed path's kind and type, the mode a claim does not make
  * and a directory's floor, and what a look finds standing at a path — not its
  * two keys, which are strings and declare nothing (infra/input.h). include/config.h
@@ -18,7 +18,7 @@
  * workspace_state_t and divergence_type_t in core/workspace.h, beside
  * workspace_displaced_t and workspace_fault_t. Reach bounds what meaning admits:
  * everything here is named by three headers or more, and the best candidate below
- * — hashmap_t, output_color_t — by two besides its own.
+ * — output_color_t — by two besides its own.
  *
  * path_kind_t, path_type_t and fs_occupant_t cross layers besides: infra/pathspec
  * matches on the kind core/manifest produces; the type is read by manifest.h
@@ -55,6 +55,7 @@ typedef const struct error *error_t __attribute__((warn_unused_result));
 typedef struct arena arena_t;
 typedef struct config config_t;
 typedef struct output output_t;
+typedef struct hashmap hashmap_t;
 
 /**
  * Error codes

@@ -24,8 +24,8 @@
  * name and folds nothing, and the one recognition reads a prefix and validates
  * nothing, its domain being any string with NULL in it. No wrapper for a name
  * is stored anywhere: the bytes are the wire form and the authenticated one both,
- * so a split is a value on the stack for one call, refspec_t's shape, never a
- * member.
+ * so a split is a value on the stack for one call, input_refspec_t's shape, never
+ * a member.
  *
  * Three verbs pay for that decision. A name is a string of a particular shape
  * and C cannot say so, so label_of, label_tail and label_compose check what they

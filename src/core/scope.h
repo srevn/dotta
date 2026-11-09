@@ -159,8 +159,8 @@ typedef struct scope_inputs {
  *   1. Borrow the enabled set off the view — the enabled rows whose branch the
  *      build found (core/manifest.h manifest_profiles) — which may be none (see
  *      "Empty-enabled policy" above).
- *   2. Read each profile:path argument whole (base/refspec.h refspec_parse):
- *      its profile and its path. Its commit is the view's (core/manifest.h
+ *   2. Read each profile:path argument whole (infra/input.h input_refspec): its
+ *      profile and its path. Its commit is the view's (core/manifest.h
  *      manifest_build) and never read here, and the token is never cut at its
  *      '@' first, which would read another commit. One that names no profile is
  *      its caller's bug.

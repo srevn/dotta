@@ -3897,13 +3897,16 @@ enum apply_class { APPLY_CLASS_PATH = 1, APPLY_CLASS_PROFILE, APPLY_CLASS_REFSPE
  * apply_post_parse (base/args.h args_completion_t), and apply_complete asks it
  * of the word before an `@` being typed: a token carrying a commit (base/refspec.h
  * refspec_commit) or setting a profile apart at its first ':' (infra/input.h
- * input_announces_profile) goes to refspecs[], for apply_post_parse to read —
- * one with no name before its ':' among them, which the parse refuses as every
- * verb's does; one that announces a path to paths[] (input_announces_path); and
- * what announces nothing is a profile name. The commit is asked first, since a
- * commit may hold a ':' or a glob's bytes, and the profile's name before the
- * pattern, so `p:'*.conf'` is p's; every token neither question takes keeps the
- * class it had, a path or a profile's name.
+ * input_announces_profile) goes to refspecs[], for apply_post_parse to read
+ * (infra/input.h input_refspec) — one with no name before its ':' among them,
+ * which the reading refuses as every verb's does; one that announces a path to
+ * paths[] (input_announces_path); and what announces nothing is a profile name.
+ * The commit is asked first, since a commit may hold a ':' or a glob's bytes,
+ * and the profile's name before the pattern, so `p:'*.conf'` is p's; every token
+ * neither question takes keeps the class it had, a path or a profile's name.
+ * The reading asks the ':' of the word its commit leaves, and the classifier of
+ * the token: the two part only where the commit holds a ':' (`p@HEAD:x`), a token
+ * the commit already routes to the reading, so the class agrees with the reading.
  */
 static args_class_t apply_classify(const char *tok) {
     if (refspec_commit(tok) || input_announces_profile(tok)) return APPLY_CLASS_REFSPEC;
@@ -3921,14 +3924,14 @@ static args_class_t apply_classify(const char *tok) {
  * p@C ~/.c` does. A profile is read at one (core/manifest.h manifest_build, its
  * map): one named at two is refused before anything is read. The map's readers
  * are the build and the skips' remedies, which name apply's own way at a commit
- * (apply_print_deploy_skips, apply_print_cleanup_skips). The word a commit leaves
- * selects what it would select alone, read by the classifier's own rungs: a
- * profile:path the scope's, the token raw (core/scope.h scope_inputs_t); a
- * profile's name a profile named on its own, so `apply p@C X` is p's X; and a
- * path, at a commit, is refused. The profiles and the refspecs are laid out anew
- * in `arena`, the profiles named on their own first and each word after them in
- * the line's order: the options point at the new arrays, and the engine's are
- * never written.
+ * (apply_print_deploy_skips, apply_print_cleanup_skips). Each token is read once,
+ * as every verb reads one (infra/input.h input_refspec): one that sets a profile
+ * apart is the scope's, the token raw (core/scope.h scope_inputs_t); one that
+ * sets none apart is a profile's name, named on its own, so `apply p@C X` is
+ * p's X, or a path, which at a commit is refused. The profiles and the refspecs
+ * are laid out anew in `arena`, the profiles named on their own first and each
+ * word after them in the line's order: the options point at the new arrays, and
+ * the engine's are never written.
  */
 static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command_t *cmd) {
     (void) cmd;
@@ -3956,46 +3959,44 @@ static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command
     for (size_t i = 0; i < o->refspec_count; i++) {
         char *token = o->refspecs[i];
 
-        /* The whole token first: one that names no file — `p:`, `p:@C`, `@HEAD`,
-         * `:@HEAD` — or no profile before its ':' — `:x` — is refused before
-         * its word is asked anything */
-        refspec_t rs = { 0 };
-        error_t err = refspec_parse(arena, token, &rs);
+        /* The token read once, as every verb reads one (infra/input.h
+         * input_refspec): one that names no file — `p:`, `p:@C`, `@HEAD`, `:@HEAD`
+         * — or no profile before its ':' — `:x` — is refused there, before anything
+         * is asked of it */
+        input_refspec_t rs;
+        error_t err = input_refspec(token, arena, &rs);
         if (err) return error_wrap(err, "Failed to parse file specification");
 
-        /* The word its commit leaves, never empty once the parse has passed the
-         * token, and asked the rungs in place of the token, since a commit may
-         * hold a ':' or a glob's bytes that are no word's */
-        const char *commit = refspec_commit(token);
-        char *word = commit ? arena_strndup(arena, token, (size_t) (commit - 1 - token)) : token;
-
-        const char *profile = rs.profile;
-        if (input_announces_profile(word)) {
-            /* A profile:path, its profile the parse's: the search that cut the
-             * word found the parse's commit, so the ':' before it is the rung's */
+        if (rs.profile != NULL) {
+            /* A profile:path, the scope's, the token raw: the scope reads it as
+             * this reading does, so the two set the same profile apart */
             refspecs[refspec_count++] = token;
-        } else if (input_announces_path(word)) {
+        } else if (input_announces_path(rs.path)) {
             /* A path, here only at a commit: no profile to read it at, whatever
              * -p names (show reads one profile, apply's -p filters any number) */
             return error_create(
                 ERR_INVALID_ARG, "A path at a commit names its profile: '%s'", token
             );
         } else {
-            /* A profile's name, here only at a commit: named on its own */
-            profile = word;
-            profiles[profile_count++] = word;
+            /* A profile's name, here only at a commit: named on its own, in the
+             * bucket's own copy of a string the reading lends const */
+            profiles[profile_count++] = arena_strdup(arena, rs.path);
         }
 
         /* A negation leaves out what another rule of its profile selected
          * (infra/pathspec.h) and reads none of the profile's rows itself */
-        if (commit == NULL && rs.file[0] == '!') continue;
+        if (rs.commit == NULL && rs.path[0] == '!') continue;
 
-        /* The revision its word names its profile at, the map the seen-set and
-         * the build's input in one: the first word holds it, the same again is
-         * one revision, and another is refused, compared as typed and before
-         * anything is read — an absent commit spelled HEAD as the build spells
-         * it, so `p:a@HEAD p:b` is one revision and `p:a p:b@C` two */
-        if (!hashmap_add(o->revisions, profile, commit ? arena_strdup(arena, commit) : NULL)) {
+        /* The revision its word names its profile at — the profile its ':' sets
+         * apart, or the word whole, a profile's name at a commit — the map the
+         * seen-set and the build's input in one, holding its own copy of the
+         * commit: the first word holds it, the same again is one revision, and
+         * another is refused, compared as typed and before anything is read —
+         * an absent commit spelled HEAD as the build spells it, so `p:a@HEAD
+         * p:b` is one revision and `p:a p:b@C` two */
+        const char *profile = rs.profile ? rs.profile : rs.path;
+        char *commit = rs.commit ? arena_strdup(arena, rs.commit) : NULL;
+        if (!hashmap_add(o->revisions, profile, commit)) {
             const char *seen = hashmap_get(o->revisions, profile);
             if (strcmp(seen ? seen : "HEAD", commit ? commit : "HEAD") != 0) {
                 return error_create(

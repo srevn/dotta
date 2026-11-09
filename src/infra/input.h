@@ -1,5 +1,5 @@
 /**
- * input.h - The key a CLI path argument names
+ * input.h - The readings of a CLI argument: the refspec it spells, the key it names
  *
  * A filesystem path keys across profiles — the view's rows, the record, every
  * screen — and a storage path keys within one (infra/label.h). The resolver answers
@@ -38,6 +38,12 @@
  * slot could hold a profile instead (input_announces_path), and whether it sets
  * a profile apart at its first ':' (input_announces_profile). Neither resolves
  * anything, and neither is the resolver's own reading, which is wider.
+ *
+ * A positional of the refspec family, `[profile:]<path>[@commit]`, is read once,
+ * here, before any key is read from its path (input_refspec): its commit is the
+ * lexer's to find (base/refspec.h refspec_commit), and the ':' that sets its
+ * profile apart is the second question's, which only a layer that knows what a
+ * path looks like can answer — so a path holding a ':' keeps it in every verb.
  */
 
 #ifndef DOTTA_INPUT_H
@@ -76,6 +82,16 @@ typedef struct {
         const char *storage_path;    /* INPUT_KEY_STORAGE: validated, the directory spelling shed */
     };
 } input_path_t;
+
+/**
+ * A positional read as a refspec: each part the arena's, a part it does not carry
+ * NULL.
+ */
+typedef struct {
+    const char *profile;    /* the profile its first ':' sets apart, or NULL */
+    const char *path;       /* after that ':', or the word whole */
+    const char *commit;     /* the commit it carries, or NULL */
+} input_refspec_t;
 
 /**
  * Does the positional announce a path, or is it a name?
@@ -117,10 +133,12 @@ typedef struct {
  * in a revision whose pattern holds a glob's bytes, which is never a path.
  *
  * Readers: list's inference form and its completion, diff's and apply's positional
- * classifiers, apply's reading of the word a commit leaves (cmds/apply.c
- * apply_post_parse), update's first-positional rule and its completion, and
- * revert's first word, in every form, and its completion's search for the profile
- * holding a path (cmds/revert.c revert_post_parse, revert_holder).
+ * classifiers, apply's reading of a refspec that sets no profile apart
+ * (cmds/apply.c apply_post_parse), update's first-positional rule and its
+ * completion, revert's first word, in every form, and its completion's search
+ * for the profile holding a path (cmds/revert.c revert_post_parse, revert_holder),
+ * and the commit slot after a word that names no profile (cmds/completion.c
+ * completion_commits_at).
  *
  * @param input The positional (may be NULL, which announces nothing)
  * @return true iff the input announces a path, or a pattern that selects one
@@ -130,15 +148,15 @@ bool input_announces_path(const char *input);
 /**
  * Does the positional set a profile apart at its first ':'?
  *
- * The profile:path grammar's question (base/refspec.h refspec_parse: the profile
- * is what precedes the first ':'), asked of a token whose slot is undecided and
- * before a pattern is read in it — so `p:*.conf` is p's pattern, never a path
- * holding a ':'. The first ':' sets a profile apart unless the token announces
+ * The refspec's question (input_refspec: the profile is what precedes the first
+ * ':' of the word its commit leaves), asked of a token whose slot is undecided
+ * and before a pattern is read in it — so `p:*.conf` is p's pattern, never a
+ * path holding a ':'. The first ':' sets a profile apart unless the token announces
  * a path before it: a place in its first byte, a label opening it, or a rule —
  * a negation, or a wildcard ahead of the ':', one after it being the profile's
  * own pattern. So a path holding a ':' keeps its reading — `~/a:b`, `home/a:b`,
  * `*a:b*`, `./a:b`, `!a:b` — and a ':' opening the token sets apart a profile
- * it does not name, which the parse refuses: `:x` names no profile before its
+ * it does not name, which the reading refuses: `:x` names no profile before its
  * ':'. A label's word alone before the ':' is a profile's name, the one spelling
  * a positional has for a profile so named (`home:~/.x`), `home` alone being the
  * namespace's own directory (input_announces_path).
@@ -147,10 +165,9 @@ bool input_announces_path(const char *input);
  * and its path (`foo:*.conf`); a leading `**` component names the same paths as
  * a pattern.
  *
- * Readers: cmds/apply.c apply_classify, of the token; apply_post_parse, of the
- * word its commit leaves; and apply_complete, of the token being typed — apply's
- * alone: the verbs that take a refspec in a slot of their own parse it there
- * (base/refspec.h refspec_parse).
+ * Readers: input_refspec, of the word its commit leaves; cmds/apply.c
+ * apply_classify, of the token, which routes one that sets a profile apart to
+ * that reading; and apply_complete, of the token being typed.
  *
  * @param input The positional (may be NULL, which sets none apart)
  * @return true iff the input's first ':' sets a profile apart, a name before it
@@ -175,6 +192,55 @@ bool input_announces_profile(const char *input);
  * @return true iff the input announces a rule
  */
 bool input_announces_rule(const char *input);
+
+/**
+ * The refspec a positional spells, `[profile:]<path>[@commit]`
+ *
+ * The commit first, the one the token carries (base/refspec.h refspec_commit):
+ * an '@' no commit follows is the name's own, and a ':' or a glob's bytes the
+ * commit holds — `HEAD^{/fix: typo}` — are the commit's. Then the profile, at
+ * the first ':' of the word the commit leaves, where that ':' sets one apart
+ * (input_announces_profile): a path announced before its ':' keeps it, so
+ * `~/cfg/a:b@C` is that path at C and never the profile `~/cfg/a`, while `cfg:a`
+ * is the profile cfg's `a` and `./cfg:a` the path. A profile whose own name opens
+ * like a path — under a label (`home/x`), or with a place's byte or a negation's
+ * — has no refspec spelling, and is named by -p or by export's two words. The
+ * path is what follows the profile's ':', or the word whole where none is set
+ * apart: a path, or a profile's name in a slot that takes one (`p@C`), its reader's
+ * to decide.
+ *
+ * A side the ':' or the commit sets apart and leaves empty is refused, quoted
+ * as it was read, the path's side first: `p:`, `p:@C` and `@HEAD` name no file,
+ * and so do `:` and `:@HEAD`, which name neither; `:x` names no profile before
+ * its ':'. A token with no profile's ':' and no commit is its caller's, the empty
+ * one among them.
+ *
+ *   home/.bashrc                  -> NULL          home/.bashrc       NULL
+ *   global:home/.bashrc@a4f2c8e   -> global        home/.bashrc       a4f2c8e
+ *   darwin/work:~/.bashrc         -> darwin/work   ~/.bashrc          NULL
+ *   home:~/.x                     -> home          ~/.x               NULL   (a label's word alone)
+ *   ~/cfg/foo:a.conf@HEAD~1       -> NULL          ~/cfg/foo:a.conf   HEAD~1
+ *   p:*.conf                      -> p             *.conf             NULL
+ *   work@HEAD~1                   -> NULL          work               HEAD~1
+ *   home/.x@HEAD^{/fix: typo}     -> NULL          home/.x            HEAD^{/fix: typo}
+ *   foo@bar.txt                   -> NULL          foo@bar.txt        NULL
+ *   p:@HEAD                       -> refused: names no file
+ *   :home/.x                      -> refused: names no profile before its ':'
+ *
+ * `*out` is zeroed on entry: after a refusal it is no answer.
+ *
+ * Readers — a reader not on this list is a bug: core/scope.c scope_build;
+ * cmds/apply.c apply_post_parse; cmds/show.c show_post_parse; cmds/revert.c
+ * revert_post_parse, revert_holder; cmds/export.c export_post_parse,
+ * export_complete; cmds/completion.c completion_profile_of,
+ * completion_path_history, completion_commits_at.
+ *
+ * @param input The positional (must not be NULL)
+ * @param arena Arena that owns the answer's strings (must not be NULL)
+ * @param out   The profile, the path and the commit (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t input_refspec(const char *input, arena_t *arena, input_refspec_t *out);
 
 /**
  * Read a CLI path argument: the shape dispatch, and nothing else.

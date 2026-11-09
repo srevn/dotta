@@ -1,7 +1,7 @@
 /**
- * input.c - The key a CLI path argument names
+ * input.c - The readings of a CLI argument: the refspec it spells, the key it names
  *
- * The readings of a flexible CLI path argument:
+ * The readings of a flexible CLI argument:
  *
  *   input_resolve           - the key the input names: a filesystem path (a
  *                             filesystem shape, normalized) or a storage path
@@ -19,14 +19,19 @@
  *                             mount_validate_target), for the three binders:
  *                             the --target flags and the editor's save
  *
+ *   input_refspec           - a positional of the refspec family, read once: its
+ *                             commit, then its profile where the first ':' sets
+ *                             one apart, then its path — every verb that reads
+ *                             a refspec, and the scope's profile:path arguments
+ *
  *   input_announces_path    - the grammars' question, asked of a positional whose
  *                             slot is still undecided: a path, or a name (list,
  *                             diff, apply, update)
  *
  *   input_announces_profile
- *                           - the profile:path grammar's, asked of the same
- *                             positional: a profile set apart at its first ':',
- *                             or a path holding one (apply)
+ *                           - the refspec's, asked of the same positional: a
+ *                             profile set apart at its first ':', or a path holding
+ *                             one (the refspec's reading, apply's classifier)
  *
  *   input_announces_rule    - the filter's question: a rule, or a path named
  *                             exactly (the pathspec's gate, and the pattern a
@@ -37,11 +42,12 @@
  * whose answer is the key. The grammar of a name (infra/label.h: label_prefixes,
  * label_validate_storage), the filesystem's two readings (fs_expand_tilde,
  * fs_working_directory), the path's algebra (base/string.h: str_path_join,
- * str_path_fold) and HOME's two spellings (sys/identity) are delegated to the
- * layers below. The table of roots is not among them: no root's spelling is read
- * here and no root's noun, so this file names no place (infra/input.h). A target's
- * rules are mount's (the place a binding means), asked of the argument's spelling
- * and of nothing the table holds.
+ * str_path_fold), HOME's two spellings (sys/identity) and the commit a refspec
+ * carries (base/refspec.h refspec_commit) are delegated to the layers below.
+ * The table of roots is not among them: no root's spelling is read here and no
+ * root's noun, so this file names no place (infra/input.h). A target's rules
+ * are mount's (the place a binding means), asked of the argument's spelling and
+ * of nothing the table holds.
  */
 
 #include "infra/input.h"
@@ -50,13 +56,14 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/refspec.h"
 #include "base/string.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
-#define PATH_WILDCARDS "*?["   /* a rule's alphabet: the filter's wildcards (input_announces_rule) */
+#define PATH_WILDCARDS "*?["   /* a rule's alphabet: the filter's wildcards */
 
 bool input_announces_path(const char *input) {
     if (!input || input[0] == '\0') return false;
@@ -85,6 +92,45 @@ bool input_announces_rule(const char *input) {
     CHECK_NULL(input);
 
     return input[0] == '!' || strpbrk(input, PATH_WILDCARDS) != NULL;
+}
+
+error_t input_refspec(const char *input, arena_t *arena, input_refspec_t *out) {
+    CHECK_NULL(input);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    *out = (input_refspec_t){ 0 };
+
+    /* The commit first, and the word it leaves: the arena's own copy, so the
+     * ':' that sets a profile apart ends the profile in place */
+    const char *commit = refspec_commit(input);
+    char *word = arena_strndup(
+        arena, input, commit ? (size_t) (commit - 1 - input) : strlen(input)
+    );
+
+    /* Then the profile, at the word's first ':' where no path is announced before
+     * it — asked of the word and never the token, whose commit may hold a ':' —
+     * and the path after it, or the word whole */
+    char *colon = input_announces_profile(word) ? strchr(word, ':') : NULL;
+    if (colon) *colon = '\0';
+    const char *path = colon ? colon + 1 : word;
+
+    /* A side the ':' or the commit sets apart and leaves empty, the path's first,
+     * so a token that names neither — `:`, `:@HEAD` — names no file. A word with
+     * no profile's ':' and no commit is its caller's, the empty one among them. */
+    if (path[0] == '\0' && (colon || commit)) {
+        return error_create(ERR_INVALID_ARG, "'%s' names no file", input);
+    }
+    if (colon == word) {
+        return error_create(ERR_INVALID_ARG, "'%s' names no profile before its ':'", input);
+    }
+
+    *out = (input_refspec_t){
+        .profile = colon ? word : NULL,
+        .path = path,
+        .commit = commit ? arena_strdup(arena, commit) : NULL,
+    };
+    return NULL;
 }
 
 error_t input_resolve(const char *input, arena_t *arena, input_path_t *out) {

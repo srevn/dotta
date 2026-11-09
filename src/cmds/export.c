@@ -1373,9 +1373,9 @@ cleanup:
 
 /**
  * Interpret the 1-3 raw positionals into `profile`, `file_path`, and `commit`.
- * The profile is always explicit, and the first word is read by the refspec
- * whatever follows it (base/refspec.h): what it holds, and the words after it,
- * name the shape:
+ * The profile is always explicit, and the first word is read as a refspec whatever
+ * follows it (infra/input.h input_refspec): what it holds, and the words after
+ * it, name the shape:
  *
  *   <profile>:<path>[@commit]          a path, its destination next or by -o
  *   <profile> <path> <commit>          a path, historical
@@ -1410,8 +1410,8 @@ static error_t export_post_parse(
         );
     }
 
-    refspec_t rs = { 0 };
-    error_t err = refspec_parse(arena, first, &rs);
+    input_refspec_t rs;
+    error_t err = input_refspec(first, arena, &rs);
     if (err != NULL) {
         return error_wrap(err, "Failed to parse target specification");
     }
@@ -1422,10 +1422,11 @@ static error_t export_post_parse(
          * (cp-style; '-o' stays valid as the explicit form). Only this form earns
          * it — every other shape would need a heuristic on the destination token
          * to distinguish it from a path or commit, and heuristics on user paths
-         * are how silent misroutes happen. The parse names the form, never a
-         * ':' anywhere in the word: one a commit carries is the commit's. */
+         * are how silent misroutes happen. The reading names the form, never a
+         * ':' anywhere in the word: one a commit carries is the commit's, and
+         * one a path holds the path's. */
         o->profile = rs.profile;
-        o->file_path = rs.file;
+        o->file_path = rs.path;
         o->commit = rs.commit;
 
         if (o->positional_count > 2) {
@@ -1459,7 +1460,7 @@ static error_t export_post_parse(
     } else if (rs.commit != NULL) {
         /* <profile>@<commit> [<path>]: the usage's own [@commit], so a word after
          * it is the path, never the destination */
-        o->profile = rs.file;
+        o->profile = rs.path;
         o->commit = rs.commit;
         if (o->positional_count == 2) o->file_path = args[1];
     } else if (o->positional_count == 2) {
@@ -1471,13 +1472,13 @@ static error_t export_post_parse(
         if (refspec_looks_like_commit(args[1])) {
             o->commit = args[1];
         } else {
-            refspec_t second = { 0 };
-            err = refspec_parse(arena, args[1], &second);
+            input_refspec_t second;
+            err = input_refspec(args[1], arena, &second);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }
             if (second.profile != NULL) o->profile = second.profile;
-            o->file_path = second.file;
+            o->file_path = second.path;
             o->commit = second.commit;
         }
     } else {
@@ -1526,9 +1527,9 @@ static args_want_t export_complete(
 
     /* The first word read as the command reads it, by the refspec: one it refuses
      * leads nowhere */
-    refspec_t rs = { 0 };
+    input_refspec_t rs = { 0 };
     if (o->positional_count > 0 &&
-        refspec_parse(ctx->arena, o->positional_args[0], &rs) != NULL) {
+        input_refspec(o->positional_args[0], ctx->arena, &rs) != NULL) {
         return ARGS_WANT_NONE;
     }
 
@@ -1538,10 +1539,11 @@ static args_want_t export_complete(
         return o->positional_count == 1 ? ARGS_WANT_FILES : ARGS_WANT_NONE;
     }
 
-    /* An `@` opens a commit slot where no commit is given yet: in the first word,
-     * and in a path after a bare profile, which names the profile it is read
-     * in. After `profile@commit` the path is taken as typed, its `@` its own */
-    if (rs.commit == NULL && completion_commits_at(ctx, out, at->current, rs.file)) {
+    /* Else the first word names the profile whole, the reading's path. An `@`
+     * opens a commit slot where no commit is given yet: in the first word, and
+     * in a path after a bare profile, which names the profile it is read in.
+     * After `profile@commit` the path is taken as typed, its `@` its own */
+    if (rs.commit == NULL && completion_commits_at(ctx, out, at->current, rs.path)) {
         return ARGS_WANT_NONE;
     }
 
@@ -1552,11 +1554,11 @@ static args_want_t export_complete(
     }
 
     if (o->positional_count == 1) {
-        completion_refspecs(ctx, out, rs.file);
-        completion_directories(ctx, out, rs.file);
-        if (rs.commit == NULL) completion_history(ctx, out, rs.file);
+        completion_refspecs(ctx, out, rs.path);
+        completion_directories(ctx, out, rs.path);
+        if (rs.commit == NULL) completion_history(ctx, out, rs.path);
     } else if (o->positional_count == 2 && rs.commit == NULL) {
-        completion_path_history(ctx, out, rs.file, o->positional_args[1]);
+        completion_path_history(ctx, out, rs.path, o->positional_args[1]);
     }
     return ARGS_WANT_NONE;
 }

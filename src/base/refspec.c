@@ -1,24 +1,17 @@
 /**
- * refspec.c - Refspec parsing utilities
+ * refspec.c - The commit a refspec carries, and the shape of a commit
  *
- * Splits "[profile:]<path>[@commit]" into three arena-backed slices, over the
- * one rule that says what a commit looks like — asked of the suffix after each
- * '@', from the last back, until one has a commit's shape: the commit a token
- * carries (refspec_commit), the one search the parse splits at. See refspec.h
- * for lifetime rules and for what that rule does and does not recognize.
- *
- * A partial parse that fails mid-way leaves a few unused bytes in the arena;
- * these are reclaimed when the arena is freed. No rollback is needed, so the
- * parse body is a straight sequence of returns.
+ * The one rule that says what a commit looks like, asked of the suffix after
+ * each '@', from the last back, until one has a commit's shape: the commit a
+ * token carries (refspec_commit), the one search the refspec's reading splits
+ * at (infra/input.h input_refspec). See refspec.h for what that rule does and
+ * does not recognize.
  */
 
 #include "base/refspec.h"
 
 #include <ctype.h>
 #include <string.h>
-
-#include "base/arena.h"
-#include "base/error.h"
 
 bool refspec_looks_like_commit(const char *token) {
     if (!token || !*token) {
@@ -74,8 +67,8 @@ const char *refspec_head_steps(const char *spelling) {
      * HEAD's `@{` takes. */
     if (spelling[0] == '@') {
         const char *steps = spelling + 1;
-        if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '{' ||
-            steps[0] == ':') {
+        if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' ||
+            steps[0] == '{' || steps[0] == ':') {
             return steps;
         }
         return NULL;
@@ -91,8 +84,8 @@ const char *refspec_head_steps(const char *spelling) {
         return NULL;
     }
     const char *steps = spelling + 4;
-    if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '@' ||
-        steps[0] == ':') {
+    if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' ||
+        steps[0] == '@' || steps[0] == ':') {
         return steps;
     }
     return NULL;
@@ -113,51 +106,5 @@ const char *refspec_commit(const char *token) {
             return p;
         }
     }
-    return NULL;
-}
-
-error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
-    CHECK_NULL(arena);
-    CHECK_NULL(input);
-    CHECK_NULL(out);
-
-    refspec_t rs = { 0 };
-
-    /* The commit first, the one the input carries, and the file ends at its '@' */
-    const char *end = input + strlen(input);
-    const char *commit = refspec_commit(input);
-    if (commit) {
-        rs.commit = arena_strdup(arena, commit);
-        end = commit - 1;
-    }
-
-    /* Then the profile, whatever precedes the first ':' before the commit (a
-     * sub-profile like darwin/work keeps its own separator): a ':' the commit
-     * carries — a pattern's, `^{/fix: typo}` — is the commit's, and no profile
-     * holds one (git-check-ref-format). */
-    const char *remainder = input;
-    const char *colon = memchr(input, ':', (size_t) (end - input));
-    if (colon) {
-        rs.profile = arena_strndup(arena, input, (size_t) (colon - input));
-        remainder = colon + 1;
-    }
-
-    /* The file is what a ':' or a commit's '@' sets apart: where either stands
-     * and nothing lies in the file's place, the spelling names no file, and says
-     * which spelling it read. A bare token with neither is its caller's to read
-     * — a path, or export's profile — the empty one among them. */
-    if (remainder == end && (colon || rs.commit)) {
-        return error_create(ERR_INVALID_ARG, "'%s' names no file", input);
-    }
-
-    /* The profile is what the ':' sets apart on its other side, and a ':' opening
-     * the token leaves nothing there: the spelling names no profile. Asked after
-     * the file, so one that names neither — `:`, `:@HEAD` — names no file. */
-    if (colon == input) {
-        return error_create(ERR_INVALID_ARG, "'%s' names no profile before its ':'", input);
-    }
-    rs.file = arena_strndup(arena, remainder, (size_t) (end - remainder));
-
-    *out = rs;
     return NULL;
 }

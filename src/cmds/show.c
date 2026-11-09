@@ -733,16 +733,16 @@ static error_t show_post_parse(
             o->mode = SHOW_COMMIT;
             o->commit = arg;
         } else {
-            /* File mode: parse [profile:]file[@commit] into arena. */
+            /* File mode: the refspec read (infra/input.h input_refspec) */
             o->mode = SHOW_FILE;
-            refspec_t rs = { 0 };
-            error_t err = refspec_parse(arena, arg, &rs);
+            input_refspec_t rs;
+            error_t err = input_refspec(arg, arena, &rs);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }
             /* A refspec-supplied profile overrides any -p/--profile flag. */
             if (rs.profile != NULL) o->profile = rs.profile;
-            o->file_path = rs.file;
+            o->file_path = rs.path;
             if (rs.commit != NULL) o->commit = rs.commit;
         }
     } else if (o->positional_count == 2) {
@@ -752,8 +752,8 @@ static error_t show_post_parse(
             /* [profile:]<file> <commit> — the file token read as the lone one
              * is, its profile winning over -p; the commit is the second's, so
              * one inside the token too is a commit given twice. */
-            refspec_t rs = { 0 };
-            error_t err = refspec_parse(arena, args[0], &rs);
+            input_refspec_t rs;
+            error_t err = input_refspec(args[0], arena, &rs);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }
@@ -764,18 +764,18 @@ static error_t show_post_parse(
                 );
             }
             if (rs.profile != NULL) o->profile = rs.profile;
-            o->file_path = rs.file;
+            o->file_path = rs.path;
             o->commit = args[1];
         } else {
             /* <profile> <file[@commit]> — refspec profile wins if present. */
             o->profile = args[0];
-            refspec_t rs = { 0 };
-            error_t err = refspec_parse(arena, args[1], &rs);
+            input_refspec_t rs;
+            error_t err = input_refspec(args[1], arena, &rs);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }
             if (rs.profile != NULL) o->profile = rs.profile;
-            o->file_path = rs.file;
+            o->file_path = rs.path;
             if (rs.commit != NULL) o->commit = rs.commit;
         }
     } else if (o->positional_count == 3) {

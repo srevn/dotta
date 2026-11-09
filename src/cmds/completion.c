@@ -24,7 +24,6 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/refspec.h"
 #include "base/string.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -488,12 +487,12 @@ static void changes_emit(
  * The profile a token names
  */
 const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token) {
-    refspec_t rs = { 0 };
-    error_t err = refspec_parse(ctx->arena, token, &rs);
+    input_refspec_t rs;
+    error_t err = input_refspec(token, ctx->arena, &rs);
     if (err) {
         return token;
     }
-    return rs.profile ? rs.profile : rs.file;
+    return rs.profile ? rs.profile : rs.path;
 }
 
 /**
@@ -523,17 +522,18 @@ void completion_history(
 bool completion_path_history(
     const dotta_ctx_t *ctx, FILE *out, const char *pinned, const char *token
 ) {
-    /* The word read as the commands read it (base/refspec.h): one they refuse,
-     * or one that names its commit already, leaves no commit slot after it */
-    refspec_t rs = { 0 };
-    if (refspec_parse(ctx->arena, token, &rs) != NULL || rs.commit != NULL) return true;
+    /* The word read as the commands read it (infra/input.h input_refspec): one
+     * they refuse, or one that names its commit already, leaves no commit slot
+     * after it */
+    input_refspec_t rs;
+    if (input_refspec(token, ctx->arena, &rs) != NULL || rs.commit != NULL) return true;
 
     /* Its profile, else the one the line pinned: none, and the caller's rules
      * stand */
     const char *profile = rs.profile ? rs.profile : pinned;
     if (profile == NULL) return false;
 
-    changes_emit(ctx, out, NULL, profile, rs.file);
+    changes_emit(ctx, out, NULL, profile, rs.path);
     return true;
 }
 
@@ -548,12 +548,12 @@ bool completion_commits_at(
     if (at == NULL) return false;
     if (ctx->run.repo == NULL) return true;
 
-    /* Read as the commands read it (base/refspec.h): a prefix they refuse, or
-     * one whose last '@' is its commit's own — a reflog's HEAD@{ being typed —
-     * leaves no commit to offer */
+    /* Read as the commands read it (infra/input.h input_refspec): a prefix they
+     * refuse, or one whose last '@' is its commit's own — a reflog's HEAD@{ being
+     * typed — leaves no commit to offer */
     char *prefix = arena_strndup(ctx->arena, current, (size_t) (at - current));
-    refspec_t rs = { 0 };
-    if (refspec_parse(ctx->arena, prefix, &rs) != NULL || rs.commit != NULL) return true;
+    input_refspec_t rs;
+    if (input_refspec(prefix, ctx->arena, &rs) != NULL || rs.commit != NULL) return true;
 
     /* Its profile, else the one the line pinned: with a path, the path's own
      * changes. A prefix that announces no path is the profile itself: its history
@@ -563,9 +563,9 @@ bool completion_commits_at(
      * the forms printed after the walk read as they would before it. */
     const char *profile = rs.profile ? rs.profile : pinned;
     if (profile) {
-        changes_emit(ctx, out, prefix, profile, rs.file);
-    } else if (!input_announces_path(rs.file)) {
-        if (commits_walk(ctx, out, prefix, rs.file, false) > 0) {
+        changes_emit(ctx, out, prefix, profile, rs.path);
+    } else if (!input_announces_path(rs.path)) {
+        if (commits_walk(ctx, out, prefix, rs.path, false) > 0) {
             commits_references(out, prefix);
         }
     }

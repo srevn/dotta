@@ -1454,7 +1454,7 @@ cleanup:
  * The 1-3 raw positionals read by the forms into `profile`, `path` and `commit`
  *
  * One reading, left to right, each word that can carry a profile or a commit of
- * its own read as a refspec (base/refspec.h refspec_parse). The first word is
+ * its own read as a refspec (infra/input.h input_refspec). The first word is
  * the path's where it names its own profile, under -p whatever its shape, or
  * where it announces a path (infra/input.h input_announces_path), and the profile's
  * otherwise — the shape rule, as list reads its first word, and -p making it
@@ -1476,8 +1476,8 @@ cleanup:
  * never at a tag (stated): `p C` reads its second word's shape to tell a commit
  * from a path, and `p@v1.0` is one word, the profile p@v1.0 that no branch is.
  * A profile whose own name announces a path — one named under a label's word —
- * has no whole-profile form (stated). No commit at all is refused, and so is
- * `p:@C`, a refspec that names no path.
+ * has no whole-profile form and no profile:path form, -p naming it (stated). No
+ * commit at all is refused, and so is `p:@C`, a refspec that names no path.
  *
  * Allocation model: refspec substrings are arena-allocated; pure positional
  * pointers borrow argv. cmd_revert does not free any of these pointers — the
@@ -1496,32 +1496,32 @@ static error_t revert_post_parse(
     }
 
     size_t next = 0;
-    refspec_t rs = { 0 };
-    error_t err = refspec_parse(arena, args[next++], &rs);
+    input_refspec_t rs;
+    error_t err = input_refspec(args[next++], arena, &rs);
     if (err != NULL) {
         return error_wrap(err, "Failed to parse file specification");
     }
 
-    if (rs.profile != NULL || o->profile != NULL || input_announces_path(rs.file)) {
+    if (rs.profile != NULL || o->profile != NULL || input_announces_path(rs.path)) {
         /* The path's word: its own profile, over -p's */
         if (rs.profile != NULL) o->profile = rs.profile;
-        o->path = rs.file;
+        o->path = rs.path;
         o->commit = rs.commit;
     } else if (rs.commit != NULL || next == count ||
         (count == 2 && refspec_looks_like_commit(args[next]))) {
         /* The profile's word, naming it whole: its commit inside it, no word
          * beside it, or the one beside it with a commit's shape */
-        o->profile = rs.file;
+        o->profile = rs.path;
         o->commit = rs.commit;
     } else {
         /* The profile's word, then the path's: its own profile over the first */
-        o->profile = rs.file;
-        err = refspec_parse(arena, args[next++], &rs);
+        o->profile = rs.path;
+        err = input_refspec(args[next++], arena, &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
         if (rs.profile != NULL) o->profile = rs.profile;
-        o->path = rs.file;
+        o->path = rs.path;
         o->commit = rs.commit;
     }
 
@@ -1559,15 +1559,15 @@ static error_t revert_post_parse(
 static const char *revert_holder(const dotta_ctx_t *ctx, const char *word) {
     if (ctx->run.repo == NULL || ctx->run.mounts == NULL) return NULL;
 
-    refspec_t rs = { 0 };
-    if (refspec_parse(ctx->arena, word, &rs) != NULL || rs.profile != NULL ||
-        !input_announces_path(rs.file)) {
+    input_refspec_t rs;
+    if (input_refspec(word, ctx->arena, &rs) != NULL || rs.profile != NULL ||
+        !input_announces_path(rs.path)) {
         return NULL;
     }
 
     input_path_t arg;
     const char *holder = NULL;
-    if (input_resolve(rs.file, ctx->arena, &arg) != NULL ||
+    if (input_resolve(rs.path, ctx->arena, &arg) != NULL ||
         revert_select_profile(ctx, &arg, &holder) != NULL) {
         return NULL;
     }

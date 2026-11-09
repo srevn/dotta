@@ -110,9 +110,10 @@ void completion_refspecs(
 /**
  * The profile a token names: its part before ':' when it is a refspec, the token
  * itself otherwise (its commit part, `profile@commit`, dropped) — what a first
- * positional pins for the verbs that read `[profile:]path` shapes. The refspec
- * parser draws the line, as the commands do. Arena-owned or the token itself;
- * never NULL.
+ * positional pins for the verbs that read `[profile:]path` shapes. The refspec's
+ * reading draws the line (infra/input.h input_refspec), as the commands do, so
+ * a path holding a ':' is no profile's. Arena-owned or the token itself; never
+ * NULL.
  */
 const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token);
 
@@ -141,16 +142,16 @@ void completion_history(
 /**
  * The commits that changed the path a word names, for the commit slot after it
  *
- * The word read as the commands read it (base/refspec.h), `[profile:]<path>`:
- * its profile the word's own, else `pinned` — the one the line names for it, -p
- * or the profile word before it, or for a path revert's own search finds holding
- * it (cmds/revert.c revert_complete) — as a refspec's profile wins over -p in
- * each command's grammar. The path is the profile's name for it at its head
- * (core/scope.h scope_resolve_name), and its changes are the walk's from that
- * head (sys/stats.h stats_path_history): a file's, or each commit that changed
- * anything beneath a directory, newest first, each a commit as completion_history
- * prints one, and no reference form — HEAD's steps are the profile's, never the
- * path's.
+ * The word read as the commands read it (infra/input.h input_refspec),
+ * `[profile:]<path>`: its profile the word's own, else `pinned` — the one the
+ * line names for it, -p or the profile word before it, or for a path revert's
+ * own search finds holding it (cmds/revert.c revert_complete) — as a refspec's
+ * profile wins over -p in each command's grammar. The path is the profile's name
+ * for it at its head (core/scope.h scope_resolve_name), and its changes are the
+ * walk's from that head (sys/stats.h stats_path_history): a file's, or each commit
+ * that changed anything beneath a directory, newest first, each a commit as
+ * completion_history prints one, and no reference form — HEAD's steps are the
+ * profile's, never the path's.
  *
  * A word no profile names is the caller's: a path typed alone, whose profile
  * the line does not know, keeps the profile's list or the enabled histories

@@ -445,13 +445,14 @@ error_t content_cache_get_from_blob_oid(
 
     /* The key names the whole binding a decrypt proves — the profile whose pair
      * unseals the blob, the storage path the SIV absorbs, the blob itself — spelled
-     * the way base/refspec spells a content name, the blob's OID where a commit
-     * would stand. Injective: a profile name is a ref name and cannot contain
-     * ':', and the OID is a fixed-width suffix. A hit is therefore an entry the
-     * cipher verified for exactly this binding; a second row naming the same
-     * ciphertext under another path or profile misses and runs its own decrypt,
-     * which the cipher refuses. A plaintext blob shared by two rows is read twice
-     * — one inflate of a dotfile; the cache exists for the decrypt.
+     * the way a refspec spells a content name (infra/input.h input_refspec),
+     * the blob's OID where a commit would stand. Injective: a profile name is a
+     * ref name and cannot contain ':', and the OID is a fixed-width suffix. A
+     * hit is therefore an entry the cipher verified for exactly this binding; a
+     * second row naming the same ciphertext under another path or profile misses
+     * and runs its own decrypt, which the cipher refuses. A plaintext blob shared
+     * by two rows is read twice — one inflate of a dotfile; the cache exists
+     * for the decrypt.
      *
      * The entry's filemode closes the key: a link's bytes are copied where a
      * content entry's are judged, so one binding read both ways is two entries.

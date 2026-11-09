@@ -10,11 +10,11 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
-#include "base/refspec.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "infra/input.h"
 #include "infra/label.h"
 #include "infra/pathspec.h"
 #include "sys/gitops.h"
@@ -65,16 +65,16 @@ error_t scope_build(
      *    an empty scope is not an error ("Empty-enabled policy", scope.h). */
     s->enabled = manifest_profiles(view);
 
-    /* 2. The profile:path arguments, each read whole (base/refspec.h): its profile
-     *    and its path. Its commit is the view's (core/manifest.h manifest_build)
-     *    and never read here, and the token is never cut at its '@' first, which
-     *    would read another commit. One that names no profile is its caller's
-     *    bug. */
-    refspec_t *refspecs = arena_calloc(arena, in->refspec_count, sizeof(*refspecs));
+    /* 2. The profile:path arguments, each read whole (infra/input.h input_refspec):
+     *    its profile and its path. Its commit is the view's (core/manifest.h
+     *    manifest_build) and never read here, and the token is never cut at its
+     *    '@' first, which would read another commit. One that names no profile
+     *    is its caller's bug. */
+    input_refspec_t *refspecs = arena_calloc(arena, in->refspec_count, sizeof(*refspecs));
     string_array_t names;
     string_array_init(&names, arena, in->refspec_count);
     for (size_t i = 0; i < in->refspec_count; i++) {
-        error_t err = refspec_parse(arena, in->refspecs[i], &refspecs[i]);
+        error_t err = input_refspec(in->refspecs[i], arena, &refspecs[i]);
         if (err) return err;
         CHECK_ARG(refspecs[i].profile != NULL, "a profile:path argument names its profile");
         string_array_push(&names, refspecs[i].profile);
@@ -99,8 +99,8 @@ error_t scope_build(
      *    was given. Then each profile:path profile's, in the order given, into
      *    a matcher of its own: a matcher is one ordered program, so no profile's
      *    negation runs against another's paths. Each profile has a path at least
-     *    — refspec_parse refuses one naming no file — so none has the matcher
-     *    that takes every path. */
+     *    — the reading refuses one naming no file — so none has the matcher that
+     *    takes every path. */
     err = pathspec_create(in->paths, in->path_count, arena, &s->paths);
     if (err) return err;
 
@@ -111,7 +111,7 @@ error_t scope_build(
         string_array_clear(&inputs);
         for (size_t j = 0; j < in->refspec_count; j++) {
             if (strcmp(refspecs[j].profile, s->refspec_profiles.entries[i]) == 0) {
-                string_array_push(&inputs, refspecs[j].file);
+                string_array_push(&inputs, refspecs[j].path);
             }
         }
 

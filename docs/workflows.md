@@ -56,7 +56,7 @@ dotta apply --keep-orphans
 
 `apply` performs full synchronization: it deploys new and updated files, and prunes dotta's own unchanged copies of orphaned files — those of disabled profiles, and those deleted from their profiles.
 
-A profile, or one profile's path, ending in `@<commit>` deploys its files as that commit held them, and so does a path named beside it (`dotta apply darwin@HEAD~1 ~/.zshrc`). Nothing is committed: `dotta status` then lists those files as changes to deploy, `dotta apply` brings the latest version back, and `dotta revert darwin:~/.config/nvim@HEAD~1` makes the old version the profile's. A profile is read at one commit a run, so naming it again without that commit is refused.
+A profile, or one profile's path, ending in `@<commit>` deploys its files as that commit held them, and commits nothing. `dotta status` then lists them as changes to deploy, `dotta apply` brings the latest version back, and `dotta revert darwin:~/.config/nvim@HEAD~1` makes the old version the profile's.
 
 ### A Machine That Already Has Its Own Files
 

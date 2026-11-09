@@ -3912,19 +3912,22 @@ static args_class_t apply_classify(const char *tok) {
 /**
  * Each word read into the view's fact and the scope's
  *
- * A word that reads a profile's rows names the revision it reads them at — the
- * commit it carries, or the profile's head where it carries none — and a negation,
- * which reads none, names one only where it carries a commit. A profile is read
- * at one (core/manifest.h manifest_build, its map): one named at two is refused
- * before anything is read. The map's readers are the build and the skips' remedies,
- * which name apply's own way at a commit (apply_print_deploy_skips,
- * apply_print_cleanup_skips). The word a commit leaves selects what it would
- * select alone, read by the classifier's own rungs: a profile:path the scope's,
- * the token raw (core/scope.h scope_inputs_t); a profile's name a profile named
- * on its own, so `apply p@C X` is p's X; and a path, at a commit, is refused.
- * The profiles and the refspecs are laid out anew in `arena`, the profiles named
- * on their own first and each word after them in the line's order: the options
- * point at the new arrays, and the engine's are never written.
+ * A word that names a profile and reads its rows names the revision it reads
+ * them at — the commit it carries, or the profile's head where it carries none
+ * — and a negation, which reads none, names one only where it carries a commit.
+ * A path named on its own names no profile, so it reads each at the revision
+ * the line names it at: `apply ~/.c p:~/.b@C` takes p's ~/.c from C, as `apply
+ * p@C ~/.c` does. A profile is read at one (core/manifest.h manifest_build, its
+ * map): one named at two is refused before anything is read. The map's readers
+ * are the build and the skips' remedies, which name apply's own way at a commit
+ * (apply_print_deploy_skips, apply_print_cleanup_skips). The word a commit leaves
+ * selects what it would select alone, read by the classifier's own rungs: a
+ * profile:path the scope's, the token raw (core/scope.h scope_inputs_t); a
+ * profile's name a profile named on its own, so `apply p@C X` is p's X; and a
+ * path, at a commit, is refused. The profiles and the refspecs are laid out anew
+ * in `arena`, the profiles named on their own first and each word after them in
+ * the line's order: the options point at the new arrays, and the engine's are
+ * never written.
  */
 static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command_t *cmd) {
     (void) cmd;
@@ -4150,13 +4153,10 @@ const args_command_t spec_apply = {
         "\n"
         "Past Commits:\n"
         "  A profile or a profile path ending in @<commit> deploys its files\n"
-        "  as that commit had them ('work@HEAD~1', 'work:~/.ssh@a4f2c8e'),\n"
-        "  and so does a path named beside it ('work@HEAD~1 ~/.bashrc'). A\n"
-        "  profile is read at one commit a run: naming it again without that\n"
-        "  commit is refused. Nothing is committed: 'dotta status' then shows\n"
-        "  those files as changed, a plain 'dotta apply' brings back the\n"
-        "  latest, and 'dotta revert' with the same argument commits the old\n"
-        "  version.\n"
+        "  as that commit had them ('work@HEAD~1', 'work:~/.ssh@a4f2c8e').\n"
+        "  Nothing is committed: 'dotta status' then shows those files as\n"
+        "  changed, a plain 'dotta apply' brings back the latest, and\n"
+        "  'dotta revert' with the same argument commits the old version.\n"
         "\n"
         "Exclusion Patterns:\n"
         "  Excluded paths are protected from deployment, directory\n"

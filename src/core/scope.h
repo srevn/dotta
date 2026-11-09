@@ -179,9 +179,8 @@ typedef struct scope_inputs {
  *
  * @param repo   Repository: a profile the line names that is not enabled is asked
  *               of it, to tell a disabled profile from none here (must not be NULL)
- * @param view   The view the command reads, ctx->run.manifest or one it built
- *               (must not be NULL; borrowed for the scope's life, whose enabled
- *               set is the view's)
+ * @param view   The run's view, ctx->run.manifest (must not be NULL; borrowed
+ *               for the scope's life, whose enabled set is the view's)
  * @param in     Inputs (must not be NULL)
  * @param arena  Arena the scope lives in, and everything it holds (must not be
  *               NULL)

@@ -101,10 +101,10 @@ const args_command_t *const *dotta_registry(void) {
  * The needs are checked for closure first: the spec names the full set its handler
  * reads, and the set must hold its own inputs. Then the repository, state — in
  * the shape the spec declares, narrowed to READ where this invocation is a preview
- * (runtime.h) — the crypto handles, the view and the mount table, the view's
- * own where both are declared; each iff declared. Every member starts NULL and
- * is populated in place, so on an error the members already opened are exactly
- * what `close_run` releases.
+ * (runtime.h) — the crypto handles, the view at the revisions the line names
+ * and the mount table, the view's own where both are declared; each iff declared.
+ * Every member starts NULL and is populated in place, so on an error the members
+ * already opened are exactly what `close_run` releases.
  *
  * State opens before crypto, so a run that holds the store's write lock reads
  * the repository's epoch inside it. Nothing depends on that today — the one command
@@ -208,8 +208,7 @@ static error_t open_run(
                     "Encryption is enabled but this repository's epoch (%s) %s, and "
                     "every encrypted file is sealed under it; a fetch of '"
                     EPOCH_RESTORE_REFSPEC "' from a remote that holds it restores it, "
-                    "or encryption.enabled = false works without it",
-                    EPOCH_REF,
+                    "or encryption.enabled = false works without it", EPOCH_REF,
                     error_code(err) == ERR_NOT_FOUND ? "is missing" : "cannot be read"
                 );
                 goto done;
@@ -235,13 +234,25 @@ static error_t open_run(
         run->content_cache = content_cache_create(run->repo, run->keymgr, arena);
     }
 
-    /* The view over the enabled set as it stands. The builder's error is returned
-     * as it is: it names the profile and, for a custom/ path under a profile
-     * with no target, the repair. A value of the command arena, rows and indexes
-     * alike: nothing for close_run. */
+    /* The view over the enabled set as it stands, each profile at the revision
+     * the line names for it and at its head where it names none. The builder's
+     * error is returned as it is: it names the profile and, for a custom/ path
+     * under a profile with no target, the repair; for a revision, one that does
+     * not resolve or that its branch holds no commit for. A value of the command
+     * arena, rows and indexes alike: nothing for close_run. */
     if (needs->manifest) {
+        /* The spec's own map row, asked as the --dry-run above is: args_map_value
+         * answers NULL for a command whose table carries none, post_parse makes
+         * none for a line that names no revision, and a command that parsed no
+         * options has no row to ask, so each reads every profile at its head.
+         * The map is the line's, in the process's arena, and the build borrows
+         * it for the call. */
+        const hashmap_t *revisions = opts != NULL
+            ? args_map_value(spec, opts, "revisions")
+            : NULL;
+
         manifest_t *view = NULL;
-        err = manifest_build(run->repo, run->state, NULL, arena, &view);
+        err = manifest_build(run->repo, run->state, revisions, arena, &view);
         if (err) goto done;
         run->manifest = view;
     }

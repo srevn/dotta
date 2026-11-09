@@ -35,10 +35,11 @@
  * `scope_build`, `workspace_load`, `deploy_execute`, `ignore_rules_create`); no
  * core header includes this one. A command-layer function takes the context when
  * it reads two or more of its resources, and the call from cmds into core is
- * the line where the dependencies are spelled out: `manifest_build(ctx->run.repo,
- * ctx->run.state, ctx->arena, &m)`. What a command built — a scope, a workspace,
- * the view after its own mutation — is a parameter, never read off the context:
- * the context carries the dispatcher's instant and nothing the command made.
+ * the line where the dependencies are spelled out: `scope_build(ctx->run.repo,
+ * ctx->run.manifest, &scope_inputs, ctx->arena, &scope)`. What a command built
+ * — a scope, a workspace, the view after its own mutation — is a parameter, never
+ * read off the context: the context carries the dispatcher's instant, as the
+ * line asks for it, and nothing the command made.
  */
 
 #ifndef DOTTA_RUNTIME_H
@@ -197,7 +198,8 @@ typedef enum dotta_verbosity {
  * not one of them and never will be: the identity of the run is a process fact
  * (sys/identity), and what a run cannot do as the invoker is each engine's
  * preflight skip, not a need. Nor is what an invocation asks of the run, which
- * the dispatcher reads off the spec's own rows (--dry-run, dotta_verbosity_t).
+ * the dispatcher reads off the spec's own rows (--dry-run, dotta_verbosity_t,
+ * the revisions a line names).
  *
  * The spec names the full set, not the deepest need on each chain: a reader learns
  * that `status` reads the state from `status`'s spec, not from a lattice. The
@@ -287,26 +289,37 @@ typedef enum dotta_verbosity {
  *
  * manifest
  * --------
- * The view — every enabled profile at HEAD, precedence resolved, one row per
- * active path (`core/manifest.h`) — `manifest_build` over the state's enabled
- * set. Requires `state`. Borrowed by the handler, and a value of the command
- * arena, which nothing frees (the run, below).
+ * The view — every enabled profile at the revision the line names for it, at
+ * its head where it names none, precedence resolved, one row per active path
+ * (`core/manifest.h`) — `manifest_build` over the state's enabled set. Requires
+ * `state`. Borrowed by the handler, and a value of the command arena, which nothing
+ * frees (the run, below).
+ *
+ * The revisions are what an invocation asks of the view. Before the build the
+ * dispatcher asks the spec's own `revisions` row (base/args.h ARGS_MAP): the
+ * map its post_parse derives from the words that name a profile at a commit
+ * (`cmds/apply.c` apply_post_parse), asked as a WRITE spec's `--dry-run` is asked
+ * before the state opens (main.c open_run). A spec that carries no such row, or
+ * a line that names no revision, reads every profile at its head; nothing is
+ * declared anywhere, and a spec that grows the row gets the rule by growing it.
  *
  * Who declares it: the commands whose subject is the view — the workspace commands
- * (status, diff, update — `workspace_load` borrows the view rather than building
- * one) — and `profile enable`, which reads the view before once — an enabled
- * profile Git holds no branch for (`manifest_missing`), and one whose claims
- * are placed nowhere for want of a target (`manifest_unbound`), each of which
- * an enable naming that profile warns of — and whose build gates the set it adds
- * to: each profile it adds is read as strictly as the build reads one
+ * (status, diff, update, apply — `workspace_load` borrows the view rather than
+ * building one) — and `profile enable`, which reads the view before once — an
+ * enabled profile Git holds no branch for (`manifest_missing`), and one whose
+ * claims are placed nowhere for want of a target (`manifest_unbound`), each of
+ * which an enable naming that profile warns of — and whose build gates the set
+ * it adds to: each profile it adds is read as strictly as the build reads one
  * (`core/profiles.h` `profile_needs_target`), its binding by the target's reading
  * (`infra/input.h` `input_target`), so no enable completes on a set the build
  * refuses. A build that fails ends dispatch with the builder's message — a tree
  * that will not load, metadata that will not parse — on every path of the command,
  * including the ones that would not have read the view; such a set is broken as
- * a whole, and `profile disable` (or `remove`) is the way out. A custom/ claim
- * under a profile with no target is not such a failure: the build is total over
- * it — no row, recorded on the view (`manifest_unbound`) — and the health consumers
+ * a whole, and `profile disable` (or `remove`) is the way out. So does a revision
+ * the line names that does not resolve, or that its branch holds no commit for
+ * (sys/revision.h): a refusal of the line, not of the set. A custom/ claim under
+ * a profile with no target is not such a failure: the build is total over it —
+ * no row, recorded on the view (`manifest_unbound`) — and the health consumers
  * (status, apply, sync) surface the held claims.
  *
  * Who does not: a command for which the view is incidental (one lookup or one
@@ -320,13 +333,10 @@ typedef enum dotta_verbosity {
  * run builds the view before its acts and the one after them for its Manifest
  * block, a failure of either warned and the block skipped, and a dry run builds
  * none) builds its own where it needs it, with the failure handling that path
- * wants. apply, whose subject is the view too, builds its own at the revisions
- * its line names (`cmds/apply.c` `cmd_apply`) — a line the dispatcher does not
- * read — and refuses a build that fails in the builder's words, as dispatch would.
- * A command that moves Git or the enabled set and reads the view it leaves (add,
- * update, remove, sync, clone, interactive) builds that view itself — the builder
- * called again over the rows as they now stand: `run.manifest` is the view at
- * dispatch and is never rebuilt — see "Members not welcome" #1 on the run.
+ * wants. A command that moves Git or the enabled set and reads the view it leaves
+ * (add, update, remove, sync, clone, interactive) builds that view itself — the
+ * builder called again over the rows as they now stand: `run.manifest` is the
+ * view at dispatch and is never rebuilt — see "Members not welcome" #1 on the run.
  *
  * tolerant
  * --------
@@ -371,12 +381,13 @@ typedef struct dotta_needs {
  *   - `keymgr != NULL` implies `config->encryption_enabled`. `content_cache`
  *     carries a borrowed pointer to it (NULL when encryption is disabled) and
  *     is torn down before it.
- *   - `manifest` is the view over the enabled set as it stands at dispatch — a
- *     value of the command arena, rows and indexes alike, which nothing frees.
- *     Never reassigned: a command that moves Git (a commit) or the enabled set
- *     builds the view it leaves itself, where it reads one, and `run.manifest`
- *     stays the view before — the one `profile enable` reads its missing branches
- *     and unbound claims off (`cmds/profile.c` `profile_enable`).
+ *   - `manifest` is the view over the enabled set as it stands at dispatch, each
+ *     profile at the revision the line names for it and at its head where it
+ *     names none — a value of the command arena, rows and indexes alike, which
+ *     nothing frees. Never reassigned: a command that moves Git (a commit) or
+ *     the enabled set builds the view it leaves itself, where it reads one, and
+ *     `run.manifest` stays the view before — the one `profile enable` reads its
+ *     missing branches and unbound claims off (`cmds/profile.c` `profile_enable`).
  *
  * Owning-typed pointers where `close_run` frees (`content_cache_t *`, `keymgr
  * *`, `state_t *`, `git_repository *`); `const` where nothing does (`mounts`

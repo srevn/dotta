@@ -710,6 +710,7 @@ typedef struct scope_coverage scope_coverage_t;
  */
 typedef struct {
     pathspec_entry_t entry;          /* The entry as its word typed it, a profile:path's with its profile */
+    const char *profile;             /* The profile its word names, a profile:path's; NULL: a path named on its own */
     const char *hidden;              /* The first profile whose subject it matched, its word leaving it out; NULL: none */
 } scope_miss_t;
 

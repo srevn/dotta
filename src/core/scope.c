@@ -647,7 +647,8 @@ scope_misses_t scope_coverage_misses(const scope_coverage_t *c) {
     /* Each entry left unreached, with the profile kept for it, in the coverage's
      * order: the paths named on their own as typed, then each profile:path
      * profile's as its word typed it — its profile and its path, the commit being
-     * the view's */
+     * the view's — the profile its word names beside it, so a screen tells the
+     * profile its own word left out from one a filter did */
     scope_miss_t *misses = arena_calloc(c->arena, c->remaining, sizeof(*misses));
     size_t count = 0;
     size_t entry = 0;
@@ -665,7 +666,11 @@ scope_misses_t scope_coverage_misses(const scope_coverage_t *c) {
             typed.text = arena_str_format(
                 c->arena, "%s:%s", c->scope->refspec_profiles.entries[i], typed.text
             );
-            misses[count++] = (scope_miss_t){ .entry = typed, .hidden = c->hidden[entry] };
+            misses[count++] = (scope_miss_t){
+                .entry = typed,
+                .profile = c->scope->refspec_profiles.entries[i],
+                .hidden = c->hidden[entry],
+            };
         }
     }
 

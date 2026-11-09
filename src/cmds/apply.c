@@ -3058,9 +3058,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Each path argument answered alone, over apply's universe, the managed paths:
      * the workspace's items, active and orphaned, whatever bucket a plan holds
      * each in — so what a flag withholds counts as reached, and an entry that
-     * reached only what its word's profiles leave out — -p's, or a profile:path's
-     * own — names the first one's profile (core/scope.h scope_coverage_t). One
-     * block, its boundary asked by its first line. */
+     * reached only what its word's profiles leave out names the first one's profile
+     * (core/scope.h scope_coverage_t): a path's miss beside the filter that hid
+     * it, -p, and a profile:path's alone, its own word naming another profile.
+     * One block, its boundary asked by its first line. */
     {
         scope_coverage_t *coverage = scope_coverage_create(scope, ctx->arena);
 
@@ -3091,7 +3092,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         for (size_t i = 0; i < misses.count; i++) {
             const scope_miss_t *miss = &misses.entries[i];
-            if (miss->hidden) {
+            if (miss->hidden && miss->profile) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "No managed path matches %s'%s' (%s's)",
+                    miss->entry.rule ? "pattern " : "", miss->entry.text, miss->hidden
+                );
+            } else if (miss->hidden) {
                 output_warning(
                     out, OUTPUT_NORMAL,
                     "No managed path matches %s'%s' (%s's, hidden by the profile filter)",

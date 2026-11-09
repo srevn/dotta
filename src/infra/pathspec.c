@@ -13,8 +13,8 @@
 #include "base/heap.h"
 #include "base/string.h"
 #include "base/wildmatch.h"
-#include "infra/label.h"
 #include "infra/input.h"
+#include "infra/label.h"
 
 /* The ascent's copy of a subject: the stack covers the common case, the heap
  * the rest, so a long path is walked and never silently skipped. The same constant

@@ -23,8 +23,8 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "infra/content.h"
-#include "infra/mount.h"
 #include "infra/input.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 #include "sys/revision.h"
 

@@ -103,8 +103,8 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "infra/content.h"
-#include "infra/label.h"
 #include "infra/input.h"
+#include "infra/label.h"
 #include "sys/filesystem.h"
 #include "sys/revision.h"
 

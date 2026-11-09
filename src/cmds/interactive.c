@@ -28,8 +28,8 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/mount.h"
 #include "infra/input.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
 

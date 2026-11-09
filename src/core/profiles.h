@@ -347,13 +347,13 @@ void profile_free(profile_t *profile);
  * ask its view by name or word a refusal under it (cmds/export.c
  * export_collect_profile, export_collect_storage and export_collect_filesystem,
  * cmds/revert.c revert_select_profile, where it places a typed name and each
- * holder's name for the place); a restore, its two views' asker and each claim's
- * placer (cmds/revert.c revert_restore_path); cmds/show.c show_file, whose bytes
- * the profile's key opens and whose warning names it; remove's universe, whose
- * custom/ claims it places under the profile's binding, and its directory offer,
- * which describes each claim by it (cmds/remove.c remove_list_claims,
- * remove_offer_directory); and update's capture, whose seal the profile's key
- * makes (cmds/update.c update_capture).
+ * holder's name for the place); a restore, its two views' asker and the placer
+ * of its argument and of each claim (cmds/revert.c revert_restore_path);
+ * cmds/show.c show_file, whose bytes the profile's key opens and whose warning
+ * names it; remove's universe, whose custom/ claims it places under the profile's
+ * binding, and its directory offer, which describes each claim by it (cmds/remove.c
+ * remove_list_claims, remove_offer_directory); and update's capture, whose seal
+ * the profile's key makes (cmds/update.c update_capture).
  *
  * @param profile Handle (must not be NULL)
  * @return The handle's copy; valid until profile_free
@@ -798,9 +798,11 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  * cmds/export.c export_collect_storage (a file claim and a directory claim, both
  * TOLERANT: the single-file copy, or the copy's root), each claim of either kind
  * a restore writes, its commit's view standing it where the argument reaches
- * (STRICT: cmds/revert.c revert_select_claim), and a profile's draft at each
- * rung of the way a restore brings back (a directory claim, STRICT, of the commit's
- * profile: profile_restore_file, profile_restore_directory).
+ * (STRICT: cmds/revert.c revert_select_claim), the file it writes at its argument
+ * read again by its preview through the restore's answer (cmds/revert.c
+ * cmd_revert), and a profile's draft at each rung of the way a restore brings
+ * back (a directory claim, STRICT, of the commit's profile: profile_restore_file,
+ * profile_restore_directory).
  *
  * @param profile Handle (must not be NULL)
  * @param read The sheet's policy for this question
@@ -1204,9 +1206,10 @@ error_t profile_draft_merge(
  * encryption prior; cmds/remove.c remove_paths, for the claims its arguments
  * are matched against (remove_resolve); cmds/revert.c cmd_revert, for the entry
  * its preview reads at the name it shows one file at (profile_entry); cmds/revert.c
- * revert_restore_path, for the head a restore reads — its view, which names each
- * write, and its walk, every claim it may take; and cmds/update.c update_profile,
- * for a capture's prior and the name its seal is keyed by (update_capture).
+ * revert_restore_path, for the head a restore reads — its name, which places
+ * the argument, its view, which names each write, and its walk, every claim it
+ * may take; and cmds/update.c update_profile, for a capture's prior and the name
+ * its seal is keyed by (update_capture).
  *
  * @param draft The draft (must not be NULL)
  * @return The base; never NULL
@@ -1715,9 +1718,8 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  *
  * Readers: profile_commit, the names its message gives (infra/commit.h
  * commit_message); and cmds/revert.c cmd_revert, asked before its commit, its
- * answer that commit's — the preview's sections and the name it shows one file
- * at, the paths its hooks are handed and the places its record phase reads. A
- * reader not on this list is a bug.
+ * answer that commit's — the preview's sections, the paths its hooks are handed
+ * and the places its record phase reads. A reader not on this list is a bug.
  *
  * @param draft The draft, every edit in (must not be NULL)
  * @param arena The arena the lists and their names live in (must not be NULL)

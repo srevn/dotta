@@ -75,9 +75,9 @@ typedef struct {
  *
  * What a revert is said of is what was typed — the argument as the shell spells
  * it, a name as typed — or the profile whole. Its preview shows one file's restore
- * whole, under the name the commit writes it at, where the path reaches that
- * one claim: restored, its contents unchanged, or its diff; any other revert
- * lists what the commit changes of the profile, in the commit's words.
+ * whole, under the name the commit writes it at, where the path is that file
+ * and reaches nothing else: restored, its contents unchanged, or its diff; any
+ * other revert lists what the commit changes of the profile, in the commit's words.
  *
  * The record phase: a revert changes Git and nothing on disk, and owes the record
  * one write, the reclaim — this profile's record retired at a place the commit
@@ -93,11 +93,9 @@ typedef struct {
  * next load reads a restored file there as [stale].
  *
  * Costs, a verb's, paid when typed: at a path, the restore's two one-profile
- * views and its walk of the profile (revert_restore_path), and where the path
- * reaches one claim the preview's view of the commit, built again; without a
- * profile named, each local profile's one-profile view where the argument has a
- * place in it, and its documents at the name where it has none
- * (revert_select_profile).
+ * views and its walk of the profile (revert_restore_path); without a profile
+ * named, each local profile's one-profile view where the argument has a place
+ * in it, and its documents at the name where it has none (revert_select_profile).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

@@ -487,9 +487,7 @@ error_t manifest_build(
  * stands there, which is what manifest_lookup_claim's own note is about; the
  * name a profile gives a path argument, over whatever tree its reader selected
  * (core/scope.c scope_resolve_name, which asks it manifest_claim_name for the
- * -p arms of show and list, and for completion's commit slot after a path);
- * revert's preview, the commit's file at its argument's own place where the path
- * reaches one claim, read off one of the commit (cmds/revert.c cmd_revert); add,
+ * -p arms of show and list, and for completion's commit slot after a path); add,
  * which builds one over its draft's base (core/profiles.h profile_draft_base)
  * and asks it every naming question for the length of the command (cmds/add.c
  * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); the two
@@ -1212,9 +1210,7 @@ bool manifest_holds_name(
  * Readers: the name's holders, a rung holding no name (manifest_holder); export's
  * directory claims, a rung being none to count (cmds/export.c
  * export_collect_filesystem, export_entry_from_row); and the commit's claims a
- * restore writes, a rung being none to restore (cmds/revert.c revert_restore_path),
- * and the file revert's preview shows whole at its argument's own place
- * (cmds/revert.c cmd_revert).
+ * restore writes, a rung being none to restore (cmds/revert.c revert_restore_path).
  *
  * @param manifest Manifest (NULL answers false)
  * @param row A row of this view (NULL answers false)

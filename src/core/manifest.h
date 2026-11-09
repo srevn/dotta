@@ -426,9 +426,10 @@ typedef struct manifest manifest_t;
  *              be NULL; borrowed, only the row cache is consulted)
  * @param revisions The run's revisions: a profile's name → the revision it is
  *                  read at, as typed (const char *); a profile it holds no key
- *                  for is read at HEAD, and so is every profile where it is NULL
- *                  (borrowed for the call). apply's line fills it (cmds/apply.c
- *                  apply_post_parse); every other caller passes NULL
+ *                  for, or holds with no revision, is read at HEAD, and so is
+ *                  every profile where the map is NULL (borrowed for the call).
+ *                  apply's line fills it (cmds/apply.c apply_post_parse); every
+ *                  other caller passes NULL
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
  * @param out Manifest (must not be NULL)

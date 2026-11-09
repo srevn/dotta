@@ -3851,32 +3851,42 @@ static args_class_t apply_classify(const char *tok) {
 }
 
 /**
- * Each refspec read into the view's fact and the scope's
+ * Each word read into the view's fact and the scope's
  *
- * The commit a word carries is the revision its profile is read at, one a profile
- * (core/manifest.h manifest_build, its map), and the word its commit leaves selects
- * what it would select alone, read by the classifier's own rungs: a profile:path
- * the scope's, the token raw (core/scope.h scope_inputs_t); a profile's name a
- * profile named on its own, so `apply p@C X` is p's X; and a path, at a commit,
- * is refused. The profiles and the refspecs are laid out anew in `arena`, the
- * profiles named on their own first and each word after them in the line's order:
- * the options point at the new arrays, and the engine's are never written.
+ * A word that reads a profile's rows names the revision it reads them at — the
+ * commit it carries, or the profile's head where it carries none — and a negation,
+ * which reads none, names one only where it carries a commit. A profile is read
+ * at one (core/manifest.h manifest_build, its map): one named at two is refused
+ * before anything is read. The word a commit leaves selects what it would select
+ * alone, read by the classifier's own rungs: a profile:path the scope's, the
+ * token raw (core/scope.h scope_inputs_t); a profile's name a profile named on
+ * its own, so `apply p@C X` is p's X; and a path, at a commit, is refused. The
+ * profiles and the refspecs are laid out anew in `arena`, the profiles named on
+ * their own first and each word after them in the line's order: the options point
+ * at the new arrays, and the engine's are never written.
  */
 static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command_t *cmd) {
     (void) cmd;
     cmd_apply_options_t *o = opts_v;
+
+    /* No word carries a commit or names its profile before a ':': no map is made,
+     * and the build reads every profile at its head */
     if (o->refspec_count == 0) return NULL;
 
     /* Worst case: every refspec a profile's name, or every one a profile:path
-     * (update_post_parse's raw shape) */
+     * (update_post_parse's raw shape), and the map a profile a word */
     char **profiles = arena_calloc(arena, o->profile_count + o->refspec_count, sizeof(*profiles));
     size_t profile_count = 0;
-    for (; profile_count < o->profile_count; profile_count++) {
-        profiles[profile_count] = o->profiles[profile_count];
-    }
     char **refspecs = arena_calloc(arena, o->refspec_count, sizeof(*refspecs));
     size_t refspec_count = 0;
-    o->revisions = hashmap_borrow(arena, o->refspec_count);
+    o->revisions = hashmap_borrow(arena, o->profile_count + o->refspec_count);
+
+    /* The profiles named on their own, -p's and bare: each at its head, which
+     * no two disagree on, so none is asked */
+    for (; profile_count < o->profile_count; profile_count++) {
+        profiles[profile_count] = o->profiles[profile_count];
+        hashmap_set(o->revisions, profiles[profile_count], NULL);
+    }
 
     for (size_t i = 0; i < o->refspec_count; i++) {
         char *token = o->refspecs[i];
@@ -3909,20 +3919,26 @@ static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command
             profile = word;
             profiles[profile_count++] = word;
         }
-        if (commit == NULL) continue;
 
-        /* Its commit is the revision its profile is read at: the same spelling
-         * again is the same revision, and another is refused, compared as typed
-         * and before anything is read — the map is the seen-set and the build's
-         * input in one */
-        const char *seen = hashmap_get(o->revisions, profile);
-        if (seen && strcmp(seen, commit) != 0) {
-            return error_create(
-                ERR_INVALID_ARG, "Commit given twice for '%s': '%s' and '%s'",
-                profile, seen, commit
-            );
+        /* A negation leaves out what another rule of its profile selected
+         * (infra/pathspec.h) and reads none of the profile's rows itself */
+        if (commit == NULL && rs.file[0] == '!') continue;
+
+        /* The revision its word names its profile at, the map the seen-set and
+         * the build's input in one: the first word holds it, the same again is
+         * one revision, and another is refused, compared as typed and before
+         * anything is read — an absent commit spelled HEAD as the build spells
+         * it, so `p:a@HEAD p:b` is one revision and `p:a p:b@C` two */
+        if (!hashmap_add(o->revisions, profile, commit ? arena_strdup(arena, commit) : NULL)) {
+            const char *seen = hashmap_get(o->revisions, profile);
+            if (strcmp(seen ? seen : "HEAD", commit ? commit : "HEAD") != 0) {
+                return error_create(
+                    ERR_INVALID_ARG, "Profile '%s' is named at %s and at %s", profile,
+                    seen ? arena_str_format(arena, "'%s'", seen) : "its head",
+                    commit ? arena_str_format(arena, "'%s'", commit) : "its head"
+                );
+            }
         }
-        if (seen == NULL) hashmap_set(o->revisions, profile, arena_strdup(arena, commit));
     }
 
     o->profiles = profiles;
@@ -4073,10 +4089,13 @@ const args_command_t spec_apply = {
         "\n"
         "Past Commits:\n"
         "  A profile or a profile path ending in @<commit> deploys its files\n"
-        "  as that commit had them ('work@HEAD~1', 'work:~/.ssh@a4f2c8e').\n"
-        "  Nothing is committed: 'dotta status' then shows those files as\n"
-        "  changed, a plain 'dotta apply' brings back the latest, and\n"
-        "  'dotta revert' with the same argument commits the old version.\n"
+        "  as that commit had them ('work@HEAD~1', 'work:~/.ssh@a4f2c8e'),\n"
+        "  and so does a path named beside it ('work@HEAD~1 ~/.bashrc'). A\n"
+        "  profile is read at one commit a run: naming it again without that\n"
+        "  commit is refused. Nothing is committed: 'dotta status' then shows\n"
+        "  those files as changed, a plain 'dotta apply' brings back the\n"
+        "  latest, and 'dotta revert' with the same argument commits the old\n"
+        "  version.\n"
         "\n"
         "Exclusion Patterns:\n"
         "  Excluded paths are protected from deployment, directory\n"

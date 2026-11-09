@@ -24,7 +24,7 @@ typedef struct {
     size_t path_count;          /* Number of paths */
     char **refspecs;            /* profile:path arguments, raw: the scope parses each whole */
     size_t refspec_count;       /* Number of profile:path arguments */
-    hashmap_t *revisions;       /* Profile name -> its revision, as typed (NULL = all at HEAD) */
+    hashmap_t *revisions;       /* Profile name -> the commit its words name it at, as typed; none: its head (NULL = all at HEAD) */
     bool force;                 /* Override deploy's conflicts and cleanup's skip reasons */
     bool dry_run;               /* Don't actually deploy */
     bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */

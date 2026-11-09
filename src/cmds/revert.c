@@ -1576,17 +1576,17 @@ static const char *revert_holder(const dotta_ctx_t *ctx, const char *word) {
 
 /**
  * What can stand at the cursor, by the shapes revert_post_parse reads — as show,
- * without the bare-commit form: first a file of any profile as `profile:path`,
- * bare once -p pins one. After one positional, a word naming a profile and a
- * path — `profile:path`, or a path once -p pins one, or a path the one profile
- * holding it pins (revert_holder) — is followed by its commit, the path's own
- * changes (completion_path_history); any other word by the files of the profile
- * it may name or that profile's history, the grammar deciding by the next token,
- * a path several profiles hold or none by the enabled histories. After two, the
- * commit: the second word's own changes in the profile the first names. An `@`
- * in the token being typed completes its commit part, its profile the token's
- * own, the line's, or the one holding the path its part before the `@` names
- * (completion_commits_at).
+ * without the bare-commit form: first a file or a directory claim of any profile
+ * as `profile:path`, bare once -p pins one. After one positional, a word naming
+ * a profile and a path — `profile:path`, or a path once -p pins one, or a path
+ * the one profile holding it pins (revert_holder) — is followed by its commit,
+ * the path's own changes (completion_path_history); any other word by the files
+ * and directory claims of the profile it may name or that profile's history,
+ * the grammar deciding by the next token, a path several profiles hold or none
+ * by the enabled histories. After two, the commit: the second word's own changes
+ * in the profile the first names. An `@` in the token being typed completes its
+ * commit part, its profile the token's own, the line's, or the one holding the
+ * path its part before the `@` names (completion_commits_at).
  */
 static args_want_t revert_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1621,6 +1621,7 @@ static args_want_t revert_complete(
 
     if (o->positional_count == 0) {
         completion_refspecs(ctx, out, pinned);
+        completion_directories(ctx, out, pinned);
     } else if (o->positional_count == 1) {
         /* The path's own profile: -p's, else the one holding it, where it names
          * none of its own (completion_path_history reads a word's own first) */
@@ -1628,6 +1629,7 @@ static args_want_t revert_complete(
         const char *holder = o->profile ? o->profile : revert_holder(ctx, word);
         if (!completion_path_history(ctx, out, holder, word)) {
             completion_refspecs(ctx, out, pinned);
+            completion_directories(ctx, out, pinned);
             completion_history(ctx, out, pinned);
         }
     } else if (o->positional_count == 2) {

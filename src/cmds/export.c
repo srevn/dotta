@@ -1505,15 +1505,15 @@ static error_t export_post_parse(
 
 /**
  * What can stand at the cursor, by the shapes export_post_parse reads: a local
- * profile or a refspec first. After `profile:path` the destination, a filesystem
- * path; after a bare profile a file or directory claim of that profile, or a
- * commit; after `profile@commit` a claim of that profile alone, its commit given;
- * then the commit, the path's own changes (completion_path_history). An `@` in
- * the token being typed completes its commit part where the grammar reads one:
- * in the first word, its profile the token's own, and in a path after a bare
- * profile, which names it (completion_commits_at); in the destination and in a
- * claim after `profile@commit`, each taken as typed, it is the path's own. -o
- * takes a path.
+ * profile, or a profile's file or directory claim as `profile:path`, first. After
+ * `profile:path` the destination, a filesystem path; after a bare profile a file
+ * or directory claim of that profile, or a commit; after `profile@commit` a claim
+ * of that profile alone, its commit given; then the commit, the path's own changes
+ * (completion_path_history). An `@` in the token being typed completes its commit
+ * part where the grammar reads one: in the first word, its profile the token's
+ * own, and in a path after a bare profile, which names it (completion_commits_at);
+ * in the destination and in a claim after `profile@commit`, each taken as typed,
+ * it is the path's own. -o takes a path.
  */
 static args_want_t export_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1550,6 +1550,7 @@ static args_want_t export_complete(
     if (o->positional_count == 0) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
         completion_refspecs(ctx, out, NULL);
+        completion_directories(ctx, out, NULL);
         return ARGS_WANT_NONE;
     }
 

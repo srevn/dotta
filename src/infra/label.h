@@ -164,14 +164,14 @@ label_split_t label_split(const char *s);
  * internal file onto a profile's draft, which no name in the grammar passes
  * (core/profiles.c profile_put_internal_file), and the changes a draft's commit
  * names, which name its internal files apart (profile_changes); the refspec
- * completion (cmds/completion.c refspec_emit), diff's delta selection (cmds/diff.c
- * diff_select_delta_cb) and sync's of a tree diff's deletions (cmds/sync.c
- * sync_disagreements), the rule compiler (infra/pathspec.c compile_rule), the
- * resolver's storage arm and the question its neighbour asks of a positional
- * whose slot is undecided (infra/input.c input_resolve, input_announces_path),
- * the two input heads that dispatch on shape before reading it (cmds/add.c cmd_add,
- * cmds/ignore.c ignore_test) and export's profile slot's own grammar (cmds/export.c
- * export_post_parse).
+ * completion (cmds/completion.c completion_offer_file), diff's delta selection
+ * (cmds/diff.c diff_select_delta_cb) and sync's of a tree diff's deletions
+ * (cmds/sync.c sync_disagreements), the rule compiler (infra/pathspec.c
+ * compile_rule), the resolver's storage arm and the question its neighbour asks
+ * of a positional whose slot is undecided (infra/input.c input_resolve,
+ * input_announces_path), the two input heads that dispatch on shape before reading
+ * it (cmds/add.c cmd_add, cmds/ignore.c ignore_test) and export's profile slot's
+ * own grammar (cmds/export.c export_post_parse).
  */
 bool label_prefixes(const char *s);
 

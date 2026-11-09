@@ -315,10 +315,11 @@ error_t profile_open(const char *name, const git_commit *commit, profile_t **out
  * of a head by name, what it holds and whether it needs a target — cmds/profile.c
  * profile_list and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c
  * read_targets, cmds/key.c key_status; the directory claims a completion offers
- * at a profile's head — export's (cmds/completion.c completion_directories) and
- * remove's own (cmds/remove.c remove_complete); and the head a verb reads where
- * no commit is named — export's (cmds/export.c cmd_export) and show's, of the
- * profile named or of the one whose row stands at the path (cmds/show.c cmd_show).
+ * at a profile's head — beside its files (cmds/completion.c completion_directories)
+ * and remove's own (cmds/remove.c remove_complete); and the head a verb reads
+ * where no commit is named — export's (cmds/export.c cmd_export) and show's, of
+ * the profile named or of the one whose row stands at the path (cmds/show.c
+ * cmd_show).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param name The profile's name, which its branch is named by (must not be NULL;
@@ -432,17 +433,17 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * rows, read TOLERANT (cmds/list.c list_files, through list_collect_file); export's
  * whole and name arms, read TOLERANT, the second keeping the claims beneath its
  * name (cmds/export.c export_collect_profile and export_collect_storage, through
- * export_collect_claim); the directory claims a completion offers export
- * (cmds/completion.c completion_directories, through completion_offer_directory),
- * and those remove's completion offers as names, before profile_contradicted's
- * (cmds/remove.c remove_complete, through remove_offer_directory); and every
- * claim the profile makes, a derived one passed by, before profile_contradicted's,
- * through one visitor — the universe a removal's arguments are matched against,
- * read STRICT, and every claim a deletion takes, read TOLERANT (cmds/remove.c
- * remove_list_claims, through remove_collect_claim, for remove_resolve and
- * remove_profile); and every claim of a draft's base a restore may take, before
- * profile_contradicted's, read STRICT (cmds/revert.c revert_restore_path, through
- * revert_take_claim).
+ * export_collect_claim); the directory claims a completion offers beside a
+ * profile's files (cmds/completion.c completion_directories, through
+ * completion_offer_directory), and those remove's completion offers as names,
+ * before profile_contradicted's (cmds/remove.c remove_complete, through
+ * remove_offer_directory); and every claim the profile makes, a derived one passed
+ * by, before profile_contradicted's, through one visitor — the universe a removal's
+ * arguments are matched against, read STRICT, and every claim a deletion takes,
+ * read TOLERANT (cmds/remove.c remove_list_claims, through remove_collect_claim,
+ * for remove_resolve and remove_profile); and every claim of a draft's base a
+ * restore may take, before profile_contradicted's, read STRICT (cmds/revert.c
+ * revert_restore_path, through revert_take_claim).
  *
  * @param profile Handle (must not be NULL); its sheet is read by the first question
  *                that needs it, a walk or profile_load_sheet

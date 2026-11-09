@@ -4025,7 +4025,8 @@ static error_t apply_post_parse(void *opts_v, arena_t *arena, const args_command
  * commit part where the word before it names a profile, as apply_classify reads
  * that word, a path's `@` being its own (completion_commits_at); a ':' being
  * typed that sets a profile apart, with its name before it or none, every profile's
- * files as `profile:path` (completion_refspecs).
+ * files and directory claims as `profile:path` (completion_refspecs,
+ * completion_directories).
  */
 static args_want_t apply_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -4056,9 +4057,11 @@ static args_want_t apply_complete(
     }
 
     /* A ':' being typed that sets a profile apart, its name before it or none:
-     * every profile's files as `profile:path`, the shell matching what it will */
+     * every profile's files and directory claims as `profile:path`, a directory
+     * slash-marked, the shell matching what it will */
     if (input_announces_profile(at->current)) {
         completion_refspecs(ctx, out, NULL);
+        completion_directories(ctx, out, NULL);
         return ARGS_WANT_NONE;
     }
 

@@ -115,7 +115,9 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
          * the remote goes */
         git_remote *remote = NULL;
         const char *url = NULL;
-        if (git_remote_lookup(&remote, repo, name) == 0) url = git_remote_url(remote);
+        if (git_remote_lookup(&remote, repo, name) == 0) {
+            url = git_remote_url(remote);
+        }
         fprintf(out, "%s\t%s\n", name, url ? url : "Remote");
         git_remote_free(remote);
     }
@@ -148,9 +150,7 @@ void completion_files(
      * / ~180-row repository, measured 2026-08 — well inside a tab-press. */
     manifest_t *manifest = NULL;
     error_t err = manifest_build(repo, state, NULL, ctx->arena, &manifest);
-    if (err) {
-        return;
-    }
+    if (err) return;
 
     manifest_rows_t rows = manifest_rows(manifest);
     for (size_t i = 0; i < rows.count; i++) {
@@ -173,17 +173,26 @@ void completion_files(
 }
 
 /**
- * What a directory offer prints beside each claim: where the candidates go, and
- * the profile they are offered from
+ * How an offer spells each claim
+ */
+typedef enum {
+    COMPLETION_BARE,         /* `<path>`, the profile its description: the profile is pinned */
+    COMPLETION_NAMED,        /* `<profile>:<path>`: every local profile's, each naming its own */
+} completion_spelling_t;
+
+/**
+ * What an offer prints for each claim: where the candidates go, the profile they
+ * are offered from, and how each is spelled
  */
 typedef struct {
     FILE *out;
-    const char *profile;   /* Each candidate's description */
+    const char *profile;             /* The description, or the word before the ':' */
+    completion_spelling_t spelling;
 } completion_offer_t;
 
 /**
- * Walk visitor: one claim, offered slash-marked where it is a directory's — a
- * file claim is the refspecs' to offer (completion_refspecs)
+ * Walk visitor: one claim, offered slash-marked where it is a directory's, as
+ * the offer spells it — a file claim is completion_refspecs' to offer
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
  * @param payload The offer (completion_offer_t)
@@ -192,8 +201,15 @@ typedef struct {
 static error_t completion_offer_directory(const profile_claim_t *claim, void *payload) {
     const completion_offer_t *offer = payload;
 
-    if (claim->type == PATH_TYPE_DIRECTORY) {
-        fprintf(offer->out, "%s/\t%s\n", claim->storage_path, offer->profile);
+    if (claim->type != PATH_TYPE_DIRECTORY) return NULL;
+
+    switch (offer->spelling) {
+        case COMPLETION_BARE:
+            fprintf(offer->out, "%s/\t%s\n", claim->storage_path, offer->profile);
+            break;
+        case COMPLETION_NAMED:
+            fprintf(offer->out, "%s:%s/\n", offer->profile, claim->storage_path);
+            break;
     }
 
     return NULL;
@@ -204,38 +220,44 @@ static error_t completion_offer_directory(const profile_claim_t *claim, void *pa
  *
  * Either class, deliberately — see completion_files.
  */
-void completion_directories(
-    const dotta_ctx_t *ctx, FILE *out, const char *pinned
-) {
+void completion_directories(const dotta_ctx_t *ctx, FILE *out, const char *pinned) {
     git_repository *repo = ctx->run.repo;
-    if (repo == NULL || pinned == NULL) return;
+    if (repo == NULL) return;
 
-    /* The profile at its head: not a branch, or a head that will not read, offers
-     * nothing */
-    profile_t *profile = NULL;
-    error_t err = profile_load(repo, pinned, &profile);
-    if (err) return;
+    /* The pinned profile, or every local one: a listing that fails offers none */
+    string_array_t profiles;
+    if (pinned) {
+        string_array_init(&profiles, ctx->arena, 0);
+        string_array_push(&profiles, pinned);
+    } else if (gitops_list_branches(repo, ctx->arena, &profiles) != NULL) {
+        return;
+    }
 
-    /* The directory claims the walk shows, so a claim a blob contradicts at its
-     * own name or above it is none, and is not offered. Read strictly: the claims
-     * are the sheet's alone, so a sheet that will not load offers none either
-     * way, and a strict walk spares the tree. They come after the tree's blobs,
-     * so a walk that fails offers none of them; its failure is dropped, as the
-     * load's above, at most one per offer */
-    completion_offer_t offer = { .out = out, .profile = pinned };
-    (void) profile_walk(profile, PROFILE_READ_STRICT, completion_offer_directory, &offer);
-    profile_free(profile);
+    completion_offer_t offer = {
+        .out = out, .spelling = pinned ? COMPLETION_BARE : COMPLETION_NAMED,
+    };
+    for (size_t i = 0; i < profiles.count; i++) {
+        /* Each at its head: not a branch, or a head that will not read, offers
+         * nothing */
+        profile_t *profile = NULL;
+        if (profile_load(repo, profiles.entries[i], &profile) != NULL) continue;
+
+        /* The directory claims the walk shows, so a claim a blob contradicts at
+         * its own name or above it is none, and is not offered. Read strictly:
+         * the claims are the sheet's alone, so a sheet that will not load offers
+         * none either way, and a strict walk spares the tree. They come after
+         * the tree's blobs, so a walk that fails offers none of them; its failure
+         * is dropped, as the load's above, at most one per profile */
+        offer.profile = profiles.entries[i];
+        (void) profile_walk(
+            profile, PROFILE_READ_STRICT, completion_offer_directory, &offer
+        );
+        profile_free(profile);
+    }
 }
 
-/* The refspec walk: where the tokens go. */
-typedef struct {
-    FILE *out;
-    const char *profile;  /* current profile (source of the "<profile>:" prefix) */
-    bool prefix;          /* prefix "<profile>:" (every profile) vs bare path (pinned) */
-} refspec_walk_t;
-
 /**
- * Walk visitor: one token per tracked file blob
+ * Walk visitor: one file of a profile's tree, as the offer spells it
  *
  * The content gate every walk over a branch asks (infra/label.h label_prefixes),
  * of every entry's whole name: a name in the grammar is content, and whatever
@@ -243,23 +265,29 @@ typedef struct {
  * hand left beside them — is one of its internal files, pruned with its subtree
  * and no token.
  */
-static error_t refspec_emit(
+static error_t completion_offer_file(
     const char *path, const git_tree_entry *entry, void *payload,
     gitops_next_t *next
 ) {
-    const refspec_walk_t *walk = payload;
+    const completion_offer_t *offer = payload;
 
-    if (!label_prefixes(path)) {                                  /* the content gate */
+    if (!label_prefixes(path)) { /* the content gate */
         *next = GITOPS_NEXT_SKIP;
         return NULL;
     }
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return NULL;  /* descend trees */
-
-    if (walk->prefix) {
-        fprintf(walk->out, "%s:%s\n", walk->profile, path);
-    } else {
-        fprintf(walk->out, "%s\t%s\n", path, walk->profile);
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+        return NULL;  /* descend trees */
     }
+
+    switch (offer->spelling) {
+        case COMPLETION_BARE:
+            fprintf(offer->out, "%s\t%s\n", path, offer->profile);
+            break;
+        case COMPLETION_NAMED:
+            fprintf(offer->out, "%s:%s\n", offer->profile, path);
+            break;
+    }
+
     return NULL;
 }
 
@@ -272,34 +300,34 @@ void completion_refspecs(
     git_repository *repo = ctx->run.repo;
     if (repo == NULL) return;
 
+    /* The pinned profile, or every local one: a listing that fails offers none */
     string_array_t profiles;
     if (pinned) {
         string_array_init(&profiles, ctx->arena, 0);
         string_array_push(&profiles, pinned);
-    } else {
-        error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
-        if (err) return;  /* silent-failure model */
+    } else if (gitops_list_branches(repo, ctx->arena, &profiles) != NULL) {
+        return;
     }
 
-    refspec_walk_t walk = {
-        .out    = out,
-        .prefix = (pinned == NULL)
+    completion_offer_t offer = {
+        .out = out, .spelling = pinned ? COMPLETION_BARE : COMPLETION_NAMED,
     };
 
     /* Every profile's tree, whole: the shell matches what is typed against all
      * of it, its substring and subsequence matches among them, and sorts what
      * it offers */
     for (size_t i = 0; i < profiles.count; i++) {
-        const char *profile = profiles.entries[i];
-
+        /* Each at its head: not a branch, or a tree that will not read, offers
+         * nothing */
         git_tree *tree = NULL;
-        error_t err = gitops_load_branch_tree(repo, profile, &tree);
-        if (err) continue;  /* not a branch, or unloadable: silent */
+        if (gitops_load_branch_tree(repo, profiles.entries[i], &tree) != NULL) {
+            continue;
+        }
 
-        walk.profile = profile;
         /* A walk's failure is silent here, as the load's above: at most one per
          * profile is dropped */
-        (void) gitops_tree_walk(tree, refspec_emit, &walk);
+        offer.profile = profiles.entries[i];
+        (void) gitops_tree_walk(tree, completion_offer_file, &offer);
         git_tree_free(tree);
     }
 }

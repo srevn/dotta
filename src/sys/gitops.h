@@ -616,10 +616,9 @@ error_t gitops_load_branch_tree(
  * Readers: the walks over a profile's content, which SKIP its internal files at
  * their gate — a name under no label, a tree of them with everything beneath
  * (infra/label.h label_prefixes) — core/profiles.c profile_step, which also STOPs
- * where its own visitor fails, and cmds/completion.c refspec_emit, which also
- * STOPs at its cap; and the ciphertext census, which SKIPs a binding it has met
- * and a subtree it cannot load, and STOPs where its asker has an answer
- * (infra/epoch.c epoch_present_blob).
+ * where its own visitor fails, and cmds/completion.c completion_offer_file; and
+ * the ciphertext census, which SKIPs a binding it has met and a subtree it cannot
+ * load, and STOPs where its asker has an answer (infra/epoch.c epoch_present_blob).
  */
 typedef enum {
     GITOPS_NEXT_CONTINUE,   /* on to the next entry: a tree's own entries first */

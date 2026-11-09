@@ -83,12 +83,19 @@ void completion_files(
 
 /**
  * A profile's directory claims, as its walk decodes them rather than as the view
- * places them — the companion of completion_refspecs' pinned form for export,
- * which materializes a profile's claims, and for list, which shows a path's
- * history: bare slash-marked paths, the profile as description. An empty tracked
- * directory (no tree entry) is exactly as offerable as the rest; a claim a blob
- * contradicts at its own name or above it is none (core/profiles.h profile_walk),
- * and is not offered.
+ * places them — the companion of completion_refspecs wherever a verb reads a
+ * profile's directory: export, which materializes its claims, list, which shows
+ * a path's history, revert, which restores one, and apply after a profile's ':',
+ * a subtree filter; never show, which prints one file. Slash-marked, which no
+ * shell follows with a space, so a deeper path or the directory's commit
+ * (`p:dir/@C`) may follow. The walk reads the sheet, where the files need none
+ * (completion_refspecs): an empty tracked directory (no tree entry) is exactly
+ * as offerable as the rest; a claim a blob contradicts at its own name or above
+ * it is none (core/profiles.h profile_walk), and is not offered.
+ *
+ * @param pinned NULL: every local profile, as `<profile>:<path>/`, as
+ *               completion_refspecs offers their files. Else that profile only,
+ *               as bare `<path>/`, the profile as description.
  */
 void completion_directories(
     const dotta_ctx_t *ctx, FILE *out, const char *pinned
@@ -96,12 +103,16 @@ void completion_directories(
 
 /**
  * A profile's files, from Git rather than the view, so the verbs that name a
- * profile — remove, list, show, revert, export — reach every file the profile
- * holds, however many: one another claim stands over here, or one in a profile
- * not enabled here.
+ * profile — remove, list, show, revert, export, and apply after a profile's ':'
+ * — reach every file the profile holds, however many: one another claim stands
+ * over here, or one in a profile not enabled here. Its tree alone names them,
+ * so no sheet is read: a slot offering files alone, show's or remove's, pays
+ * for none, where the directory claims need one (completion_directories).
  *
- * @param pinned NULL: every local profile, as `<profile>:<path>`. Else that profile
- *               only, as bare `<path>` (the profile is pinned).
+ * @param pinned NULL: every local profile, as `<profile>:<path>` — one whose
+ *               name opens like a path among them, though it has no refspec
+ *               spelling (infra/input.h input_refspec). Else that profile only,
+ *               as bare `<path>` (the profile is pinned).
  */
 void completion_refspecs(
     const dotta_ctx_t *ctx, FILE *out, const char *pinned

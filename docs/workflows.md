@@ -225,7 +225,7 @@ dotta show home/.bashrc
 dotta show -p global home/.bashrc
 
 # At a specific commit
-dotta show home/.bashrc@a4f2c8e
+dotta show -p global home/.bashrc@a4f2c8e
 
 # Refspec syntax
 dotta show global:home/.bashrc@a4f2c8e

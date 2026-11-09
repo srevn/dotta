@@ -2,7 +2,7 @@
  * refspec.h - The commit a refspec carries, and the shape of a commit
  *
  * The lexical rule that decides where the '@' of `[profile:]<path>[@commit]`
- * splits — what a commit reference looks like, with no repository in hand, and
+ * splits — the shape that announces a commit, with no repository in hand, and
  * the commit a token carries by it — which the refspec's reading asks of a
  * positional (infra/input.h input_refspec), and the commands whose slot could
  * hold a commit ask of a whole one. The profile and the path are read above,
@@ -18,37 +18,37 @@
 #include <types.h>
 
 /**
- * Does the token look like a commit reference?
+ * Does the token announce a commit?
  *
  * The shape of a refspec's commit: what may stand after an '@', and — for the
- * verbs whose positional slot could hold one — what a whole token may be. It
- * recognizes the spellings that name a commit with nothing looked up: HEAD's
+ * verbs whose positional slot could hold one — what a whole token may be. A commit
+ * announces itself, with nothing looked up, in the spellings that name one: HEAD's
  * (refspec_head_steps — `HEAD` or `@` where the word ends there or a modifier
  * follows it: `HEAD~1`, `HEAD^`, `HEAD~3^2`, `HEAD@{1}`, `HEAD:x`, `@`, `@~1`,
  * `@^2`), a bare SHA of 7 to 40 hex digits, and a SHA carrying a modifier
  * (`a4f2c8e^`, `def4567~2`).
  *
  * A shape and never an existence: nothing is resolved and no store is read, so
- * a tag and a branch name are refused here whatever the repository holds — and
- * so is a word that merely begins with a commit's letters, `HEADER` being a profile
- * name like any other. A verb that means to accept a tag takes its commit by
- * position instead of asking — revert, every word past its path's — and asks
- * only where a word could be a commit or something else: revert's second word
- * beside a profile's, the whole profile's commit or its path (cmds/revert.c
+ * a tag and a branch name announce nothing, whatever the repository holds — and
+ * neither does a word that merely begins with a commit's letters, `HEADER` being
+ * a profile name like any other. A verb that means to accept a tag takes its
+ * commit by position instead of asking — revert, every word past its path's —
+ * and asks only where a word could be a commit or something else: revert's second
+ * word beside a profile's, the whole profile's commit or its path (cmds/revert.c
  * revert_post_parse).
  *
  * Readers: refspec_commit, for its '@' gate, and the refspec's reading through
  * it (infra/input.h input_refspec); show's one- and two-positional forms, export's
  * second positional, and revert's second word beside a profile's, each deciding
  * by this alone whether a token is its commit slot's; and diff's classifier,
- * which asks this first — a token shaped like a commit is never read as a path,
- * and the two shapes meet only in a revision whose pattern holds a glob's bytes
- * (infra/input.h input_announces_path).
+ * which asks this first — a token that announces a commit is never read as a
+ * path, and the two shapes meet only in a revision whose pattern holds a glob's
+ * bytes (infra/input.h input_announces_path).
  *
- * @param token The token to read (may be NULL, which looks like nothing)
- * @return true iff the token has a commit reference's shape
+ * @param token The token to read (may be NULL, which announces nothing)
+ * @return true iff the token announces a commit
  */
-bool refspec_looks_like_commit(const char *token);
+bool refspec_announces_commit(const char *token);
 
 /**
  * The steps a HEAD spelling takes from a branch's head
@@ -65,8 +65,8 @@ bool refspec_looks_like_commit(const char *token);
  * The shape alone: which steps a branch can take is the resolver's to say, so a
  * modifier it refuses is still HEAD's here, and a spelling that opens on HEAD
  * never reaches git's own HEAD, the store's, which nothing reads. Readers:
- * refspec_looks_like_commit, whose HEAD and `@` spellings are exactly these,
- * and sys/revision.c revision_resolve, which reads the steps and walks them.
+ * refspec_announces_commit, whose HEAD and `@` spellings are exactly these, and
+ * sys/revision.c revision_resolve, which reads the steps and walks them.
  *
  * @param spelling The spelling to read (may be NULL, which is nobody's HEAD)
  * @return The steps after HEAD, borrowed from `spelling` ("" for the head), or
@@ -77,8 +77,8 @@ const char *refspec_head_steps(const char *spelling);
 /**
  * The commit a token carries
  *
- * The shortest suffix after an '@' with a commit's shape
- * (refspec_looks_like_commit), so an '@' that no commit follows is the name's
+ * The shortest suffix after an '@' that announces a commit
+ * (refspec_announces_commit), so an '@' that no commit follows is the name's
  * own — `foo@bar.txt` carries none — and a commit holding an '@' of its own is
  * split before it: `x@@` carries `@`, and `x@HEAD@{1}` carries `HEAD@{1}`, which
  * the resolver refuses. A commit's shape inside the name before it stays the

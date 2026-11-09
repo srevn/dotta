@@ -1461,7 +1461,7 @@ cleanup:
  * the path's slot (cmds/list.c list_post_parse), so `-p q w@C` reads the path
  * w, which the resolver refuses as a bare word. A profile's word names the profile
  * whole where it holds its commit, stands alone, or stands beside a second and
- * last word with a commit's shape (refspec_looks_like_commit); else the next
+ * last word that announces a commit (refspec_announces_commit); else the next
  * word is the path's, its own profile over the first. Every word left is the
  * commit, by position — a tag or a branch among them — and one past a commit
  * already read is a commit given twice:
@@ -1508,7 +1508,7 @@ static error_t revert_post_parse(
         o->path = rs.path;
         o->commit = rs.commit;
     } else if (rs.commit != NULL || next == count ||
-        (count == 2 && refspec_looks_like_commit(args[next]))) {
+        (count == 2 && refspec_announces_commit(args[next]))) {
         /* The profile's word, naming it whole: its commit inside it, no word
          * beside it, or the one beside it with a commit's shape */
         o->profile = rs.path;

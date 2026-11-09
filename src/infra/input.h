@@ -127,10 +127,10 @@ typedef struct {
  *   home         yes                home
  *
  * Reads the grammar and no table of roots, as the resolver does (this file's
- * banner). The other classifier a positional meets — a token shaped like a commit
+ * banner). The other classifier a positional meets — whether it announces a commit
  * — reads Git's vocabulary and is spelled where that syntax lives (base/refspec.h
- * refspec_looks_like_commit); diff asks that one first, and the two meet only
- * in a revision whose pattern holds a glob's bytes, which is never a path.
+ * refspec_announces_commit); diff asks that one first, and the two meet only in
+ * a revision whose pattern holds a glob's bytes, which is never a path.
  *
  * Readers: list's inference form and its completion, diff's and apply's positional
  * classifiers, apply's reading of a refspec that sets no profile apart

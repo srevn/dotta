@@ -726,7 +726,7 @@ static error_t show_post_parse(
     if (o->positional_count == 1) {
         const char *arg = args[0];
 
-        if (refspec_looks_like_commit(arg)) {
+        if (refspec_announces_commit(arg)) {
             /* A commit by its shape alone, as the two-positional form asks it:
              * a '/' or '.' a revision holds — a search's, `^{/fix.conf}` — is
              * the revision's, and a file named like one is spelled `./name`. */
@@ -748,7 +748,7 @@ static error_t show_post_parse(
     } else if (o->positional_count == 2) {
         o->mode = SHOW_FILE;
 
-        if (refspec_looks_like_commit(args[1])) {
+        if (refspec_announces_commit(args[1])) {
             /* [profile:]<file> <commit> — the file token read as the lone one
              * is, its profile winning over -p; the commit is the second's, so
              * one inside the token too is a commit given twice. */

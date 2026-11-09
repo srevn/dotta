@@ -1996,21 +1996,21 @@ enum diff_class { DIFF_CLASS_PATH = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, }
  *
  * Three-way split, each bucket claimed by a token that announces itself and the
  * last taking what announces nothing:
- *   - Looks like a ref → git_refs[] bucket (diff mode selector).
- *   - Announces a path → paths[] bucket (path filter).
- *   - Else             → profiles[] bucket (profile filter).
+ *   - Announces a commit → git_refs[] bucket (diff mode selector).
+ *   - Announces a path   → paths[] bucket (path filter).
+ *   - Else               → profiles[] bucket (profile filter).
  *
  * The commit's shape is asked first, so a revision whose pattern holds a glob's
  * bytes — `HEAD^{/fix.*}` — is never read as a path filter. The two shapes meet
- * nowhere else: a token shaped like a commit opens on no '/', '~' or '.' and
- * under no label (base/refspec.h refspec_looks_like_commit, infra/input.h
+ * nowhere else: a token that announces a commit opens on no '/', '~' or '.' and
+ * under no label (base/refspec.h refspec_announces_commit, infra/input.h
  * input_announces_path).
  *
  * Mode (workspace vs commit-to-workspace vs commit-to-commit) is inferred from
  * the number of git refs in diff_post_parse.
  */
 static args_class_t diff_classify(const char *tok) {
-    if (refspec_looks_like_commit(tok)) return DIFF_CLASS_GIT_REF;
+    if (refspec_announces_commit(tok)) return DIFF_CLASS_GIT_REF;
     if (input_announces_path(tok)) return DIFF_CLASS_PATH;
     return DIFF_CLASS_PROFILE;
 }

@@ -1,11 +1,10 @@
 /**
  * refspec.c - The commit a refspec carries, and the shape of a commit
  *
- * The one rule that says what a commit looks like, asked of the suffix after
- * each '@', from the last back, until one has a commit's shape: the commit a
- * token carries (refspec_commit), the one search the refspec's reading splits
- * at (infra/input.h input_refspec). See refspec.h for what that rule does and
- * does not recognize.
+ * The one rule that says what announces a commit, asked of the suffix after each
+ * '@', from the last back, until one announces it: the commit a token carries
+ * (refspec_commit), the one search the refspec's reading splits at (infra/input.h
+ * input_refspec). See refspec.h for what that rule does and does not recognize.
  */
 
 #include "base/refspec.h"
@@ -13,7 +12,7 @@
 #include <ctype.h>
 #include <string.h>
 
-bool refspec_looks_like_commit(const char *token) {
+bool refspec_announces_commit(const char *token) {
     if (!token || !*token) {
         return false;
     }
@@ -96,13 +95,13 @@ const char *refspec_commit(const char *token) {
         return NULL;
     }
 
-    /* The shortest suffix with a commit's shape after an '@'. The last '@' is not
+    /* The shortest suffix after an '@' that announces a commit. The last '@' is not
      * always the one: a commit may carry an '@' of its own — `@` alone, HEAD@{…}
      * — so `x@@` carries `@`, x at HEAD, and `x@HEAD@{1}` reaches the resolver's
      * refusal of a step it does not take instead of reading as a name that holds
      * it. */
     for (const char *p = token + strlen(token); p > token; p--) {
-        if (p[-1] == '@' && refspec_looks_like_commit(p)) {
+        if (p[-1] == '@' && refspec_announces_commit(p)) {
             return p;
         }
     }

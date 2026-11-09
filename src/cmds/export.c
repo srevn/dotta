@@ -1469,7 +1469,7 @@ static error_t export_post_parse(
         /* A commit selects a whole-profile historical export, by its shape alone
          * — a search's '/' and '.' are the revision's, and a file named like
          * one is spelled `./name`; anything else goes through refspec parsing. */
-        if (refspec_looks_like_commit(args[1])) {
+        if (refspec_announces_commit(args[1])) {
             o->commit = args[1];
         } else {
             input_refspec_t second;

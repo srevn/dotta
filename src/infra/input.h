@@ -6,8 +6,10 @@
  * in the one the user named and manufactures neither from the other: what a profile
  * calls a filesystem path is a claim the profile holds, and a command asks the
  * profile (core/manifest.h: the view by filesystem path, and manifest_claim_name,
- * one profile's own). There is no exception left: nothing here manufactures one
- * key from the other, and no surface below offers to.
+ * one profile's own); where a profile's name stands is the table's join, asked
+ * at the call site whose act is there (infra/mount.h mount_resolve). There is
+ * no exception left: nothing here manufactures one key from the other, and no
+ * surface below offers to.
  *
  * Each key is named for its medium wherever it is held — `filesystem_path` and
  * `storage_path`, parameter, field or local, at every layer. A function marked
@@ -299,13 +301,15 @@ error_t input_refspec(const char *input, arena_t *arena, input_refspec_t *out);
  *   - export (cmds/export.c) takes either, one arm each: a name selects what
  *     the profile claims at and beneath it, a filesystem path the profile's rows
  *     there.
- *   - revert (cmds/revert.c) takes either, its restore by place
- *     (revert_restore_path): a filesystem path is one, and a name the place this
- *     machine puts it at — every claim there, whichever label names it — while
- *     a name it places nowhere reaches the claims named beneath it; and with no
- *     profile named it finds the one holding it in the key it named
- *     (revert_select_profile): a filesystem path by the rows each profile's view
- *     stands at or beneath it, a name by either of its documents holding it.
+ *   - revert (cmds/revert.c) takes either, and reads both by place, since each
+ *     claim it restores is written under the name the profile holds its place
+ *     by: a filesystem path is one, and a name the place this machine puts it
+ *     at under the profile's binding — every claim there, whichever label names
+ *     it — while a name it places nowhere reaches the claims named beneath it.
+ *     Its restore reads one profile so (revert_restore_path), and with no profile
+ *     named its search reads every local profile so (revert_select_profile): a
+ *     place by the rows the profile's view stands at or beneath it, a name placed
+ *     nowhere by either of its documents holding it.
  *   - show and list (cmds/) take either: a name the user typed is Git's key
  *     already, and a filesystem path is the profile's to name (core/scope.h
  *     scope_resolve_name). Without a profile, they hand either to the enabled

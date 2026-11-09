@@ -40,33 +40,36 @@
 /**
  * The one local profile holding the path, where no profile is named
  *
- * Every local profile, enabled or not, is asked at its head what it holds at
- * the argument, in the key the argument named. A path: the rows its one-profile
- * view stands at or beneath it — a file's, or a directory's whole — as export
- * selects them (cmds/export.c export_collect_filesystem), named by the profile's
- * own name for the path (core/manifest.h manifest_claim_name: the claim held
- * there, else the name one would take). The view is placed by this machine's
- * table, which is the enabled set's (core/manifest.h manifest_mount_table): a
- * profile nothing has enabled is bound nowhere, so no path reaches its custom/
- * claims, and their names find them. A name: a file or a directory either of
- * the profile's two documents holds at it (core/profiles.h profile_holds) — the
- * tree first, so a name the tree holds is answered without the sheet — named as
- * typed.
+ * Every local profile, enabled or not, is asked at its head what it holds where
+ * the argument stands in it, as its restore reads the argument
+ * (revert_restore_path): a path at its own place, and a name at the place this
+ * machine puts it at under the profile's binding, whichever label names what
+ * stands there. At a place: the rows its one-profile view stands at or beneath
+ * it — a file's, or a directory's whole — as export selects them (cmds/export.c
+ * export_collect_filesystem), named by the profile's own name for the place
+ * (core/manifest.h manifest_claim_name: the claim held there, else the name one
+ * would take). The view is placed by this machine's table, which is the enabled
+ * set's (core/manifest.h manifest_mount_table): a profile nothing has enabled
+ * is bound nowhere, so no place reaches its custom/ claims, and their names find
+ * them. A name this machine places nowhere: a file or a directory either of the
+ * profile's two documents holds at it (core/profiles.h profile_holds) — the tree
+ * first, so a name the tree holds is answered without the sheet — named as typed.
  *
  * Every holder counts. The one is the answer; several are refused, each listed
  * beside its own name for the argument, the way through the clause; none is refused
  * as an absence, whose way through is -p: a profile that deleted the path is
  * the case a revert exists for, and a profile named is not asked what its head
  * holds. A profile holding the path only by a name its view did not keep, or by
- * a claim its own claims contradict, stands no row there and is not found by
- * path; -p reaches it (stated).
+ * a claim its own claims contradict, stands no row there and is not found at
+ * its place; -p reaches it (stated).
  *
  * Complete or an error: a profile the search cannot read stops it whichever profile
  * it is, since a list short by one is a falsely unique answer, and the refusal's
- * clause names the flag that reads one profile instead of all of them. Each view
- * is built in a frame of its own, a view built to read one answer
- * (include/runtime.h "Memory"), the holder's name copied out: the search visits
- * every local profile, at a one-profile view each.
+ * clause names the flag that reads one profile instead of all of them. Each
+ * profile's place and view are built in a frame of their own, a view built to
+ * read one answer (include/runtime.h "Memory"), the holder's name copied out:
+ * the search visits every local profile, at a one-profile view each where the
+ * argument has a place in it.
  *
  * Readers: cmd_revert, the profile the revert acts on where none is named; and
  * revert_holder, the profile a path's commit slot offers the changes of.
@@ -108,7 +111,7 @@ static error_t revert_select_profile(
     string_array_t profiles;
     error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
 
-    /* Each profile loaded once and asked in the key the argument named: a profile
+    /* Each profile loaded once and asked where the argument stands in it: a profile
      * names a path once and holds a name once, so each answers once at most.
      * The first holder is kept as itself, and every holder is spelled as found
      * beside its own name for the argument, which is all the refusal for several
@@ -121,34 +124,35 @@ static error_t revert_select_profile(
         err = profile_load(repo, profiles.entries[i], &profile);
         if (err) break;
 
+        /* Where the argument stands in this profile, as its restore reads it
+         * (revert_restore_path): a path is its own place, and a name the place
+         * this machine puts it at under the profile's binding — none for a name
+         * it places nowhere. The place and the view are the frame's, the holder's
+         * name the command's */
+        arena_t *frame = arena_create(0);
+        const char *place = arg->key == INPUT_KEY_FILESYSTEM
+            ? arg->filesystem_path
+            : mount_resolve(frame, ctx->run.mounts, profile_name(profile), arg->storage_path);
+
         const char *name = NULL;
-        if (arg->key == INPUT_KEY_FILESYSTEM) {
-            /* A path: any row at or beneath it, the profile's name for the path
-             * itself said, in the command's arena, of the view the frame holds */
-            arena_t *frame = arena_create(0);
+        if (place) {
+            /* A row at the place or beneath it, the profile's name for the place
+             * itself said */
             manifest_t *view = NULL;
             err = manifest_build_profile(profile, ctx->run.mounts, frame, &view);
-
-            const manifest_rows_t rows = manifest_rows(view);
-            const size_t len = strlen(arg->filesystem_path);
-            for (size_t r = 0; !err && r < rows.count; r++) {
-                if (str_path_under(rows.entries[r]->filesystem_path, arg->filesystem_path, len)) {
-                    name = manifest_claim_name(
-                        ctx->arena, view, profile_name(profile), arg->filesystem_path
-                    );
-                    break;
-                }
+            if (!err && (manifest_lookup(view, place) || manifest_active_beneath(view, place))) {
+                name = manifest_claim_name(ctx->arena, view, profile_name(profile), place);
             }
-            arena_free(frame);
         } else {
-            /* A name: a file or a directory at it, as typed — a gitlink there
-             * is no claim, as the view holds none */
+            /* A name placed nowhere: a file or a directory at it, as typed — a
+             * gitlink there is no claim, as the view holds none */
             profile_held_t held;
             err = profile_holds(profile, arg->storage_path, &held);
             if (!err && (held.kind == PROFILE_HELD_FILE || held.kind == PROFILE_HELD_DIRECTORY)) {
                 name = arg->storage_path;
             }
         }
+        arena_free(frame);
         profile_free(profile);
         if (err || !name) continue;
 

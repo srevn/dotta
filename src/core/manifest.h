@@ -494,9 +494,10 @@ error_t manifest_build(
  * and asks it every naming question for the length of the command (cmds/add.c
  * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); the two
  * cross-profile searches, which build one per local profile (cmds/revert.c
- * revert_select_profile, its rows at or beneath a path, and cmds/remove.c
- * remove_overlaps); and a restore's two, at its draft's base and at the commit
- * it restores from (cmds/revert.c revert_restore_path).
+ * revert_select_profile, its rows at or beneath a path or the place a typed name
+ * stands at, and cmds/remove.c remove_overlaps); and a restore's two, at its
+ * draft's base and at the commit it restores from (cmds/revert.c
+ * revert_restore_path).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -975,8 +976,10 @@ const manifest_row_t *manifest_blob_above(
  * (manifest_rows), by a scan — for a caller that holds no workspace.
  *
  * Readers: cmds/add.c add_refuse_ancestry (dotta's own link above a capture,
- * which a row of the view beneath it makes the node its landing replaces). A
- * reader not on this list is a bug.
+ * which a row of the view beneath it makes the node its landing replaces); and
+ * revert's search, whether a profile holds anything beneath where the argument
+ * stands in it, manifest_lookup asked at the place itself (cmds/revert.c
+ * revert_select_profile). A reader not on this list is a bug.
  *
  * @param manifest Manifest (NULL answers false)
  * @param path Directory to ask about, as a key spells one (NULL answers false)
@@ -1410,9 +1413,9 @@ const char *manifest_name(
  * -p arms of show and list the head, or the commit the user named, so a name
  * that changed since is found as of then, and for completion's commit slot after
  * a path the head; and revert's search, each holder named beside its own name
- * for the path (cmds/revert.c revert_select_profile). `export` selects rows
- * instead, `remove` matches its own claims, and `ignore --test` asks manifest_name
- * itself.
+ * for the path, or for the place a typed name stands at (cmds/revert.c
+ * revert_select_profile). `export` selects rows instead, `remove` matches its
+ * own claims, and `ignore --test` asks manifest_name itself.
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

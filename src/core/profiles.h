@@ -346,13 +346,14 @@ void profile_free(profile_t *profile);
  * it (core/scope.c scope_resolve_name); and the helpers that hold a profile and
  * ask its view by name or word a refusal under it (cmds/export.c
  * export_collect_profile, export_collect_storage and export_collect_filesystem,
- * cmds/revert.c revert_select_profile, each holder's name for a path); a restore,
- * its two views' asker and each claim's placer (cmds/revert.c revert_restore_path);
- * cmds/show.c show_file, whose bytes the profile's key opens and whose warning
- * names it; remove's universe, whose custom/ claims it places under the profile's
- * binding, and its directory offer, which describes each claim by it (cmds/remove.c
- * remove_list_claims, remove_offer_directory); and update's capture, whose seal
- * the profile's key makes (cmds/update.c update_capture).
+ * cmds/revert.c revert_select_profile, where it places a typed name and each
+ * holder's name for the place); a restore, its two views' asker and each claim's
+ * placer (cmds/revert.c revert_restore_path); cmds/show.c show_file, whose bytes
+ * the profile's key opens and whose warning names it; remove's universe, whose
+ * custom/ claims it places under the profile's binding, and its directory offer,
+ * which describes each claim by it (cmds/remove.c remove_list_claims,
+ * remove_offer_directory); and update's capture, whose seal the profile's key
+ * makes (cmds/update.c update_capture).
  *
  * @param profile Handle (must not be NULL)
  * @return The handle's copy; valid until profile_free
@@ -743,16 +744,17 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * that wants the entry asks profile_entry. `out` is written on success alone.
  *
  * Readers: the verbs that act on one name — cmds/show.c show_file, cmds/list.c
- * list_path_history (the history's pre-check) — the search by name across the
- * local profiles (cmds/revert.c revert_select_profile), export's name arm, which
- * words a copy with nothing in it by what stands at the name (cmds/export.c
- * export_collect_storage), and remove's directory offer, which offers a claim
- * where no blob stands at its name (cmds/remove.c remove_offer_directory); and
- * a profile's draft, at each rung of a way it writes — the two climbs' and a
- * restore's — where whatever the base holds keeps the rung, as a directory it
- * tracks beneath does (profile_capture_ancestors, profile_derive_ancestors,
- * profile_restore_file, profile_restore_directory); and a merge, at a merge-base
- * directory claim a side lacks, where whatever that side holds is its removal
+ * list_path_history (the history's pre-check) — the search across the local
+ * profiles by a name, in each this machine places it nowhere for (cmds/revert.c
+ * revert_select_profile), export's name arm, which words a copy with nothing in
+ * it by what stands at the name (cmds/export.c export_collect_storage), and
+ * remove's directory offer, which offers a claim where no blob stands at its
+ * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
+ * rung of a way it writes — the two climbs' and a restore's — where whatever
+ * the base holds keeps the rung, as a directory it tracks beneath does
+ * (profile_capture_ancestors, profile_derive_ancestors, profile_restore_file,
+ * profile_restore_directory); and a merge, at a merge-base directory claim a
+ * side lacks, where whatever that side holds is its removal
  * (profile_merge_directory) — the four through profile_passes. A reader not on
  * this list is a bug. Four neighbours ask profile_entry instead, the tree alone:
  * revert's preview, the head's entry at the name it shows one file at, where a

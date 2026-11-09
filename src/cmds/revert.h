@@ -51,9 +51,10 @@ typedef struct {
  * commit written after its path's word read by position, a tag or a branch among
  * them. A word that announces a path is one, and any other is a profile
  * (infra/input.h input_announces_path): `src/config@C` is the profile src/config,
- * and `./src/config@C` the path. A typed name is a path like any other: the place
- * this machine puts it at — or, where it places it nowhere, the name itself
- * (revert_restore_path) — so the revert writes the name the profile holds and
+ * and `./src/config@C` the path. A typed name is a path like any other, to the
+ * search and the restore alike: the place this machine puts it at — or, where
+ * it places it nowhere, the name itself (revert_select_profile,
+ * revert_restore_path) — so the revert writes the name the profile holds and
  * authors none.
  *
  * The profile is the one named — a refspec's, -p's, a whole profile's own word
@@ -94,7 +95,9 @@ typedef struct {
  * Costs, a verb's, paid when typed: at a path, the restore's two one-profile
  * views and its walk of the profile (revert_restore_path), and where the path
  * reaches one claim the preview's view of the commit, built again; without a
- * profile named, a one-profile view per local profile (revert_select_profile).
+ * profile named, each local profile's one-profile view where the argument has a
+ * place in it, and its documents at the name where it has none
+ * (revert_select_profile).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

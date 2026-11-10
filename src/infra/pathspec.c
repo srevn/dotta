@@ -11,6 +11,7 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/heap.h"
+#include "base/path.h"
 #include "base/string.h"
 #include "base/wildmatch.h"
 #include "infra/input.h"
@@ -49,8 +50,7 @@ struct pathspec {
 
 /* A filesystem path as an entry's prefix, the root directory's as it stands:
  * every absolute path lies under "/" as under any directory, and a rule anchored
- * there reads past it as past any anchor (base/string.h str_path_under,
- * str_path_beneath). */
+ * there reads past it as past any anchor (base/path.h path_under, path_beneath). */
 static void prefix_filesystem(entry_t *e, const char *filesystem_path) {
     e->key = INPUT_KEY_FILESYSTEM;
     e->prefix = filesystem_path;
@@ -268,7 +268,7 @@ static const char *own_subject(
 
 /* What a rule reads at a rung of its own subject: a storage rule the rung itself;
  * a filesystem rule what lies beneath its anchor — the pattern is rooted there
- * (base/string.h str_path_beneath) — and nothing at or above the anchor. */
+ * (base/path.h path_beneath) — and nothing at or above the anchor. */
 static const char *rule_subject(const entry_t *e, const char *rung) {
     if (!rung) {
         return NULL;
@@ -276,7 +276,7 @@ static const char *rule_subject(const entry_t *e, const char *rung) {
     if (e->key == INPUT_KEY_STORAGE) {
         return rung;
     }
-    return str_path_beneath(rung, e->prefix, e->prefix_len);
+    return path_beneath(rung, e->prefix, e->prefix_len);
 }
 
 /* A rule entry at one rung of its own subject: what it reads there (rule_subject),
@@ -314,14 +314,14 @@ static void rungs_open(rungs_t *r, const char *subject) {
 }
 
 /* Up one rung. False past the last, and the subject is then spent — no rule reads
- * it at a rung above: the parent of a single component is no rung
- * (str_path_parent_len answers 0 — the label of a storage path), and neither is
- * the root of an absolute one (1 — "/" is nothing a rule reads). */
+ * it at a rung above: the parent of a single component is no rung (path_parent_len
+ * answers 0 — the label of a storage path), and neither is the root of an absolute
+ * one (1 — "/" is nothing a rule reads). */
 static bool rungs_up(rungs_t *r) {
     if (!r->rung) {
         return false;
     }
-    size_t n = str_path_parent_len(r->rung);
+    size_t n = path_parent_len(r->rung);
     if (n <= 1) {
         r->rung = NULL;
         return false;
@@ -371,11 +371,11 @@ bool pathspec_matches(
     if (!spec) return true;
 
     /* The exact tier: the path, or one beneath an entry, in the entry's own key
-     * (base/string.h str_path_under). */
+     * (base/path.h path_under). */
     for (size_t i = 0; i < spec->count; i++) {
         const entry_t *e = &spec->entries[i];
         const char *subject = own_subject(e, filesystem_path, storage_path);
-        if (!e->rule && subject && str_path_under(subject, e->prefix, e->prefix_len)) {
+        if (!e->rule && subject && path_under(subject, e->prefix, e->prefix_len)) {
             return true;
         }
     }
@@ -425,10 +425,10 @@ bool pathspec_matches_beneath(
         if (e->rule && e->key == INPUT_KEY_STORAGE) return true;
 
         /* An exact entry's spelling, or a filesystem rule's anchor, on one line
-         * with the directory: either at or beneath the other (base/string.h
-         * str_path_under) */
-        if (str_path_under(subject, e->prefix, e->prefix_len) ||
-            str_path_under(e->prefix, subject, strlen(subject))) {
+         * with the directory: either at or beneath the other (base/path.h
+         * path_under) */
+        if (path_under(subject, e->prefix, e->prefix_len) ||
+            path_under(e->prefix, subject, strlen(subject))) {
             return true;
         }
     }
@@ -461,7 +461,7 @@ bool pathspec_entry_matches(
     if (!subject) return false;
 
     if (!e->rule) {
-        return str_path_under(subject, e->prefix, e->prefix_len) != NULL;
+        return path_under(subject, e->prefix, e->prefix_len) != NULL;
     }
 
     /* The rule at the leaf, then at every rung above it; a match either way is

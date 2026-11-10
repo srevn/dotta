@@ -15,7 +15,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "infra/label.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
@@ -29,7 +29,7 @@ error_t mount_validate_target(const char *target) {
      * bug. "/" is included: a target at the root is a binding like any other,
      * and the table keeps it as it stands (mount_table_build). */
     CHECK_ARG(
-        str_path_folded(target),
+        path_folded(target),
         "a target is spelled by its reading first (infra/input.h input_target)"
     );
 
@@ -94,8 +94,8 @@ static bool namespace_holds(const char *profile, const mount_root_t *m) {
 
 /* The search, whose contract — the tie, the boundary, the absence — is the header's
  * (infra/mount.h). A root encloses the path iff the path lies under it on a
- * component boundary, the root itself included with the empty tail (base/string.h
- * str_path_under): /home/user encloses /home/user/.bashrc and not
+ * component boundary, the root itself included with the empty tail (base/path.h
+ * path_under): /home/user encloses /home/user/.bashrc and not
  * /home/username/.bashrc, "/" every absolute path and no relative one. Every
  * key is a string of the rows' own, so no second spelling of a root is owed a
  * match. */
@@ -113,7 +113,7 @@ const mount_root_t *mount_root_above(
          * directory in this namespace, and never competes on depth. */
         if (!namespace_holds(profile, m)) continue;
 
-        const char *tail = str_path_under(
+        const char *tail = path_under(
             filesystem_path, m->filesystem_path, strlen(m->filesystem_path)
         );
         if (!tail) continue;
@@ -165,10 +165,10 @@ error_t mount_table_build(
      * Establishing it here is what lets namespace_holds read `m->profile` as
      * the whole of whose a root is, for both views at once. The target is the
      * type's contract too, and is refused when it is not absolute and folded
-     * (base/string.h str_path_folded): a relative row is no path on this machine,
-     * and a `//`, a `.` or a trailing slash would key claims no argument can
-     * spell. Neither reaches here — a row's target is the store's, whose column
-     * holds no other shape (core/state.c), and a command's own binding passed
+     * (base/path.h path_folded): a relative row is no path on this machine, and
+     * a `//`, a `.` or a trailing slash would key claims no argument can spell.
+     * Neither reaches here — a row's target is the store's, whose column holds
+     * no other shape (core/state.c), and a command's own binding passed
      * mount_validate_target — so one arriving is a caller's bug, refused as a
      * nameless binding is, naming the profile. Establishing both here is what
      * makes every path mount_resolve answers a key: the root as it stands for
@@ -184,7 +184,7 @@ error_t mount_table_build(
         }
         const char *raw = mounts[i].target;
         if (!raw) continue;
-        if (!str_path_folded(raw)) {
+        if (!path_folded(raw)) {
             return error_create(
                 ERR_INVALID_ARG, "A binding's target is an absolute, folded path "
                 "(profile '%s': '%s')", mounts[i].profile, raw
@@ -196,7 +196,7 @@ error_t mount_table_build(
          * the rows it was built from. A target of "/" is kept as it stands, as
          * HOME and the sentinel are below — a root is a path here, the one that
          * is its own separator included, and the path verbs read it as any
-         * (base/string.h); the tie between the three is mount_root_above's. */
+         * (base/path.h); the tie between the three is mount_root_above's. */
         const char *filesystem_path = arena_strdup(arena, raw);
         const char *profile = arena_strdup(arena, mounts[i].profile);
         roots[n++] = (mount_root_t){
@@ -260,9 +260,8 @@ const char *mount_resolve(
     if (!root) return NULL;
 
     /* The root's own directory for the word alone, and beneath it the join: the
-     * root, one separator, the tail (base/string.h str_path_join, which folds
-     * the root directory's own separator into the seam). Uniform across the three
-     * labels:
+     * root, one separator, the tail (base/path.h path_join, which folds the root
+     * directory's own separator into the seam). Uniform across the three labels:
      *   ROOT:   "/" and "etc/hosts"          -> "/etc/hosts"
      *   HOME:   "/home/user" and ".bashrc"   -> "/home/user/.bashrc"
      *   CUSTOM: "/jail/web" and "etc/foo"    -> "/jail/web/etc/foo"
@@ -272,6 +271,6 @@ const char *mount_resolve(
      * refusal (mount_table_build) — and a tail is a name's, so either answer is
      * the spelling every producer of a key agrees on. */
     return *split.tail
-        ? str_path_join(arena, root->filesystem_path, split.tail)
+        ? path_join(arena, root->filesystem_path, split.tail)
         : arena_strdup(arena, root->filesystem_path);
 }

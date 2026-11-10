@@ -27,7 +27,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "sys/filesystem.h"
 
 static identity_t self;
@@ -215,8 +215,8 @@ error_t identity_init(arena_t *arena) {
     }
 
     /* The folded spelling, into the arena: by the string alone, as every key
-     * beneath HOME is folded (base/string.h str_path_fold). */
-    self.home = str_path_fold(arena, home, NULL);
+     * beneath HOME is folded (base/path.h path_fold). */
+    self.home = path_fold(arena, home, NULL);
 
     /* The drop, where root was obtained for a user, and before the groups are
      * read: the list below is what the kernel checks the invoker's chown against,

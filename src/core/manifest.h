@@ -930,17 +930,17 @@ const manifest_row_t *manifest_lookup(
  *
  * The rungs are the path's own key cut at each separator — a root's spelling
  * and a shorter tail, whichever label named it (infra/mount.h) — nearest first,
- * each read off the key's own bytes by its length (base/string.h
- * str_path_parent_len_n, base/hashmap.h hashmap_get_n), so nothing is copied.
- * The root directory is read and ends the climb, because a claim can stand there
- * — `root` spells it, and `home` or `custom` on a machine whose HOME or target
- * is one (infra/label.h) — and the view places a blob at any of the three as a
- * FILE row at that directory (core/manifest.c manifest_place_claim). The namer's
- * ascent over these very rungs floors on the asker's own root (manifest_name):
- * it names a path for one profile, reading that profile's claims at its root
- * and beneath. This climb has no asker — it asks what stands at a path, whoever
- * holds it — so the root directory is its floor, as it is deploy's (core/deploy.c
- * nearest_ancestor), and "/" itself has nothing above it.
+ * each read off the key's own bytes by its length (base/path.h path_parent_len_n,
+ * base/hashmap.h hashmap_get_n), so nothing is copied. The root directory is
+ * read and ends the climb, because a claim can stand there — `root` spells it,
+ * and `home` or `custom` on a machine whose HOME or target is one (infra/label.h)
+ * — and the view places a blob at any of the three as a FILE row at that directory
+ * (core/manifest.c manifest_place_claim). The namer's ascent over these very
+ * rungs floors on the asker's own root (manifest_name): it names a path for one
+ * profile, reading that profile's claims at its root and beneath. This climb
+ * has no asker — it asks what stands at a path, whoever holds it — so the root
+ * directory is its floor, as it is deploy's (core/deploy.c nearest_ancestor),
+ * and "/" itself has nothing above it.
  *
  * Readers: cmds/add.c cmd_add, of the path an argument names — a capture beneath
  * one of the profile's own files, whichever label names either, over the one
@@ -968,10 +968,10 @@ const manifest_row_t *manifest_blob_above(
  * — no allocation, no error path.
  *
  * The question core/workspace.h workspace_active_beneath asks of the join's active
- * items, which are these rows, by the same relation (base/string.h
- * str_path_beneath), so the two cannot part: the join answers off its items'
- * order by a lower bound, and this off the rows standing, unordered
- * (manifest_rows), by a scan — for a caller that holds no workspace.
+ * items, which are these rows, by the same relation (base/path.h path_beneath),
+ * so the two cannot part: the join answers off its items' order by a lower bound,
+ * and this off the rows standing, unordered (manifest_rows), by a scan — for a
+ * caller that holds no workspace.
  *
  * Readers: cmds/add.c add_refuse_ancestry (dotta's own link above a capture,
  * which a row of the view beneath it makes the node its landing replaces); and

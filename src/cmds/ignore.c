@@ -625,8 +625,8 @@ static error_t ignore_test(
 
     /* The directory hint is read from the argument as typed, and it is the only
      * thing read from it: both readings below shed a trailing slash of their
-     * own — the resolver's storage arm sheds it, and str_path_fold folds it away
-     * — so nothing here has to hand them a shortened copy. Shortening it *before*
+     * own — the resolver's storage arm sheds it, and path_fold folds it away —
+     * so nothing here has to hand them a shortened copy. Shortening it *before*
      * the dispatch is what used to read `home/` as the working directory's `home`.
      * It is the kind the argument alone gives, which stands wherever nothing
      * can be looked at (ignore_kind). */

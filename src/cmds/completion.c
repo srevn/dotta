@@ -24,6 +24,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/path.h"
 #include "base/string.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -649,9 +650,9 @@ bool completion_paths_under(
 
     /* At the root or beneath it the command reads the token as typed, so the
      * path is the shell's: add_spell's escape test over the same two strings,
-     * positive (base/string.h str_path_under). Every absolute token lies under
-     * a root of "/", and a relative one lists beneath it. */
-    if (str_path_under(current, root, strlen(root))) {
+     * positive (base/path.h path_under). Every absolute token lies under a root
+     * of "/", and a relative one lists beneath it. */
+    if (path_under(current, root, strlen(root))) {
         return false;
     }
 
@@ -670,10 +671,10 @@ bool completion_paths_under(
      * the module's idiom (cmds/add.c add_inside): nothing here is freed, so no
      * candidate's path has a free to get wrong. The token's directory is joined
      * beneath the root as the command joins an argument there (add_spell), one
-     * separator at the seam, the root directory's own included (base/string.h
-     * str_path_join). */
+     * separator at the seam, the root directory's own included (base/path.h
+     * path_join). */
     const char *dir = dir_len > 0
-        ? str_path_join(ctx->arena, root, arena_strndup(ctx->arena, rel, dir_len))
+        ? path_join(ctx->arena, root, arena_strndup(ctx->arena, rel, dir_len))
         : root;
 
     string_array_t listing;
@@ -685,7 +686,7 @@ bool completion_paths_under(
         if (strncmp(entry, name, name_len) != 0) continue;
         if (entry[0] == '.' && name[0] != '.') continue;
 
-        const char *path = str_path_join(ctx->arena, dir, entry);
+        const char *path = path_join(ctx->arena, dir, entry);
 
         fprintf(
             out, "%s%.*s%s%s\n", leading, (int) dir_len, rel, entry,

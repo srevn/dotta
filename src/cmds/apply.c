@@ -17,8 +17,8 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/output.h"
+#include "base/path.h"
 #include "base/refspec.h"
-#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
@@ -2214,7 +2214,7 @@ static void apply_print_cleanup_refused(
             } else {
                 output_print(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} %s%s (%.*s is not writable)\n", path,
-                    path_kind_suffix(item->item_kind), (int) str_path_parent_len(path), path
+                    path_kind_suffix(item->item_kind), (int) path_parent_len(path), path
                 );
             }
         }
@@ -2428,7 +2428,7 @@ static error_t apply_write_record(
         for (size_t i = 0; i < active.count; i++) {
             const workspace_item_t *item = active.entries[i];
 
-            if (item->record && str_path_beneath(item->filesystem_path, node, len)) {
+            if (item->record && path_beneath(item->filesystem_path, node, len)) {
                 err = state_retire(state, item->filesystem_path);
                 if (err) goto cleanup;
             }

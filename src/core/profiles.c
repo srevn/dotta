@@ -68,6 +68,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/path.h"
 #include "base/string.h"
 #include "core/ignore.h"
 #include "core/metadata.h"
@@ -1774,7 +1775,7 @@ static const char *profile_look_rung(
             const mount_root_t *root = mount_root_of(mounts, draft->base->name, label);
             if (!root) continue;
 
-            const char *tail = str_path_beneath(
+            const char *tail = path_beneath(
                 filesystem_path, root->filesystem_path, strlen(root->filesystem_path)
             );
             if (!tail) continue;

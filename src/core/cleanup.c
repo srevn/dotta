@@ -25,7 +25,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "core/scope.h"
 #include "core/workspace.h"
 #include "sys/filesystem.h"
@@ -349,7 +349,7 @@ static bool cleanup_emptied(const workspace_t *ws, const hashmap_t *prunable, co
  * the removal reports it.
  */
 static bool cleanup_refused(const char *path) {
-    size_t len = str_path_parent_len(path);
+    size_t len = path_parent_len(path);
     char parent[PATH_MAX];
 
     if (len >= sizeof(parent)) {

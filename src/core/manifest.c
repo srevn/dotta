@@ -51,6 +51,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/path.h"
 #include "base/string.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -593,7 +594,7 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
     const size_t floor = strlen(root->filesystem_path);   /* the rung the root stands at */
 
     while (len > floor) {
-        len = str_path_parent_len(rung);
+        len = path_parent_len(rung);
         rung[len] = '\0';
 
         /* What is kept at this rung, and only a directory naming what lies beneath
@@ -601,12 +602,10 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
         const char *above = manifest_claim_beneath(manifest_kept(n, rung));
         if (!above) continue;
 
-        /* What lies beneath the rung (base/string.h str_path_beneath), read off
+        /* What lies beneath the rung (base/path.h path_beneath), read off
          * `filesystem_path`, because the truncation above took `rung`'s byte at
          * that offset. */
-        return arena_str_format(
-            n->arena, "%s/%s", above, str_path_beneath(filesystem_path, rung, len)
-        );
+        return arena_str_format(n->arena, "%s/%s", above, path_beneath(filesystem_path, rung, len));
     }
 
     /* Nothing of the profile's above it: the root's own label, and the tail —
@@ -1046,7 +1045,7 @@ static error_t manifest_contribute(
  * The nearest blob an index holds strictly above a path, or NULL
  *
  * The rungs are the path's own key cut at each separator, nearest first, each
- * read off the key's bytes by its length (base/string.h str_path_parent_len_n,
+ * read off the key's bytes by its length (base/path.h path_parent_len_n,
  * base/hashmap.h hashmap_get_n), so nothing is copied: the root directory, the
  * path's last parent, is the last rung read, and "/" has none above it. A directory
  * row of either class stops nothing.
@@ -1070,7 +1069,7 @@ static manifest_row_t *manifest_index_blob_above(
     const hashmap_t *index, const hashmap_t *interior, const char *filesystem_path
 ) {
     for (size_t len = strlen(filesystem_path); len > 1;) {
-        len = str_path_parent_len_n(filesystem_path, len);
+        len = path_parent_len_n(filesystem_path, len);
 
         /* A standing claim beneath this rung: no blob stands at it or above */
         if (interior && hashmap_get_n(interior, filesystem_path, len)) return NULL;
@@ -1102,7 +1101,7 @@ static void manifest_mark_interior(
     char *rung = NULL;
 
     for (size_t len = strlen(filesystem_path); len > 1;) {
-        len = str_path_parent_len_n(filesystem_path, len);
+        len = path_parent_len_n(filesystem_path, len);
         if (hashmap_get_n(interior, filesystem_path, len) == c) return;
 
         if (!rung) rung = arena_strdup(frame, filesystem_path);
@@ -1970,7 +1969,7 @@ bool manifest_active_beneath(const manifest_t *manifest, const char *path) {
      * is asked */
     const size_t len = strlen(path);
     for (size_t i = 0; i < manifest->count; i++) {
-        if (str_path_beneath(manifest->rows[i]->filesystem_path, path, len)) {
+        if (path_beneath(manifest->rows[i]->filesystem_path, path, len)) {
             return true;
         }
     }

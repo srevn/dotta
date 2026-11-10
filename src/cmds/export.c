@@ -97,8 +97,8 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/output.h"
+#include "base/path.h"
 #include "base/refspec.h"
-#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -284,7 +284,7 @@ static error_t dest_resolve(
     bool beneath = name[0] != '\0' &&
         (fs_is_directory(expanded) || (len > 0 && expanded[len - 1] == '/'));
 
-    *out = beneath ? str_path_join(arena, expanded, name) : expanded;
+    *out = beneath ? path_join(arena, expanded, name) : expanded;
     return NULL;
 }
 
@@ -372,11 +372,11 @@ static error_t export_collect_claim(const profile_claim_t *claim, void *payload)
     export_walk_t *walk = payload;
 
     /* Where the claim stands in the copy: at its own name in the whole profile,
-     * at what lies beneath the name beneath a name (base/string.h
-     * str_path_beneath), and nowhere at the name itself, which is the copy's
-     * root rather than an entry beneath it */
+     * at what lies beneath the name beneath a name (base/path.h path_beneath),
+     * and nowhere at the name itself, which is the copy's root rather than an
+     * entry beneath it */
     const char *rel = walk->base
-        ? str_path_beneath(claim->storage_path, walk->base, walk->base_len)
+        ? path_beneath(claim->storage_path, walk->base, walk->base_len)
         : claim->storage_path;
     if (!rel) return NULL;
 
@@ -653,13 +653,13 @@ static error_t export_collect_filesystem(
     );
 
     /* Every row strictly beneath the path — beneath the root directory as beneath
-     * any directory (base/string.h str_path_beneath) — at what lies beneath it,
-     * borrowed from the row, whose string is the arena's */
+     * any directory (base/path.h path_beneath) — at what lies beneath it, borrowed
+     * from the row, whose string is the arena's */
     const size_t len = strlen(filesystem_path);
     manifest_rows_t rows = manifest_rows(view);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
-        const char *rel = str_path_beneath(row->filesystem_path, filesystem_path, len);
+        const char *rel = path_beneath(row->filesystem_path, filesystem_path, len);
         if (!rel) continue;
 
         export_entry_t e = export_entry_from_row(view, row);

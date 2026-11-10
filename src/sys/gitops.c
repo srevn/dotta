@@ -24,6 +24,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/path.h"
 #include "base/string.h"
 #include "sys/identity.h"
 
@@ -672,7 +673,7 @@ error_t gitops_list_refs(
 
     /* The loose store beneath it, read whole: its directory is spelled in the
      * answer's arena, beside the names. */
-    const char *dir = str_path_join(arena, git_repository_commondir(repo), namespace);
+    const char *dir = path_join(arena, git_repository_commondir(repo), namespace);
     loose_walk_t walk = {
         .repo       = repo,
         .refname_at = strlen(dir) - strlen(namespace),

@@ -71,7 +71,7 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/hashmap.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
@@ -567,15 +567,15 @@ static const repository_t *source_repository(
             return r;
         }
         source_read(
-            f, path[0] == '/' ? path : str_path_join(f->arena, r->workdir, path), 0,
+            f, path[0] == '/' ? path : path_join(f->arena, r->workdir, path), 0,
             r->casing, &r->excludes_file
         );
     }
     if (!excludesfile || (optional && !r->excludes_file.rules && !r->excludes_file.failure)) {
         const char *xdg = getenv("XDG_CONFIG_HOME");
         source_read(
-            f, xdg && *xdg ? str_path_join(f->arena, xdg, "git/ignore")
-                           : str_path_join(f->arena, identity()->home, ".config/git/ignore"),
+            f, xdg && *xdg ? path_join(f->arena, xdg, "git/ignore")
+                           : path_join(f->arena, identity()->home, ".config/git/ignore"),
             0, r->casing, &r->excludes_file
         );
     }

@@ -28,6 +28,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/path.h"
 #include "base/string.h"
 #include "sys/gitops.h"
 
@@ -827,7 +828,7 @@ static error_t stage_step(
 ) {
     const stage_walk_t *walk = payload;
 
-    if (str_path_under(path, walk->path, walk->path_len)) {
+    if (path_under(path, walk->path, walk->path_len)) {
         if (git_tree_entry_type(entry) == GIT_OBJECT_TREE) return NULL;
 
         git_index_entry put;
@@ -839,7 +840,7 @@ static error_t stage_step(
         return stage_put_entry(walk->index, &put);
     }
 
-    if (!str_path_beneath(walk->path, path, strlen(path))) {
+    if (!path_beneath(walk->path, path, strlen(path))) {
         *next = GITOPS_NEXT_SKIP;
     }
     return NULL;

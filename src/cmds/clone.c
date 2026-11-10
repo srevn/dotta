@@ -29,7 +29,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -287,7 +287,7 @@ static void rollback_clone_dir(
         string_array_t listing = { 0 };
         err = fs_list_dir(path, ctx->arena, &listing);
         for (size_t i = 0; i < listing.count && !err; i++) {
-            err = fs_clear_path(str_path_join(ctx->arena, path, listing.entries[i]));
+            err = fs_clear_path(path_join(ctx->arena, path, listing.entries[i]));
         }
     } else {
         err = fs_remove_dir(path);

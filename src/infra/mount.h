@@ -55,10 +55,10 @@
  * destroy: the scan's roots and its leaf probe, and cleanup's guard
  * (core/workspace.c).
  *
- * Every root's spelling is absolute and folded (base/string.h str_path_folded),
- * each established where it is made: the sentinel's is the literal "/", HOME's
- * is the identity's (sys/identity, normalized at identity_init), and a row's
- * target is normalized and validated where it is written (the binders, through
+ * Every root's spelling is absolute and folded (base/path.h path_folded), each
+ * established where it is made: the sentinel's is the literal "/", HOME's is
+ * the identity's (sys/identity, normalized at identity_init), and a row's target
+ * is normalized and validated where it is written (the binders, through
  * infra/input.h input_target) over a column that holds no other shape
  * (core/state.c: a target no binder would write is refused where a hand makes
  * the edit). So the build meets only spellings that are keys, keeps each as it
@@ -68,10 +68,10 @@
  * So a root is a path wherever it is read — printed, compared to an argument,
  * measured against a rung. The root directory is the one root that *is* its own
  * separator, which the path verbs the table reads it through already know: every
- * absolute path lies under it (base/string.h str_path_under), and a tail joins
- * beneath it with one separator (str_path_join). So it is held and read as "/"
- * like any root, and it is where the sentinel, a HOME of "/" (a container's bare
- * uid) and a binding whose target is "/" (a container's own root) all stand.
+ * absolute path lies under it (base/path.h path_under), and a tail joins beneath
+ * it with one separator (path_join). So it is held and read as "/" like any root,
+ * and it is where the sentinel, a HOME of "/" (a container's bare uid) and a
+ * binding whose target is "/" (a container's own root) all stand.
  *
  * One table, one reading
  * ----------------------
@@ -134,9 +134,9 @@
  * reads every typed target — the two --target flags' and the editor's — as any
  * argument is read first (tilde, the working directory, `.`, `..`, `//`), so
  * what reaches here is the absolute, folded path the row stores: the shape every
- * key has (base/string.h str_path_folded), a contract the call checks and dies
- * on, never a refusal no input can reach. A traversal is folded away by that
- * reading and never met here.
+ * key has (base/path.h path_folded), a contract the call checks and dies on,
+ * never a refusal no input can reach. A traversal is folded away by that reading
+ * and never met here.
  *
  * Refuses, one message each, a path that does not stand (a link to nothing named
  * as such), or that is not a directory — one stat, through a link standing at
@@ -200,10 +200,10 @@ typedef struct mount_table mount_table_t;
  *   the machine-wide name this module does not produce. mount_table_build refuses
  *   one.
  * - target: where the profile's custom/ tree stands, as its binder wrote it —
- *   absolute and folded (base/string.h str_path_folded), "/" included, which
- *   the table keeps as it stands — and the key of every custom/ path beneath
- *   it. NULL or empty contributes no mount: the profile is bound nowhere in that
- *   table. Any other string is refused at the build (mount_table_build).
+ *   absolute and folded (base/path.h path_folded), "/" included, which the table
+ *   keeps as it stands — and the key of every custom/ path beneath it. NULL or
+ *   empty contributes no mount: the profile is bound nowhere in that table. Any
+ *   other string is refused at the build (mount_table_build).
  */
 typedef struct {
     const char *profile;

@@ -18,7 +18,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/output.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -366,7 +366,7 @@ static bool remove_contradicted(
     const char *storage_path, const char *const *named, size_t named_count
 ) {
     for (size_t i = 0; i < named_count; i++) {
-        if (str_path_under(storage_path, named[i], strlen(named[i]))) {
+        if (path_under(storage_path, named[i], strlen(named[i]))) {
             return true;
         }
     }
@@ -482,7 +482,7 @@ static error_t remove_resolve(
 
         /* The subject's length, asked once for every claim below — "/" a directory
          * like any other: what stands at it is at it, and every other absolute
-         * path lies beneath it (base/string.h str_path_under) */
+         * path lies beneath it (base/path.h path_under) */
         const size_t subject_len = strlen(subject);
 
         /* The blobs the argument names: a file claim at the subject itself — by
@@ -501,7 +501,7 @@ static error_t remove_resolve(
             if (!key) continue;                       /* it stands nowhere */
 
             /* The claim at the subject, or one beneath it at a directory boundary */
-            if (!str_path_under(key, subject, subject_len)) {
+            if (!path_under(key, subject, subject_len)) {
                 continue;
             }
 

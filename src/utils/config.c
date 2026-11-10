@@ -15,6 +15,7 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/output.h"
+#include "base/path.h"
 #include "base/string.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
@@ -214,14 +215,14 @@ config_t *config_create_default(arena_t *arena) {
 
     /* The file it is read from: the default location, until the variable names
      * another (config_load) */
-    config->file = str_path_join(arena, identity()->home, DEFAULT_CONFIG_FILE);
+    config->file = path_join(arena, identity()->home, DEFAULT_CONFIG_FILE);
 
     /* Set defaults */
-    config->repo_dir = str_path_join(arena, identity()->home, DEFAULT_REPO_DIR);
+    config->repo_dir = path_join(arena, identity()->home, DEFAULT_REPO_DIR);
     config->strict_ownership = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
-    config->hooks_dir = str_path_join(arena, identity()->home, DEFAULT_HOOKS_DIR);
+    config->hooks_dir = path_join(arena, identity()->home, DEFAULT_HOOKS_DIR);
     config->hook_timeout = 30;  /* Default: 30 seconds */
 
     config->confirm_destructive = true;

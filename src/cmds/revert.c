@@ -19,9 +19,9 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/output.h"
+#include "base/path.h"
 #include "base/refspec.h"
 #include "base/secure.h"
-#include "base/string.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -239,9 +239,9 @@ typedef struct {
  * so the commit's claims and the head's cannot part over what the argument reaches.
  * Both views are one profile's under one table, so the two keys never cross: no
  * claim this machine places has a name beneath a name it places nowhere. The
- * answer is the boundary's own (base/string.h str_path_under): "" where the claim
- * is the argument itself, its tail beneath it otherwise, and NULL where it is
- * neither, which a caller that wants the test alone reads as one.
+ * answer is the boundary's own (base/path.h path_under): "" where the claim is
+ * the argument itself, its tail beneath it otherwise, and NULL where it is neither,
+ * which a caller that wants the test alone reads as one.
  *
  * @param r The restore
  * @param filesystem_path Where the claim stands, or NULL where it stands nowhere
@@ -256,7 +256,7 @@ static const char *revert_reaches(
 ) {
     const char *key = r->key == INPUT_KEY_FILESYSTEM ? filesystem_path : storage_path;
 
-    return key ? str_path_under(key, r->path, r->path_len) : NULL;
+    return key ? path_under(key, r->path, r->path_len) : NULL;
 }
 
 /**

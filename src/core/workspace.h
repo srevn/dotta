@@ -2080,11 +2080,10 @@ bool workspace_active_beneath(const workspace_t *ws, const char *path);
  * key opens
  *
  * At any depth, in the orphans' order, which holds the ones beneath a path in
- * one block (base/string.h str_path_beneath_order), never "the orphans after
- * it": strcmp puts a sibling the path merely prefixes ("d-x", "d.conf") between
- * the path and them. Pure value return — no allocation, no error path; the analyzed
- * orphans alone (workspace_orphans), so a load that declined the analysis lends
- * none.
+ * one block (base/path.h path_beneath_order), never "the orphans after it": strcmp
+ * puts a sibling the path merely prefixes ("d-x", "d.conf") between the path
+ * and them. Pure value return — no allocation, no error path; the analyzed orphans
+ * alone (workspace_orphans), so a load that declined the analysis lends none.
  *
  * Readers: core/cleanup.c cleanup_emptied — a directory orphan the load did not
  * release holds the orphans beneath it and nothing else that stays, so a run

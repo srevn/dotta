@@ -262,7 +262,7 @@ static fs_occupant_t state_kind_from_text(const char *text) {
 
 /**
  * The spelling every path the store keeps is held to: absolute and folded, "/"
- * included — the rule base/string.h str_path_folded holds in C, which the binders
+ * included — the rule base/path.h path_folded holds in C, which the binders
  * validate a target by (infra/mount.h mount_validate_target) and mount_resolve
  * spells every key in — and whole: no NUL, so the string C reads is the one SQLite
  * stores, and every clause judges all of it. Two constraints compose it,

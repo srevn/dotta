@@ -11,7 +11,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/string.h"
+#include "base/path.h"
 
 /**
  * The word of each label — the single source of truth.
@@ -40,8 +40,8 @@ label_split_t label_split(const char *s) {
          * is the word with an empty tail too, and the shed is the reader's
          * (infra/input.c input_resolve). "homework" stands under none. The word
          * is read as the directory it names, under which a path lies as under
-         * any (base/string.h str_path_under). */
-        const char *tail = str_path_under(s, word, strlen(word));
+         * any (base/path.h path_under). */
+        const char *tail = path_under(s, word, strlen(word));
         if (tail) return (label_split_t){ .label = label, .tail = tail };
     }
 

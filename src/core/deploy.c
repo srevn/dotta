@@ -14,7 +14,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/heap.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "core/metadata.h"
 #include "core/scope.h"
 #include "core/workspace.h"
@@ -243,11 +243,11 @@ typedef struct {
  * path, a scan past copies that never match it, the rows beneath a node standing
  * beneath no blob; beneath a view row's squatter it finds none. The copies are
  * one block of the list, which holds them in path order, by its lower bound
- * (base/string.h str_path_beneath_order), as core/workspace.c
- * workspace_items_beneath bounds its arrays: every orphan beneath a blob row is
- * a copy, no node lying beneath a blob, whose rows beneath would stand beneath
- * it. A directory row reaches no copy: the copies beneath its path lie beneath
- * a blob row beneath it, that row's.
+ * (base/path.h path_beneath_order), as core/workspace.c workspace_items_beneath
+ * bounds its arrays: every orphan beneath a blob row is a copy, no node lying
+ * beneath a blob, whose rows beneath would stand beneath it. A directory row
+ * reaches no copy: the copies beneath its path lie beneath a blob row beneath
+ * it, that row's.
  *
  * @param nodes The landing's orphans in the making, in path order (NULL where
  *        count is 0)
@@ -285,7 +285,7 @@ static bool deploy_reach(
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
 
-        if (str_path_beneath_order(nodes[mid].item->filesystem_path, path, len) < 0) {
+        if (path_beneath_order(nodes[mid].item->filesystem_path, path, len) < 0) {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -294,7 +294,7 @@ static bool deploy_reach(
 
     /* The block: every copy beneath the row */
     bool spared = false;
-    for (; lo < count && str_path_beneath_order(nodes[lo].item->filesystem_path, path, len) == 0;
+    for (; lo < count && path_beneath_order(nodes[lo].item->filesystem_path, path, len) == 0;
         lo++) {
         nodes[lo].reached = true;
         spared = spared || nodes[lo].spared != NULL;
@@ -936,7 +936,7 @@ static void check_ancestry(
         const workspace_item_t *dir = verdicts->skipped_absent.entries[i];
         const size_t len = strlen(dir->filesystem_path);
 
-        if (str_path_beneath(path, dir->filesystem_path, len)) {
+        if (path_beneath(path, dir->filesystem_path, len)) {
             skip->reason = DEPLOY_SKIP_OWNERSHIP;
             skip->ancestor = len;
             return;
@@ -1245,7 +1245,7 @@ static bool above_deployable_row(
 
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         for (size_t i = 0; i < kinds[k]->count; i++) {
-            if (str_path_beneath(kinds[k]->entries[i].item->filesystem_path, dir, len)) {
+            if (path_beneath(kinds[k]->entries[i].item->filesystem_path, dir, len)) {
                 return true;
             }
         }
@@ -1947,7 +1947,7 @@ static error_t replace_node(deploy_run_t *run, const char *path) {
     for (size_t i = 0; i < replaces->count && !node; i++) {
         const char *place = replaces->entries[i]->filesystem_path;
 
-        if (str_path_beneath(path, place, strlen(place))) node = replaces->entries[i];
+        if (path_beneath(path, place, strlen(place))) node = replaces->entries[i];
     }
     if (!node) return NULL;
 
@@ -2072,7 +2072,7 @@ static error_t clear_copies(deploy_run_t *run, const char *path) {
     for (size_t i = 0; i < clears->count; i++) {
         const workspace_item_t *copy = clears->entries[i];
 
-        if (!str_path_beneath(copy->filesystem_path, path, len)) continue;
+        if (!path_beneath(copy->filesystem_path, path, len)) continue;
 
         error_t err = clear_occupant(copy->filesystem_path, copy->occupant);
         if (err) return err;
@@ -2286,7 +2286,7 @@ static error_t poisoned_above(const deploy_run_t *run, const char *path) {
     for (size_t i = 0; i < run->uncreated_count; i++) {
         const deploy_uncreated_t *uncreated = &run->uncreated[i];
 
-        if (str_path_beneath(path, uncreated->filesystem_path, uncreated->len)) {
+        if (path_beneath(path, uncreated->filesystem_path, uncreated->len)) {
             return uncreated->error;
         }
     }

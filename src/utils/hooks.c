@@ -15,7 +15,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "sys/filesystem.h"
 #include "sys/process.h"
 #include "utils/config.h"
@@ -208,7 +208,7 @@ static error_t hook_fire(
     const char *hook_name = arena_str_format(
         frame, "%s-%s", phase == HOOK_PHASE_PRE ? "pre" : "post", hook_word(inv->cmd)
     );
-    const char *hook_path = str_path_join(frame, config->hooks_dir, hook_name);
+    const char *hook_path = path_join(frame, config->hooks_dir, hook_name);
     const char *reason = NULL;
     error_t err = NULL;
 

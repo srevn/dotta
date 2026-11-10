@@ -40,11 +40,11 @@
  * unset, empty, or, under root obtained for a user, root's own home (`-H`, `-i`
  * and always_set_home rewrite it to root's; that is sudo's doing, not the user's),
  * in which case the invoker's passwd entry answers. Absolute and folded
- * (base/string.h str_path_folded, by normalizing here rather than refusing): a
- * key under HOME is HOME's spelling and a tail (infra/mount.h), and a doubled
- * slash inside HOME would be a spelling no folded argument matches. It is one
- * of the mount table's three root spellings, each established where it is made.
- * Whether the directory exists is not asked here.
+ * (base/path.h path_folded, by normalizing here rather than refusing): a key
+ * under HOME is HOME's spelling and a tail (infra/mount.h), and a doubled slash
+ * inside HOME would be a spelling no folded argument matches. It is one of the
+ * mount table's three root spellings, each established where it is made. Whether
+ * the directory exists is not asked here.
  *
  * HOME may have a second spelling: the one the kernel writes — realpath's, and
  * so getcwd's beneath it — where the directory is reached through a link (macOS's

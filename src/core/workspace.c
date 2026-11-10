@@ -58,7 +58,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/string.h"
+#include "base/path.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -240,12 +240,12 @@ static workspace_item_t *workspace_find_active(const workspace_t *ws, const char
  * strictly beneath `path`
  *
  * The array is in strcmp order, so the keys beneath the path sort in one block
- * of it (base/string.h str_path_beneath_order), never "the items after the path":
- * strcmp puts a sibling the path merely prefixes ("d-x", "d.conf") between the
- * path and them. Two lower bounds find the block — workspace_find_item's search,
- * asked of the paths beneath a path rather than of the path: one past every key
- * the order puts before it, where it opens, and one past every key in it, where
- * it ends. An empty block is the answer that nothing lies beneath.
+ * of it (base/path.h path_beneath_order), never "the items after the path": strcmp
+ * puts a sibling the path merely prefixes ("d-x", "d.conf") between the path
+ * and them. Two lower bounds find the block — workspace_find_item's search, asked
+ * of the paths beneath a path rather than of the path: one past every key the
+ * order puts before it, where it opens, and one past every key in it, where it
+ * ends. An empty block is the answer that nothing lies beneath.
  *
  * Readers: workspace_look, over the orphans, of a path a link stands at — a row's
  * or a record's — whether a record beneath it would be looked at through the
@@ -269,7 +269,7 @@ static workspace_items_t workspace_items_beneath(
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
 
-        if (str_path_beneath_order(items[mid]->filesystem_path, path, len) < 0) {
+        if (path_beneath_order(items[mid]->filesystem_path, path, len) < 0) {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -283,7 +283,7 @@ static workspace_items_t workspace_items_beneath(
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
 
-        if (str_path_beneath_order(items[mid]->filesystem_path, path, len) == 0) {
+        if (path_beneath_order(items[mid]->filesystem_path, path, len) == 0) {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -406,8 +406,8 @@ static workspace_fault_t workspace_error_fault(error_t err) {
 /**
  * The squatted directory that reaches `path`, or NULL — the reach rule as a scan
  *
- * Proper ancestors only (str_path_beneath is strict), so a squatter is never
- * its own answer, and the outermost among those that reach the asker: the shortest
+ * Proper ancestors only (path_beneath is strict), so a squatter is never its
+ * own answer, and the outermost among those that reach the asker: the shortest
  * match, because the true offender is the one whose fate settles every claim
  * beneath it. The list is in the order the load looks, which is path order
  * (workspace_load), so its first hit is the outermost too; the scan asks for
@@ -451,7 +451,7 @@ static const workspace_squatted_t *workspace_squatter_above(
         const workspace_squatted_t *dir = &ws->squatted[i];
 
         if (dir->claim == WORKSPACE_DISPLACED_RECORD && !orphan) continue;
-        if (str_path_beneath(path, dir->filesystem_path, dir->len) &&
+        if (path_beneath(path, dir->filesystem_path, dir->len) &&
             (!outermost || dir->len < outermost->len)) {
             outermost = dir;
         }
@@ -1810,7 +1810,7 @@ static const workspace_item_t *const *workspace_find_entries(
  * @return true when the parent was stat'd
  */
 static bool stat_parent(const char *path, struct stat *st) {
-    size_t len = str_path_parent_len(path);
+    size_t len = path_parent_len(path);
     char parent[PATH_MAX];
 
     if (len >= sizeof(parent)) {
@@ -1862,8 +1862,8 @@ static bool same_entry(const char *path, const char *other, const struct stat *s
     struct stat other_parent;
 
     /* The names by bytes, each read from its key's last separator on — a key is
-     * absolute (base/string.h str_path_folded), so it holds one — then the
-     * directories by identity */
+     * absolute (base/path.h path_folded), so it holds one — then the directories
+     * by identity */
     return strcmp(strrchr(path, '/'), strrchr(other, '/')) == 0 &&
            stat_parent(path, &parent) && stat_parent(other, &other_parent) &&
            parent.st_dev == other_parent.st_dev && parent.st_ino == other_parent.st_ino;

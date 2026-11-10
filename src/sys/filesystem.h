@@ -656,9 +656,9 @@ typedef enum {
  * An entry is looked past when it is OS metadata — exactly what fs_remove_empty_dir
  * clears — or when `vouch`, handed the entry's full path, answers true: the caller
  * is about to remove it, or has decided it does not count. The path is joined
- * as base/string.h str_path_join joins one — a child of "/" is "/x" — so a caller
- * keyed by path finds what it names. That lets a caller who is about to remove
- * things beneath a directory ask whether the directory will then be empty, without
+ * as base/path.h path_join joins one — a child of "/" is "/x" — so a caller keyed
+ * by path finds what it names. That lets a caller who is about to remove things
+ * beneath a directory ask whether the directory will then be empty, without
  * mutating anything and without a second walk of its own. With vouch == NULL
  * only metadata is looked past.
  *
@@ -745,8 +745,8 @@ error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
  *
  * The listing lives in a scratch the walk owns, whole — the stream closed with
  * it, so a walk holds one descriptor however deep it goes — and each entry's
- * path is joined there as it is read (base/string.h str_path_join: the root joins
- * as every directory does). How deep it goes is the kernel's to say: a path past
+ * path is joined there as it is read (base/path.h path_join: the root joins as
+ * every directory does). How deep it goes is the kernel's to say: a path past
  * PATH_MAX fails the look at it (ENAMETOOLONG), which each walk answers as it
  * answers any look that failed — and a frame costs a few hundred bytes of stack,
  * so the deepest path the kernel resolves is well inside the run's. Reading an
@@ -823,7 +823,7 @@ error_t fs_ensure_parent_dirs(const char *path);
 /**
  * The working directory, spelled as the shell spells it
  *
- * $PWD by pwd -L's rule — the fold's own spelling (base/string.h str_path_folded),
+ * $PWD by pwd -L's rule — the fold's own spelling (base/path.h path_folded),
  * one device and inode with "." — and getcwd's physical path when the shell set
  * none, or it has gone stale, or it is not folded (every shell writes a fixed
  * point; a hand-set variable may not). Logical, because a path names the entry
@@ -865,15 +865,15 @@ const char *fs_tmpdir(void);
  * A leading tilde expands as the shell expands one (fs_expand_tilde, whose refusal
  * of a login the system does not know is this function's one), a relative path
  * joins the working directory as the shell spells it (fs_working_directory),
- * and the whole folds (base/string.h str_path_fold): `.` and empty components
- * always, and a `..` where the component it takes is a directory — the directory
- * holding it, whatever stands above — or is a file or nothing at all, which the
- * kernel has no reading of. After a link the `..` stays, and so does one whose
- * look is refused: the kernel steps out of what a link reaches, and a fold by
- * the string would name another directory. Unlike fs_canonicalize_path, which
- * resolves every link through realpath(3), a link stays the entry it is reached
- * through, and the path need not exist; the filesystem is asked only at a `..`,
- * and of the working directory.
+ * and the whole folds (base/path.h path_fold): `.` and empty components always,
+ * and a `..` where the component it takes is a directory — the directory holding
+ * it, whatever stands above — or is a file or nothing at all, which the kernel
+ * has no reading of. After a link the `..` stays, and so does one whose look is
+ * refused: the kernel steps out of what a link reaches, and a fold by the string
+ * would name another directory. Unlike fs_canonicalize_path, which resolves every
+ * link through realpath(3), a link stays the entry it is reached through, and
+ * the path need not exist; the filesystem is asked only at a `..`, and of the
+ * working directory.
  *
  * Readers: the store's directory, the one reading its two sources share so that
  * the two can be compared — the configured one, settled at load (utils/config.c
@@ -943,10 +943,10 @@ char *fs_parent_dir(const char *path);
  *   ~              -> /home/user          (so does ~/)
  *   ~alice/.bashrc -> /home/alice/.bashrc (whoever runs it)
  *
- * The tail joins the home at one separator (base/string.h str_path_join), so
- * `~//x` is `~/x`. Inputs without a leading '~' are copied verbatim — into the
- * arena, like every answer, so no answer shares its lifetime with the caller's
- * input. A login the system does not know, or one with no home, is refused
+ * The tail joins the home at one separator (base/path.h path_join), so `~//x`
+ * is `~/x`. Inputs without a leading '~' are copied verbatim — into the arena,
+ * like every answer, so no answer shares its lifetime with the caller's input.
+ * A login the system does not know, or one with no home, is refused
  * (ERR_INVALID_ARG), as git refuses one (path.c interpolate_path).
  *
  * @param path Path with optional ~ prefix (must not be NULL)

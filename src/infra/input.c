@@ -41,13 +41,13 @@
  * filesystem spelling (absolute, tilde, relative) to the argument's reading,
  * whose answer is the key. The grammar of a name (infra/label.h: label_prefixes,
  * label_validate_storage), the filesystem's two readings (fs_expand_tilde,
- * fs_working_directory), the path's algebra (base/string.h: str_path_join,
- * str_path_fold), HOME's two spellings (sys/identity) and the commit a refspec
- * carries (base/refspec.h refspec_commit) are delegated to the layers below.
- * The table of roots is not among them: no root's spelling is read here and no
- * root's noun, so this file names no place (infra/input.h). A target's rules
- * are mount's (the place a binding means), asked of the argument's spelling and
- * of nothing the table holds.
+ * fs_working_directory), the grammar of a path's spelling (base/path.h: path_join,
+ * path_fold), HOME's two spellings (sys/identity) and the commit a refspec carries
+ * (base/refspec.h refspec_commit) are delegated to the layers below. The table
+ * of roots is not among them: no root's spelling is read here and no root's noun,
+ * so this file names no place (infra/input.h). A target's rules are mount's (the
+ * place a binding means), asked of the argument's spelling and of nothing the
+ * table holds.
  */
 
 #include "infra/input.h"
@@ -56,8 +56,8 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/path.h"
 #include "base/refspec.h"
-#include "base/string.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
@@ -215,8 +215,8 @@ error_t input_resolve(const char *input, arena_t *arena, input_path_t *out) {
  * machine under it, or a HOME reached through a link to its own ancestor, where
  * the substitution would nest the tail beneath itself; the other direction is a
  * link to its own descendant, which the kernel refuses as a loop. Both are one
- * test, the rule's spelling under the kernel's (base/string.h str_path_under).
- * In each, the directory stands as the shell spelled it.
+ * test, the rule's spelling under the kernel's (base/path.h path_under). In each,
+ * the directory stands as the shell spelled it.
  */
 static error_t input_working_directory(arena_t *arena, const char **out) {
     const char *cwd = NULL;
@@ -229,10 +229,10 @@ static error_t input_working_directory(arena_t *arena, const char **out) {
     if (!physical) return NULL;
 
     size_t len = strlen(physical);
-    if (str_path_under(home, physical, len)) {
+    if (path_under(home, physical, len)) {
         return NULL;
     }
-    if (!str_path_under(cwd, physical, len)) {
+    if (!path_under(cwd, physical, len)) {
         return NULL;
     }
 
@@ -268,10 +268,10 @@ error_t input_filesystem_path(const char *input, arena_t *arena, const char **ou
         const char *cwd = NULL;
         err = input_working_directory(arena, &cwd);
         if (err) return err;
-        path = str_path_join(arena, cwd, path);
+        path = path_join(arena, cwd, path);
     }
 
-    *out = str_path_fold(arena, path, NULL);
+    *out = path_fold(arena, path, NULL);
 
     return NULL;
 }

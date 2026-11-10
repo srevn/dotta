@@ -19,6 +19,7 @@
 #include "base/gitignore.h"
 #include "base/hashmap.h"
 #include "base/output.h"
+#include "base/path.h"
 #include "base/string.h"
 #include "cmds/completion.h"
 #include "core/ignore.h"
@@ -247,7 +248,7 @@ typedef struct {
  */
 static bool add_inside(const char *input, const char *target, arena_t *arena) {
     /* The folded prefix, grown one component at a time, with "." dropped and
-     * ".." popping — the fold str_path_fold performs over a whole argument, applied
+     * ".." popping — the fold path_fold performs over a whole argument, applied
      * per prefix so the prefixes exist to be asked about. Folding never grows a
      * path, so the argument's own length plus a leading slash and a terminator
      * bounds it, absolute or not. */
@@ -270,9 +271,9 @@ static bool add_inside(const char *input, const char *target, arena_t *arena) {
 
         if (length == 1 && component[0] == '.') continue;
         if (length == 2 && component[0] == '.' && component[1] == '.') {
-            /* str_path_parent_len keeps the root's own slash ("/etc" -> 1, "/"
-             * -> 1), so the root pops to itself (base/string.h). */
-            len = str_path_parent_len(folded);
+            /* path_parent_len keeps the root's own slash ("/etc" -> 1, "/"
+             * -> 1), so the root pops to itself (base/path.h). */
+            len = path_parent_len(folded);
             folded[len] = '\0';
             continue;
         }
@@ -351,7 +352,7 @@ static error_t add_spell(
     const char *composed = input;
     if (target && input[0] != '~' && input[0] != '.' && input[0] != '\0') {
         bool inside = input[0] == '/' && add_inside(input, target, arena);
-        if (!inside) composed = str_path_join(arena, target, input);
+        if (!inside) composed = path_join(arena, target, input);
     }
 
     /* The answer is the arena's, as the composition it reads is: the caller keys,
@@ -365,9 +366,9 @@ static error_t add_spell(
      * outside. The subject is folded (input_filesystem_path), so the whole test
      * is a string's, where the boundary above had to be asked per prefix on the
      * bytes as typed. A tilde path is HOME's and is read against no target, even
-     * one beneath HOME. Every absolute path lies under a target of "/"
-     * (base/string.h str_path_under). */
-    if (target && input[0] != '~' && !str_path_under(spelled, target, strlen(target))) {
+     * one beneath HOME. Every absolute path lies under a target of "/" (base/path.h
+     * path_under). */
+    if (target && input[0] != '~' && !path_under(spelled, target, strlen(target))) {
         return error_create(
             ERR_INVALID_ARG, "Path '%s' resolves outside target root '%s', and a path "
             "spelled from here or walking out with '..' cannot escape the target",
@@ -1002,7 +1003,7 @@ static error_t add_refuse_ancestry(
          * derived one, at a rung the capture's climb visits — and so retires,
          * under every name */
         if (!other && manifest_is_derived(held) && !record &&
-            str_path_beneath(link, root->filesystem_path, strlen(root->filesystem_path))) {
+            path_beneath(link, root->filesystem_path, strlen(root->filesystem_path))) {
             continue;
         }
 

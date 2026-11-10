@@ -20,8 +20,8 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/path.h"
 #include "base/secure.h"
-#include "base/string.h"
 #include "sys/entropy.h"
 #include "sys/identity.h"
 
@@ -1068,12 +1068,12 @@ bool fs_is_directory(const char *path) {
 /**
  * The path of a directory's entry, into a buffer — false where it does not fit
  *
- * Joined as base/string.h str_path_join joins a directory and a name: the
- * directory's trailing separators fold into the one written at the seam, so a
- * child of the root is "/x", the spelling every key names it by. One producer
- * for the two spellings the emptiness walk must not let disagree: the path it
- * hands its vouch, which a caller keys by (fs_directory_emptiness), and the one
- * it lstats to tell OS metadata (entry_is_removable_metadata).
+ * Joined as base/path.h path_join joins a directory and a name: the directory's
+ * trailing separators fold into the one written at the seam, so a child of the
+ * root is "/x", the spelling every key names it by. One producer for the two
+ * spellings the emptiness walk must not let disagree: the path it hands its vouch,
+ * which a caller keys by (fs_directory_emptiness), and the one it lstats to tell
+ * OS metadata (entry_is_removable_metadata).
  */
 static bool fs_entry_path(char *child, size_t size, const char *dir, const char *name) {
     size_t len = strlen(dir);
@@ -1222,7 +1222,7 @@ error_t fs_remove_empty_dir(const char *path) {
     }
 
     for (size_t i = 0; i < listing.count && !err; i++) {
-        err = fs_remove_file(str_path_join(frame, path, listing.entries[i]));
+        err = fs_remove_file(path_join(frame, path, listing.entries[i]));
     }
 
     arena_free(frame);
@@ -1310,9 +1310,7 @@ const char *fs_listing_next(fs_listing_t *listing) {
     }
 
     arena_reset(listing->scratch, listing->entry);
-    return str_path_join(
-        listing->scratch, listing->directory, listing->names.entries[listing->next++]
-    );
+    return path_join(listing->scratch, listing->directory, listing->names.entries[listing->next++]);
 }
 
 /**
@@ -1320,14 +1318,13 @@ const char *fs_listing_next(fs_listing_t *listing) {
  */
 
 /* pwd -L's rule: $PWD is the working directory when it is the fold's own spelling
- * (str_path_folded) and names the directory the process is in — one device and
- * inode with ".". It is carried as it stands, so anything the fold would move
- * is refused with it: a `..` behind a symlink folds to a directory other than
- * the one it named, and a doubled slash misses every prefix a reader tests it
- * against. Every shell writes a fixed point; only a hand-set variable is refused
- * here. */
+ * (path_folded) and names the directory the process is in — one device and inode
+ * with ".". It is carried as it stands, so anything the fold would move is refused
+ * with it: a `..` behind a symlink folds to a directory other than the one it
+ * named, and a doubled slash misses every prefix a reader tests it against. Every
+ * shell writes a fixed point; only a hand-set variable is refused here. */
 static bool pwd_is_here(const char *pwd) {
-    if (!str_path_folded(pwd)) return false;
+    if (!path_folded(pwd)) return false;
 
     struct stat named, here;
     return fs_stat(pwd, &named) == 0 && fs_stat(".", &here) == 0 &&
@@ -1404,10 +1401,10 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
         const char *cwd = NULL;
         err = fs_working_directory(arena, &cwd);
         if (err) return err;
-        expanded = str_path_join(arena, cwd, expanded);
+        expanded = path_join(arena, cwd, expanded);
     }
 
-    *out = str_path_fold(arena, expanded, fs_folds);
+    *out = path_fold(arena, expanded, fs_folds);
     return NULL;
 }
 
@@ -1480,7 +1477,7 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out) {
     /* The home itself, alone or with its '/'; else the tail, whose own separators
      * fold into the one the join writes. */
     *out = rest[0] == '\0' || (rest[0] == '/' && rest[1] == '\0')
-        ? arena_strdup(arena, home) : str_path_join(arena, home, rest);
+        ? arena_strdup(arena, home) : path_join(arena, home, rest);
     return NULL;
 }
 

@@ -101,12 +101,96 @@ static error_t stage_tree_index(const stage_t *st, git_index **out) {
 }
 
 /**
+ * Whether `index` holds an entry beneath `path`: one the name and a separator
+ * begin, at any depth
+ *
+ * The separator is the boundary: an entry at the name itself is not beneath it,
+ * nor one at a sibling the name merely prefixes ("x.bak" and "x0" beside "x").
+ * The index is sorted, so one prefix probe answers (lib/libgit2/src/libgit2/index.c
+ * git_index_find_prefix), and it asks every stage: a conflict's entries are entries
+ * here.
+ *
+ * Readers: stage_merge_trees, an entry Git's merge staged; stage_put_entry, a
+ * directory where the file goes; stage_holds_beneath, the stage's question of
+ * its own index — so the merge's conflict, the put's refusal and the prune's
+ * answer cannot part.
+ */
+static error_t stage_beneath(git_index *index, const char *path, bool *out) {
+    size_t len = strlen(path);
+    char *prefix = heap_alloc(len + 2);
+    memcpy(prefix, path, len);
+    prefix[len] = '/';
+    prefix[len + 1] = '\0';
+
+    int rc = git_index_find_prefix(NULL, index, prefix);
+    free(prefix);
+
+    /* Not tidiness: a failure read as nothing beneath would admit a blob over a
+     * directory, leave one Git's merge staged there to a tree that loses it,
+     * and let the prune take a derivation something stands beneath. The linked
+     * libgit2 is whichever one pkg-config found at or above 1.9, and its contract
+     * here is "0 or an error code", GIT_ENOTFOUND where no entry begins with
+     * the prefix. */
+    if (rc != 0 && rc != GIT_ENOTFOUND) {
+        return error_git(rc, "Failed to search the tree beneath '%s'", path);
+    }
+
+    *out = rc == 0;
+    return NULL;
+}
+
+/**
+ * An entry Git's merge staged, set at its side's stage: a conflict, as every
+ * pair of a file and a directory libgit2 finds itself is
+ *
+ * Reader: stage_merge_trees, each entry Git staged with an entry beneath it.
+ */
+static error_t stage_unsettle(stage_t *st, const git_index_entry *entry) {
+    /* Whose it is, ours' tree answers. With no rename paired, Git stages at a
+     * name what a side's tree holds there or what it composed of both sides'
+     * blobs, and beneath it only what a side's tree holds beneath it
+     * (lib/libgit2/src/libgit2/merge.c merge_conflict_resolve_trivial,
+     * merge_conflict_can_resolve_contents); no tree holds an entry at a name
+     * and another beneath it. So one side holds the name as an entry that is no
+     * tree — a blob of any mode, a gitlink — and the other a directory there.
+     * Asked because a conflict's stages say whose each entry is (sys/stage.h
+     * stage_conflicts), as libgit2 sets each side of a pair it finds: at the
+     * other side's stage, that side would hold a file at the name and an entry
+     * beneath it, which no tree does, and which libgit2's insert answers by taking
+     * that side's entries beneath away — before libgit2 2.0 only by where the
+     * name sorts (index.c has_file_name; libgit2#7160). Nothing reads which stage
+     * a name stands at, so no suite fails where the side is dropped. */
+    git_tree_entry *held = NULL;
+    int rc = git_tree_entry_bypath(&held, st->tree, entry->path);
+    if (rc < 0 && rc != GIT_ENOTFOUND) {
+        return error_git(rc, "Failed to merge into '%s'", st->refname);
+    }
+    const git_index_entry *ours =
+        rc == 0 && git_tree_entry_type(held) != GIT_OBJECT_TREE ? entry : NULL;
+    git_tree_entry_free(held);
+
+    /* The entry as Git staged it, copied (index.c git_index_conflict_add): its
+     * mode is Git's canonical word since the merge filled the index (index.c
+     * git_index__fill, git_index__create_mode), which the conflict's insert admits
+     * (valid_filemode). The merge base's slot stays empty: a merge base holding
+     * a blob at the name leaves it removed or in conflict already (merge.c
+     * merge_conflict_resolve_one_removed). */
+    rc = git_index_conflict_add(st->index, NULL, ours, ours ? NULL : entry);
+    if (rc < 0) {
+        return error_git(rc, "Failed to merge into '%s'", st->refname);
+    }
+
+    return NULL;
+}
+
+/**
  * A merge's index: Git's three-way merge of the opened tree and theirs over the
- * tree the two histories last shared, under the stage's own options
+ * tree the two histories last shared, under the stage's own options, and kept
+ * to the rule every put keeps — no entry with another beneath it
  *
  * A failure is said as the merge's, theirs' read among them — a commit the store
- * lacks named by libgit2 — save the empty tree's, said as each reader of it says
- * it (stage_empty_tree).
+ * lacks named by libgit2 — save the empty tree's and the search's, each said as
+ * every reader of it says it (stage_empty_tree, stage_beneath).
  *
  * Reader: stage_seed, a merge's seed.
  */
@@ -153,6 +237,47 @@ static error_t stage_merge_trees(stage_t *st, const git_oid *theirs) {
         &st->index, st->repo, st->merge_base, st->tree, st->theirs_tree, &opts
     );
     if (rc < 0) {
+        return error_git(rc, "Failed to merge into '%s'", st->refname);
+    }
+
+    /* The one index no put filled, asked the put's question (stage_put_entry):
+     * an entry Git staged with an entry beneath it is unsettled. libgit2 pairs
+     * a file with a directory at its name only where the first entry either side
+     * moved after the name lies beneath it and was added or changed (merge.c
+     * merge_diff_detect_df_conflict), and stages both everywhere else, its index
+     * asking no collision as it fills (index.c git_index__fill) — where a tree
+     * written from the two keeps the directory and loses the file (tree.c
+     * write_tree). Read off a snapshot, which the index's edits move nothing of
+     * (include/git2/index.h git_index_iterator_new): an entry unsettled is still
+     * the loop's to read, and no position is read off an index the loop moves. */
+    git_index_iterator *entries = NULL;
+    rc = git_index_iterator_new(&entries, st->index);
+    if (rc < 0) {
+        return error_git(rc, "Failed to merge into '%s'", st->refname);
+    }
+
+    /* Everything a name begins sorts in one run directly after it — a sibling
+     * it prefixes, what lies beneath it — a merge's index sorting byte by byte,
+     * then by stage, case never folded (index.c git_index__new,
+     * git_index_entry_cmp). So a staged entry the next one does not continue
+     * has nothing beneath it, and only the rest are asked; the next is read at
+     * whatever stage it stands, so a child standing in conflict alone beneath
+     * the name continues it too. The iteration classifies its three answers, as
+     * every one dotta makes does: an entry, the end, or a failure. */
+    const git_index_entry *entry = NULL;
+    const git_index_entry *next = NULL;
+    while (!err && (rc = git_index_iterator_next(&next, entries)) == 0) {
+        if (entry && git_index_entry_stage(entry) == GIT_INDEX_STAGE_NORMAL &&
+            str_starts_with(next->path, entry->path)) {
+            bool beneath = false;
+            err = stage_beneath(st->index, entry->path, &beneath);
+            if (!err && beneath) err = stage_unsettle(st, entry);
+        }
+        entry = next;
+    }
+    git_index_iterator_free(entries);
+    if (err) return err;
+    if (rc != GIT_ITEROVER) {
         return error_git(rc, "Failed to merge into '%s'", st->refname);
     }
 
@@ -370,43 +495,6 @@ static error_t stage_admit_path(git_index *index, const char *path) {
 }
 
 /**
- * Whether `index` holds an entry beneath `path`: one the name and a separator
- * begin, at any depth
- *
- * The separator is the boundary: an entry at the name itself is not beneath it,
- * nor one at a sibling the name merely prefixes ("x.bak" and "x0" beside "x").
- * The index is sorted, so one prefix probe answers (lib/libgit2/src/libgit2/index.c
- * git_index_find_prefix), and it asks every stage: a conflict's entries are entries
- * here.
- *
- * Readers: stage_put_entry, a directory where the file goes; stage_holds_beneath,
- * the stage's question of its own index, so the put's refusal and the prune's
- * answer cannot part.
- */
-static error_t stage_beneath(git_index *index, const char *path, bool *out) {
-    size_t len = strlen(path);
-    char *prefix = heap_alloc(len + 2);
-    memcpy(prefix, path, len);
-    prefix[len] = '/';
-    prefix[len + 1] = '\0';
-
-    int rc = git_index_find_prefix(NULL, index, prefix);
-    free(prefix);
-
-    /* Not tidiness: a failure read as nothing beneath would admit a blob the
-     * index then makes room for by dropping an entry, and let the prune take a
-     * derivation something stands beneath. The linked libgit2 is whichever one
-     * pkg-config found at or above 1.9, and its contract here is "0 or an error
-     * code", GIT_ENOTFOUND where no entry begins with the prefix. */
-    if (rc != 0 && rc != GIT_ENOTFOUND) {
-        return error_git(rc, "Failed to search the tree beneath '%s'", path);
-    }
-
-    *out = rc == 0;
-    return NULL;
-}
-
-/**
  * Whether `index` already holds `entry` as given: the staged entry at its path,
  * its id under its mode — the two facts a tree records
  *
@@ -430,11 +518,17 @@ static bool stage_holds_entry(git_index *index, const git_index_entry *entry) {
  * Put an entry into `index`: the mode, the shape, the two collisions, then
  * libgit2's add — none where the index already holds the entry as given
  *
- * Every entry enters an index here — the stage's, and an admission's — and the
- * order is the header's first rule: git_index_add REPLACES on a file/directory
- * collision (index.c check_file_directory_collision with ok_to_replace), so an
- * entry added past a refusal would take another away. Both collisions are refused
- * first, in this module's own sentences.
+ * Every entry dotta puts enters an index here — the stage's, and an admission's;
+ * a merge's are Git's, asked the same question at its open (stage_merge_trees)
+ * — and the order is the header's first rule. git_index_add makes room on a
+ * file/directory collision (index.c check_file_directory_collision with
+ * ok_to_replace): it drops a blob above the entry, and the entries beneath it —
+ * before libgit2 2.0 only where every entry sorting before them begins with its
+ * name, standing over them everywhere else, has_file_name scanning from the index's
+ * first entry for an entry new at its stage (libgit2#7160). So an entry added
+ * past a refusal would take another away, or stand over a directory that a tree
+ * written from the index keeps in its place. Both collisions are refused first,
+ * in this module's own sentences.
  *
  * What git_index_add can refuse after that is libgit2's own path rule — `.git`
  * as a component in every spelling libgit2 protects, `.` and `..` — validated
@@ -803,7 +897,7 @@ error_t stage_unite(stage_t *st, const char *path) {
     CHECK_NULL(path);
 
     /* The conflict at the name: the merge base's entry there, ours' and theirs',
-     * each where that side holds a blob */
+     * each where that side holds an entry */
     const git_index_entry *ancestor = NULL;
     const git_index_entry *ours = NULL;
     const git_index_entry *theirs = NULL;

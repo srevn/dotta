@@ -38,8 +38,11 @@
  * Git's words; and nothing is committed. A deletion is another writer's act as
  * a commit is, and the stage writes over neither.
  *
- * A put never removes another path. libgit2's index REPLACES on a file/directory
- * collision — `git_index_add` of `a/x` over blob `a` drops `a` — so the stage
+ * A put never removes another path. libgit2's add would, or would leave two:
+ * `git_index_add` of `a/x` over blob `a` drops `a`, and of blob `a` over `a/x`
+ * drops `a/x` — before libgit2 2.0 only by where `a` sorts, standing beside it
+ * elsewhere, a tree written from the two keeping the directory alone
+ * (lib/libgit2/src/libgit2/index.c has_file_name; libgit2#7160). So the stage
  * refuses both collisions itself, and no verb but four takes an entry away:
  * stage_remove the one it names, stage_settle a name's at and beneath it,
  * stage_unite a conflict's, its union in their place, and stage_read_tree every
@@ -112,19 +115,27 @@
  * merge_normalize_opts), and its union is the union favor (merge_driver.c
  * git_merge_driver__union); and no favor, ever: a conflict is its caller's to
  * settle — a side kept (stage_settle) or the two united (stage_unite), each at
- * its caller's word — never the merge's. Nor is a seal ever composed: every seal
- * holds a NUL in its header (crypto/cipher.h), so Git reads each as binary
- * (merge_file.c merge_file__is_binary), and its binary merge takes a side whole
- * under ours' or theirs' favor and leaves the conflict under any other
- * (merge_file__binary). Two answers stay Git's, stated: a merge attribute in
- * git's attributes files — the system's, the user's, the store's info/attributes
- * (attr.c attr_setup) — outranks the driver, and no option keeps it from the
- * merge (merge_driver.c merge_driver_name_for_path), so a name it matches merges
- * by its driver, a union composing two plaintexts, both standing in the merge's
- * parents; and two heads with several best common ancestors — a criss-cross,
- * which two remotes swapped by `dotta remote set-url` reach — merge over the
- * first of them (merge.c git_merge_base), so a name two earlier merges settled
- * apart takes one of the two settles in silence, both standing in the history.
+ * its caller's word — never the merge's. And the index Git answers is kept to
+ * the rule every put keeps. libgit2 pairs a file one side holds with the directory
+ * the other holds at its name only where the first entry either side moved after
+ * the name lies beneath it and was added or changed (merge.c
+ * merge_diff_detect_df_conflict), and stages both everywhere else, its index
+ * asking no collision as it fills (index.c git_index__fill), a tree written from
+ * the two keeping the directory and losing the file (tree.c write_tree). So an
+ * entry Git staged with an entry beneath it is set at its side's stage: the
+ * conflict a pair libgit2 finds is. Nor is a seal ever composed: every seal holds
+ * a NUL in its header (crypto/cipher.h), so Git reads each as binary (merge_file.c
+ * merge_file__is_binary), and its binary merge takes a side whole under ours'
+ * or theirs' favor and leaves the conflict under any other (merge_file__binary).
+ * Two answers stay Git's, stated: a merge attribute in git's attributes files —
+ * the system's, the user's, the store's info/attributes (attr.c attr_setup) —
+ * outranks the driver, and no option keeps it from the merge (merge_driver.c
+ * merge_driver_name_for_path), so a name it matches merges by its driver, a union
+ * composing two plaintexts, both standing in the merge's parents; and two heads
+ * with several best common ancestors — a criss-cross, which two remotes swapped
+ * by `dotta remote set-url` reach — merge over the first of them (merge.c
+ * git_merge_base), so a name two earlier merges settled apart takes one of the
+ * two settles in silence, both standing in the history.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, its object
  * writer, its ref writer and its merge base, nothing of mounts, content or dotta's
@@ -198,10 +209,12 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
  * that share no commit merge over Git's empty tree, as git merges unrelated
  * histories. Each name the merge could not compose stands at its stages until
  * it is settled — the merge base's entry there, ours' and theirs', each where
- * that side holds a blob (stage_conflicts) — and every other name stands as Git
- * composed or took it. The opened tree is the head's (stage_tree): what the merge
- * brings is measured from it, and an admission is seeded from it. The open writes
- * the blobs Git's clean content merges compose, and nothing else (the header).
+ * that side holds an entry (stage_conflicts), an entry Git staged with an entry
+ * beneath it among them, at its side's stage (the header) — and every other name
+ * stands as Git composed or took it. The opened tree is the head's (stage_tree):
+ * what the merge brings is measured from it, and an admission is seeded from
+ * it. The open writes the blobs Git's clean content merges compose, and nothing
+ * else (the header).
  *
  * Reader: core/profiles.c profile_draft_merge.
  *
@@ -500,12 +513,13 @@ error_t stage_remove(stage_t *st, const char *path);
  * The names a merge left in conflict, in path order, each once
  *
  * A name both sides moved apart that Git could not compose — two edits of one
- * blob, an edit beside a deletion, a blob beside a directory — held at its stages:
- * the merge base's entry there, ours' and theirs', each where that side holds a
- * blob. The iterator steps past a name's stages at once
- * (lib/libgit2/src/libgit2/index.c git_index_conflict_next), and the index is
- * sorted, so each name comes once and in order, byte by byte as strcmp reads
- * it. None over no merge, and none once each is settled. Nothing is written.
+ * blob, an edit beside a deletion, a blob beside a directory, wherever the merge
+ * left the two (stage_merge) — held at its stages: the merge base's entry there,
+ * ours' and theirs', each where that side holds an entry. The iterator steps
+ * past a name's stages at once (lib/libgit2/src/libgit2/index.c
+ * git_index_conflict_next), and the index is sorted, so each name comes once
+ * and in order, byte by byte as strcmp reads it. None over no merge, and none
+ * once each is settled. Nothing is written.
  *
  * Reader: core/profiles.c profile_merge_tree, each name composed by a rule or
  * noted as a content conflict.
@@ -646,8 +660,9 @@ stage_held_t stage_holds(const stage_t *st, const char *path);
  * entry the name and a separator begin, at any depth
  *
  * The question every put asks before it adds an entry — a directory where the
- * file goes — asked of the tree the puts and removals so far leave, by the one
- * search the put makes, so this answer and the put's refusal cannot part. An
+ * file goes — and a merge's open asks of each entry Git staged, here asked of
+ * the tree the puts and removals so far leave, by the one search all three make,
+ * so this answer, the put's refusal and the merge's conflict cannot part. An
  * entry at the name itself is not beneath it — its twin, stage_holds, answers
  * what stands there — nor one at a sibling the name merely prefixes ("x.bak"
  * and "x0" beside "x"). A conflict's stages are entries to it: the search asks

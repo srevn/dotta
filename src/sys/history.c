@@ -22,6 +22,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/heap.h"
+#include "base/path.h"
 #include "sys/gitops.h"
 
 /* A path asked, beside its slot in the caller's array: the walk's order is its own */
@@ -53,7 +54,8 @@ typedef struct {
     history_path_t *paths;          /* The paths asked, in the walk's order */
     size_t count;
     size_t words;                   /* A set's words: one per 64 paths */
-    char *component;                /* The name the descent looks up, NUL-terminated */
+    char *component;                /* The component a descent is at, NUL-terminated:
+                                     * its run's directory and the name it looks up */
     hashmap_t *commits;             /* Hex id → history_commit_t: every commit reached */
     history_commit_t **queue;       /* The commits with paths waiting, oldest first: the newest is read next */
     size_t queue_count;
@@ -138,22 +140,26 @@ static void history_descend(
         const char *name = walk->paths[positions[i]].path + offset;
         const size_t len = strcspn(name, "/");
 
-        /* The run of paths at this name: one in the walk's order, so its end is
-         * the first path past it, found by a search */
+        /* The component, NUL-terminated — the directory the run is asked against,
+         * then the name each tree is asked for — spelled at each run, the descent
+         * beneath the last run having written its own over it */
+        memcpy(walk->component, name, len);
+        walk->component[len] = '\0';
+
+        /* The run of paths under the component, at it or beneath it (base/path.h
+         * path_under): one in the walk's order, so its end is the first path
+         * past it, found by a search */
         size_t end = n;
         for (size_t lo = i + 1; lo < end;) {
             const size_t mid = lo + (end - lo) / 2;
             const char *other = walk->paths[positions[mid]].path + offset;
 
-            if (strncmp(other, name, len) == 0 && (other[len] == '\0' || other[len] == '/')) {
+            if (path_under(other, walk->component, len)) {
                 lo = mid + 1;
             } else {
                 end = mid;
             }
         }
-
-        memcpy(walk->component, name, len);
-        walk->component[len] = '\0';
 
         const git_tree_entry *entry = git_tree_entry_byname(parent, walk->component);
         const git_tree_entry *child_entry = child

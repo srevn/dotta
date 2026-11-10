@@ -675,7 +675,8 @@ void output_format_counts(
  * Readers: cmds/remove.c remove_paths (its dry run and its receipt) and
  * remove_ask_paths (its question), cmds/export.c cmd_export (its dry run and
  * its receipt), cmds/apply.c cmd_apply (what changed in Git), cmds/add.c cmd_add
- * (what the walk collected, and its receipt) and add_print_preview.
+ * (what the walk collected, and its receipt) and add_print_preview, and
+ * cmds/status.c status_print_profiles (what of a profile has no target).
  *
  * @param files Number of files
  * @param directories Number of directories

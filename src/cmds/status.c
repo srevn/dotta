@@ -120,10 +120,15 @@ static void status_print_profiles(
         }
 
         /* Unbound claims are not rows — the counts above never see them; the
-         * annotation is what says the profile carries more than it projects. */
-        size_t unplaced = 0;
+         * annotation is what says the profile carries more than it projects, by
+         * kind, as what it holds is counted (core/profiles.h profile_counts_t) */
+        size_t unplaced_files = 0;
+        size_t unplaced_dirs = 0;
         for (size_t j = 0; j < unbound.count; j++) {
-            if (strcmp(unbound.entries[j].profile, profile) == 0) unplaced++;
+            if (strcmp(unbound.entries[j].profile, profile) != 0) continue;
+
+            if (unbound.entries[j].kind == PATH_KIND_DIRECTORY) unplaced_dirs++;
+            else unplaced_files++;
         }
 
         /* Nor are the paths the view does not use. One count and not two: the
@@ -156,11 +161,15 @@ static void status_print_profiles(
             );
         }
 
-        if (unplaced > 0) {
+        /* Dim, as the deployment's time and the target's arrow are: a fact of
+         * the profile, no target being a state the user may choose, where the
+         * yellow annotations beside it say something is broken */
+        if (unplaced_files + unplaced_dirs > 0) {
+            char counts[64];
+            output_format_kinds(unplaced_files, unplaced_dirs, counts, sizeof(counts));
             output_print(
-                out, OUTPUT_NORMAL,
-                " {yellow}(%zu custom/ path%s need%s a deployment target){reset}",
-                unplaced, unplaced == 1 ? "" : "s", unplaced == 1 ? "s" : ""
+                out, OUTPUT_NORMAL, " {dim}(%s %s no target){reset}", counts,
+                unplaced_files + unplaced_dirs == 1 ? "has" : "have"
             );
         }
 
@@ -280,9 +289,9 @@ static void status_print_profiles(
     /* The repairs, in the shape this screen spells a repair: a legend under the
      * block it belongs to, each line a dimmed annotation and its sentence, the
      * annotations aligned — what a list's legend does for its tags (base/output.h
-     * output_list_legend), with the yellow annotation above playing the tag's
-     * part. `Hint:` is apply's voice and sync's, and this channel was the only
-     * thing in status that spoke it.
+     * output_list_legend), with the annotation above playing the tag's part.
+     * `Hint:` is apply's voice and sync's, and this channel was the only thing
+     * in status that spoke it.
      *
      * Generic in both the profile and the path. The annotations say which profiles
      * carry them, so one filled name would read as the only one wherever two
@@ -308,7 +317,7 @@ static void status_print_profiles(
              * way out (dotta remove), never this annotation's */
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "  custom/ paths - run 'dotta profile enable <profile> --target /path' "
+                "  no target     - run 'dotta profile enable <profile> --target /path' "
                 "to place them"
             );
             break;

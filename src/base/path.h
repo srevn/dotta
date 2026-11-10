@@ -147,8 +147,11 @@ const char *path_basename(const char *path);
  * trailing separators and the name's leading ones fold into it, so the root joins
  * as every directory does ("/" and "x" is "/x"), and a name spelled from the
  * root joins as a relative one does ("/t" and "/etc/x" is "/t/etc/x" — the
- * re-rooting under add's --target reads it so). Nothing else is folded: a `.`,
- * a `..` or a doubled separator inside either side stands, for path_fold.
+ * re-rooting under add's --target reads it so). A name of separators alone is
+ * no empty side: its separators are the seam's, and the join is the directory
+ * and that one separator ("/a" and "/" is "/a/", which a home spelled "~//" reaches
+ * through sys/filesystem.h fs_expand_tilde). Nothing else is folded: a `.`, a
+ * `..` or a doubled separator inside either side stands, for path_fold.
  *
  * @param arena Arena the joined path lives in (must not be NULL)
  * @param dir Directory (must not be NULL or empty)

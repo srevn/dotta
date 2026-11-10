@@ -310,7 +310,7 @@ typedef enum dotta_verbosity {
  * claims are placed nowhere for want of a target (`manifest_unbound`), each of
  * which an enable naming that profile warns of — and whose build gates the set
  * it adds to: each profile it adds is read as strictly as the build reads one
- * (`core/profiles.h` `profile_needs_target`), its binding by the target's reading
+ * (`core/profiles.h` `profile_counts`), its binding by the target's reading
  * (`infra/input.h` `input_target`), so no enable completes on a set the build
  * refuses. A build that fails ends dispatch with the builder's message — a tree
  * that will not load, metadata that will not parse — on every path of the command,
@@ -511,12 +511,11 @@ typedef struct dotta_run {
  *         environment (`utils/hooks.c` hook_fire, `utils/bootstrap.c`
  *         bootstrap_live), a run's own lists (`utils/bootstrap.c` bootstrap_fire),
  *         a fetch's refspecs (`sys/remote.c` remote_fetch), a diff's attribution
- *         index (`core/manifest.c` manifest_diff), the table with no binding a
- *         profile's need of a target is asked of (`core/profiles.c`
- *         profile_needs_target), a listing read to decide (`sys/filesystem.c`
- *         fs_remove_empty_dir, `sys/gitops.c` gitops_branches_exist and
- *         gitops_create_branch, `infra/epoch.c` epoch_walk), and a walk whose
- *         answer is an error (`sys/filesystem.c` fs_remove_dir).
+ *         index (`core/manifest.c` manifest_diff), a listing read to decide
+ *         (`sys/filesystem.c` fs_remove_empty_dir, `sys/gitops.c`
+ *         gitops_branches_exist and gitops_create_branch, `infra/epoch.c`
+ *         epoch_walk), and a walk whose answer is an error (`sys/filesystem.c`
+ *         fs_remove_dir).
  *
  *       - A handle's own. Made by its opener and freed by its closer: a printer's
  *         list (base/output.h output_list_t), a profile at a commit

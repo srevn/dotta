@@ -97,10 +97,10 @@
  *     the table hands out what it found and composes nothing, a name being the
  *     grammar's to spell (infra/label.h label_compose).
  *   - Where the asker's root of a label stands: mount_root_of, by label rather
- *     than by place — the view's contribution, add's receipt, whether a profile
- *     needs a target, every name a place has under the asker's roots, which the
- *     climb spells where the disk contradicts its claims there, and the root a
- *     capture's climb goes beneath, which add reads a capture's ancestors against.
+ *     than by place — the view's contribution, add's receipt, every name a place
+ *     has under the asker's roots, which the climb spells where the disk
+ *     contradicts its claims there, and the root a capture's climb goes beneath,
+ *     which add reads a capture's ancestors against.
  *   - Where a profile's claim stands (profile + storage -> filesystem):
  *     mount_resolve — that second find, then the join. A name is composed beneath
  *     a root, so resolving one places it back at the very path it was composed
@@ -254,14 +254,12 @@ typedef struct {
  *   - ERR_INVALID_ARG when a mount names no profile, or names a target that is
  *     not absolute and folded.
  *
- * Two production readers. core/manifest.h's manifest_mount_table shapes the state's
+ * One production reader: core/manifest.h's manifest_mount_table shapes the state's
  * rows — and a command's own binding, where the run brought one — into the array:
  * every verb reads the asker's own entries, so a table holding one binding would
  * answer its profile as the whole table does, and the one derivation is kept
  * because the rows a command's table is built from are the rows the view it later
- * joins by is built from (cmds/add.c). core/profiles.c's profile_needs_target
- * builds the table no state can produce — no mounts at all, HOME and the sentinel
- * alone — to ask a profile what it needs apart from what this machine binds.
+ * joins by is built from (cmds/add.c).
  *
  * @param arena       Arena for the table and its internal storage
  * @param mounts      Caller-declared mounts (may be NULL when count is 0)
@@ -376,13 +374,11 @@ const mount_root_t *mount_root_above(
  * gives the binding the tie. Never fails, allocates nothing.
  *
  * Readers: add's receipt, which names the place the custom/ names it captured
- * went under (cmds/add.c add_labels); the target mark, which asks the table no
- * state row can produce for each label a profile claims under (core/profiles.c
- * profile_needs_target); the climbs' look, which spells the name a place has
- * under each of the profile's roots strictly above it, to retire every derived
- * claim the disk contradicts there (core/profiles.c profile_look_rung); and add's
- * ancestry refusal, the root a captured name's label resolves to, beneath which
- * the capture's climb goes (cmds/add.c add_refuse_ancestry).
+ * went under (cmds/add.c add_labels); the climbs' look, which spells the name a
+ * place has under each of the profile's roots strictly above it, to retire every
+ * derived claim the disk contradicts there (core/profiles.c profile_look_rung);
+ * and add's ancestry refusal, the root a captured name's label resolves to, beneath
+ * which the capture's climb goes (cmds/add.c add_refuse_ancestry).
  */
 const mount_root_t *mount_root_of(
     const mount_table_t *table,

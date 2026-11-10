@@ -65,12 +65,11 @@ typedef enum {
 } label_t;
 
 /**
- * The labels' arity, for a walk over them (the grammar's own, cmds/add.c
- * add_labels, core/profiles.c profile_needs_target and profile_look_rung) and
- * for an array with one slot per label (label_words itself, that receipt's counts,
- * and the labels profile_needs_target notes). A macro, not an enumerator, so
- * the type holds no sentinel: every label_t a reader holds subscripts label_words
- * in range.
+ * The labels' arity, for a walk over them (the grammar's own, cmds/add.c add_labels
+ * and core/profiles.c profile_look_rung) and for an array with one slot per label
+ * (label_words itself, and that receipt's counts). A macro, not an enumerator,
+ * so the type holds no sentinel: every label_t a reader holds subscripts
+ * label_words in range.
  */
 #define LABEL_COUNT (LABEL_CUSTOM + 1)
 
@@ -192,13 +191,13 @@ bool label_prefixes(const char *s);
  * home/ always does and root/ and custom/ do unless the invoker is root
  * (core/metadata.c metadata_capture_ownership), and which rule placed the root
  * a relocated claim lands under (core/workspace.c workspace_analyze_orphans) —
- * three that only index by it: add's receipt counting names by their label
- * (cmds/add.c add_labels), a profile's need of a target noting the labels it
- * claims under (core/profiles.c profile_note_label), and add's ancestry refusal
- * asking for the root a captured name's label resolves to (cmds/add.c
- * add_refuse_ancestry) — and two that compare it: a contribution's places, which
- * ask whether two claims share a label (core/manifest.c manifest_places), and
- * the first observations a flush could not name, each kept by the capture's whole
+ * two that only index by it: add's receipt counting names by their label
+ * (cmds/add.c add_labels), and add's ancestry refusal asking for the root a
+ * captured name's label resolves to (cmds/add.c add_refuse_ancestry) — and three
+ * that compare it: a contribution's places, which ask whether two claims share
+ * a label (core/manifest.c manifest_places), a profile's counts, which tally
+ * what it holds under custom/ (core/profiles.c profile_count_claim), and the
+ * first observations a flush could not name, each kept by the capture's whole
  * input, the label among it (core/workspace.c workspace_flush).
  */
 label_t label_of(const char *storage_path);

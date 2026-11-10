@@ -126,22 +126,20 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
     /* Print available (disabled) profiles, marking the ones that need a target:
      * such a profile is enabled only with one, so this is the mark on exactly
      * the profile clone and --all left here, and the answer is the profile's
-     * own (core/profiles.h profile_needs_target). One handle serves both: the
-     * count and the mark walk one head and parse its sheet once, and a row that
-     * would not count says so rather than marking nothing in silence. */
+     * own, its counts' custom/ tally (core/profiles.h profile_counts_t). One
+     * walk counts the row and marks it, and a row that would not count says so
+     * rather than marking nothing in silence. */
     if (available.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available.count; i++) {
             const char *name = available.entries[i];
 
-            /* What the profile holds, and whether it needs a target, both asked
-             * of the one handle loaded at its head */
+            /* What the profile holds, counted over its head (core/profiles.h
+             * profile_counts) */
             profile_t *profile = NULL;
             profile_counts_t count = { 0 };
-            bool needs_target = false;
             error_t row_err = profile_load(repo, name, &profile);
             if (!row_err) row_err = profile_counts(profile, &count);
-            if (!row_err) row_err = profile_needs_target(profile, &needs_target);
             profile_free(profile);
 
             /* Name what the profile holds where it reads, otherwise say so: the
@@ -159,7 +157,7 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
                 output_print(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)", name, counts
                 );
-                if (needs_target) {
+                if (count.custom_file_count + count.custom_directory_count > 0) {
                     output_print(out, OUTPUT_NORMAL, " {dim}(needs a target){reset}");
                 }
             }
@@ -661,22 +659,29 @@ static error_t profile_enable(
         /* A profile that needs a target is enabled only with one: the binding
          * is part of the enablement, and a row without one would hold every custom/
          * claim while the screens said "enabled". Whether it needs one is the
-         * profile's own answer, the labels its walk shows asked of a table with
-         * no binding (core/profiles.h profile_needs_target), asked whatever the
-         * flag says, so the profile is the earlier question: a tree Git cannot
-         * read, or a sheet this build cannot, is the error here, before the row
-         * is written, as it would be the view build's. Skipped, whatever the
-         * request shape, in the words clone skips it with (cmds/clone.c cmd_clone):
-         * the target it needs names the flag that gives one, and "not enabled"
-         * tells it from an enabled row the same fact is said of above. A run
-         * that enabled nothing ends in the error below. */
+         * profile's own answer, what its counts hold under custom/ (core/profiles.h
+         * profile_counts_t), asked whatever the flag says, so the profile is
+         * the earlier question: a tree Git cannot read, or a sheet this build
+         * cannot, is the error here, before the row is written, as it would be
+         * the view build's. A custom/ chain of derived claims alone holds nothing
+         * there, and needs none. Skipped, whatever the request shape, in the
+         * words clone skips it with (cmds/clone.c cmd_clone): the target it needs
+         * names the flag that gives one, and "not enabled" tells it from an enabled
+         * row the same fact is said of above. A run that enabled nothing ends
+         * in the error below.
+         *
+         * The rule is the enablers' — this one, clone's and the editor's gate —
+         * and no invariant of the rows: the editor lets a row be saved unbound
+         * (cmds/interactive.c plan_classify says why), and a sync or a re-bind
+         * can leave an enabled row needing one, a lifecycle stage the health
+         * channel names, not an inconsistency. */
         profile_t *profile = NULL;
-        bool needs_target = false;
+        profile_counts_t count = { 0 };
         err = profile_load(repo, name, &profile);
-        if (!err) err = profile_needs_target(profile, &needs_target);
+        if (!err) err = profile_counts(profile, &count);
         profile_free(profile);
         if (err) return err;
-        if (needs_target && !target) {
+        if (count.custom_file_count + count.custom_directory_count > 0 && !target) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL,

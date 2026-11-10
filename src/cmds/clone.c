@@ -472,22 +472,22 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * cannot take one (enable's --target names a single profile): it is left
      * fetched and disabled, said in the sentence profile enable refuses it with
      * (cmds/profile.c profile_enable), the command that places it the help's.
-     * The answer is the profile's own — the labels its walk shows, asked of a
-     * table with no binding (core/profiles.h profile_needs_target) — and its
-     * failures are the clone's: a tree Git cannot read, or a sheet this build
-     * cannot, fails the clone whole and rolls the store back, as the build in
-     * initialize_state did for a portable profile and now does for every one. */
+     * The answer is the profile's own — what its counts hold under custom/
+     * (core/profiles.h profile_counts_t) — and its failures are the clone's: a
+     * tree Git cannot read, or a sheet this build cannot, fails the clone whole
+     * and rolls the store back, as the build in initialize_state did for a portable
+     * profile and now does for every one. */
     string_array_t to_enable;
     string_array_init(&to_enable, ctx->arena, 0);
     for (size_t i = 0; i < landed.count; i++) {
         const char *name = landed.entries[i];
         profile_t *profile = NULL;
-        bool needs_target = false;
+        profile_counts_t count = { 0 };
         err = profile_load(repo, name, &profile);
-        if (!err) err = profile_needs_target(profile, &needs_target);
+        if (!err) err = profile_counts(profile, &count);
         profile_free(profile);
         if (err) goto cleanup;
-        if (needs_target) {
+        if (count.custom_file_count + count.custom_directory_count > 0) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL,

@@ -228,14 +228,18 @@ static void read_targets(git_repository *repo, state_t *deploy_state, view_t *vi
          * gated, its mark the branch it lacks (row_render) */
         if (it->missing) continue;
 
-        /* The need, absorbed (above), asked of the profile at its head: the error
-         * is dropped, one per row whose profile will not read. */
+        /* The need, absorbed (above): what the profile holds under custom/, counted
+         * at its head (core/profiles.h profile_counts_t), the error dropped,
+         * one per row whose profile will not read. */
         profile_t *profile = NULL;
+        profile_counts_t count = { 0 };
         error_t err = profile_load(repo, it->name, &profile);
-        if (!err) err = profile_needs_target(profile, &it->needs_target);
+        if (!err) err = profile_counts(profile, &count);
         profile_free(profile);
         if (err) {
             it->unreadable = true;
+        } else {
+            it->needs_target = count.custom_file_count + count.custom_directory_count > 0;
         }
     }
 }

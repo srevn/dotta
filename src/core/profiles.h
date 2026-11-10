@@ -311,15 +311,14 @@ error_t profile_open(const char *name, const git_commit *commit, profile_t **out
  * manifest_build).
  *
  * Readers: cmds/remove.c remove_overlaps and cmds/revert.c revert_select_profile,
- * which load every local profile; cmds/ignore.c ignore_test; the questions asked
- * of a head by name, what it holds and whether it needs a target — cmds/profile.c
- * profile_list and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c
- * read_targets, cmds/key.c key_status; the directory claims a completion offers
- * at a profile's head — beside its files (cmds/completion.c completion_directories)
- * and remove's own (cmds/remove.c remove_complete); and the head a verb reads
- * where no commit is named — export's (cmds/export.c cmd_export) and show's, of
- * the profile named or of the one whose row stands at the path (cmds/show.c
- * cmd_show).
+ * which load every local profile; cmds/ignore.c ignore_test; the question asked
+ * of a head by name, what it holds — cmds/profile.c profile_list and
+ * profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c read_targets,
+ * cmds/key.c key_status; the directory claims a completion offers at a profile's
+ * head — beside its files (cmds/completion.c completion_directories) and remove's
+ * own (cmds/remove.c remove_complete); and the head a verb reads where no commit
+ * is named — export's (cmds/export.c cmd_export) and show's, of the profile named
+ * or of the one whose row stands at the path (cmds/show.c cmd_show).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param name The profile's name, which its branch is named by (must not be NULL;
@@ -429,22 +428,22 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * under either.
  *
  * Readers: core/manifest.c manifest_contribute; profile_counts, its tally; the
- * labels a profile claims under (profile_needs_target); the bytes a profile line
- * weighs (cmds/list.c list_profiles, through list_size_claim); the file listing's
- * rows, read TOLERANT (cmds/list.c list_files, through list_collect_file); export's
- * whole and name arms, read TOLERANT, the second keeping the claims beneath its
- * name (cmds/export.c export_collect_profile and export_collect_storage, through
- * export_collect_claim); the directory claims a completion offers beside a
- * profile's files (cmds/completion.c completion_directories, through
- * completion_offer_directory), and those remove's completion offers as names,
- * before profile_contradicted's (cmds/remove.c remove_complete, through
- * remove_offer_directory); and every claim the profile makes, a derived one passed
- * by, before profile_contradicted's, through one visitor — the universe a removal's
- * arguments are matched against, read STRICT, and every claim a deletion takes,
- * read TOLERANT (cmds/remove.c remove_list_claims, through remove_collect_claim,
- * for remove_resolve and remove_profile); and every claim of a draft's base a
- * restore may take, before profile_contradicted's, read STRICT (cmds/revert.c
- * revert_restore_path, through revert_take_claim).
+ * bytes a profile line weighs (cmds/list.c list_profiles, through list_size_claim);
+ * the file listing's rows, read TOLERANT (cmds/list.c list_files, through
+ * list_collect_file); export's whole and name arms, read TOLERANT, the second
+ * keeping the claims beneath its name (cmds/export.c export_collect_profile and
+ * export_collect_storage, through export_collect_claim); the directory claims a
+ * completion offers beside a profile's files (cmds/completion.c
+ * completion_directories, through completion_offer_directory), and those remove's
+ * completion offers as names, before profile_contradicted's (cmds/remove.c
+ * remove_complete, through remove_offer_directory); and every claim the profile
+ * makes, a derived one passed by, before profile_contradicted's, through one
+ * visitor — the universe a removal's arguments are matched against, read STRICT,
+ * and every claim a deletion takes, read TOLERANT (cmds/remove.c
+ * remove_list_claims, through remove_collect_claim, for remove_resolve and
+ * remove_profile); and every claim of a draft's base a restore may take, before
+ * profile_contradicted's, read STRICT (cmds/revert.c revert_restore_path, through
+ * revert_take_claim).
  *
  * @param profile Handle (must not be NULL); its sheet is read by the first question
  *                that needs it, a walk or profile_load_sheet
@@ -509,8 +508,8 @@ error_t profile_contradicted(
 );
 
 /**
- * What a profile holds, counted: the claims its walk shows, by kind, and the
- * files among them stamped encrypted
+ * What a profile holds, counted: the claims its walk shows, by kind, the files
+ * among them stamped encrypted, and those under custom/ by kind
  *
  * Every blob a file, and every tracked directory claim the walk shows a directory.
  * An ancestor claim is the way to content, never content, and counting it would
@@ -525,13 +524,25 @@ error_t profile_contradicted(
  * its path, a blob above it, or claims beneath it, the profile's own among them
  * (docs/profiles.md, core/manifest.c manifest_layer).
  *
+ * The custom/ tally is what a binding places, the one label no root of this
+ * machine's holds alone (infra/label.h LABEL_CUSTOM): the profile's fact and
+ * not this machine's, so it is answered where no row is in scope (clone, before
+ * its state is written) and no row this machine writes moves it. It is the view's
+ * own count by another route: for a profile the table binds nothing for, the
+ * view records on its health exactly the claims tallied here, by the same rule
+ * (core/manifest.h manifest_unbound), and tests/test-profiles.c holds the two
+ * together. A custom/ chain of derived claims alone — a hand commit's residue,
+ * which a commit through dotta prunes — holds nothing there.
+ *
  * A count reads no blob. The bytes the files stand for are a listing's to fold,
  * beside the rows that must sum to them (cmds/list.c list_size_claim).
  */
 typedef struct {
-    size_t file_count;        /* The blob claims the walk shows */
-    size_t directory_count;   /* The tracked directory claims it shows */
-    size_t encrypted_count;   /* The blob claims among them stamped encrypted */
+    size_t file_count;               /* The blob claims the walk shows */
+    size_t directory_count;          /* The tracked directory claims it shows */
+    size_t encrypted_count;          /* The blob claims among them stamped encrypted */
+    size_t custom_file_count;        /* The blob claims among them under custom/ */
+    size_t custom_directory_count;   /* The tracked directory claims among them under custom/ */
 } profile_counts_t;
 
 /**
@@ -549,14 +560,22 @@ typedef struct {
  * `out` is written once, on success alone: a walk that stopped short leaves it
  * as the caller supplied it, so no screen prints half a count.
  *
+ * Cost: one walk of the profile, whose sheet a question before it may have parsed
+ * already, the handle keeping it — about 0.13 µs a claim past the parse, measured
+ * at 0.165.12.
+ *
  * Readers: the screens that name what a profile holds — `dotta list -v`'s profile
  * rows and the file listing's no-files arm (cmds/list.c list_profiles, list_files),
- * `profile list`'s enabled and available rows (cmds/profile.c profile_list),
- * the deletion's preview and confirmation (cmds/remove.c remove_profile), and
- * the encrypted files `key status` sums over the enabled profiles (cmds/key.c
- * key_status). A reader not on this list is a bug, and a screen that counts what
- * a profile holds beside this one is the second producer these counts exist to
- * prevent.
+ * `profile list`'s enabled and available rows, the custom/ tally its available
+ * row's mark (cmds/profile.c profile_list), the deletion's preview and confirmation
+ * (cmds/remove.c remove_profile), and the encrypted files `key status` sums over
+ * the enabled profiles (cmds/key.c key_status); and the custom/ tally where a
+ * profile is enabled only with a target — `profile enable` and clone, each asking
+ * it before the row is written (cmds/profile.c profile_enable, cmds/clone.c
+ * cmd_clone), and the editor's seed, its mark and its OFF→ON gate, which absorbs
+ * a profile that will not read as the row's (cmds/interactive.c read_targets).
+ * A reader not on this list is a bug, and a screen that counts what a profile
+ * holds beside this one is the second producer these counts exist to prevent.
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param out The counts (must not be NULL; written on success alone)
@@ -564,69 +583,6 @@ typedef struct {
  *         under "Cannot read profile '%s' at commit %s"
  */
 error_t profile_counts(profile_t *profile, profile_counts_t *out);
-
-/**
- * Does this profile need a deployment target?
- *
- * Definitional, not a rule of its own: the labels its walk shows claims under,
- * each asked of the one table no state row can produce — HOME and the root
- * sentinel, no binding — for the profile's root of it (infra/mount.h
- * mount_root_of). A label with no root there is one only a binding places, so a
- * claim under it is the answer: every home/ and root/ claim has its root there;
- * a custom/ claim — a blob under custom/ or at the word itself, a custom/ item
- * of the sheet, tracked or derived — has none. An empty custom tree needs none,
- * by the same reading: the walk shows no claim in it, and a binding would place
- * nothing for it.
- *
- * It is the view's own answer by another route, and agrees with it by construction:
- * the view's contribution places every claim the same walk shows, and records
- * on the health slice exactly the claims whose label the table has no root of
- * (core/manifest.c manifest_place_claim, through mount_resolve, whose absence
- * is mount_root_of's). So a view built over the profile under that table holds
- * an unbound claim exactly where this says yes (tests/test-profiles.c holds the
- * two together), and none is built here.
- *
- * The profile's fact and not this machine's: asked under a table with no binding
- * so that what the profile needs and what this machine binds are two facts, the
- * first answerable where the second is not in scope (clone holds no state at
- * its skip), and unchanged by a row this machine writes.
- *
- * Complete or an error: a sheet this build cannot read, and a tree the walk refuses
- * — a name outside the storage grammar, a subtree the store lacks — fail here,
- * the failures the next view build over the same profile would fail on, met before
- * `profile enable` writes the row. A profile that will not load is its caller's,
- * which loads it (profile_load). A caller that must not fail whole on one profile
- * absorbs the error and renders the row as unreadable (cmds/interactive.c
- * read_targets), as cmds/profile.c's listing already does for its counts' error.
- *
- * Readers: the three enablers' skip — `profile enable` (cmds/profile.c
- * profile_enable), clone (cmds/clone.c cmd_clone), the editor's OFF→ON gate —
- * and the two marks, the listing's available rows and the editor's. The listing
- * asks it of the handle its row counted at (cmds/profile.c profile_list); the
- * editor's two read the one answer its rows keep (cmds/interactive.c read_targets).
- * The rule these keep is "a profile that needs a target is not enabled without
- * one", and its scope is theirs alone, not an invariant of the rows: the editor
- * prompts and lets a row be saved unbound (cmds/interactive.c plan_classify says
- * why), add's implicit enable authors no such row (a created profile's custom/
- * claim requires --target, which the row takes), sync and a re-bind can leave
- * an enabled row needing one — an enabled row with no binding is a lifecycle
- * stage the health channel names, not an inconsistency.
- *
- * Cost: one walk of the profile — whose sheet a question before it may have parsed
- * already, the handle keeping it — and a two-root table in a frame of the call's
- * own: the product is a bool and nothing outlives the call (include/runtime.h
- * "Memory", no arena in reach). Measured at 0.165.12, a walk past the parse costs
- * about 0.13 µs a claim; the view built here before cost 2.5 ms per 1,000 paths.
- *
- * @param profile Handle, at its head as every reader loads it (must not be NULL;
- *                its sheet read through it)
- * @param needs_target Output flag: the profile holds a claim under a label the
- *                     binding-less table has no root of (must not be NULL; false
- *                     after an error)
- * @return Error or NULL on success: the sheet's, in the loader's words; the tree's,
- *         under "Cannot read profile '%s' at commit %s"
- */
-error_t profile_needs_target(profile_t *profile, bool *needs_target);
 
 /**
  * What stands at one name: the four things a profile can hold there

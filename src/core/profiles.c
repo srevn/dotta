@@ -20,38 +20,37 @@
  * (profile_directory_item), decoded as the walk decodes it
  * (profile_decode_directory). The seal at a name is the blob's, asked of its
  * two witnesses: its stamp through the same decode, its bytes where the stamp
- * says none (profile_sealed). The counts and the need of a target are the walk,
- * folded (profile_counts, profile_needs_target). A name's departure is its
- * history's one walk from a head (sys/history.h), read through the one table of
- * what each removal's action means (profile_departures). The draft is three things
- * in an arena of its own: a sys/stage, opened at the profile's head, over Git's
- * empty tree for a profile the commit creates, or over a merge of the head with
- * another commit; the base, the profile at the tree the stage opened, its sheet
- * read at the open; and the sheet the commit carries — that sheet copied, or
- * the claims a merge composed. An admission asks a name chosen before its bytes
- * of the copy and of the tree as chosen so far, claiming a directory in the copy
- * as it admits it; a removal edits the stage and the copy; a capture authors
- * its claim off the look, asks the base what stands in its way, puts its bytes
- * and writes the claim into the copy, and the climbs claim the way to a leaf
- * off the disk — the first capture where the profile does not pass through a
- * rung yet, the named re-derivation again where a run's paths select one; a restore
- * has content read the commit's blob once — its stamp, and its reseal where its
- * name moved — asks the base the same, puts its entry — at its id, or as the
- * bytes the stage writes at its commit — and writes the commit's claim whole,
- * and its way where the profile does not pass through it, into the copy, a
- * directory's asking the tree the commit would record for room first; a commit's
- * whole tree takes the index whole but the sheet's own name, settled back to
- * the base's as a merge settles it, and its sheet the copy's place; dotta's own
- * file is put beside the claims. A merge composes its tree first — each name
- * Git could not compose settled by a rule, or for the run's side — then its claims,
- * one pass a kind over the three sides' sheets in step, each claim a side moved
- * composed from the three sides' words, each read over its own tree, and standing
- * where the merged tree leaves it room. The change test holds each document against
- * the one the draft opened, and the changes merge what each says moved into the
- * explicit claims the commit adds, updates and removes; and the commit, where
- * an edit moved either, prunes the sheet it carries, saves it where its claims
- * are no longer the base's, renders its message from the writer's words over
- * those changes and commits.
+ * says none (profile_sealed). The counts are the walk, folded (profile_counts).
+ * A name's departure is its history's one walk from a head (sys/history.h), read
+ * through the one table of what each removal's action means (profile_departures).
+ * The draft is three things in an arena of its own: a sys/stage, opened at the
+ * profile's head, over Git's empty tree for a profile the commit creates, or
+ * over a merge of the head with another commit; the base, the profile at the
+ * tree the stage opened, its sheet read at the open; and the sheet the commit
+ * carries — that sheet copied, or the claims a merge composed. An admission asks
+ * a name chosen before its bytes of the copy and of the tree as chosen so far,
+ * claiming a directory in the copy as it admits it; a removal edits the stage
+ * and the copy; a capture authors its claim off the look, asks the base what
+ * stands in its way, puts its bytes and writes the claim into the copy, and the
+ * climbs claim the way to a leaf off the disk — the first capture where the profile
+ * does not pass through a rung yet, the named re-derivation again where a run's
+ * paths select one; a restore has content read the commit's blob once — its stamp,
+ * and its reseal where its name moved — asks the base the same, puts its entry
+ * — at its id, or as the bytes the stage writes at its commit — and writes the
+ * commit's claim whole, and its way where the profile does not pass through it,
+ * into the copy, a directory's asking the tree the commit would record for room
+ * first; a commit's whole tree takes the index whole but the sheet's own name,
+ * settled back to the base's as a merge settles it, and its sheet the copy's
+ * place; dotta's own file is put beside the claims. A merge composes its tree
+ * first — each name Git could not compose settled by a rule, or for the run's
+ * side — then its claims, one pass a kind over the three sides' sheets in step,
+ * each claim a side moved composed from the three sides' words, each read over
+ * its own tree, and standing where the merged tree leaves it room. The change
+ * test holds each document against the one the draft opened, and the changes
+ * merge what each says moved into the explicit claims the commit adds, updates
+ * and removes; and the commit, where an edit moved either, prunes the sheet it
+ * carries, saves it where its claims are no longer the base's, renders its message
+ * from the writer's words over those changes and commits.
  */
 
 #include "core/profiles.h"
@@ -820,7 +819,10 @@ error_t profile_contradicted(
  *
  * A blob is a file, whatever its type, counted again where its stamp says
  * encrypted; a directory claim counts where the profile tracks it, and an ancestor
- * claim not at all (profile_counts_t).
+ * claim not at all (profile_counts_t). Either counts again under custom/, the
+ * label a binding places: every name the walk shows stands under a label, a blob's
+ * past the walk's own gate and shape check, a directory claim's key past the
+ * sheet's parse (the decode).
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
  * @param payload The counts so far (profile_counts_t)
@@ -832,8 +834,10 @@ static error_t profile_count_claim(const profile_claim_t *claim, void *payload) 
     if (claim->type != PATH_TYPE_DIRECTORY) {
         counts->file_count++;
         if (claim->encrypted) counts->encrypted_count++;
+        if (label_of(claim->storage_path) == LABEL_CUSTOM) counts->custom_file_count++;
     } else if (claim->tracked) {
         counts->directory_count++;
+        if (label_of(claim->storage_path) == LABEL_CUSTOM) counts->custom_directory_count++;
     }
 
     return NULL;
@@ -856,58 +860,6 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out) {
 
     *out = counts;
     return NULL;
-}
-
-/**
- * Walk visitor: the label a claim stands under, noted
- *
- * @param claim One claim, decoded (borrowed — valid for the call only)
- * @param payload The labels noted so far (bool[LABEL_COUNT])
- * @return NULL: noting a label fails nowhere
- */
-static error_t profile_note_label(const profile_claim_t *claim, void *payload) {
-    bool *claimed = payload;
-
-    /* Every name the walk shows is under a label: a blob's passed the walk's
-     * own gate and shape check, a directory claim's key the sheet's parse
-     * (core/profiles.h, the decode) */
-    claimed[label_of(claim->storage_path)] = true;
-
-    return NULL;
-}
-
-error_t profile_needs_target(profile_t *profile, bool *needs_target) {
-    CHECK_NULL(profile);
-    CHECK_NULL(needs_target);
-
-    *needs_target = false;
-
-    /* The labels the profile claims anything under, read as the view is shown
-     * them: one strict walk, so a sheet that will not load and a tree the walk
-     * refuses are the answer's failure here, as they are the view build's */
-    bool claimed[LABEL_COUNT] = { false };
-    error_t err = profile_walk(
-        profile, PROFILE_READ_STRICT, profile_note_label, claimed
-    );
-    if (err) return err;
-
-    /* Each asked of the table no state row can produce — HOME and the sentinel
-     * alone — for the profile's own root of it, in a frame of the call's own,
-     * the product being a bool: one with none there is placed by a binding alone,
-     * and which labels a binding places is the table's to say (infra/mount.h
-     * mount_table_build), so a label it learns to bind moves the answer with it
-     * and no label is named here */
-    arena_t *frame = arena_create(0);
-    mount_table_t *mounts = NULL;
-    err = mount_table_build(frame, NULL, 0, &mounts);
-    for (label_t label = LABEL_HOME; !err && label < LABEL_COUNT; label++) {
-        if (claimed[label] && !mount_root_of(mounts, profile->name, label)) {
-            *needs_target = true;
-        }
-    }
-    arena_free(frame);
-
-    return err;
 }
 
 error_t profile_entry(

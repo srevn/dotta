@@ -1245,7 +1245,7 @@ static void status_print_workspace(
                      * two an orphan is let go for here (cleanup_verdict) */
                     if (item->occupant == FS_OCCUPANT_NONE) {
                         legend = "already gone from disk";
-                    } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+                    } else if (item->squatter_above) {
                         legend = "not looked at, beneath a squatted directory";
                     }
                     break;

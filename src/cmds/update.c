@@ -1695,8 +1695,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
              * dotta's own copy Git moved past — and a climb would commit what
              * the occupant answers as the user's word about the chain: a rung
              * retired, or a link target's attributes, on every machine. */
-            if (item->displaced != WORKSPACE_DISPLACED_NONE &&
-                item->displaced != WORKSPACE_DISPLACED_DERIVED) {
+            if (item->squatter_above &&
+                item->squatter_above->claim != WORKSPACE_DISPLACED_DERIVED) {
                 continue;
             }
 
@@ -1711,16 +1711,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
              * which at that place names the re-derivation this test refuses: a
              * named run there re-derives nothing, and no screen names moving
              * the node aside (stated) */
-            if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
-                const workspace_squatted_t *above = workspace_squatted_ancestor(
-                    ws, item->filesystem_path
-                );
+            if (item->squatter_above) {
                 const string_array_t *profiles = manifest_profiles(manifest);
 
                 size_t p = 0;
                 for (; p < profiles->count; p++) {
                     const manifest_row_t *held = manifest_lookup_claim(
-                        manifest, profiles->entries[p], above->filesystem_path
+                        manifest, profiles->entries[p], item->squatter_above->filesystem_path
                     );
                     if (held && !manifest_is_derived(held)) break;
                 }

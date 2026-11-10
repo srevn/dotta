@@ -198,8 +198,8 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
  * What becomes of a planned orphan, read off the item alone
  *
  * The table and its rationale are in cleanup.h. Every input is a fact the workspace
- * established once at load and left on the item — its occupant, state, displaced
- * class, fault and divergence bits: no syscall.
+ * established once at load and left on the item — its occupant, state, the squatter
+ * above it, fault and divergence bits: no syscall.
  */
 cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     if (item->occupant == FS_OCCUPANT_NONE) {
@@ -226,7 +226,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
         return CLEANUP_RELEASED;
     }
 
-    if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+    if (item->squatter_above) {
         /* A squatter stands above the path: dotta's copy went with the real
          * directory, and nothing at the path was looked at — not dotta's to remove,
          * --force included. The path stays, the record retires: the same letting-go
@@ -317,7 +317,7 @@ static bool cleanup_emptied(const workspace_t *ws, const hashmap_t *prunable, co
 
         /* Not there: gone at the load, or displaced — its squatter, which stands
          * in the directory, is the one whose fate decides */
-        if (orphan->occupant == FS_OCCUPANT_NONE || orphan->displaced != WORKSPACE_DISPLACED_NONE) {
+        if (orphan->occupant == FS_OCCUPANT_NONE || orphan->squatter_above) {
             continue;
         }
         if (!hashmap_has(prunable, orphan->filesystem_path)) return false;

@@ -103,8 +103,7 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * skips it (DEPLOY_SKIP_UNREADABLE). Left out of the plan either
              * would fall to the clean bucket, which adoption reads, and adopting
              * a path nobody looked at would take ownership of a stranger's file. */
-            return item->displaced != WORKSPACE_DISPLACED_NONE ||
-                   item->fault != WORKSPACE_FAULT_NONE ||
+            return item->squatter_above || item->fault != WORKSPACE_FAULT_NONE ||
                    (item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
@@ -235,37 +234,34 @@ typedef struct {
  * with it. Asked of a row -e does not name, and of no other: a row -e names reaches
  * nothing.
  *
- * Dotta's node is the squatter whose class the row carries (core/workspace.h
- * workspace_displaced_t: STALE, CONFLICT), as a row beneath a view row's squatter
- * of dotta's own copy carries that one's: the outermost squatter above the row,
- * which a node always is, one above it having withheld its look — lent by the
- * workspace (workspace_squatted_ancestor) and found among the orphans by its
- * path, a scan past copies that never match it, the rows beneath a node standing
- * beneath no blob; beneath a view row's squatter it finds none. The copies are
- * one block of the list, which holds them in path order, by its lower bound
- * (base/path.h path_beneath_order), as core/workspace.c workspace_items_beneath
- * bounds its arrays: every orphan beneath a blob row is a copy, no node lying
- * beneath a blob, whose rows beneath would stand beneath it. A directory row
- * reaches no copy: the copies beneath its path lie beneath a blob row beneath
- * it, that row's.
+ * Dotta's node is the squatter the row keeps above it where its class is a node's
+ * (core/workspace.h workspace_item_t's squatter_above; workspace_displaced_t:
+ * STALE, CONFLICT), as a row beneath a view row's squatter of dotta's own copy
+ * keeps that one: the outermost squatter above the row, which a node always is,
+ * one above it having withheld its look — found among the orphans by its path,
+ * a scan past copies that never match it, the rows beneath a node standing beneath
+ * no blob; beneath a view row's squatter it finds none. The copies are one block
+ * of the list, which holds them in path order, by its lower bound (base/path.h
+ * path_beneath_order), as core/workspace.c workspace_items_beneath bounds its
+ * arrays: every orphan beneath a blob row is a copy, no node lying beneath a
+ * blob, whose rows beneath would stand beneath it. A directory row reaches no
+ * copy: the copies beneath its path lie beneath a blob row beneath it, that row's.
  *
  * @param nodes The landing's orphans in the making, in path order (NULL where
  *        count is 0)
  * @param count Their count
- * @param ws Workspace, for the squatter above the row (must not be NULL)
  * @param item An active item in scope that -e does not name (must not be NULL)
  * @return Whether the user's word spares one in the row's way
  */
 static bool deploy_reach(
-    deploy_node_t *nodes, size_t count, const workspace_t *ws, const workspace_item_t *item
+    deploy_node_t *nodes, size_t count, const workspace_item_t *item
 ) {
-    if (item->displaced == WORKSPACE_DISPLACED_STALE ||
-        item->displaced == WORKSPACE_DISPLACED_CONFLICT) {
-        const char *squatter =
-            workspace_squatted_ancestor(ws, item->filesystem_path)->filesystem_path;
-
+    if (item->squatter_above && (item->squatter_above->claim == WORKSPACE_DISPLACED_STALE ||
+        item->squatter_above->claim == WORKSPACE_DISPLACED_CONFLICT)) {
         for (size_t i = 0; i < count; i++) {
-            if (strcmp(nodes[i].item->filesystem_path, squatter) == 0) {
+            if (strcmp(
+                nodes[i].item->filesystem_path, item->squatter_above->filesystem_path
+                ) == 0) {
                 nodes[i].reached = true;
                 return nodes[i].spared != NULL;
             }
@@ -405,7 +401,7 @@ deploy_plan_t *deploy_plan_build(
         skip_reason_t skip = SKIP_NONE;
         if (scope_is_excluded(scope, item->storage_path, PATH_KIND_DIRECTORY)) {
             skip = SKIP_EXCLUDED;
-        } else if (deploy_reach(nodes, node_count, ws, item)) {
+        } else if (deploy_reach(nodes, node_count, item)) {
             skip = SKIP_KEPT;
         }
 
@@ -437,10 +433,9 @@ deploy_plan_t *deploy_plan_build(
         skip_reason_t skip = SKIP_NONE;
         if (scope_is_excluded(scope, item->storage_path, PATH_KIND_FILE)) {
             skip = SKIP_EXCLUDED;
-        } else if (deploy_reach(nodes, node_count, ws, item)) {
+        } else if (deploy_reach(nodes, node_count, item)) {
             skip = SKIP_KEPT;
-        } else if (skip_existing && item->displaced == WORKSPACE_DISPLACED_NONE &&
-            item->occupant != FS_OCCUPANT_NONE) {
+        } else if (skip_existing && !item->squatter_above && item->occupant != FS_OCCUPANT_NONE) {
             skip = SKIP_EXISTING;
         }
 
@@ -865,11 +860,12 @@ static bool node_is_replaced(const deploy_preflight_t *verdicts, const char *pat
  * real and writable, so the landing probe would wave the write through and the
  * run would deploy INTO the link's target, over whatever the user keeps there.
  * The walk notes the first beside its fates (deploy_preflight_t's skipped_absent);
- * the workspace lends the second whole (workspace_squatted_ancestor — the
- * outermost, fate-blind, with the claim the load noted beside it), and this splits
- * the answer by what the run itself decided about that ancestor, the premise
- * the plan carried by scope now asked of the verdicts, so it is exactly true.
- * One arm per fate, in the order asked, each writing what it decides:
+ * the row's item keeps the second (core/workspace.h workspace_item_t's
+ * squatter_above — the outermost, fate-blind, with the claim the load noted beside
+ * it), and this splits the answer by what the run itself decided about that
+ * ancestor, the premise the plan carried by scope now asked of the verdicts, so
+ * it is exactly true. One arm per fate, in the order asked, each writing what
+ * it decides:
  *
  *   absent        the walk skipped a directory row on the way for its pair, and
  *                 nothing stands there as the run will find it: no directory
@@ -897,11 +893,12 @@ static bool node_is_replaced(const deploy_preflight_t *verdicts, const char *pat
  *                 away, -e'd, or an ancestor claim the plan never holds): ANCESTOR
  *                 — the same fate a squatter no row names earns at check_landing,
  *                 an incapacity. The skip carries the squatter's class — the
- *                 load's own note of it, lent with the path — because the remedies
- *                 part ways there: a wider scope plans a tracked row's squatter,
- *                 and dotta's own copy at a rung, the view having moved past it
- *                 (promoted, deploy_plan_build); the named re-derivation retires
- *                 an ancestor claim the user's own squatter holds
+ *                 load's own note of it, kept with the path on the row's item —
+ *                 because the remedies part ways there: a wider scope plans a
+ *                 tracked row's squatter, and dotta's own copy at a rung, the
+ *                 view having moved past it (promoted, deploy_plan_build); the
+ *                 named re-derivation retires an ancestor claim the user's own
+ *                 squatter holds
  *
  * The class is written in the no-fate arm alone — a row beneath a skipped squatter
  * leaves the ancestry NONE, its remedy being that squatter's own line's
@@ -912,9 +909,8 @@ static bool node_is_replaced(const deploy_preflight_t *verdicts, const char *pat
  * The skip and *out_absent are written only when an ancestor decides — the caller's
  * zero skip and false stand otherwise, and the row judges itself.
  *
- * @param ws Workspace, for the squatted-ancestor answer (must not be NULL)
  * @param verdicts The fates decided so far (must not be NULL)
- * @param path Planned path (must not be NULL)
+ * @param item The planned row's item, the squatter above it kept (must not be NULL)
  * @param skip The row's skip in the making (must not be NULL): the reason — TYPE,
  *        ANCESTOR or OWNERSHIP — the named ancestor's prefix length, and where
  *        the run gave a squatter no fate its class
@@ -922,7 +918,7 @@ static bool node_is_replaced(const deploy_preflight_t *verdicts, const char *pat
  *        not be NULL)
  */
 static void check_ancestry(
-    const workspace_t *ws, const deploy_preflight_t *verdicts, const char *path,
+    const deploy_preflight_t *verdicts, const workspace_item_t *item,
     deploy_skip_t *skip, bool *out_absent
 ) {
     /* Absent: a directory row on the way that this run skipped for its pair, so
@@ -936,47 +932,45 @@ static void check_ancestry(
         const workspace_item_t *dir = verdicts->skipped_absent.entries[i];
         const size_t len = strlen(dir->filesystem_path);
 
-        if (path_beneath(path, dir->filesystem_path, len)) {
+        if (path_beneath(item->filesystem_path, dir->filesystem_path, len)) {
             skip->reason = DEPLOY_SKIP_OWNERSHIP;
             skip->ancestor = len;
             return;
         }
     }
 
-    const workspace_squatted_t *above = workspace_squatted_ancestor(ws, path);
-
-    if (!above) return;
+    if (!item->squatter_above) return;
 
     /* Deployable: the directory pass converges the ancestor first — or it is
      * dotta's node, which the way replaces before anything beneath it lands
      * (replace_node) */
-    if (directory_is_deployable(verdicts, above->filesystem_path) ||
-        node_is_replaced(verdicts, above->filesystem_path)) {
+    if (directory_is_deployable(verdicts, item->squatter_above->filesystem_path) ||
+        node_is_replaced(verdicts, item->squatter_above->filesystem_path)) {
         *out_absent = true;
         return;
     }
 
     /* The two fates left both skip the row, and both name the squatter */
-    skip->ancestor = above->len;
+    skip->ancestor = item->squatter_above->len;
 
     /* Skipped: the squatter's class, never its sentence — consent stays TYPE,
      * and an incapacity reads what every squatter is, not a directory */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
-        if (strcmp(s->item->filesystem_path, above->filesystem_path) == 0) {
+        if (strcmp(s->item->filesystem_path, item->squatter_above->filesystem_path) == 0) {
             skip->reason = deploy_skip_needs_force(s->reason)
                 ? DEPLOY_SKIP_TYPE : DEPLOY_SKIP_ANCESTOR;
             return;
         }
     }
 
-    /* No fate: ANCESTOR, and the squatter's class as the load noted it — the
-     * view's face lends a view claim alone, TRACKED to CONFLICT. A wider scope
-     * plans every squatter but one: the user's own at a rung (DERIVED), which
-     * no plan holds and the named re-derivation answers for */
+    /* No fate: ANCESTOR, and the squatter's class as the load noted it — a row's
+     * item keeps a view claim alone, TRACKED to CONFLICT. A wider scope plans
+     * every squatter but one: the user's own at a rung (DERIVED), which no plan
+     * holds and the named re-derivation answers for */
     skip->reason = DEPLOY_SKIP_ANCESTOR;
-    skip->ancestry = above->claim;
+    skip->ancestry = item->squatter_above->claim;
 }
 
 /**
@@ -1404,7 +1398,7 @@ error_t deploy_preflight(
         deploy_walk_t walk = { .ws = ws, .arena = arena, .skip = &skip };
         bool absent = false;
 
-        check_ancestry(ws, verdicts, path, &skip, &absent);
+        check_ancestry(verdicts, item, &skip, &absent);
 
         /* The path's rungs, unless its ancestry answered. A row planned as absent
          * is asked none of them: the path is empty once the directory pass has
@@ -1602,7 +1596,7 @@ error_t deploy_preflight(
         deploy_skip_t skip = { .item = item };
         bool absent = false;
 
-        check_ancestry(ws, verdicts, path, &skip, &absent);
+        check_ancestry(verdicts, item, &skip, &absent);
         if (skip.reason != DEPLOY_SKIP_NONE) {
             continue;   /* beneath a squatter that stays, or an absent row skipped for its pair */
         }

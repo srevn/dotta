@@ -269,7 +269,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
  *   a squatted ancestor above             RELEASED   both kinds. No look was
- *   (the item's displaced class)                     taken: a squatter stands
+ *   (the item's squatter_above)                      taken: a squatter stands
  *                                                    above the path and whatever
  *                                                    is there is not dotta's to
  *                                                    remove, --force included.

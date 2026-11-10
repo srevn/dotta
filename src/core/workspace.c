@@ -35,7 +35,7 @@
  * and every record in path order, a parent before every path beneath it: each
  * row analyzed as its kind asks, each record looked at for the phases after it
  * — and measured where it is dotta's own node above a row, for the class every
- * path beneath it carries. Every phase after a look reads the item rather than
+ * path beneath it reads. Every phase after a look reads the item rather than
  * looking again. The entries index holds the items whose look found their claim's
  * kind, the orphan analysis measures the copy off the item's own stat, or reads
  * the fault the look wrote where it failed, the scan's roots take their kind
@@ -142,12 +142,11 @@ struct workspace {
      * own file or link stands with a row beneath it, and every path it looked
      * at where a link stands with an orphan beneath it, with the claim. Noted
      * by the look that found one and asked before every look after it, which
-     * writes the answer onto the item it withholds the look from (workspace_look,
-     * workspace_squatter_above); lent whole to a caller holding a path
-     * (workspace_squatted_ancestor); asked at an item's own path for the orphans
-     * its note displaces (workspace_displaced_orphans); paths borrowed from the
-     * rows and the records. Almost always empty, which is what makes every ask
-     * free. */
+     * keeps the answer on the item it withholds the look from (workspace_look,
+     * workspace_squatter_above); asked at an item's own path for the orphans
+     * its note displaces (workspace_squatted, workspace_displaced_orphans); paths
+     * borrowed from the rows and the records. Items point into it, so it is never
+     * grown. Almost always empty, which is what makes every ask free. */
     workspace_squatted_t *squatted;              /* Arena; sized by the partition, never grown */
     size_t squatted_count;
 
@@ -404,7 +403,7 @@ static workspace_fault_t workspace_error_fault(error_t err) {
 }
 
 /**
- * The squatted directory that reaches `path`, or NULL — the reach rule as a scan
+ * The squatted directory that reaches an item, or NULL — the reach rule as a scan
  *
  * Proper ancestors only (path_beneath is strict), so a squatter is never its
  * own answer, and the outermost among those that reach the asker: the shortest
@@ -413,45 +412,42 @@ static workspace_fault_t workspace_error_fault(error_t err) {
  * (workspace_load), so its first hit is the outermost too; the scan asks for
  * the minimum all the same, which reads no order, so all the walk owes the notes
  * is that a parent's is made before any look beneath it. Whose claims reach the
- * asker is the rule's one input: what the view requires — a directory row's claim,
- * or dotta's node above a row — reaches every path beneath it, a record's memory
- * (WORKSPACE_DISPLACED_RECORD) the orphans alone (workspace_displaced_t).
+ * asker is the rule's one input, the item's row: what the view requires — a
+ * directory row's claim, or dotta's node above a row — reaches every path beneath
+ * it, a record's memory (WORKSPACE_DISPLACED_RECORD) the orphans alone
+ * (workspace_displaced_t). That is the one class read inside the walk, and no
+ * refinement moves a note to or from it (workspace_look_orphan,
+ * workspace_analyze_directory), so the scan reads it final.
  *
  * Nothing beneath a squatter that reaches it is looked at, so nothing there is
  * ever noted: the list holds nothing beneath what the view requires, and no
  * orphan's note beneath any. It can hold a row's note beneath a record claim —
  * a row beneath a path only a record remembers is looked at, the record's memory
  * not reaching it, and its look may find a squatter of its own: a directory row's,
- * or a link over another orphan — so the minimum is load-bearing for an orphan
- * beneath both, and costs the same scan either way.
+ * or a link over another orphan — so the minimum is the note an orphan beneath
+ * both keeps, the one its block answers by (workspace_displaced_orphans), and
+ * costs the same scan either way.
  *
  * Empty on every healthy load, which is what makes every ask free.
  *
  * Readers: workspace_look, before every look the load takes — it takes them all,
- * and writes the answer onto the item it withholds the look from —
- * workspace_squatted_ancestor, the view-only face that lends the answer whole
- * to a caller that needs the squatter itself (core/deploy.c check_ancestry and
- * deploy_plan_build, cmds/update.c cmd_update), and workspace_displaced_orphans,
- * of an item's own path: whether the note there is the outermost over the orphans
- * beneath it.
+ * and keeps the answer on the item it withholds the look from (workspace_item_t's
+ * squatter_above). A reader not on this list is a bug.
  *
  * @param ws Workspace (must not be NULL)
- * @param path The asker's path (must not be NULL)
- * @param orphan Whether the asker is an orphan, the one item a record's memory
- *        reaches
+ * @param item The asker, not yet looked at: a row's item, or an orphan's — the
+ *        one item a record's memory reaches (must not be NULL)
  */
 static const workspace_squatted_t *workspace_squatter_above(
-    const workspace_t *ws,
-    const char *path,
-    bool orphan
+    const workspace_t *ws, const workspace_item_t *item
 ) {
     const workspace_squatted_t *outermost = NULL;
 
     for (size_t i = 0; i < ws->squatted_count; i++) {
         const workspace_squatted_t *dir = &ws->squatted[i];
 
-        if (dir->claim == WORKSPACE_DISPLACED_RECORD && !orphan) continue;
-        if (path_beneath(path, dir->filesystem_path, dir->len) &&
+        if (dir->claim == WORKSPACE_DISPLACED_RECORD && item->row) continue;
+        if (path_beneath(item->filesystem_path, dir->filesystem_path, dir->len) &&
             (!outermost || dir->len < outermost->len)) {
             outermost = dir;
         }
@@ -461,25 +457,27 @@ static const workspace_squatted_t *workspace_squatter_above(
 }
 
 /**
- * Is `path` itself a squatted directory the load noted?
+ * The squatted directory an item's own look noted, or NULL
  *
- * Whether a look noted a squatter at its own item's path (workspace_look): the
- * twin of workspace_squatter_above, which answers the notes above a path. A scan
- * of the list, empty on every healthy load.
+ * The note at the item's own path (workspace_look), which no other item's look
+ * makes, a path being one item: the twin of workspace_squatter_above, which answers
+ * the notes above the item. A scan of the list, empty on every healthy load.
  *
  * Readers: workspace_displaced_orphans. A reader not on this list is a bug.
  *
  * @param ws Workspace (must not be NULL)
- * @param path The path asked about (must not be NULL)
+ * @param item The item asked about (must not be NULL)
  */
-static bool workspace_squatted(const workspace_t *ws, const char *path) {
+static const workspace_squatted_t *workspace_squatted(
+    const workspace_t *ws, const workspace_item_t *item
+) {
     for (size_t i = 0; i < ws->squatted_count; i++) {
-        if (strcmp(ws->squatted[i].filesystem_path, path) == 0) {
-            return true;
+        if (strcmp(ws->squatted[i].filesystem_path, item->filesystem_path) == 0) {
+            return &ws->squatted[i];
         }
     }
 
-    return false;
+    return NULL;
 }
 
 /**
@@ -666,13 +664,15 @@ static bool workspace_obstructs(const workspace_t *ws, const workspace_item_t *i
  * (core/workspace.h workspace_fault_t), which every phase after it reads and
  * none classes again.
  *
- * Readers of the notes: workspace_squatter_above, asked here before each look;
- * and core/deploy.c check_ancestry and deploy_plan_build and cmds/update.c
- * cmd_update, lent them through workspace_squatted_ancestor. The note is handed
- * back to the caller whose look made it, which alone may refine its class before
- * any look beneath reads it: the directory analysis a view row's, from the record,
- * and the join's look at a record dotta's node's, from its measure
- * (workspace_look_orphan). The file analysis has nothing to refine, and drops it.
+ * Readers of the notes: workspace_squatter_above, asked here before each look,
+ * its answer kept on the item it withholds the look from (core/workspace.h
+ * workspace_item_t's squatter_above, whose readers are listed there); and
+ * workspace_squatted, asked at an item's own path for the orphans its note
+ * displaces (workspace_displaced_orphans). The note is handed back to the caller
+ * whose look made it, which alone may refine its class before any look beneath
+ * reads it: the directory analysis a view row's, from the record, and the join's
+ * look at a record dotta's node's, from its measure (workspace_look_orphan).
+ * The file analysis has nothing to refine, and drops it.
  *
  * @param ws Workspace (must not be NULL)
  * @param item The item to look at (must not be NULL)
@@ -682,16 +682,11 @@ static bool workspace_obstructs(const workspace_t *ws, const workspace_item_t *i
 static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *item) {
     /* No look beneath a squatter: it would answer for the squatter — a link's
      * target, a file's ENOTDIR — and nothing it said would be this path's. The
-     * item takes the claim's class instead and keeps UNKNOWN, a look nobody took.
+     * item keeps the squatted directory instead, and UNKNOWN, a look nobody took.
      * An orphan (no row) is reached by a record's memory as well as by the view's
      * claims; an active item by the view's claims alone. */
-    const workspace_squatted_t *above = workspace_squatter_above(
-        ws, item->filesystem_path, item->row == NULL
-    );
-    if (above) {
-        item->displaced = above->claim;
-        return NULL;
-    }
+    item->squatter_above = workspace_squatter_above(ws, item);
+    if (item->squatter_above) return NULL;
 
     /* One lstat into the item, and a look that failed classed off its errno at
      * once: it is lstat's until anything else runs (fs_lstat_occupant's
@@ -1112,12 +1107,12 @@ static void workspace_analyze_file(
      * such answer is this path's: not a byte, not a mode, not an absence. The
      * item stands as the partition made it, DEPLOYED-shaped with nothing measured:
      * UNKNOWN is the occupant every reader treats as "assumed present, nothing
-     * read", and the look wrote the class of the claim whose squatter every verb
-     * resolves first (workspace_displaced_t). The blob bit rides — it is Git's,
-     * and the filesystem is not a party to it — and the record pairs as on every
-     * item, so a pending reassignment still shows. Nothing is owed the record:
-     * a record is what dotta saw, and dotta saw nothing here. */
-    if (item->displaced != WORKSPACE_DISPLACED_NONE) return;
+     * read", and the look kept the squatter every verb resolves first
+     * (workspace_displaced_t). The blob bit rides — it is Git's, and the filesystem
+     * is not a party to it — and the record pairs as on every item, so a pending
+     * reassignment still shows. Nothing is owed the record: a record is what
+     * dotta saw, and dotta saw nothing here. */
+    if (item->squatter_above) return;
 
     if (item->occupant == FS_OCCUPANT_NONE) {
         /* Absent: classify_absent decides (its claim gate is inert here — a file
@@ -2105,7 +2100,7 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  * A record's look in the join, and the class of dotta's node where it is one
  *
  * The look (workspace_look), and where it noted dotta's own node above a row
- * (workspace_obstructs), the class every path beneath it carries, off the copy's
+ * (workspace_obstructs), the class every path beneath it reads, off the copy's
  * measure (workspace_measure): STALE where the copy is untouched (core/workspace.h
  * workspace_untouched), CONFLICT where it is not — the directory analysis's
  * refinement of a view row's squatter (workspace_analyze_directory), for the
@@ -2619,7 +2614,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * no look was taken (workspace_look), and the item says so: ORPHANED
          * with nothing measured; cleanup's displaced arm releases the copy and
          * apply's settle retires the record. */
-        if (item->displaced != WORKSPACE_DISPLACED_NONE) continue;
+        if (item->squatter_above) continue;
 
         /* The join's look at this record, on its item (workspace_look): never
          * UNKNOWN for "not looked at" here — that record returned above — so
@@ -3450,7 +3445,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * - DIRECTORY: Actual directory, check metadata */
     workspace_squatted_t *squatted = workspace_look(ws, item);
 
-    if (item->displaced != WORKSPACE_DISPLACED_NONE) return;
+    if (item->squatter_above) return;
 
     if (item->occupant == FS_OCCUPANT_NONE) {
         /* Absent path: classify_absent decides, and this is where its claim gate
@@ -3501,7 +3496,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * a squatter is a fact about the path, and a rung dotta's own node squats
      * is the plan's to converge. The note takes the verdict's class before any
      * look beneath is taken — the walk takes a parent before every path beneath
-     * it (workspace_load) — so every path beneath carries the squatter's verb. */
+     * it (workspace_load) — so every path beneath reads the squatter's verb. */
     if (item->occupant != FS_OCCUPANT_DIRECTORY) {
         compare_result_t at_base;
 
@@ -4351,23 +4346,6 @@ workspace_items_t workspace_orphans_beneath(const workspace_t *ws, const char *p
 }
 
 /**
- * The squatted directory above `path`, or NULL — the view's claims
- */
-const workspace_squatted_t *workspace_squatted_ancestor(
-    const workspace_t *ws,
-    const char *path
-) {
-    if (!ws || !path) return NULL;
-
-    /* The view's face of the one scan (workspace_squatter_above), lent whole —
-     * what the view requires, a directory row's claim or dotta's node above a
-     * row: a record's memory reaches the orphans alone, which carry the fact
-     * themselves (the reach rule, workspace_displaced_t), and this probe's askers
-     * need the squatter itself, which no item carries. */
-    return workspace_squatter_above(ws, path, false);
-}
-
-/**
  * The orphans an item's own squatter displaces — the block beneath its note
  */
 workspace_items_t workspace_displaced_orphans(
@@ -4376,18 +4354,22 @@ workspace_items_t workspace_displaced_orphans(
 ) {
     if (!ws || !item) return (workspace_items_t){ 0 };
 
-    /* A squatter at the item's own path, and the outermost over what lies beneath
-     * it: no note above the path reaches an orphan (workspace_squatter_above),
-     * so this one withheld the look of each orphan beneath. An orphan's own note
-     * always is the outermost — its look was taken, so no note above it reached
-     * it — and a row's need not be: beneath a squatter only a record remembers,
-     * the orphans beneath the row are that squatter's. */
-    const char *path = item->filesystem_path;
-    if (!workspace_squatted(ws, path) || workspace_squatter_above(ws, path, true)) {
+    /* The note the item's own look made: none on every item but a squatter's,
+     * found by a scan of the notes that is empty on every healthy load, so the
+     * block's bounds are paid at a noted item alone */
+    const workspace_squatted_t *squatted = workspace_squatted(ws, item);
+    if (!squatted) return (workspace_items_t){ 0 };
+
+    /* The block keeps one note, so its first orphan answers for it: this one,
+     * or a record's memory above a row, which reaches the orphans beneath the
+     * row and never the row's look. By pointer — each note is an element of the
+     * one list, its address its identity */
+    workspace_items_t beneath = workspace_orphans_beneath(ws, item->filesystem_path);
+    if (beneath.count == 0 || beneath.entries[0]->squatter_above != squatted) {
         return (workspace_items_t){ 0 };
     }
 
-    return workspace_orphans_beneath(ws, path);
+    return beneath;
 }
 
 /**
@@ -4404,8 +4386,13 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
      * and cleanup_verdict's displaced arm rank the same fact the same way. The
      * class is the squatter's own route, inherited. RECORD never stands on a
      * deployed item (the reach rule), so the four view classes are the whole
-     * test and falling through is what a record's memory says of a view row. */
-    switch (item->displaced) {
+     * test and falling through is what a record's memory says of a view row.
+     * Held in its type: the conditional's own is int, and only a switch over an
+     * enum is held to every value */
+    const workspace_displaced_t displaced = item->squatter_above
+        ? item->squatter_above->claim : WORKSPACE_DISPLACED_NONE;
+
+    switch (displaced) {
         case WORKSPACE_DISPLACED_TRACKED:  return WORKSPACE_ROUTE_DISPLACED_TRACKED;
         case WORKSPACE_DISPLACED_DERIVED:  return WORKSPACE_ROUTE_DISPLACED_DERIVED;
         case WORKSPACE_DISPLACED_STALE:    return WORKSPACE_ROUTE_DISPLACED_STALE;
@@ -4586,7 +4573,7 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
                 break;
             }
 
-            if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+            if (item->squatter_above) {
                 /* Beneath a squatter (workspace_displaced_t): nothing here was
                  * looked at, so the item carries no path bit — and a tag read
                  * off a look nobody took would name work no verb takes. The path's
@@ -4730,7 +4717,7 @@ workspace_line_t workspace_item_line(const workspace_item_t *item) {
                 workspace_line_add(&line, "absent");
                 line.color = OUTPUT_COLOR_CYAN;
 
-            } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+            } else if (item->squatter_above) {
                 /* A squatter stands above the path, so nothing there was looked
                  * at and no bit below was ever read (workspace_displaced_t).
                  * Checked here for the reason absence is checked above it: such

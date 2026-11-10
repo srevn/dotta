@@ -540,7 +540,7 @@ typedef struct {
  * as claimed. Every such path is an ancestor of the row's own, and so a prefix
  * of the item's filesystem_path by construction (check_landing truncates the
  * planned path; a squatted directory stands strictly above every row that names
- * it, and the load lends its length with it — core/workspace.h
+ * it, and the note the row's item keeps holds its length — core/workspace.h
  * workspace_squatted_t; an absent directory is a row the walk decided above the
  * path) — carried as the byte length of that prefix, not a copy. 0 where the
  * reason has no ancestor to name: it is about the planned path itself (OWNERSHIP
@@ -549,33 +549,33 @@ typedef struct {
  * `ancestry` is the named squatter's class where the skip is the squatter's only
  * report — ANCESTOR's alone, where the run gives the squatter no fate, written
  * where that reason is decided (core/deploy.c check_ancestry): the class the
- * load noted beside the squatter, which every path beneath it carries as its
- * displaced class (core/workspace.h workspace_squatted_t), so apply's remedy,
- * which parts on it (cmds/apply.c apply_print_deploy_skips), and status's Displaced
- * paths section read one class. A view row's squatter, TRACKED to CONFLICT: a
- * record's memory is no claim on a planned row (the reach rule, core/workspace.h
- * workspace_displaced_t), and dotta's node above a row is the landing's, held
- * wherever a row of the run lies beneath it (deploy_plan_t's nodes). NONE on
- * every other skip: on a row beneath a squatter the run planned and skipped,
- * whose remedy is that squatter's own skip, listed above it, and on a squatter
- * nothing claims, the landing check's find, which no class names. `blocker` is
- * the path a clearance names at the row's path or beneath it — where its walk
- * stopped, or the first copy only --force removes (deploy_blocker_t) — and none
- * on every skip the walk did not write.
+ * load noted beside the squatter, which every path beneath it reads through the
+ * squatter its item keeps (core/workspace.h workspace_squatted_t), so apply's
+ * remedy, which parts on it (cmds/apply.c apply_print_deploy_skips), and status's
+ * Displaced paths section read one class. A view row's squatter, TRACKED to
+ * CONFLICT: a record's memory is no claim on a planned row (the reach rule,
+ * core/workspace.h workspace_displaced_t), and dotta's node above a row is the
+ * landing's, held wherever a row of the run lies beneath it (deploy_plan_t's
+ * nodes). NONE on every other skip: on a row beneath a squatter the run planned
+ * and skipped, whose remedy is that squatter's own skip, listed above it, and
+ * on a squatter nothing claims, the landing check's find, which no class names.
+ * `blocker` is the path a clearance names at the row's path or beneath it — where
+ * its walk stopped, or the first copy only --force removes (deploy_blocker_t) —
+ * and none on every skip the walk did not write.
  *
  * The item is the verdict's: the one the row's bucket holds, or the node the
  * plan holds, and never NULL (deploy_verdict_t). Whether it holds a look is the
  * row's ancestry's to say — a node's is always its own — and the item says so
  * itself: a row its ancestry answered for — beneath a squatter that stays, or
  * planned absent and then refused by the row's rung — carries an item nothing
- * looked at, occupant UNKNOWN and no path bit (the displaced class every reader
- * of an item reads, core/workspace.h workspace_displaced_t), never a blanked
- * pointer. So a reader consults the look only where the reason is a sentence
- * about it — a CONTENT skip's route, an UNREADABLE skip's fault, a FOREIGN skip's
- * owner, the bit a landing's PERMISSION names: path rungs, asked only where the
- * ancestry did not answer. OWNERSHIP reads its claim off the row and never the
- * item's look, which a row planned absent does not have — or, where it names an
- * ancestor, the ancestry rung's answer, nothing of the row but its path.
+ * looked at, occupant UNKNOWN and no path bit (the squatter above it kept instead,
+ * core/workspace.h workspace_displaced_t), never a blanked pointer. So a reader
+ * consults the look only where the reason is a sentence about it — a CONTENT
+ * skip's route, an UNREADABLE skip's fault, a FOREIGN skip's owner, the bit a
+ * landing's PERMISSION names: path rungs, asked only where the ancestry did not
+ * answer. OWNERSHIP reads its claim off the row and never the item's look, which
+ * a row planned absent does not have — or, where it names an ancestor, the ancestry
+ * rung's answer, nothing of the row but its path.
  *
  * Nothing here is owned: the item is borrowed (workspace lifetime), as every
  * item and row in this module is.
@@ -976,17 +976,17 @@ typedef struct {
  * a clean one is a path the load looked at and found agreeing.
  *
  * A path beneath a squatted directory needs no rule of the plan's own: the
- * workspace looked at nothing there, so the row's item carries the displaced
- * class and no path bit (core/workspace.h workspace_displaced_t), and the work
- * predicate reads that class first (deploy_needs_work). Such a row is work, and
- * not occupied for --skip-existing's purpose; -e still excludes it. What becomes
- * of it is preflight's alone, asked of this run's own fates rather than guessed
- * from scope: the directory pass converges the ancestor and the row is written
- * fresh beneath it, or the pass does not and the row is skipped with it, in the
- * ancestor's class (check_ancestry, deploy_preflight). Scope still bounds the
- * plan in the ordinary way — a row scope rejects (-p, a path filter) is not planned
- * on its ancestor's account, Coherent Scope, and converges on the next apply
- * that covers it.
+ * workspace looked at nothing there, so the row's item keeps the squatter above
+ * it and no path bit (core/workspace.h workspace_displaced_t), and the work
+ * predicate asks for that squatter first (deploy_needs_work). Such a row is work,
+ * and not occupied for --skip-existing's purpose; -e still excludes it. What
+ * becomes of it is preflight's alone, asked of this run's own fates rather than
+ * guessed from scope: the directory pass converges the ancestor and the row is
+ * written fresh beneath it, or the pass does not and the row is skipped with
+ * it, in the ancestor's class (check_ancestry, deploy_preflight). Scope still
+ * bounds the plan in the ordinary way — a row scope rejects (-p, a path filter)
+ * is not planned on its ancestor's account, Coherent Scope, and converges on
+ * the next apply that covers it.
  *
  * A landing's orphan is the plan's where a row of the run needs its place — in
  * scope, -e naming the row not — whatever the orphan's own scope: dotta's node
@@ -1052,16 +1052,16 @@ static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
  *   standing there as the run will find it, is asked first: no directory will
  *   stand there whatever converges above it, so the row takes OWNERSHIP naming
  *   it. Then a squatter above the path where the view requires a directory — a
- *   directory row's, or dotta's node above the row (workspace_squatted_ancestor)
- *   — which voids every probe taken beneath it, the landing check's included —
- *   the workspace took none there at all, so the row arrives with nothing measured:
- *   an ancestor the directory pass converges first, or a node the way replaces,
- *   means the row is planned absent and asked nothing else; one the run skips
- *   means the row takes that skip's class, ancestor named; one the run never
- *   acts on (scope, -p, -e, an ancestor claim the plan does not hold) is ANCESTOR
- *   — an incapacity, and the remedy is a run that reaches it, or, for a claim
- *   the run cannot reach at all because nothing plans it, a re-derivation of
- *   the chain.
+ *   directory row's, or dotta's node above the row, kept on the row's item
+ *   (core/workspace.h workspace_item_t's squatter_above) — which voids every
+ *   probe taken beneath it, the landing check's included — the workspace took
+ *   none there at all, so the row arrives with nothing measured: an ancestor
+ *   the directory pass converges first, or a node the way replaces, means the
+ *   row is planned absent and asked nothing else; one the run skips means the
+ *   row takes that skip's class, ancestor named; one the run never acts on (scope,
+ *   -p, -e, an ancestor claim the plan does not hold) is ANCESTOR — an incapacity,
+ *   and the remedy is a run that reaches it, or, for a claim the run cannot reach
+ *   at all because nothing plans it, a re-derivation of the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file or a link renamed over the target, a mkdir
  *   — so the path's own permissions are never the question; a directory converged

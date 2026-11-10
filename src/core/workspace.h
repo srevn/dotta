@@ -247,9 +247,9 @@ typedef enum {
  * the record is an item as the partition made it, DEPLOYED- or ORPHANED-shaped,
  * occupant UNKNOWN, with no path bit and nothing owed the record. Every displaced
  * active item is therefore DEPLOYED with no path bit — a file row's blob bit
- * rides, Git's and no look's — which is what lets a consumer that forgets this
- * field do nothing rather than something wrong: the absence arms are never reached
- * beneath a squatter, so none of them needs a clause.
+ * rides, Git's and no look's — which is what lets a consumer that forgets the
+ * squatter above an item do nothing rather than something wrong: the absence
+ * arms are never reached beneath a squatter, so none of them needs a clause.
  *
  * Two authorities can make the claim, and they reach differently — the reach rule:
  *
@@ -307,19 +307,23 @@ typedef enum {
  *                       it — never a view row, so RECORD stands on no DEPLOYED
  *                       item.
  *
- * NONE on every item looked at at its own path, the squatter's own included:
- * the ask is of proper ancestors, so a squatter is never its own answer and carries
- * its own verdict instead — TYPE, STALE, or both (the frame across kinds), or a
- * node's OBSTRUCTING.
+ * No item looked at at its own path keeps a squatter above it, the squatter's
+ * own included: the ask is of proper ancestors, so a squatter is never its own
+ * answer and carries its own verdict instead — TYPE, STALE, or both (the frame
+ * across kinds), or a node's OBSTRUCTING. NONE is the class where no squatter
+ * stands, which no note holds: what the route and a skip read there
+ * (workspace_item_route, core/deploy.h deploy_skip_t).
  *
- * Noted by the look that found the squatter — a view row's class refined once,
- * from the record, by the directory analysis that took that look, and a node's
- * from its measure, by the join's look at its record, each before any look beneath
- * (workspace.c workspace_analyze_directory, workspace_look_orphan: STALE, CONFLICT)
- * — and written by every look it withholds (workspace.c workspace_look), which
- * asks the same scan before it takes one (workspace_squatter_above) — so the
- * class is total, and both halves of the fact are one function: an item that
- * carries one is an item with nothing measured.
+ * Noted by the look that found the squatter (workspace_squatted_t below) — a
+ * view row's class refined once, from the record, by the directory analysis that
+ * took that look, and a node's from its measure, by the join's look at its record,
+ * each before any look beneath (workspace.c workspace_analyze_directory,
+ * workspace_look_orphan: STALE, CONFLICT) — and kept by every look it withholds,
+ * on the item (workspace.c workspace_look; workspace_item_t's squatter_above),
+ * which asks the same scan before it takes one (workspace_squatter_above) — so
+ * the class is read where it is asked, always as its squatter's analysis left
+ * it, and both halves of the fact are one function: an item that keeps one is
+ * an item with nothing measured.
  *
  * The words on screen, so the sentences cannot drift apart again: the directory
  * another kind stands at is *squatted*, the path beneath it is *displaced* —
@@ -338,23 +342,19 @@ typedef enum {
  * not a directory" — the one line that names it where the run gives the squatter
  * no fate.
  *
- * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
- * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
- * node a row lies beneath: deploy_reach), workspace.c workspace_item_line (the
- * DEPLOYED arm's [displaced], beside which only what no look decides or disproves
- * rides, and the ORPHANED arm's rider), and cmds/status.c status_print_workspace's
- * key for a displaced orphan; cmds/update.c cmd_update (the named derivation's
- * leaves, climbed beneath the user's squatter at a rung alone, the one squatter
- * the climb's retire answers for — but at a lost blob's place); and core/deploy.c
- * check_ancestry, off the squatted directory itself — a caller that needs the
- * squatter, which no item carries, is lent it whole, the claim this class is
- * copied from (workspace_squatted_ancestor) — which copies the class onto the
- * skip of a row whose squatter the run gives no fate, for cmds/apply.c
+ * Readers of the class, each through the squatter an item keeps (workspace_item_t's
+ * squatter_above, whose paragraph names the readers of its presence):
+ * workspace_item_route, the four routes; core/deploy.c deploy_reach, the node a
+ * row lies beneath where the class is a node's; cmds/update.c cmd_update (the
+ * named derivation's leaves, climbed beneath the user's squatter at a rung alone,
+ * the one squatter the climb's retire answers for — but at a lost blob's place);
+ * and core/deploy.c check_ancestry, which copies the class onto the skip of a
+ * row whose squatter the run gives no fate, for cmds/apply.c
  * apply_print_deploy_skips to part its remedy on, so apply's remedy and status's
  * section read one class for one squatter.
  */
 typedef enum {
-    WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
+    WORKSPACE_DISPLACED_NONE = 0,  /* No squatter stands above: no note's class */
     WORKSPACE_DISPLACED_TRACKED,   /* Beneath the user's squatter a tracked row claims */
     WORKSPACE_DISPLACED_DERIVED,   /* Beneath the user's squatter an ancestor claim holds */
     WORKSPACE_DISPLACED_STALE,     /* Beneath dotta's own copy Git moved past, untouched */
@@ -378,17 +378,29 @@ typedef enum {
  * analysis that took the look, and a node's by the measure the join takes of
  * it, each before any look beneath — dotta's own copy Git moved past, untouched
  * or not (workspace.c workspace_analyze_directory, workspace_look_orphan) — and
- * an item the squatted directory reaches carries it as its displaced class —
- * the outermost's, where two reach the item — and a caller holding a path is
- * lent the element itself (workspace_squatted_ancestor), one holding an item
- * the orphans the note at its path displaces (workspace_displaced_orphans).
+ * kept by every item it reaches, the outermost where two reach one
+ * (workspace_item_t's squatter_above), its class read through it; a caller holding
+ * an item is lent the orphans the note at its path displaces
+ * (workspace_displaced_orphans).
+ *
+ * Both classes of directory row qualify: what matters is that some claim says a
+ * directory belongs at the path, not whether the profile tracks the directory
+ * itself (core/manifest.h). A path no enabled claim names and no record of dotta's
+ * stands for is never noted, by design — a symlinked configuration directory of
+ * the user's own arrangement is the user's, and deploy writes through it, cleanup
+ * prunes through it, and update captures through it, all correctly. That case
+ * survives the ancestry being claimed because the capture rule authors nothing
+ * for a component that is not a real directory when the chain is walked: a
+ * directory the user had already symlinked never becomes a claim in the first
+ * place.
  *
  * The workspace's own list element, lent: the list is one arena block, sized by
  * the partition for every item that could note one and never grown, so a pointer
- * to an element is valid for the workspace's lifetime. The path is the row's or
- * the record's (borrowed); `len` is its strlen, hoisted for the scan — and, the
- * squatted directory being a proper ancestor of every path it reaches, the byte
- * length of the prefix each of those paths opens with.
+ * to an element is valid for the workspace's lifetime — which is what lets an
+ * item keep one. The path is the row's or the record's (borrowed); `len` is its
+ * strlen, hoisted for the scan — and, the squatted directory being a proper
+ * ancestor of every path it reaches, the byte length of the prefix each of those
+ * paths opens with.
  */
 typedef struct {
     const char *filesystem_path;  /* The row's or the record's (borrowed) */
@@ -628,8 +640,8 @@ workspace_fault_t workspace_code_fault(error_code_t code);
  * rule did not, or has not yet — the partition makes every item so, a look nobody
  * took — and assumes present either way (absence is never inferred from a failure
  * to look, and never from a look not taken). What it means is said beside it:
- * the fault where a look failed, a displaced class where none was taken, and on
- * a released record neither — letting a copy go needs no measurement. No reader
+ * the fault where a look failed, the squatter above where none was taken, and
+ * on a released record neither — letting a copy go needs no measurement. No reader
  * is lent an orphan the load did not analyze, whatever its look: the diverged
  * items (workspace_diverged) and workspace_find lend an orphan only where the
  * load analyzed the orphans. Presence is therefore `occupant != FS_OCCUPANT_NONE`
@@ -742,6 +754,35 @@ workspace_fault_t workspace_code_fault(error_code_t code);
  * of an answer this load asked (workspace.c workspace_flush). A reader not on
  * this list is a bug.
  *
+ * `squatter_above` is the squatted directory that withheld the look
+ * (workspace_squatted_t): the outermost note above the path that reaches the
+ * item — what the view requires, for a row's item and an orphan's, and a record's
+ * memory too, for an orphan's alone (the reach rule, workspace_displaced_t).
+ * Kept by the look, which asks for it before it takes one (workspace.c
+ * workspace_look), and borrowed from the load's own notes, which never move.
+ * NULL on every item looked at at its own path, the squatter's own among them,
+ * and on every item the scan makes. Its claim is read where it is asked, never
+ * copied, so a class the squatter's analysis refines after the note is made is
+ * read as refined. It lends a path, a length and a class, never an item, so no
+ * reader is lent through it an orphan the load did not analyze (workspace_find).
+ * Fate-blind: whether this run converges the squatter is deploy's question, asked
+ * of its own fates against this answer (core/deploy.c check_ancestry). Readers
+ * of its presence — nothing at the path was looked at: the three analyses, which
+ * take no verdict beneath it (workspace.c workspace_analyze_file,
+ * workspace_analyze_directory, workspace_analyze_orphans); the line's [displaced]
+ * (workspace_item_line); core/deploy.c deploy_needs_work, and deploy_plan_build's
+ * --skip-existing test; core/cleanup.c cleanup_verdict and cleanup_emptied; and
+ * cmds/status.c status_print_workspace's key for a displaced orphan. Readers of
+ * the squatter itself: workspace_item_route, its class (workspace_displaced_t);
+ * core/deploy.c deploy_reach, its path, where its class is a node's;
+ * check_ancestry, all three — the path, to find the fate this run gave the squatted
+ * directory's row, the length, to name it on the skip of a row it holds
+ * (core/deploy.h deploy_skip_t), and the claim, for the remedy where the run
+ * gave that row no fate; cmds/update.c cmd_update, its class and its path, above
+ * a named leaf the user's squatter displaces; and workspace_displaced_orphans,
+ * which reads the block's first orphan's against the note at an item's own path.
+ * A reader not on this list is a bug.
+ *
  * `blob_above` is the view's blob row standing above an overridden copy
  * (core/manifest.h manifest_blob_above): the answer the orphan analysis decides
  * the copy's state by (workspace.c workspace_analyze_orphans), kept as `departure`
@@ -753,6 +794,11 @@ workspace_fault_t workspace_code_fault(error_code_t code);
  * (workspace_item_line's other), and cmds/status.c status_print_workspace's
  * Overridden copies, whose rows name the blob whole. A reader not on this list
  * is a bug.
+ *
+ * `squatter_above` and `blob_above` are the item's two relations to another path,
+ * and one shape: a borrowed pointer to that path's own product, written by the
+ * one pass that held both ends — the look, the orphan analysis — and NULL on
+ * every other item. A third relation takes this shape, or says why not.
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -767,7 +813,7 @@ typedef struct {
 
     /* The look, taken once (workspace_look) */
     fs_occupant_t occupant;              /* What the lstat found; UNKNOWN where none was taken or it failed */
-    workspace_displaced_t displaced;     /* Whose squatter withheld the look, or NONE */
+    const workspace_squatted_t *squatter_above; /* The squatted directory that withheld the look, or NULL */
     struct stat st;                      /* The look's stat, meaningful for a present occupant alone */
 
     /* The verdict — its kind's analysis's */
@@ -1419,16 +1465,16 @@ typedef enum {
 /**
  * Decide which verb's work a deployed item is, from the item alone
  *
- * Pure in what the item holds: the displaced class, the fault, divergence, kind
- * and occupant the load wrote once, and the record at its path — its base for
- * the bytes and the profile it names — as the item holds it, which an ownership
- * event replaces (workspace_reassigned says what reading the live record means).
- * The route is asked over two records — the load's list before its flush
- * (core/workspace.c workspace_list), every screen after it — and answers alike
- * over both: the flush gives a base to no item carrying CONTENT or TYPE, nor
- * takes one from it, and moves no owned record's binding (core/workspace.c
- * workspace_flush, workspace_learning). No syscall, no options; the first rung
- * that answers wins, the content's axis asked before the claim's:
+ * Pure in what the item holds: the class of the squatter it keeps above it, the
+ * fault, divergence, kind and occupant the load wrote once, and the record at
+ * its path — its base for the bytes and the profile it names — as the item holds
+ * it, which an ownership event replaces (workspace_reassigned says what reading
+ * the live record means). The route is asked over two records — the load's list
+ * before its flush (core/workspace.c workspace_list), every screen after it —
+ * and answers alike over both: the flush gives a base to no item carrying CONTENT
+ * or TYPE, nor takes one from it, and moves no owned record's binding
+ * (core/workspace.c workspace_flush, workspace_learning). No syscall, no options;
+ * the first rung that answers wins, the content's axis asked before the claim's:
  *
  *   displaced, TRACKED       DISPLACED_TRACKED — the user's squatter a tracked
  *                            row claims stands above the path, so nothing there
@@ -1650,7 +1696,7 @@ typedef struct {
  * - The filesystem: one look per row, either kind, and one per record the view
  *   lacks — and none beneath a squatter that reaches the asker
  *   (workspace_displaced_t) — with dotta's own file or link above a row measured
- *   at its look, for the class every path beneath it carries
+ *   at its look, for the class every path beneath it reads
  * - The history: where a load finds a file's bytes none of its row's and no base
  *   stands, its row's own branch at the view's head, for whether it held them
  *   at the row's name — one capture a file and one walk a profile, past the head
@@ -1668,7 +1714,7 @@ typedef struct {
  * is noted by the look that finds it (workspace.c workspace_look) and every look
  * beneath it asks that fact before taking one: take a row beneath a squatter
  * before it and the row is looked at *through* the squatter — workspace_displaced_t
- * names what such a look answers — carrying no displaced field to say so, so
+ * names what such a look answers — keeping no squatter above it to say so, so
  * its bits come back as the user's own work (workspace_item_route). The bytes'
  * answer the join notes owed over no base is the history's, asked once the walk
  * is done and before anything reads a verdict, and every load's too: one that
@@ -2133,80 +2179,20 @@ bool workspace_active_beneath(const workspace_t *ws, const char *path);
 workspace_items_t workspace_orphans_beneath(const workspace_t *ws, const char *path);
 
 /**
- * The squatted directory above `path`, or NULL — where the view requires one
- *
- * A directory is *squatted* when the view requires a directory at the path — a
- * claim says one belongs there, or the rows beneath it need one where dotta's
- * own file or link stands — and something else stands there. A look taken beneath
- * such a path would resolve through the occupant — a symlink to a directory answers
- * for the link's target — so nothing it said would be that path's, and the load
- * takes none (workspace_displaced_t).
- *
- * Both classes of directory row qualify: what matters is that some claim says a
- * directory belongs at the path, not whether the profile tracks the directory
- * itself (core/manifest.h). A path no claim names at all stays invisible here
- * by design — a symlinked configuration directory of the user's own arrangement
- * is the user's, and deploy writes through it, cleanup prunes through it, and
- * update captures through it, all correctly. That case survives the ancestry
- * being claimed because the capture rule authors nothing for a component that
- * is not a real directory when the chain is walked: a directory the user had
- * already symlinked never becomes a claim in the first place.
- *
- * A record's memory does not qualify here: a path only a record remembers displaces
- * the orphans beneath it alone (the reach rule, workspace_displaced_t), and every
- * orphan carries the fact on itself. This probe is for a caller that needs the
- * squatter itself, which no item carries: the fate of a planned row (core/deploy.c
- * check_ancestry), the node a row lies beneath (core/deploy.c deploy_plan_build),
- * and whether the user's node squats a lost blob's place (cmds/update.c
- * cmd_update). A view row beneath a record-remembered squatter is read through
- * it, no enabled claim naming the squatter's path and no record its node
- * (workspace_displaced_t, RECORD). So the answer is what the view requires alone
- * — a directory row's claim, or dotta's node above a row — and its claim is exactly
- * the displaced class a view row's item beneath it carries.
- *
- * The answer is noted by the look that found each squatter (workspace.c
- * workspace_look), in the load's one walk over every row and record
- * (workspace_load), so it is complete before anything asks — a scan root is chosen
- * off the look the directory analysis took, later still. The outermost such
- * ancestor is returned: the true offender, whose presence voids every path beneath
- * it. Fate-blind by construction — whether *this run* converges the squatted
- * directory is deploy's question, asked of its own fates against this answer
- * (check_ancestry).
- *
- * Lent whole, as the load noted it (workspace_squatted_t): the one search, handed
- * out, with nothing re-derived from it. Readers: core/deploy.c check_ancestry,
- * which reads all three — the path, to find the fate this run gave the squatted
- * directory's row; the length, to name it on the skip of a row it holds
- * (core/deploy.h deploy_skip_t); the claim, for the remedy where the run gave
- * that row no fate, copied onto the skip — core/deploy.c deploy_plan_build, the
- * path alone, above a row displaced in a node's class: which of the plan's nodes
- * the row's landing replaces (deploy_reach) — and cmds/update.c cmd_update, the
- * path alone, above a named leaf the user's squatter displaces: whether a profile
- * holds an explicit claim there, a lost blob's place no re-derivation frees.
- *
- * @param ws Workspace (NULL returns NULL)
- * @param path Path to test (NULL returns NULL); proper ancestors only, so a
- *        squatted directory is never its own answer — its own path is its item's
- *        to answer, whose TYPE says so
- * @return The squatted directory, lent (workspace lifetime), or NULL
- */
-const workspace_squatted_t *workspace_squatted_ancestor(
-    const workspace_t *ws,
-    const char *path
-);
-
-/**
  * The orphans an item's own squatter displaces — the orphans beneath its path
- * (workspace_orphans_beneath), where the load noted a squatter there and no note
- * above it reaches them; else none
+ * (workspace_orphans_beneath), where the load noted a squatter there and they
+ * keep it; else none
  *
- * Each was withheld its look by that squatter and carries its class: every class
- * reaches the orphans beneath its squatter, the outermost answering
- * (workspace_displaced_t). The note at an orphan's own path is always the outermost
- * — its look was taken, so no note above it reached it — and a row's need not
- * be, beneath a squatter only a record remembers. Pure value return — no
- * allocation, no error path; the analyzed orphans alone, as that block is, so a
- * load that declined the analysis lends none.
+ * All of the block or none, so its first orphan answers for it. Each orphan beneath
+ * keeps the outermost note above it (workspace_item_t's squatter_above), every
+ * class reaching an orphan; and the note at the item's own path was made by a
+ * look that was taken, so no note above the item reached it. Where none stands
+ * above it, this note is the outermost over the whole block; where one does, it
+ * is a record's memory above a row — the one note the reach rule parts from a
+ * row — and the outermost over the whole block instead. An orphan's own note is
+ * always the first: a record's memory reaches an orphan too. Pure value return
+ * — no allocation, no error path; the analyzed orphans alone, as that block is,
+ * so a load that declined the analysis lends none.
  *
  * Readers: core/cleanup.c cleanup_plan_build — a note at an orphan's path lasts
  * only as long as the orphan's record, which the run reaches only with every

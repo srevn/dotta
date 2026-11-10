@@ -91,15 +91,16 @@ const char *path_under(const char *path, const char *dir, size_t dir_len);
 int path_beneath_order(const char *path, const char *dir, size_t dir_len);
 
 /**
- * Length of an absolute path's parent
+ * Length of a path's parent
  *
  * The index of the last separator, or 1 for a path directly beneath the root:
  * "/etc/hosts" → 4, "/etc" → 1 (the root keeps its slash), and "/" → 1, the root
- * directory its own parent. A path with no separator answers 0 — not absolute,
- * which a caller handed canonical paths never meets and reads as "cannot happen".
- * Pure in the string; whether the parent is there is the caller's question.
+ * directory its own parent. A name reads as a path does: "home/x" → 4, and a
+ * component alone, "home", holds no separator and answers 0 — no parent, where
+ * a climb up a name stops (infra/pathspec.c rungs_up). Pure in the string; whether
+ * the parent is there is the caller's question.
  *
- * @param path Canonical absolute path
+ * @param path A path, absolute or a name
  * @return The parent's length, or 0 when the path has no separator
  */
 size_t path_parent_len(const char *path);

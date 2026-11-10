@@ -363,6 +363,40 @@ typedef enum {
 } workspace_displaced_t;
 
 /**
+ * A squatted directory, and whose claim holds it
+ *
+ * A directory belongs at the path and the load's look found another kind standing
+ * there (workspace_displaced_t: the words, and the reach the claim's class
+ * decides). One producer for both authorities of the reach rule: the look that
+ * found the squatter (workspace.c workspace_look), over a view directory row
+ * whose class names the claim, over dotta's own file or link at no row whose
+ * own kind stands where the view's rows beneath it need a directory, over a
+ * directory record no row stands at that another kind of node stands in the place
+ * of, or over any path it looks at — a record's or a row's — where a link stands
+ * with an orphan beneath it, noted where it was found, so the claim is the
+ * producer's and is never re-derived: a view row's is refined once by the directory
+ * analysis that took the look, and a node's by the measure the join takes of
+ * it, each before any look beneath — dotta's own copy Git moved past, untouched
+ * or not (workspace.c workspace_analyze_directory, workspace_look_orphan) — and
+ * an item the squatted directory reaches carries it as its displaced class —
+ * the outermost's, where two reach the item — and a caller holding a path is
+ * lent the element itself (workspace_squatted_ancestor), one holding an item
+ * the orphans the note at its path displaces (workspace_displaced_orphans).
+ *
+ * The workspace's own list element, lent: the list is one arena block, sized by
+ * the partition for every item that could note one and never grown, so a pointer
+ * to an element is valid for the workspace's lifetime. The path is the row's or
+ * the record's (borrowed); `len` is its strlen, hoisted for the scan — and, the
+ * squatted directory being a proper ancestor of every path it reaches, the byte
+ * length of the prefix each of those paths opens with.
+ */
+typedef struct {
+    const char *filesystem_path;  /* The row's or the record's (borrowed) */
+    size_t len;                   /* strlen(filesystem_path): the prefix of every path beneath it */
+    workspace_displaced_t claim;  /* A row's class or a node's, TRACKED to CONFLICT; RECORD, a record's */
+} workspace_squatted_t;
+
+/**
  * The rule of the namespace a relocated claim lands in — the class of a relocation
  *
  * A relocation is an orphan whose own claim the view reads its profile holding
@@ -2097,40 +2131,6 @@ bool workspace_active_beneath(const workspace_t *ws, const char *path);
  * @return Borrowed sub-slice of the orphans, valid for the workspace's lifetime
  */
 workspace_items_t workspace_orphans_beneath(const workspace_t *ws, const char *path);
-
-/**
- * A squatted directory, and whose claim holds it
- *
- * A directory belongs at the path and the load's look found another kind standing
- * there (workspace_displaced_t: the words, and the reach the claim's class
- * decides). One producer for both authorities of the reach rule: the look that
- * found the squatter (workspace.c workspace_look), over a view directory row
- * whose class names the claim, over dotta's own file or link at no row whose
- * own kind stands where the view's rows beneath it need a directory, over a
- * directory record no row stands at that another kind of node stands in the place
- * of, or over any path it looks at — a record's or a row's — where a link stands
- * with an orphan beneath it, noted where it was found, so the claim is the
- * producer's and is never re-derived: a view row's is refined once by the directory
- * analysis that took the look, and a node's by the measure the join takes of
- * it, each before any look beneath — dotta's own copy Git moved past, untouched
- * or not (workspace.c workspace_analyze_directory, workspace_look_orphan) — and
- * an item the squatted directory reaches carries it as its displaced class —
- * the outermost's, where two reach the item — and a caller holding a path is
- * lent the element itself (workspace_squatted_ancestor), one holding an item
- * the orphans the note at its path displaces (workspace_displaced_orphans).
- *
- * The workspace's own list element, lent: the list is one arena block, sized by
- * the partition for every item that could note one and never grown, so a pointer
- * to an element is valid for the workspace's lifetime. The path is the row's or
- * the record's (borrowed); `len` is its strlen, hoisted for the scan — and, the
- * squatted directory being a proper ancestor of every path it reaches, the byte
- * length of the prefix each of those paths opens with.
- */
-typedef struct {
-    const char *filesystem_path;  /* The row's or the record's (borrowed) */
-    size_t len;                   /* strlen(filesystem_path): the prefix of every path beneath it */
-    workspace_displaced_t claim;  /* A row's class or a node's, TRACKED to CONFLICT; RECORD, a record's */
-} workspace_squatted_t;
 
 /**
  * The squatted directory above `path`, or NULL — where the view requires one

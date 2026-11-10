@@ -478,7 +478,10 @@ static error_t revert_restore_path(
 
     /* The commit's claims the argument reaches, as its view stands them, in its
      * view's order: each this machine places — the layer's rung being no claim
-     * of the profile's — then each it places nowhere (revert_select_claim) */
+     * of the profile's — then each it places nowhere, the claims and then the
+     * way to them (revert_select_claim). No write reads that order: a claim
+     * restored at a rung stands whichever is written first (core/profiles.c
+     * profile_restore_ancestors) */
     const manifest_rows_t rows = manifest_rows(historical);
     for (size_t i = 0; !err && i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
@@ -492,6 +495,12 @@ static error_t revert_restore_path(
     for (size_t i = 0; !err && i < unbound.count; i++) {
         err = revert_select_claim(
             &r, NULL, unbound.entries[i].storage_path, unbound.entries[i].kind
+        );
+    }
+    const manifest_unbound_t derived = manifest_derived(historical);
+    for (size_t i = 0; !err && i < derived.count; i++) {
+        err = revert_select_claim(
+            &r, NULL, derived.entries[i].storage_path, derived.entries[i].kind
         );
     }
 

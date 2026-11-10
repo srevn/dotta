@@ -359,8 +359,9 @@ typedef struct manifest manifest_t;
  * (manifest_mount_table): a re-target is in the next build because the next build
  * reads the rows. A custom/ claim whose profile has no target binding on this
  * machine — a normal lifecycle stage in a shared repository — contributes no
- * row and is recorded on the view (manifest_unbound); the health consumers surface
- * it, and the build stays total over importable content.
+ * row and is recorded on the view (manifest_unbound, a derived one apart:
+ * manifest_derived); the health consumers surface it, and the build stays total
+ * over importable content.
  *
  * Every enabled branch is asked first whether it stands, all at once (sys/gitops.h
  * gitops_branches_exist): however many are gone, the store's packed refs are
@@ -466,10 +467,10 @@ error_t manifest_build(
  *
  * Custom-prefix resolution is delegated to `mounts`. A custom/ claim the table
  * records no binding for contributes no row and is recorded on the view
- * (manifest_unbound) — the same degrade contract as manifest_build, which lets
- * the historical-diff path resolve old trees whose labels today's topology cannot
- * place. Any mount table is acceptable, including one with no binding for the
- * profile.
+ * (manifest_unbound, a derived one apart) — the same degrade contract as
+ * manifest_build, which lets the historical-diff path resolve old trees whose
+ * labels today's topology cannot place. Any mount table is acceptable, including
+ * one with no binding for the profile.
  *
  * One contribution, settled and layered like any other, so one profile's view
  * answers manifest_lookup_claim and manifest_name for its profile exactly as an
@@ -679,18 +680,22 @@ error_t manifest_mount_table(
 );
 
 /**
- * One claim the build could not place: its profile has no deployment target on
- * this machine. Recorded, never dropped in silence — the health consumers surface
- * these (cmds/status.c status_print_profiles, cmds/apply.c cmd_apply, cmds/sync.c
- * cmd_sync); export reads the count alone, for the reason its refusal gives
- * (cmds/export.c export_collect_filesystem); a restore writes the commit's beneath
- * a name the argument places nowhere, each under its own (cmds/revert.c
- * revert_restore_path); and an enable that names an enabled profile holding them
- * says so (cmds/profile.c profile_enable). The repair is one command (`profile
- * enable <p> --target /path`), the untracking another (`remove`). The screen
- * says **no target** or **needs a target**, never "unbound": the header's word
- * is what the build could not do, the screen's is what the user must give. Strings
- * are the build arena's, same lifetime as the rows.
+ * One claim the build could not place: its profile has no target on this machine.
+ * Explicit claims alone, as in every slice of the health channel — the profile's
+ * files and the directories it tracks, what it holds by core/profiles.h
+ * profile_counts_t's rule: a derived one is the way to a claim, held apart for
+ * the restore that writes it back (manifest_derived). Recorded, never dropped
+ * in silence — the health consumers surface these (cmds/status.c
+ * status_print_profiles, cmds/apply.c cmd_apply, cmds/sync.c cmd_sync); export
+ * reads the count alone, for the reason its refusal gives (cmds/export.c
+ * export_collect_filesystem); a restore writes the commit's beneath a name the
+ * argument places nowhere, each under its own (cmds/revert.c revert_restore_path);
+ * and an enable that names an enabled profile holding them says so (cmds/profile.c
+ * profile_enable). The repair is one command (`profile enable <p> --target /path`),
+ * the untracking another (`remove`). The screen says **no target** or **needs a
+ * target**, never "unbound": the header's word is what the build could not do,
+ * the screen's is what the user must give. Strings are the build arena's, same
+ * lifetime as the rows.
  */
 typedef struct {
     const char *profile;
@@ -699,7 +704,8 @@ typedef struct {
 } manifest_unbound_claim_t;
 
 /**
- * Bound carrier for the view's health slice, the manifest_rows_t idiom.
+ * Bound carrier for the view's health slice, and for the derived claims held
+ * apart beside it (manifest_derived), the manifest_rows_t idiom.
  */
 typedef struct {
     const manifest_unbound_claim_t *entries;
@@ -707,7 +713,7 @@ typedef struct {
 } manifest_unbound_t;
 
 /**
- * The claims the build could not place, grouped by profile
+ * The explicit claims the build could not place, grouped by profile
  *
  * Pure value return — no allocation, no error path. Entries arrive in build order,
  * so one profile's claims are contiguous. Each (profile, storage path) appears
@@ -716,12 +722,36 @@ typedef struct {
  * key it holds no blob at or above, the content-authority rule having contradicted
  * the rest (a path is a tree or a blob, and the tree is the content authority)
  * — a tree holding one blob per path and a sheet one directory claim per key.
- * Empty on every build whose claims all placed — the common case, costing nothing.
+ * Empty on every build whose explicit claims all placed — the common case, costing
+ * nothing.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
  */
 manifest_unbound_t manifest_unbound(const manifest_t *manifest);
+
+/**
+ * The derived claims the build could not place, held apart, grouped by profile
+ *
+ * The way to the claims manifest_unbound records — a directory derived from the
+ * chain above a tracked path — kept apart from them as a contribution keeps a
+ * placed one apart from its explicit claims: a derived claim names nothing
+ * (manifest_is_derived), so no health question is asked of it and no screen counts
+ * it. Every entry a DIRECTORY's.
+ *
+ * Pure value return — no allocation, no error path. Entries arrive in build order,
+ * one profile's contiguous, each (profile, storage path) once: the sheet holds
+ * one directory claim per key. Empty on every build whose derived claims all
+ * placed — the common case, costing nothing.
+ *
+ * Reader: a restore at a name this machine places nowhere, which writes the
+ * commit's back as the commit had them (cmds/revert.c revert_restore_path). A
+ * reader not on this list is a bug.
+ *
+ * @param manifest Manifest (NULL returns an empty slice)
+ * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
+ */
+manifest_unbound_t manifest_derived(const manifest_t *manifest);
 
 /**
  * One name a profile holds for a path it also names otherwise, recorded against

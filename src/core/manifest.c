@@ -113,9 +113,10 @@ typedef struct {
  * its indexes point at; there is no growth and no reallocation, and manifest_rows
  * hands the view's out as the public slice.
  *
- * The health channel's slices — what the build could not make a row of — are
- * flat arena arrays grown by arena_grow where each entry is noted, lent whole,
- * and empty on the common build: no allocation until the first note.
+ * The health channel's slices — what the build could not make a row of — and
+ * the derived claims it could not place, held apart beside them, are flat arena
+ * arrays grown by arena_grow where each entry is noted, lent whole, and empty
+ * on the common build: no allocation until the first note.
  */
 struct manifest {
     /* The contributions, one per profile the build walks, in precedence order,
@@ -138,10 +139,15 @@ struct manifest {
      * caller's. */
     const mount_table_t *mounts;                 /* The build's, or the caller's */
 
-    /* The claims the build could not place: no target binding here (manifest_unbound) */
+    /* The explicit claims the build could not place: no target binding here (manifest_unbound) */
     manifest_unbound_claim_t *unbound;           /* Arena; grouped by profile, in build order */
     size_t unbound_count;
     size_t unbound_capacity;
+
+    /* The derived claims it could not place, held apart (manifest_derived) */
+    manifest_unbound_claim_t *derived;           /* Arena; grouped by profile, in build order */
+    size_t derived_count;
+    size_t derived_capacity;
 
     /* The names the settle did not keep: another is kept at the path (manifest_unkept) */
     manifest_unkept_claim_t *unkept;             /* Arena; grouped by profile, in build order */
@@ -231,15 +237,15 @@ static manifest_row_t *manifest_place(
 }
 
 /**
- * Record one claim the build could not place
+ * Record one explicit claim the build could not place
  *
- * The health primitive a claim the placement cannot resolve is spent through:
- * appends (profile, storage_path, kind) to the view's health slice. No dedup,
- * and none possible — the profile's walk shows a name once (core/profiles.h
- * profile_walk): a name the tree holds a blob at, or a sheet key it holds no
- * blob at or above, the content-authority rule having contradicted the rest before
- * anything was resolved. And a tree holds one blob per path, a sheet one directory
- * claim per key.
+ * The health primitive an explicit claim the placement cannot resolve is spent
+ * through, a derived one held apart (manifest_note_derived): appends (profile,
+ * storage_path, kind) to the view's health slice. No dedup, and none possible —
+ * the profile's walk shows a name once (core/profiles.h profile_walk): a name
+ * the tree holds a blob at, or a sheet key it holds no blob at or above, the
+ * content-authority rule having contradicted the rest before anything was resolved.
+ * And a tree holds one blob per path, a sheet one directory claim per key.
  *
  * The slice grows in the arena (arena_grow). Both strings must be arena-backed
  * by the caller; the entry borrows them for the view's lifetime.
@@ -266,6 +272,41 @@ static void manifest_note_unbound(
         .profile = profile,
         .storage_path = storage_path,
         .kind = kind,
+    };
+}
+
+/**
+ * Record one derived claim the build could not place
+ *
+ * The primitive a derived claim the placement cannot resolve is spent through,
+ * held apart from the health slice as a placed one is held apart from the explicit
+ * claims (manifest_place_claim): appends (profile, storage_path) to the view's
+ * derived slice, a DIRECTORY's. No dedup, and none possible — the sheet holds
+ * one directory claim per key, and the walk shows each once.
+ *
+ * The slice grows in the arena, as the unbound one does. Both strings must be
+ * arena-backed by the caller; the entry borrows them for the view's lifetime.
+ *
+ * @param manifest Target view (must not be NULL)
+ * @param profile Arena-backed profile name (must not be NULL)
+ * @param storage_path Arena-backed storage path (must not be NULL)
+ * @param arena Arena for the array growth (must not be NULL)
+ */
+static void manifest_note_derived(
+    manifest_t *manifest,
+    const char *profile,
+    const char *storage_path,
+    arena_t *arena
+) {
+    manifest->derived = arena_grow(
+        arena, manifest->derived, &manifest->derived_capacity,
+        manifest->derived_count + 1, sizeof(*manifest->derived)
+    );
+
+    manifest->derived[manifest->derived_count++] = (manifest_unbound_claim_t){
+        .profile = profile,
+        .storage_path = storage_path,
+        .kind = PATH_KIND_DIRECTORY,
     };
 }
 
@@ -802,8 +843,9 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
      * claims, a revert that recommitted one), not corruption: no local precondition
      * can bind what another machine adds to the branch. The claim contributes
      * no row — nothing on this machine can place it — and is recorded on the
-     * view (manifest_unbound) so the health consumers surface it; it is never
-     * dropped in silence, and both kinds hold under that one UNBOUND policy.
+     * view, never dropped in silence: an explicit one where the health consumers
+     * surface it (manifest_unbound), a derived one apart, for the restore that
+     * writes it back (manifest_derived), both kinds under that one UNBOUND policy.
      * Record-safe by construction: a record can only exist where a binding existed
      * at write time, so no record ever joins a skipped claim and no orphan can
      * be manufactured here. The shape was checked where the profile read the
@@ -812,6 +854,15 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
         walk->arena, walk->manifest->mounts, c->profile, storage_path
     );
     if (!filesystem_path) {
+        /* A derived claim is held apart, as a placed one is below: the way to
+         * an explicit one, recorded in its own right, or to none, which the
+         * profile's next settle prunes — so the health slice holds the claims a
+         * repair is for, as its siblings do */
+        if (claim->type == PATH_TYPE_DIRECTORY && !claim->tracked) {
+            manifest_note_derived(walk->manifest, c->profile, storage_path, walk->arena);
+            return NULL;
+        }
+
         manifest_note_unbound(
             walk->manifest, c->profile, storage_path, path_type_kind(claim->type),
             walk->arena
@@ -931,8 +982,9 @@ static error_t manifest_note_claim(const profile_claim_t *claim, void *payload) 
  * The profile's walk shows every claim the profile makes, decoded (core/profiles.h
  * profile_walk) — its blobs, then the directory claims its own tree does not
  * contradict — and each is placed as it arrives (manifest_place_claim): resolved
- * against the mount table, recorded where this machine cannot place it
- * (manifest_note_unbound), and kept or contending. The tracked claims its tree
+ * against the mount table, recorded where this machine cannot place it — an
+ * explicit one on the view's health (manifest_note_unbound), a derived one apart
+ * (manifest_note_derived) — and kept or contending. The tracked claims its tree
  * does contradict are noted on the view's health beside them (manifest_note_claim).
  * The settle then decides every path this profile named twice, and the tail cuts
  * the spine to what each index keeps.
@@ -1664,13 +1716,24 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest) {
 }
 
 /**
- * The claims the build could not place, grouped by profile
+ * The explicit claims the build could not place, grouped by profile
  */
 manifest_unbound_t manifest_unbound(const manifest_t *manifest) {
     if (!manifest) return (manifest_unbound_t){ 0 };
     return (manifest_unbound_t){
         .entries = manifest->unbound,
         .count = manifest->unbound_count,
+    };
+}
+
+/**
+ * The derived claims the build could not place, held apart
+ */
+manifest_unbound_t manifest_derived(const manifest_t *manifest) {
+    if (!manifest) return (manifest_unbound_t){ 0 };
+    return (manifest_unbound_t){
+        .entries = manifest->derived,
+        .count = manifest->derived_count,
     };
 }
 

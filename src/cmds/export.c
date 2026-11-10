@@ -224,33 +224,6 @@ static void append_root(
 }
 
 /**
- * Join two path fragments into the arena ("" base yields rel verbatim).
- */
-static char *export_path_join(
-    arena_t *arena,
-    const char *base,
-    const char *rel
-) {
-    if (base == NULL || base[0] == '\0') {
-        return arena_strdup(arena, rel);
-    }
-
-    size_t base_len = strlen(base);
-    size_t rel_len = strlen(rel);
-    bool needs_slash = base[base_len - 1] != '/';
-
-    char *joined = arena_alloc(
-        arena, base_len + (needs_slash ? 1 : 0) + rel_len + 1
-    );
-
-    memcpy(joined, base, base_len);
-    size_t at = base_len;
-    if (needs_slash) joined[at++] = '/';
-    memcpy(joined + at, rel, rel_len + 1);
-    return joined;
-}
-
-/**
  * Apply the destination rules shared by every export shape.
  *
  * Expand '~', then on directory intent — an existing directory, or an explicit
@@ -759,11 +732,13 @@ static error_t resolve_destinations(
     );
     if (err) return err;
 
+    /* Each joined beneath the root at one separator (base/path.h path_join),
+     * and neither side is empty: the destination is refused empty where the line
+     * is read (export_post_parse), and the one empty path within the copy is
+     * the root's own, which the sort put first */
     const char *root = list->items[0].dest_path;
     for (size_t i = 1; i < list->count; i++) {
-        list->items[i].dest_path = export_path_join(
-            arena, root, list->items[i].rel_path
-        );
+        list->items[i].dest_path = path_join(arena, root, list->items[i].rel_path);
     }
 
     return NULL;

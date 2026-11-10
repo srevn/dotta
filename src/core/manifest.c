@@ -604,8 +604,8 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
 
         /* What lies beneath the rung (base/path.h path_beneath), read off
          * `filesystem_path`, because the truncation above took `rung`'s byte at
-         * that offset. */
-        return arena_str_format(n->arena, "%s/%s", above, path_beneath(filesystem_path, rung, len));
+         * that offset, and joined beneath the claim's name (path_join). */
+        return path_join(n->arena, above, path_beneath(filesystem_path, rung, len));
     }
 
     /* Nothing of the profile's above it: the root's own label, and the tail —

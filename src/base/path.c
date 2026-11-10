@@ -56,6 +56,12 @@ size_t path_parent_len_n(const char *path, size_t len) {
     return len > 1 ? len - 1 : len;
 }
 
+const char *path_basename(const char *path) {
+    const char *slash = strrchr(path, '/');
+
+    return slash ? slash + 1 : path;
+}
+
 char *path_join(arena_t *arena, const char *dir, const char *name) {
     CHECK_NULL(arena);
     CHECK_NULL(dir);

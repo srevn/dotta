@@ -658,13 +658,13 @@ bool completion_paths_under(
 
     /* The token relative to the root keeps its leading-slash style on the way
      * back, so the inserted candidate round-trips the way it was typed. Split
-     * it at its last '/': the directory to list under the root, and the name
-     * prefix to match in it. */
+     * it at its last '/': its last component is the name prefix to match
+     * (base/path.h path_basename), and what precedes the name, that '/' with
+     * it, the directory to list under the root. */
     const char *leading = current[0] == '/' ? "/" : "";
     const char *rel = current[0] == '/' ? current + 1 : current;
-    const char *slash = strrchr(rel, '/');
-    size_t dir_len = slash ? (size_t) (slash - rel + 1) : 0;
-    const char *name = slash ? slash + 1 : rel;
+    const char *name = path_basename(rel);
+    size_t dir_len = (size_t) (name - rel);
     size_t name_len = strlen(name);
 
     /* The listing and every path built from it are the arena's and abandoned,

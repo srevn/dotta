@@ -174,7 +174,7 @@ typedef struct {
     export_entry_t *items;     /* Arena-owned spine */
     size_t count;
     size_t capacity;
-    const char *basename;      /* The last segment of whatever named the copy — the
+    const char *basename;      /* The last component of whatever named the copy — the
                                 * profile, the storage path, the path — which a
                                 * directory destination nests the copy under. Every
                                 * arm sets it, and a single-file copy's leaf borrows
@@ -251,14 +251,6 @@ static char *export_path_join(
 }
 
 /**
- * Last path segment ("hosts/mbp" -> "mbp", "home/.bashrc" -> ".bashrc").
- */
-static const char *path_basename(const char *path) {
-    const char *slash = strrchr(path, '/');
-    return slash ? slash + 1 : path;
-}
-
-/**
  * Apply the destination rules shared by every export shape.
  *
  * Expand '~', then on directory intent — an existing directory, or an explicit
@@ -267,8 +259,8 @@ static const char *path_basename(const char *path) {
  * Returned string is arena-owned.
  *
  * A copy with no name of its own is the destination itself: the filesystem root
- * has no last segment, and there is nothing for a directory destination to nest
- * the copy under. Asked before the join, which takes no empty name.
+ * has no last component, and there is nothing for a directory destination to
+ * nest the copy under. Asked before the join, which takes no empty name.
  */
 static error_t dest_resolve(
     const char *dest,
@@ -413,7 +405,7 @@ static error_t export_collect_profile(
 ) {
     arena_t *arena = ctx->arena;
 
-    /* Under a directory destination the copy takes the profile's last segment
+    /* Under a directory destination the copy takes the profile's last component
      * (hosts/mbp -> mbp) — copied, since the list names the copy past the profile,
      * which cmd_export frees once the collection is whole */
     list->basename = arena_strdup(arena, path_basename(profile_name(profile)));
@@ -468,7 +460,7 @@ static error_t export_collect_storage(
 ) {
     arena_t *arena = ctx->arena;
 
-    /* The argument's last segment: the resolver's string, the command's arena */
+    /* The argument's last component: the resolver's string, the command's arena */
     list->basename = path_basename(storage_path);
 
     /* A blob at the name is the single-entry copy, its claim as the walk decodes
@@ -632,7 +624,7 @@ static error_t export_collect_filesystem(
         return error_wrap(err, "Cannot export '%s'", filesystem_path);
     }
 
-    /* The argument's last segment: the resolver's string, the command's arena */
+    /* The argument's last component: the resolver's string, the command's arena */
     list->basename = path_basename(filesystem_path);
 
     /* A blob at the path is the single-entry copy, the row as the view placed it */

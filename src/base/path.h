@@ -2,13 +2,14 @@
  * path.h - The grammar of a path's spelling
  *
  * What a path's bytes say with no filesystem in hand: whether it lies beneath a
- * directory and where it sorts against the paths that do, where its parent ends,
- * how a directory and a name join, and the fold — the one spelling a key has. A
- * path is read as bytes: separators, the root directory — the one directory whose
- * spelling is its separator — and the components between them. Whether anything
- * stands at a path is sys/filesystem's question, where a label lands infra/mount's,
- * what makes a storage name one infra/label's, and the kinds a managed path has
- * are the prelude's (include/types.h).
+ * directory and where it sorts against the paths that do, where its parent ends
+ * and its last component begins, how a directory and a name join, and the fold
+ * — the one spelling a key has. A path is read as bytes: separators, the root
+ * directory — the one directory whose spelling is its separator — and the
+ * components between them. Whether anything stands at a path is sys/filesystem's
+ * question, where a label lands infra/mount's, what makes a storage name one
+ * infra/label's, and the kinds a managed path has are the prelude's
+ * (include/types.h).
  */
 
 #ifndef DOTTA_PATH_H
@@ -118,6 +119,26 @@ size_t path_parent_len(const char *path);
  * @return The parent's length, or 0 when the span has no separator
  */
 size_t path_parent_len_n(const char *path, size_t len);
+
+/**
+ * A path's last component
+ *
+ * What follows the last separator, or the path itself where it holds none:
+ * "/etc/hosts" → "hosts", "/etc" → "etc", and a name reads as a path does,
+ * "hosts/mbp" → "mbp" and "home" → "home". The other half of the split
+ * path_parent_len measures: a path parts at its last separator, the parent ending
+ * before it — or keeping it, where the parent is the root directory, whose spelling
+ * is its separator — and the last component starting past it. Read as written,
+ * as the family reads a path: a trailing separator is the last one, and nothing
+ * follows it — "a/b/" and "/" answer "", where basename(3) sheds the separator
+ * and answers "b" and "/". The last component as git reads one (lib/git/dir.c
+ * last_matching_pattern), which base/gitignore.c's port asks here. Pure in the
+ * string: nothing is copied, and nothing written.
+ *
+ * @param path A path, absolute or a name
+ * @return The last component, aliasing `path`; "" where a separator ends it
+ */
+const char *path_basename(const char *path);
 
 /**
  * Join a directory and a name, into an arena

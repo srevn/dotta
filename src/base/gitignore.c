@@ -87,6 +87,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/path.h"
 #include "base/wildmatch.h"
 
 /* A subject's copy on the stack; a longer one is copied to the heap. A line and
@@ -540,8 +541,7 @@ static size_t rung_subject(const char **rung, const char **basename) {
     while (**rung == '/')
         (*rung)++;
 
-    const char *slash = strrchr(*rung, '/');
-    *basename = slash ? slash + 1 : *rung;
+    *basename = path_basename(*rung);
 
     return strlen(*rung);
 }
@@ -771,8 +771,7 @@ bool gitignore_is_selected(
     size_t len = copy_subject(p, path, &is_dir);
 
     if (len > 0) {
-        const char *slash = strrchr(p, '/');
-        const char *basename = slash ? slash + 1 : p;
+        const char *basename = path_basename(p);
 
         for (size_t i = set->count; i > 0; --i) {
             const gitignore_rule_t *rule = &set->rules[i - 1];

@@ -77,7 +77,14 @@
  *   which is where BINARY and strcmp meet, so a read comes back in strcmp order:
  *   a parent before everything beneath it, and every key found by a binary search
  *   by strcmp. The getters' ORDER BY is the promise; the storage makes the read
- *   a walk of the table.
+ *   a walk of the table. It holds of every store dotta creates — UTF-8, the
+ *   encoding sqlite3_open_v2 creates a file in where no pragma names another,
+ *   and the key under no collation of its own — and of no other: a database another
+ *   hand created under dotta's header, in another encoding or with its key under
+ *   another collation, is admitted on that header (state_verify) and read in
+ *   the order it keeps, which no reader of the order allows for. Stated, never
+ *   checked, as Git trusts its index's order on every read and asks it under
+ *   fsck alone (lib/git/read-cache.c check_ce_order).
  * - Nothing derivable is stored but what a load keeps under its key, and nothing
  *   no read asks for: what dotta did at a path is its own and never derivable
  *   (the two kinds of column, above); the expected side is Git's and lives in Git
@@ -902,13 +909,17 @@ const char *state_target(
  *
  * In strcmp order (the principle above). Readers, and what each takes from it:
  *   - core/workspace.c workspace_partition: pairs each record with the active
- *     item at its path by the items' own search (workspace_find_active); the
- *     orphans keep strcmp order, which the join's walk (workspace_load), the
- *     release's walk back over them, every path beneath a directory decided before
- *     it (workspace_analyze_orphans), their searches (workspace_find_item:
+ *     item at its path by one walk of the read beside each kind's half, both in
+ *     strcmp order; the orphans keep it, which the join's walk (workspace_load),
+ *     the release's walk back over them, every path beneath a directory decided
+ *     before it (workspace_analyze_orphans), their searches (workspace_find_item:
  *     workspace_find's, the scan's and the release's; workspace_items_beneath,
- *     the block beneath a path) and the diverged items' orphan listing
- *     (workspace_list, which the screens print) rest on
+ *     the block beneath a path), the diverged items' orphan listing
+ *     (workspace_list, which the screens print), and, off their lender
+ *     (core/workspace.h workspace_orphans), core/deploy.c deploy_reach (the copies
+ *     beneath a blob row, one block by its lower bound) and deploy_preflight
+ *     (each node of the plan decided before the first row that sorts after it)
+ *     rest on
  *   - cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
  *     (whose node a link above a capture is), cmds/update.c update_write_record
  *     (whose record a deleted path holds, read under the phase's lock),

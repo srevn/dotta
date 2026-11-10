@@ -95,8 +95,9 @@ struct workspace {
 
     /* The active items: one per row of the view, the directories and then the
      * files, each in strcmp order (workspace_kind_order) — each half the order
+     * the partition walks the record's read beside (workspace_partition) and
      * the join's walk merges with the orphans in (workspace_load), the one a
-     * path is found by (workspace_find_active) and the paths beneath one
+     * path is found by (workspace_find) and the paths beneath one
      * (workspace_active_beneath), and the one they are lent in, whole and by
      * kind (workspace_active, workspace_directories, workspace_files). Pointers
      * into one arena block, never moved. Never NULL (workspace_partition). */
@@ -168,12 +169,14 @@ struct workspace {
  * walks (workspace_directories, workspace_files), deploy's directories before
  * its files. strcmp within each puts a parent before everything beneath it, a
  * parent's path being a prefix of its child's: it is deploy's parent-before-child
- * walk within each kind; the order of each half the join's walk merges with the
- * orphans, a parent before every path beneath it whichever kind (workspace_load);
- * what the untracked scan's registration reads for the tie among one profile's
- * rows standing at one directory; and the one each kind's searches rest on
- * (workspace_find_item, workspace_items_beneath). The view holds one row per
- * path, so the order is total.
+ * walk within each kind; the record's own read order (core/state.h state_records),
+ * so the partition pairs each record with its item by one walk of the read beside
+ * both halves (workspace_partition); the order of each half the join's walk merges
+ * with the orphans, a parent before every path beneath it whichever kind
+ * (workspace_load); what the untracked scan's registration reads for the tie
+ * among one profile's rows standing at one directory; and the one each kind's
+ * searches rest on (workspace_find_item, workspace_items_beneath). The view holds
+ * one row per path, so the order is total.
  */
 static int workspace_kind_order(const void *a, const void *b) {
     const workspace_item_t *ia = *(const workspace_item_t *const *) a;
@@ -220,18 +223,6 @@ static workspace_item_t *workspace_find_item(
     );
 
     return found ? *found : NULL;
-}
-
-/**
- * The active item at a path, either kind: the directory items, then the file items
- *
- * Readers: the partition, pairing each record with the item at its path, and
- * workspace_find, which asks it before the orphans.
- */
-static workspace_item_t *workspace_find_active(const workspace_t *ws, const char *path) {
-    workspace_item_t *item = workspace_find_item(ws->active, ws->dir_count, path);
-
-    return item ? item : workspace_find_item(ws->active + ws->dir_count, ws->file_count, path);
 }
 
 /**
@@ -3586,8 +3577,9 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is active iff the view has a row for it, and a record is an orphan iff
- * no active item stands at its path — one search, asked once per record, decides
- * both. Nothing to clean up on error: every array it makes is the arena's.
+ * no active item stands at its path — one walk of the record's read beside the
+ * items decides both. Nothing to clean up on error: every array it makes is the
+ * arena's.
  *
  * Every array is allocated whatever its count: the arena answers a zero-byte
  * request with a place of its own (base/arena.h), so no array is ever NULL —
@@ -3598,8 +3590,8 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  * Lifetime: every pointer (the items, their arrays, the record, the squatted
  * list) lives in ws->arena, beside the view's rows and index.
  *
- * Performance: O(M log M + A log M) — one sort, and a search per record; no Git,
- * no probes.
+ * Performance: O(M log M + M + A) — one sort, and one walk of the records beside
+ * the items; no Git, no probes.
  */
 static error_t workspace_partition(workspace_t *ws) {
     manifest_rows_t view = manifest_rows(ws->manifest);
@@ -3635,13 +3627,14 @@ static error_t workspace_partition(workspace_t *ws) {
     /* The view's row order is unspecified: the items by kind, each in path order */
     qsort(ws->active, view.count, sizeof(*ws->active), workspace_kind_order);
 
-    /* The record, read once and held by the items alone. A record an active item
-     * stands at is that item's, found by the search every later reader of an
-     * active path makes; the rest are the orphans, in the snapshot's strcmp order
-     * (core/state.h), which their search and the join's walk rest on. An orphan
-     * is a single, its count known only once the records are paired — a block
-     * sized to the record would pay an item for every paired one — and the array
-     * holding them is sized to the bound: any record may be an orphan. */
+    /* The record, read once and held by the items alone. The read comes back in
+     * strcmp order (core/state.h state_records), the order each half of the items
+     * keeps, so the two are walked together: a record an active item stands at
+     * is that item's; the rest are the orphans, in the snapshot's strcmp order,
+     * which their search and the join's walk rest on. An orphan is a single,
+     * its count known only once the records are paired — a block sized to the
+     * record would pay an item for every paired one — and the array holding them
+     * is sized to the bound: any record may be an orphan. */
     state_record_t *records = NULL;
     size_t record_count = 0;
     error_t err = state_records(ws->state, ws->arena, &records, &record_count);
@@ -3649,12 +3642,26 @@ static error_t workspace_partition(workspace_t *ws) {
 
     ws->orphans = arena_calloc(ws->arena, record_count, sizeof(*ws->orphans));
 
-    for (size_t i = 0; i < record_count; i++) {
-        state_record_t *record = &records[i];
+    workspace_item_t *const *dirs = ws->active;
+    workspace_item_t *const *files = ws->active + ws->dir_count;
 
-        workspace_item_t *active = workspace_find_active(ws, record->filesystem_path);
-        if (active) {
-            active->record = record;
+    for (size_t r = 0, d = 0, f = 0; r < record_count; r++) {
+        state_record_t *record = &records[r];
+        const char *path = record->filesystem_path;
+
+        /* Each half's head past every item the record sorts after: the records
+         * come strictly increasing, so no head goes back */
+        while (d < ws->dir_count && strcmp(dirs[d]->filesystem_path, path) < 0) d++;
+        while (f < ws->file_count && strcmp(files[f]->filesystem_path, path) < 0) f++;
+
+        /* A head standing at the record's path holds it — one at most, the view
+         * holding one row per path, whichever kind either is */
+        if (d < ws->dir_count && strcmp(dirs[d]->filesystem_path, path) == 0) {
+            dirs[d]->record = record;
+            continue;
+        }
+        if (f < ws->file_count && strcmp(files[f]->filesystem_path, path) == 0) {
+            files[f]->record = record;
             continue;
         }
 
@@ -4311,15 +4318,23 @@ const workspace_item_t *workspace_find(
 ) {
     if (!ws || !filesystem_path) return NULL;
 
-    /* An active path's item, the clean ones too; else an orphan's, of the prefix
-     * the load analyzed — every orphan or none, the bound the diverged items
-     * list by and the orphans' lender lends (analyzed_count). No path is both:
-     * a record is an orphan exactly where no active item stands
-     * (workspace_partition). */
-    const workspace_item_t *item = workspace_find_active(ws, filesystem_path);
+    /* An active path's item, the clean ones too: each kind's half in its own
+     * order, the directory items and then the file items */
+    const workspace_item_t *dir = workspace_find_item(
+        ws->active, ws->dir_count, filesystem_path
+    );
+    if (dir) return dir;
 
-    return item ? item
-                : workspace_find_item(ws->orphans, ws->analyzed_count, filesystem_path);
+    const workspace_item_t *file = workspace_find_item(
+        ws->active + ws->dir_count, ws->file_count, filesystem_path
+    );
+    if (file) return file;
+
+    /* Else an orphan's, of the prefix the load analyzed — every orphan or none,
+     * the bound the diverged items list by and the orphans' lender lends
+     * (analyzed_count). No path is both: a record is an orphan exactly where no
+     * active item stands (workspace_partition). */
+    return workspace_find_item(ws->orphans, ws->analyzed_count, filesystem_path);
 }
 
 /**
@@ -4328,8 +4343,8 @@ const workspace_item_t *workspace_find(
 bool workspace_active_beneath(const workspace_t *ws, const char *path) {
     if (!ws || !path) return false;
 
-    /* Each kind's half in its own order, as workspace_find_active asks one path:
-     * the directory items, then the file items */
+    /* Each kind's half in its own order, as workspace_find asks one path: the
+     * directory items, then the file items */
     return workspace_items_beneath(ws->active, ws->dir_count, path).count > 0 ||
            workspace_items_beneath(ws->active + ws->dir_count, ws->file_count, path).count > 0;
 }

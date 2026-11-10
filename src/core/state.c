@@ -485,6 +485,13 @@ static error_t state_initialize(sqlite3 *db) {
  * both are refused. Both fields are integers every database carries, 0 where
  * nothing set them, so a header is never missing one.
  *
+ * The header is all the admission reads: the schema it marks and the file's
+ * encoding are taken on its word. A database another hand created under it, in
+ * another encoding or with its key under another collation, is read as dotta's
+ * own, in the order it keeps (core/state.h, the path-keyed table's principle):
+ * its reach a hand, never a command; its recovery a store in the encoding and
+ * the collation dotta creates one in.
+ *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
  */

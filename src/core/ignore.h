@@ -57,10 +57,10 @@
  * -----------
  * A ruleset is evaluated against the mount-relative path — `label_tail` of the
  * storage path (infra/label.h), what a `.gitignore` at `~`, at `/` or at the
- * deployment target would see. Every consumer classifies what it found before
- * it asks, and the tail is what is asked — the ladder is handed the name and
- * cuts it itself (ignore_verdict): `.cache/` means `~/.cache` for a `home/` path
- * and `/.cache` for a `root/` one, and nothing above the mount root takes part.
+ * profile's target would see. Every consumer classifies what it found before it
+ * asks, and the tail is what is asked — the ladder is handed the name and cuts
+ * it itself (ignore_verdict): `.cache/` means `~/.cache` for a `home/` path and
+ * `/.cache` for a `root/` one, and nothing above the mount root takes part.
  *
  * Full .gitignore grammar is supported:
  *   - Glob patterns (*, ?, [abc]) and `**` recursive globs

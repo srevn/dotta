@@ -61,7 +61,7 @@
 typedef enum {
     LABEL_HOME,    /* home/...   -> $HOME/... */
     LABEL_ROOT,    /* root/...   -> /... */
-    LABEL_CUSTOM,  /* custom/... -> per-profile deployment target */
+    LABEL_CUSTOM,  /* custom/... -> per-profile target */
 } label_t;
 
 /**
@@ -208,7 +208,7 @@ label_t label_of(const char *storage_path);
  * The subject every user-authored pattern is evaluated against. A pattern — in
  * `.dottaignore`, `[ignore] patterns`, `--exclude`, `auto_encrypt` — is matched
  * against the path relative to its mount root, what a `.gitignore` at `~`, at
- * `/` or at the deployment target would see: `home/.ssh/id_rsa` is matched as
+ * `/` or at the profile's target would see: `home/.ssh/id_rsa` is matched as
  * `.ssh/id_rsa`, `root/etc/hosts` as `etc/hosts`. Labels are dotta's, never the
  * pattern's, and nothing above the mount root takes part. Paths are resolved
  * through the table (infra/mount.h); patterns are not.

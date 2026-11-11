@@ -510,7 +510,7 @@ static path_kind_t ignore_kind(
     if (!filesystem_path) {
         output_info(
             out, OUTPUT_VERBOSE,
-            "%s'%s' has no deployment target here: only the name is matched",
+            "%s'%s' has no target here: only the name is matched",
             who, typed
         );
         return hint;

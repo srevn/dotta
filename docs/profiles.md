@@ -175,7 +175,7 @@ dotta --interactive
 Keybindings:
 - Arrow keys / `j`/`k` -- navigate
 - `Space` -- toggle enable/disable
-- `t` -- set or edit the deployment target
+- `t` -- set or edit the target
 - `J`/`K` -- reorder (move up/down)
 - `w` -- save changes
 - `q` / `Esc` -- quit

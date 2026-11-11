@@ -23,7 +23,7 @@ typedef struct {
     const char *profile;     /* Profile name (required) */
     char **paths;            /* The paths to add, each a file or a directory (required) */
     size_t path_count;       /* Number of paths */
-    const char *target;      /* Deployment target (optional, for custom/ storage) */
+    const char *target;      /* Target (optional, for custom/ storage) */
     const char *message;     /* Commit message (optional) */
     char **exclude_patterns; /* Exclude patterns (glob) - read-only */
     size_t exclude_count;    /* Number of exclude patterns */

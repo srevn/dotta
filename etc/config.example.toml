@@ -118,7 +118,7 @@ confirm_new_files = true
 #   5. Git's ignore rules, where each path stands (lowest priority)
 #
 # A pattern is matched against the path relative to its mount root — what a
-# .gitignore at ~ (home/ files), at / (root/ files) or at the deployment target
+# .gitignore at ~ (home/ files), at / (root/ files) or at the profile's target
 # (custom/ files) would see. Write `.config/Code/Cache/` for ~/.config/Code/Cache;
 # the home/ and root/ labels never appear in a pattern.
 #

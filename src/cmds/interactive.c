@@ -368,7 +368,7 @@ static error_t plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) 
             error_t err = input_target(it->target, view->arena, &target);
             if (err) {
                 return error_wrap(
-                    err, "Invalid deployment target for profile '%s'", it->name
+                    err, "Invalid target for profile '%s'", it->name
                 );
             }
             it->target = target;
@@ -926,7 +926,7 @@ const args_command_t spec_interactive = {
         "  ↑↓, j/k, g/G    Navigate profiles\n"
         "  space           Enable/disable profiles\n"
         "  J/K             Move profile up/down\n"
-        "  t               Set/edit deployment target\n"
+        "  t               Set/edit target\n"
         "  w               Save profile order and choice\n"
         "  q, ESC          Quit\n"
         "\n"

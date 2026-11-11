@@ -8,8 +8,8 @@
  *
  *   home/X   - X under $HOME (per-machine $HOME resolution)
  *   root/X   - /X (filesystem root; same on every machine)
- *   custom/X - X under a per-profile, per-machine deployment target (configured
- *              via `--target` at profile-enable time)
+ *   custom/X - X under a per-profile, per-machine target (configured via `--target`
+ *              at profile-enable time)
  *
  * Storage paths are stable across machines; where a label lands on this machine
  * is decided by the mount table below. The grammar of a name — the three words,
@@ -128,7 +128,7 @@
 #include "infra/label.h"
 
 /**
- * Validate a deployment target as the row will hold it: the place it names
+ * Validate a target as the row will hold it: the place it names
  *
  * Its one caller is the target's reading (infra/input.h input_target), which
  * reads every typed target — the two --target flags' and the editor's — as any
@@ -148,7 +148,7 @@
  *
  * Filesystem access is required for the existence + directory checks.
  *
- * @param target Deployment target to validate (must not be NULL)
+ * @param target The target to validate (must not be NULL)
  * @return Error or NULL when valid
  */
 error_t mount_validate_target(const char *target);
@@ -189,7 +189,7 @@ bool mount_same_target(const char *a, const char *b);
 typedef struct mount_table mount_table_t;
 
 /**
- * A single mount: the profile <-> deployment-target pairing.
+ * A single mount: the profile <-> target pairing.
  *
  * POD value type passed by callers to `mount_table_build`. Both fields are borrowed
  * for the call only — the table copies what it keeps.

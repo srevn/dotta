@@ -863,7 +863,7 @@ state_profiles_t state_profiles(const state_t *state) {
 }
 
 /**
- * A single profile's deployment target
+ * A single profile's target
  */
 const char *state_target(
     const state_t *state,
@@ -893,7 +893,7 @@ bool state_enabled(const state_t *state, const char *profile) {
 }
 
 /**
- * Enable profile with optional deployment target
+ * Enable profile with optional target
  */
 error_t state_enable_profile(
     state_t *state,
@@ -1037,8 +1037,8 @@ error_t state_reorder_profiles(
         const state_profile_entry_t *preserved = state_find_profile(state, name);
 
         /* The precondition loop above guarantees preserved is non-NULL. A profile
-         * with no deployment target (home/root) legitimately has preserved->target
-         * == NULL, which binds NULL. */
+         * with no target (home/root) legitimately has preserved->target == NULL,
+         * which binds NULL. */
 
         sqlite3_stmt *stmt = state_statement(state, STATEMENT_INSERT_PROFILE);
 

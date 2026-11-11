@@ -203,6 +203,6 @@ They run as the invoker, never as root. `HOME`, `USER` and `LOGNAME` name the us
 
 Scripts execute in the enabled profiles' layering order, bottom layer first (on a fresh clone: global, then the OS, then the host); `--all` runs every profile's script in the layering convention's order, and named profiles run in the order given. After cloning, dotta prompts to run detected bootstrap scripts (override with `--bootstrap` or `--no-bootstrap`).
 
-## Deployment Targets
+## Targets
 
 A profile can be pointed at a directory of its own -- a container, a jail, a chroot -- so that files inside it deploy there on each machine. There is nothing to configure here: a target belongs to the machine, and `dotta profile enable --target` sets it. See [Targets](profiles.md#targets).

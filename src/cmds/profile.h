@@ -34,7 +34,7 @@ typedef struct {
     char **profiles;
     size_t profile_count;
 
-    /* Deployment target (for enable with custom/ files) */
+    /* Target (for enable with custom/ files) */
     const char *target;
 
     /* List options */

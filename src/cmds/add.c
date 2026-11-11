@@ -1484,11 +1484,11 @@ static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
  * paths — whose each path is, and nothing the record says.
  *
  * Algorithm:
- *   1. Scope. A new profile is enabled here with its deployment target — creating
- *      a profile via add enables it, in the same transaction as the record. An
- *      existing profile has rows in the view only if it is already enabled: not
- *      enabled, nothing is written — no row for a capture to win, and the target
- *      UPSERT enable's business
+ *   1. Scope. A new profile is enabled here with its target — creating a profile
+ *      via add enables it, in the same transaction as the record. An existing
+ *      profile has rows in the view only if it is already enabled: not enabled,
+ *      nothing is written — no row for a capture to win, and the target UPSERT
+ *      enable's business
  *   2. Build the view; anchor each capture where its own claim stands at the
  *      path the walk read it at, its record the capture's. What the commit let
  *      go — an ancestor claim the climb retired, a derivation its prune took —

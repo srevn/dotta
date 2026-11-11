@@ -870,7 +870,7 @@ typedef struct {
 state_profiles_t state_profiles(const state_t *state);
 
 /**
- * A single profile's deployment target
+ * A single profile's target
  *
  * Returns a borrowed pointer into the row cache. Same lifetime rules as
  * state_profiles. The answer is a key or NULL, the column holding nothing else
@@ -889,8 +889,8 @@ state_profiles_t state_profiles(const state_t *state);
  *
  * @param state State (NULL answers NULL: a run with no database holds no row)
  * @param profile Profile name to look up (must not be NULL)
- * @return Borrowed deployment target string, or NULL when the profile has no
- *         deployment target, is not enabled, or the state has no database.
+ * @return Borrowed target string, or NULL when the profile has no target, is
+ *         not enabled, or the state has no database.
  */
 const char *state_target(
     const state_t *state,

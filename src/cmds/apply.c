@@ -2747,7 +2747,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Their profile has no deployment target here, so nothing lands them"
+                "  Their profile has no target here, so nothing lands them"
             );
             output_info(
                 out, OUTPUT_NORMAL,

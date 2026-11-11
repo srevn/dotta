@@ -154,10 +154,10 @@ typedef struct {
  * the capture exactly: one another claim stands over, one another name of this
  * profile holds — a second name of one profile being a thing it can hold and a
  * sync can bring here (core/manifest.h manifest_unkept, whose screen word is
- * "unused path"), whose repair is the health channel's on the same screen, not
- * this receipt's — and one whose name the profile no longer holds at the path
- * at all. Nothing falls through, which is what makes each cause checked where
- * the row that says it is in hand rather than read off a difference.
+ * "unused path"), whose repair the view's health gives on the same screen, not
+ * this receipt — and one whose name the profile no longer holds at the path at
+ * all. Nothing falls through, which is what makes each cause checked where the
+ * row that says it is in hand rather than read off a difference.
  *
  * `overridden` is three positions, the view's own (core/manifest.c manifest_layer):
  * another profile's claim standing at the path; a blob captured where claims
@@ -2679,8 +2679,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * its path, claims beneath it, or a blob above it, the profile's own
          * claims among them, so the note names no profile — a row of this one
          * under another of its own names is an unused path, whose repair the
-         * health channel carries on the status screen, and a name the profile
-         * no longer holds is one a later commit removed. A capture none of them
+         * view's health carries on the status screen, and a name the profile no
+         * longer holds is one a later commit removed. A capture none of them
          * names took its row, which the ✓ lines above already say. */
         if (receipt.overridden > 0) {
             output_info(

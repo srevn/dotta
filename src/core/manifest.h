@@ -59,7 +59,7 @@
  * called fresh, so manifest_name answers what the *next* settle will keep rather
  * than what the last one did.
  *
- * Three things a claim can fail to become, and the health channel says each. A
+ * Three things a claim can fail to become, and the view's health says each. A
  * claim this machine cannot place stands nowhere: manifest_unbound, the repair
  * a `--target`. A claim its profile did not **keep** has one, and another name
  * of the same profile is kept there: manifest_unkept, the repair a `remove`. A
@@ -77,10 +77,10 @@
  * no record join, no divergence screen, no deploy. The verbs that read a profile
  * directly serve it as readily as any other name — `dotta list -p P` lists it,
  * `dotta show -p P` prints its bytes — and none of them says it is unused, which
- * is what the health channel is for; `remove`, which reads the profile too, is
+ * is what the view's health is for; `remove`, which reads the profile too, is
  * the one verb that takes it away. And one thing a profile can fail to be: here.
  * An enabled profile Git holds no branch for is **missing** and contributes
- * nothing: manifest_missing, the channel's fourth slice, the repair a disable,
+ * nothing: manifest_missing, the view's fourth health slice, the repair a disable,
  * or the next sync where the remote holds the branch.
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
@@ -681,7 +681,7 @@ error_t manifest_mount_table(
 
 /**
  * One claim the build could not place: its profile has no target on this machine.
- * Explicit claims alone, as in every slice of the health channel — the profile's
+ * Explicit claims alone, as in every slice of the view's health — the profile's
  * files and the directories it tracks, what it holds by core/profiles.h
  * profile_counts_t's rule: a derived one is the way to a claim, held apart for
  * the restore that writes it back (manifest_derived). Recorded, never dropped
@@ -805,9 +805,9 @@ typedef struct {
  * one, a verb admitting only a name the profile already holds
  * (manifest_holds_name).
  *
- * Readers: the health channel's own listing (cmds/status.c status_print_profiles),
- * apply's section (cmds/apply.c cmd_apply) and sync's after its Git phase
- * (cmds/sync.c cmd_sync), and the completed selection's refusal in add (cmds/add.c
+ * Readers: status's health listing (cmds/status.c status_print_profiles), apply's
+ * section (cmds/apply.c cmd_apply) and sync's after its Git phase (cmds/sync.c
+ * cmd_sync), and the completed selection's refusal in add (cmds/add.c
  * add_refuse_moves) — which reads the slice as every name its claims can move,
  * since no group can grow under an uncommitted claim and only which member is
  * kept can change; which side of a place they move is another question
@@ -878,11 +878,11 @@ typedef struct {
  * classification of each directory claim, and the layer one comparison where a
  * blob and a claim leave each other no room.
  *
- * Readers: the health channel's listing (cmds/status.c status_print_profiles),
- * apply's section (cmds/apply.c cmd_apply) and sync's after its Git phase
- * (cmds/sync.c cmd_sync); and add's own remedy over its one profile's view, a
- * file it captures at a claim's own name taking it — a documents' entry, this
- * machine's never meeting its blob at one name (cmds/add.c cmd_add).
+ * Readers: status's health listing (cmds/status.c status_print_profiles), apply's
+ * section (cmds/apply.c cmd_apply) and sync's after its Git phase (cmds/sync.c
+ * cmd_sync); and add's own remedy over its one profile's view, a file it captures
+ * at a claim's own name taking it — a documents' entry, this machine's never
+ * meeting its blob at one name (cmds/add.c cmd_add).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
@@ -905,20 +905,20 @@ typedef struct {
  * is not among manifest_profiles, and every record it left is an orphan no branch
  * backs, which the workspace reads as a file released and a directory by what
  * is left in it (core/workspace.c workspace_analyze_orphans). Missing is an
- * observation, never an error (manifest_build): the health channel's fact about
- * a profile, where manifest_unbound, manifest_unkept and manifest_contradicted
- * are its facts about claims. One is left by a deletion a sync learned — another
- * machine deleted the profile, and its enabled row stays until `profile disable`
- * (cmds/sync.c sync_execute) — by Git surgery, or by a state write that failed
- * after `remove` deleted the branch. Empty on every build whose enabled profiles
- * all have their branches, and on one profile's view.
+ * observation, never an error (manifest_build): the health's fact about a profile,
+ * where manifest_unbound, manifest_unkept and manifest_contradicted are its facts
+ * about claims. One is left by a deletion a sync learned — another machine deleted
+ * the profile, and its enabled row stays until `profile disable` (cmds/sync.c
+ * sync_execute) — by Git surgery, or by a state write that failed after `remove`
+ * deleted the branch. Empty on every build whose enabled profiles all have their
+ * branches, and on one profile's view.
  *
  * The screen says **no branch**: the header's word is what the build found of
  * the profile, the screen's is what it lacks — the branch the next sync brings
  * back where the remote holds it, or the profile a disable lets go of.
  *
- * Readers: the health channel's listing (cmds/status.c status_print_profiles)
- * and apply's (cmds/apply.c cmd_apply); and an enable that names one says so
+ * Readers: status's health listing (cmds/status.c status_print_profiles) and
+ * apply's (cmds/apply.c cmd_apply); and an enable that names one says so
  * (cmds/profile.c profile_enable).
  *
  * @param manifest Manifest (NULL returns an empty slice)

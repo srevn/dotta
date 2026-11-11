@@ -104,19 +104,66 @@ typedef struct {
 } contribution_t;
 
 /**
+ * The view's health — what the build made no row of
+ *
+ * Between a profile's documents and a row standing a claim passes four checks,
+ * and the enabled set one before any; each keeps back what it cannot pass on,
+ * and notes it here where it finds it:
+ *
+ *   the set      an enabled profile no branch stands for         missing
+ *   the decode   a tracked claim its own tree contradicts        contradicted
+ *   the place    a claim this machine has no place for           unbound
+ *   the settle   a name beside the one kept at its path          unkept
+ *   the layer    a claim its own profile's claims leave no room  contradicted
+ *
+ * Explicit claims alone: a derived one is the way to a claim, and the one check
+ * that keeps back a derived claim a reader asks for, the place, holds it apart
+ * beside the explicit ones (derived). A claim another profile's claim stands
+ * over is noted nowhere: that is layering, read off the index by position.
+ *
+ * Each list is a flat array grown where an entry is noted (arena_grow), lent
+ * whole by its accessor, and empty on the common build: no allocation until the
+ * first note.
+ */
+typedef struct {
+    arena_t *arena;                              /* The build's: every list below grows here */
+
+    /* The explicit claims the build could not place: no target binding here (manifest_unbound) */
+    manifest_unbound_claim_t *unbound;           /* Grouped by profile, in build order */
+    size_t unbound_count;
+    size_t unbound_capacity;
+
+    /* The derived claims it could not place, held apart (manifest_derived) */
+    manifest_unbound_claim_t *derived;           /* Grouped by profile, in build order */
+    size_t derived_count;
+    size_t derived_capacity;
+
+    /* The names the settle did not keep: another is kept at the path (manifest_unkept) */
+    manifest_unkept_claim_t *unkept;             /* Grouped by profile, in build order */
+    size_t unkept_count;
+    size_t unkept_capacity;
+
+    /* The claims a profile's own claims leave no room (manifest_contradicted) */
+    manifest_contradicted_claim_t *contradicted; /* The decode's in build order, then the layer's */
+    size_t contradicted_count;
+    size_t contradicted_capacity;
+
+    /* The enabled profiles the build found no branch for (manifest_missing) */
+    const char **missing;                        /* In the enabled set's order */
+    size_t missing_count;
+    size_t missing_capacity;
+} health_t;
+
+/**
  * Manifest — the view
  *
- * The contributions, in precedence order, and the index precedence leaves over
- * them. Rows are allocated one by one from the caller's arena and are stable
- * from the moment they are allocated, so every index stores row pointers directly.
- * Each spine — a contribution's and the view's — is cut once, exactly, from what
- * its indexes point at; there is no growth and no reallocation, and manifest_rows
- * hands the view's out as the public slice.
- *
- * The health channel's slices — what the build could not make a row of — and
- * the derived claims it could not place, held apart beside them, are flat arena
- * arrays grown by arena_grow where each entry is noted, lent whole, and empty
- * on the common build: no allocation until the first note.
+ * The contributions, in precedence order, the index precedence leaves over them,
+ * and what the build made no row of (health_t). Rows are allocated one by one
+ * from the caller's arena and are stable from the moment they are allocated, so
+ * every index stores row pointers directly. Each spine — a contribution's and
+ * the view's — is cut once, exactly, from what its indexes point at; there is
+ * no growth and no reallocation, and manifest_rows hands the view's out as the
+ * public slice.
  */
 struct manifest {
     /* The contributions, one per profile the build walks, in precedence order,
@@ -139,44 +186,25 @@ struct manifest {
      * caller's. */
     const mount_table_t *mounts;                 /* The build's, or the caller's */
 
-    /* The explicit claims the build could not place: no target binding here (manifest_unbound) */
-    manifest_unbound_claim_t *unbound;           /* Arena; grouped by profile, in build order */
-    size_t unbound_count;
-    size_t unbound_capacity;
-
-    /* The derived claims it could not place, held apart (manifest_derived) */
-    manifest_unbound_claim_t *derived;           /* Arena; grouped by profile, in build order */
-    size_t derived_count;
-    size_t derived_capacity;
-
-    /* The names the settle did not keep: another is kept at the path (manifest_unkept) */
-    manifest_unkept_claim_t *unkept;             /* Arena; grouped by profile, in build order */
-    size_t unkept_count;
-    size_t unkept_capacity;
-
-    /* The tracked claims a profile's own tree contradicts (manifest_contradicted) */
-    manifest_contradicted_claim_t *contradicted; /* Arena; grouped by profile, in build order */
-    size_t contradicted_count;
-    size_t contradicted_capacity;
-
-    /* The enabled profiles the build found no branch for (manifest_missing) */
-    const char **missing;                        /* Arena; in the enabled set's order */
-    size_t missing_count;
-    size_t missing_capacity;
+    /* What the build made no row of, each entry noted where its check finds it */
+    health_t health;
 };
 
 /**
  * The claim walk: what one walk of one profile carries to place its claims
  *
- * Everything the walk's visitor needs to place one profile's claims: the view
- * and the contribution being filled, and the two lists the step spends. Handed
- * to each profile's walk once and read at O(1) per claim — and to its second
- * question, the claims its tree contradicts, whose visitor reads the view, the
- * profile's name and the arena alone (manifest_note_claim).
+ * Everything the per-profile step's three moves read and write: the table the
+ * claims are placed by, the view's health, the contribution being filled, and
+ * the two lists the step spends. Handed to the profile's walk once and read at
+ * O(1) per claim (manifest_place_claim); to its second question, the claims its
+ * tree contradicts, whose visitor reads the health, the profile's name and the
+ * arena alone (manifest_note_claim); and last to the settle, which decides every
+ * path the walk met twice (manifest_settle). The view's index and rows are no
+ * part of it: no claim's placement reads or writes them.
  *
  * Memory ownership:
- * - manifest: borrowed, caller retains ownership — the mount table and the unbound
- *             slice are read and written through it
+ * - mounts: borrowed, the view's table — every claim is placed by it
+ * - health: borrowed, the view's — what the step makes no row of is noted on it
  * - contribution: the profile's own, borrowed from manifest_contribute: its
  *             arena-backed name (every row of this profile borrows the pointer,
  *             and the table is keyed by it to place a custom/ claim) and its
@@ -185,14 +213,15 @@ struct manifest {
  *             spent when manifest_contribute returns
  * - contenders: the rows that arrived at a path the profile had already named,
  *             grown in the arena as rows (arena_grow), so the settle sorts them
- *             where they are; spent with the walk
+ *             where they are; spent by it
  * - arena: borrowed, must not be NULL; per-row strings are abandoned to it
  *
  * The claims arrive decoded and lent for the visit (core/profiles.h profile_walk),
  * so the walk carries no sheet: the profile read it.
  */
 typedef struct {
-    manifest_t *manifest;         /* Target view (modified by the visitor) */
+    const mount_table_t *mounts;  /* The table every claim is placed by */
+    health_t *health;             /* The view's health: what the step makes no row of */
     contribution_t *contribution; /* The profile's own claims and their indexes */
     ptr_array_t *placed;          /* Every row this step placed, in claim order */
     manifest_row_t **contenders;  /* The rows that met a path already named */
@@ -247,28 +276,26 @@ static manifest_row_t *manifest_place(
  * content-authority rule having contradicted the rest before anything was resolved.
  * And a tree holds one blob per path, a sheet one directory claim per key.
  *
- * The slice grows in the arena (arena_grow). Both strings must be arena-backed
- * by the caller; the entry borrows them for the view's lifetime.
+ * The slice grows in the health's arena (arena_grow). Both strings must be
+ * arena-backed by the caller; the entry borrows them for the view's lifetime.
  *
- * @param manifest Target view (must not be NULL)
+ * @param health The view's health (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
  * @param storage_path Arena-backed storage path (must not be NULL)
  * @param kind The claim's kind (FILE for tree blobs, DIRECTORY for metadata items)
- * @param arena Arena for the array growth (must not be NULL)
  */
 static void manifest_note_unbound(
-    manifest_t *manifest,
+    health_t *health,
     const char *profile,
     const char *storage_path,
-    path_kind_t kind,
-    arena_t *arena
+    path_kind_t kind
 ) {
-    manifest->unbound = arena_grow(
-        arena, manifest->unbound, &manifest->unbound_capacity,
-        manifest->unbound_count + 1, sizeof(*manifest->unbound)
+    health->unbound = arena_grow(
+        health->arena, health->unbound, &health->unbound_capacity,
+        health->unbound_count + 1, sizeof(*health->unbound)
     );
 
-    manifest->unbound[manifest->unbound_count++] = (manifest_unbound_claim_t){
+    health->unbound[health->unbound_count++] = (manifest_unbound_claim_t){
         .profile = profile,
         .storage_path = storage_path,
         .kind = kind,
@@ -284,26 +311,25 @@ static void manifest_note_unbound(
  * derived slice, a DIRECTORY's. No dedup, and none possible — the sheet holds
  * one directory claim per key, and the walk shows each once.
  *
- * The slice grows in the arena, as the unbound one does. Both strings must be
- * arena-backed by the caller; the entry borrows them for the view's lifetime.
+ * The slice grows in the health's arena, as the unbound one does. Both strings
+ * must be arena-backed by the caller; the entry borrows them for the view's
+ * lifetime.
  *
- * @param manifest Target view (must not be NULL)
+ * @param health The view's health (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
  * @param storage_path Arena-backed storage path (must not be NULL)
- * @param arena Arena for the array growth (must not be NULL)
  */
 static void manifest_note_derived(
-    manifest_t *manifest,
+    health_t *health,
     const char *profile,
-    const char *storage_path,
-    arena_t *arena
+    const char *storage_path
 ) {
-    manifest->derived = arena_grow(
-        arena, manifest->derived, &manifest->derived_capacity,
-        manifest->derived_count + 1, sizeof(*manifest->derived)
+    health->derived = arena_grow(
+        health->arena, health->derived, &health->derived_capacity,
+        health->derived_count + 1, sizeof(*health->derived)
     );
 
-    manifest->derived[manifest->derived_count++] = (manifest_unbound_claim_t){
+    health->derived[health->derived_count++] = (manifest_unbound_claim_t){
         .profile = profile,
         .storage_path = storage_path,
         .kind = PATH_KIND_DIRECTORY,
@@ -320,28 +346,27 @@ static void manifest_note_derived(
  * per key, and the content-authority rule settles the one name they can both
  * carry before the contest sees it).
  *
- * The slice grows in the arena, as the unbound one does. Every string must be
- * arena-backed by the caller; the entry borrows them for the view's lifetime.
+ * The slice grows in the health's arena, as the unbound one does. Every string
+ * must be arena-backed by the caller; the entry borrows them for the view's
+ * lifetime.
  *
- * @param manifest Target view (must not be NULL)
+ * @param health The view's health (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
  * @param row The row whose name was not kept (must not be NULL)
  * @param kept The name that was (must not be NULL)
- * @param arena Arena for the array growth (must not be NULL)
  */
 static void manifest_note_unkept(
-    manifest_t *manifest,
+    health_t *health,
     const char *profile,
     const manifest_row_t *row,
-    const char *kept,
-    arena_t *arena
+    const char *kept
 ) {
-    manifest->unkept = arena_grow(
-        arena, manifest->unkept, &manifest->unkept_capacity,
-        manifest->unkept_count + 1, sizeof(*manifest->unkept)
+    health->unkept = arena_grow(
+        health->arena, health->unkept, &health->unkept_capacity,
+        health->unkept_count + 1, sizeof(*health->unkept)
     );
 
-    manifest->unkept[manifest->unkept_count++] = (manifest_unkept_claim_t){
+    health->unkept[health->unkept_count++] = (manifest_unkept_claim_t){
         .profile = profile,
         .storage_path = row->storage_path,
         .kind = path_type_kind(row->type),
@@ -362,32 +387,30 @@ static void manifest_note_unkept(
  * — the other NULL. No dedup, and none needed: a claim the tree contradicts is
  * one the walk never shows, and the layer decides each claim the walk shows once.
  *
- * The slice grows in the arena, as the others do. Every string must be arena-backed
- * by the caller; the entry borrows them for the view's lifetime.
+ * The slice grows in the health's arena, as the others do. Every string must be
+ * arena-backed by the caller; the entry borrows them for the view's lifetime.
  *
- * @param manifest Target view (must not be NULL)
+ * @param health The view's health (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
  * @param storage_path The claim that stands nowhere (must not be NULL)
  * @param kind Its kind
  * @param blob_above The blob at its name or at a rung above it, or NULL
  * @param place The name the directory taking its place has, or NULL
- * @param arena Arena for the array growth (must not be NULL)
  */
 static void manifest_note_contradicted(
-    manifest_t *manifest,
+    health_t *health,
     const char *profile,
     const char *storage_path,
     path_kind_t kind,
     const char *blob_above,
-    const char *place,
-    arena_t *arena
+    const char *place
 ) {
-    manifest->contradicted = arena_grow(
-        arena, manifest->contradicted, &manifest->contradicted_capacity,
-        manifest->contradicted_count + 1, sizeof(*manifest->contradicted)
+    health->contradicted = arena_grow(
+        health->arena, health->contradicted, &health->contradicted_capacity,
+        health->contradicted_count + 1, sizeof(*health->contradicted)
     );
 
-    manifest->contradicted[manifest->contradicted_count++] = (manifest_contradicted_claim_t){
+    health->contradicted[health->contradicted_count++] = (manifest_contradicted_claim_t){
         .profile = profile,
         .storage_path = storage_path,
         .kind = kind,
@@ -403,24 +426,22 @@ static void manifest_note_contradicted(
  * contributing nothing. No dedup, and none needed — the enabled set names each
  * profile once.
  *
- * The slice grows in the arena, as the other two do. The name must be arena-backed
- * by the caller; the entry borrows it for the view's lifetime.
+ * The slice grows in the health's arena, as the others do. The name must be
+ * arena-backed by the caller; the entry borrows it for the view's lifetime.
  *
- * @param manifest Target view (must not be NULL)
+ * @param health The view's health (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
- * @param arena Arena for the array growth (must not be NULL)
  */
 static void manifest_note_missing(
-    manifest_t *manifest,
-    const char *profile,
-    arena_t *arena
+    health_t *health,
+    const char *profile
 ) {
-    manifest->missing = arena_grow(
-        arena, manifest->missing, &manifest->missing_capacity,
-        manifest->missing_count + 1, sizeof(*manifest->missing)
+    health->missing = arena_grow(
+        health->arena, health->missing, &health->missing_capacity,
+        health->missing_count + 1, sizeof(*health->missing)
     );
 
-    manifest->missing[manifest->missing_count++] = profile;
+    health->missing[health->missing_count++] = profile;
 }
 
 /**
@@ -740,55 +761,53 @@ static int name_order(const void *a, const void *b) {
  * Empty on every profile that names each of its paths once, which is the whole
  * cost on a branch this machine authored alone.
  *
- * @param manifest Target view — the mount table, and the unkept slice (must not
- *                 be NULL)
- * @param c The contribution being settled (must not be NULL)
- * @param contenders The rows that met a path already named, sorted here in place
- *                   (NULL where there are none)
- * @param contender_count How many
- * @param arena Arena for the groups and the composed names (must not be NULL)
+ * @param walk The profile's walk, both its passes done (must not be NULL): its
+ *             contenders are sorted here in place and its contribution settled,
+ *             under the table its claims were placed by, and every name not kept
+ *             is noted on its health
  */
-static void manifest_settle(
-    manifest_t *manifest,
-    contribution_t *c,
-    manifest_row_t **contenders,
-    size_t contender_count,
-    arena_t *arena
-) {
-    if (contender_count == 0) return;
+static void manifest_settle(const claim_walk_t *walk) {
+    if (walk->contender_count == 0) return;
+
+    contribution_t *c = walk->contribution;
 
     /* The index of the groups, allocated where the first one is about to exist:
      * a contribution with no contender never has one, and the readers test the
      * pointer rather than a count. */
-    c->contested = hashmap_borrow(arena, 8);
+    c->contested = hashmap_borrow(walk->arena, 8);
 
     /* What every question below is asked under: this contribution, and no claim
      * beyond it — the settle reads the profile as it arrived. */
     const naming_t n = {
         .c       = c,
-        .mounts  = manifest->mounts,
+        .mounts  = walk->mounts,
         .profile = c->profile,
         .pending = NULL,
-        .arena   = arena,
+        .arena   = walk->arena,
     };
 
     /* The contest by path, so the rows contending for one path form a run and a
      * parent's run comes before its children's (filesystem_order) */
-    qsort(contenders, contender_count, sizeof(*contenders), filesystem_order);
+    qsort(
+        walk->contenders, walk->contender_count,
+        sizeof(*walk->contenders), filesystem_order
+    );
 
-    for (size_t i = 0; i < contender_count;) {
-        const char *filesystem_path = contenders[i]->filesystem_path;
+    for (size_t i = 0; i < walk->contender_count;) {
+        const char *filesystem_path = walk->contenders[i]->filesystem_path;
 
         size_t count = 0;
-        while (i + count < contender_count &&
-            strcmp(contenders[i + count]->filesystem_path, filesystem_path) == 0) count++;
+        while (i + count < walk->contender_count &&
+            strcmp(walk->contenders[i + count]->filesystem_path, filesystem_path) == 0) {
+            count++;
+        }
 
         /* The group: the name that arrived first, and the ones that met it. One
          * slot past them stays NULL — the group outlives this loop, and every
          * reader of it walks to the terminator. */
-        manifest_row_t **group = arena_calloc(arena, count + 2, sizeof(*group));
+        manifest_row_t **group = arena_calloc(walk->arena, count + 2, sizeof(*group));
         group[0] = hashmap_get(c->explicit, filesystem_path);
-        for (size_t g = 0; g < count; g++) group[g + 1] = contenders[i + g];
+        for (size_t g = 0; g < count; g++) group[g + 1] = walk->contenders[i + g];
         qsort(group, count + 1, sizeof(*group), name_order);
 
         manifest_row_t *kept = manifest_decide(&n, filesystem_path, group);
@@ -803,9 +822,7 @@ static void manifest_settle(
 
         for (size_t g = 0; group[g]; g++) {
             if (group[g] == kept) continue;
-            manifest_note_unkept(
-                manifest, c->profile, group[g], kept->storage_path, arena
-            );
+            manifest_note_unkept(walk->health, c->profile, group[g], kept->storage_path);
         }
 
         i += count;
@@ -830,9 +847,9 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
     claim_walk_t *walk = payload;
     contribution_t *c = walk->contribution;
 
-    /* The walk lends the name for this call alone; the row and the unbound note
-     * keep it past the walk, so it is copied into the arena — once, and Git's
-     * only bound on a path's length is memory. */
+    /* The walk lends the name for this call alone; the row, or the note where
+     * none is made, keeps it past the walk, so it is copied into the arena —
+     * once, and Git's only bound on a path's length is memory. */
     const char *storage_path = arena_strdup(walk->arena, claim->storage_path);
 
     /* Convert storage path to filesystem path against the mount table.
@@ -851,7 +868,7 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
      * be manufactured here. The shape was checked where the profile read the
      * name — a blob's at its walk, an item's at its parse — so the label is one. */
     const char *filesystem_path = mount_resolve(
-        walk->arena, walk->manifest->mounts, c->profile, storage_path
+        walk->arena, walk->mounts, c->profile, storage_path
     );
     if (!filesystem_path) {
         /* A derived claim is held apart, as a placed one is below: the way to
@@ -859,13 +876,12 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
          * profile's next settle prunes — so the health slice holds the claims a
          * repair is for, as its siblings do */
         if (claim->type == PATH_TYPE_DIRECTORY && !claim->tracked) {
-            manifest_note_derived(walk->manifest, c->profile, storage_path, walk->arena);
+            manifest_note_derived(walk->health, c->profile, storage_path);
             return NULL;
         }
 
         manifest_note_unbound(
-            walk->manifest, c->profile, storage_path, path_type_kind(claim->type),
-            walk->arena
+            walk->health, c->profile, storage_path, path_type_kind(claim->type)
         );
         return NULL;
     }
@@ -962,9 +978,9 @@ static error_t manifest_note_claim(const profile_claim_t *claim, void *payload) 
     if (!claim->tracked) return NULL;
 
     manifest_note_contradicted(
-        walk->manifest, walk->contribution->profile,
+        walk->health, walk->contribution->profile,
         arena_strdup(walk->arena, claim->storage_path), PATH_KIND_DIRECTORY,
-        arena_strdup(walk->arena, claim->blob_above), NULL, walk->arena
+        arena_strdup(walk->arena, claim->blob_above), NULL
     );
 
     return NULL;
@@ -1042,7 +1058,8 @@ static error_t manifest_contribute(
     ptr_array_init(&placed, arena, 0);
 
     claim_walk_t walk = {
-        .manifest     = manifest,
+        .mounts       = manifest->mounts,
+        .health       = &manifest->health,
         .contribution = c,
         .placed       = &placed,
         .arena        = arena
@@ -1066,7 +1083,7 @@ static error_t manifest_contribute(
     if (err) return err;
 
     /* Every path this profile named twice, decided once. */
-    manifest_settle(manifest, c, walk.contenders, walk.contender_count, arena);
+    manifest_settle(&walk);
 
     /* The contribution's rows: every row kept in the index of its class, in claim
      * order. A name that lost and a second chain stay in the arena and leave
@@ -1394,8 +1411,8 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
             if (above) {
                 if (above->profile == c->profile) {
                     manifest_note_contradicted(
-                        manifest, c->profile, row->storage_path, path_type_kind(row->type),
-                        above->storage_path, NULL, arena
+                        &manifest->health, c->profile, row->storage_path,
+                        path_type_kind(row->type), above->storage_path, NULL
                     );
                 }
                 continue;
@@ -1417,8 +1434,8 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
                 ptr_array_push(&rungs, rung);
                 if (beneath == c) {
                     manifest_note_contradicted(
-                        manifest, c->profile, row->storage_path, path_type_kind(row->type),
-                        NULL, rung->storage_path, arena
+                        &manifest->health, c->profile, row->storage_path,
+                        path_type_kind(row->type), NULL, rung->storage_path
                     );
                 }
                 continue;
@@ -1483,7 +1500,8 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
  * so is the index, which borrows its keys from the rows it points at
  * (hashmap_borrow); each contribution fills its own slot as it is registered
  * (manifest_contribute). No spine is allocated here: each is cut once, exactly,
- * from the indexes that decide it.
+ * from the indexes that decide it. Nor is any list of the health, each of which
+ * grows in the same arena from its first note (health_t).
  */
 static manifest_t *manifest_allocate(
     arena_t *arena,
@@ -1500,6 +1518,8 @@ static manifest_t *manifest_allocate(
     string_array_init(&manifest->profiles, arena, profile_capacity);
 
     manifest->index = hashmap_borrow(arena, index_capacity);
+
+    manifest->health.arena = arena;
 
     return manifest;
 }
@@ -1608,7 +1628,7 @@ error_t manifest_build(
         err = stands[i] ? gitops_branch_commit(repo, name, &head) : NULL;
         if (err) return err;
         if (!head) {
-            manifest_note_missing(manifest, arena_strdup(arena, name), arena);
+            manifest_note_missing(&manifest->health, arena_strdup(arena, name));
             continue;
         }
 
@@ -1721,8 +1741,8 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest) {
 manifest_unbound_t manifest_unbound(const manifest_t *manifest) {
     if (!manifest) return (manifest_unbound_t){ 0 };
     return (manifest_unbound_t){
-        .entries = manifest->unbound,
-        .count = manifest->unbound_count,
+        .entries = manifest->health.unbound,
+        .count = manifest->health.unbound_count,
     };
 }
 
@@ -1732,8 +1752,8 @@ manifest_unbound_t manifest_unbound(const manifest_t *manifest) {
 manifest_unbound_t manifest_derived(const manifest_t *manifest) {
     if (!manifest) return (manifest_unbound_t){ 0 };
     return (manifest_unbound_t){
-        .entries = manifest->derived,
-        .count = manifest->derived_count,
+        .entries = manifest->health.derived,
+        .count = manifest->health.derived_count,
     };
 }
 
@@ -1743,19 +1763,20 @@ manifest_unbound_t manifest_derived(const manifest_t *manifest) {
 manifest_unkept_t manifest_unkept(const manifest_t *manifest) {
     if (!manifest) return (manifest_unkept_t){ 0 };
     return (manifest_unkept_t){
-        .entries = manifest->unkept,
-        .count = manifest->unkept_count,
+        .entries = manifest->health.unkept,
+        .count = manifest->health.unkept_count,
     };
 }
 
 /**
- * The tracked directory claims the profiles' own trees contradict
+ * The claims the profiles' own claims leave no room, in their documents and on
+ * this machine
  */
 manifest_contradicted_t manifest_contradicted(const manifest_t *manifest) {
     if (!manifest) return (manifest_contradicted_t){ 0 };
     return (manifest_contradicted_t){
-        .entries = manifest->contradicted,
-        .count = manifest->contradicted_count,
+        .entries = manifest->health.contradicted,
+        .count = manifest->health.contradicted_count,
     };
 }
 
@@ -1765,8 +1786,8 @@ manifest_contradicted_t manifest_contradicted(const manifest_t *manifest) {
 manifest_missing_t manifest_missing(const manifest_t *manifest) {
     if (!manifest) return (manifest_missing_t){ 0 };
     return (manifest_missing_t){
-        .entries = manifest->missing,
-        .count = manifest->missing_count,
+        .entries = manifest->health.missing,
+        .count = manifest->health.missing_count,
     };
 }
 

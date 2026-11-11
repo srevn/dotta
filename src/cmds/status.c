@@ -290,8 +290,8 @@ static void status_print_profiles(
      * block it belongs to, each line a dimmed annotation and its sentence, the
      * annotations aligned — what a list's legend does for its tags (base/output.h
      * output_list_legend), with the annotation above playing the tag's part.
-     * `Hint:` is apply's voice and sync's, and this channel was the only thing
-     * in status that spoke it.
+     * `Hint:` is apply's voice and sync's, and the view's health was the only
+     * thing in status that spoke it.
      *
      * Generic in both the profile and the path. The annotations say which profiles
      * carry them, so one filled name would read as the only one wherever two

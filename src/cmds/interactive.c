@@ -315,7 +315,7 @@ static void plan_collect(view_t *view, plan_t *plan) {
  * (handle_key_prompt), told apart by the question the save asks of it: does the
  * store hold this binding as written? A NULL target is legitimate on every row:
  * one that needs no target has nothing to place, and one that needs a target
- * and is saved without it is a normal lifecycle stage the health channel names
+ * and is saved without it is a normal lifecycle stage the view's health names
  * (core/manifest.h manifest_unbound) — the OFF→ON prompt asks for a target, a
  * row already enabled without one keeps that, and nothing downstream refuses
  * either. No second guard here. */
@@ -436,7 +436,7 @@ static error_t plan_apply(state_t *deploy_state, const plan_t *plan) {
  * It is the tripwire that keeps the save from landing an enabled set the next
  * load cannot build: a branch that exists but will not load. Not a target gate
  * — the build is total over a custom/ claim whose profile has no binding, which
- * contributes no row and is recorded for the health channel to say (core/manifest.h
+ * contributes no row and is recorded for the view's health to say (core/manifest.h
  * manifest_unbound) — so an unbound row saves here as a clone's and a sync's do.
  *
  * Built only to learn that it can be, in a frame of the check's own, freed before

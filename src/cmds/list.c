@@ -423,18 +423,23 @@ static error_t list_profiles(
 }
 
 /**
- * A file the file listing prints: its name, and what a verbose row reads off
- * its claim
+ * A file the file listing prints: its name, what a verbose row reads off its
+ * claim, and what it weighs
  *
  * Copied out of the claim the walk lends (core/profiles.h profile_visit_fn): a
  * row outlives the visit that showed it, and the walk joins each blob's name in
  * a buffer the next entry takes. The blob and the stamp are the claim's, as the
- * profile decodes them, so no row asks the tree again.
+ * profile decodes them, so no row asks the tree again. The size is a verbose
+ * row's, read off the blob before any row prints so its column is measured, as
+ * a profile line's is (list_line_t) — empty where the header would not read.
+ *
+ * The size's buffer is the minimum output_format_size states.
  */
 typedef struct {
     const char *storage_path;   /* The name, in the listing's arena */
     git_oid blob_oid;           /* The blob whose header sizes the row */
     bool encrypted;             /* The claim's stamp: the mark, and the framing off the size */
+    char size[32];              /* At verbose, what the file weighs; empty where it did not read */
 } list_file_t;
 
 /**
@@ -592,9 +597,9 @@ static error_t list_files(
     qsort(walk.files, walk.file_count, sizeof(*walk.files), list_path_order);
 
     /* What a verbose row reads beyond its claim: the last change behind each
-     * name, and the width the names need. Both are the whole listing's, read
-     * once before any row prints, the way the profile listing above reads and
-     * measures before its own.
+     * name, what each file weighs, and the widths the names and the sizes need.
+     * All are the whole listing's, read once before any row prints, the way the
+     * profile listing above reads and measures before its own.
      *
      * A sheet the walk could not read costs the rows their marks and leaves their
      * sizes the stored blobs' own — the listing itself is the tree's and stands
@@ -604,7 +609,7 @@ static error_t list_files(
      * arm above) names what it failed to do; this one names what it failed to
      * read, which is the other question about the same document. */
     commit_info_t *changes = NULL;
-    size_t max_path_len = 0;
+    size_t max_path_len = 0; size_t max_size_len = 0; size_t total_size = 0;
     if (verbose) {
         err = profile_load_sheet(profile);
         if (err) {
@@ -636,9 +641,37 @@ static error_t list_files(
         }
 
         for (size_t i = 0; i < walk.file_count; i++) {
-            size_t len = strlen(walk.files[i].storage_path);
+            list_file_t *file = &walk.files[i];
+
+            size_t len = strlen(file->storage_path);
             if (len > max_path_len) {
                 max_path_len = len;
+            }
+
+            /* The size is the stored blob's own header, the cipher's framing
+             * taken off a stamped one through the helper that keeps crypto/cipher.h
+             * out of the command layer. The row's mark is the stamp's and needs
+             * no read at all, so a header that will not read costs this row its
+             * number and nothing else — and the row says so where the number
+             * would have stood. A total short by a row is then short where the
+             * reader can see it, which is the whole of what this screen can
+             * honestly say: the object is missing or corrupt, and the profile's
+             * line at level 1, which weighs what it counts, refuses outright
+             * over the same failure (list_size_claim). The header's error is
+             * dropped where the row says so, one per unreadable blob. */
+            size_t size = 0;
+            err = stats_blob_size(repo, &file->blob_oid, &size);
+            if (!err) {
+                size_t display_size = content_estimated_plaintext_size(size, file->encrypted);
+                output_format_size(display_size, file->size, sizeof(file->size));
+                total_size += display_size;
+            } else {
+                err = NULL;
+            }
+
+            len = strlen(file->size);
+            if (len > max_size_len) {
+                max_size_len = len;
             }
         }
         /* Cap at reasonable width to prevent excessive spacing */
@@ -648,7 +681,6 @@ static error_t list_files(
     }
 
     /* List files */
-    size_t total_size = 0;
     for (size_t i = 0; i < walk.file_count; i++) {
         const list_file_t *file = &walk.files[i];
 
@@ -684,29 +716,13 @@ static error_t list_files(
                 output_print(out, OUTPUT_VERBOSE, "      ");
             }
 
-            /* The size is the stored blob's own header, the cipher's framing
-             * taken off a stamped one through the helper that keeps crypto/cipher.h
-             * out of the command layer. The mark above needed no read at all,
-             * so a header that will not read costs this row its number and nothing
-             * else — and says so where the number would have stood. A total short
-             * by a row is then short where the reader can see it, which is the
-             * whole of what this screen can honestly say: the object is missing
-             * or corrupt, and the profile's line at level 1, which weighs what
-             * it counts, refuses outright over the same failure (list_size_claim).
-             * The header's error is dropped where the row says so, one per
-             * unreadable blob. */
-            size_t size = 0;
-            err = stats_blob_size(repo, &file->blob_oid, &size);
-            if (!err) {
-                size_t display_size = content_estimated_plaintext_size(size, file->encrypted);
-
-                char size_str[32];
-                output_format_size(display_size, size_str, sizeof(size_str));
-                output_print(out, OUTPUT_VERBOSE, " %8s", size_str);
-                total_size += display_size;
+            /* Its size, right-aligned in the column measured for it; where the
+             * header would not read, the glyph in the number's place, no wider
+             * than the narrowest size ("0 B") */
+            if (file->size[0] != '\0') {
+                output_print(out, OUTPUT_VERBOSE, " %*s", (int) max_size_len, file->size);
             } else {
-                output_print(out, OUTPUT_VERBOSE, " {dim}%8s{reset}", "[?]");
-                err = NULL;
+                output_print(out, OUTPUT_VERBOSE, " {dim}%*s{reset}", (int) max_size_len, "[?]");
             }
 
             /* Its last change, printed as a profile row prints its last commit

@@ -313,8 +313,8 @@ error_t input_refspec(const char *input, arena_t *arena, input_refspec_t *out);
  *   - show and list (cmds/) take either: a name the user typed is Git's key
  *     already, and a filesystem path is the profile's to name (core/scope.h
  *     scope_resolve_name). Without a profile, they hand either to the enabled
- *     set's view (core/scope.h scope_resolve_claim): a path is the row standing
- *     there, a name its one holder.
+ *     set (core/scope.h scope_resolve_claim): a path is the row standing there,
+ *     a name its one holder — standing, else the one enabled profile holding it.
  *   - completion's commit slot after a path (cmds/completion.c changes_emit)
  *     takes either, as show and list do with a profile named: the profile names
  *     the argument (core/scope.h scope_resolve_name), and one the resolver refuses

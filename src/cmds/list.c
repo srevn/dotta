@@ -816,8 +816,9 @@ static error_t list_path_history(
         err = profile_require(repo, name);
         if (err) return err;
     } else {
-        /* The owner is the view's: the enabled set at HEAD, precedence resolved,
-         * which holds the set it was built from. The view is the arena's. */
+        /* The owner is asked of the view first: the enabled set at HEAD, precedence
+         * resolved, which holds the set it was built from. The view is the
+         * arena's. */
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, NULL, ctx->arena, &manifest);
         if (err) return err;
@@ -834,18 +835,15 @@ static error_t list_path_history(
         }
 
         /* The claim the argument names there, in its key: the row standing at a
-         * path, a name's one holder (core/scope.h scope_resolve_claim) */
-        const manifest_row_t *row = NULL;
-        err = scope_resolve_claim(manifest, &arg, ctx->arena, &row);
+         * path; a name's one holder, standing, else the one enabled profile holding
+         * it (core/scope.h scope_resolve_claim). The answer names both halves —
+         * whose claim it is, and what it is called — so there is nothing to look
+         * up again in the profile. Its head is read below again, moments after
+         * the view read it, and the search where no row stands under a name: a
+         * writer landing between lends the history the later head's, a window
+         * stated and not closed. */
+        err = scope_resolve_claim(repo, manifest, &arg, ctx->arena, &name, &storage_path);
         if (err) return err;
-
-        /* The winner names both halves: whose claim stands there, and what it
-         * is called — the row is that profile's own, so there is nothing to look
-         * up again in the profile. Its head is read below a second time, moments
-         * after the view read it: a writer landing between the two lends the
-         * history the later head's, a window stated and not closed. */
-        name = row->profile;
-        storage_path = row->storage_path;
     }
 
     /* The branch read once, at its head: where a path is named, what the pre-check

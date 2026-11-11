@@ -391,32 +391,90 @@ error_t scope_resolve_range(
 }
 
 error_t scope_resolve_claim(
-    const manifest_t *view, const input_path_t *arg, arena_t *arena,
-    const manifest_row_t **out_row
+    git_repository *repo, const manifest_t *view, const input_path_t *arg,
+    arena_t *arena, const char **out_profile, const char **out_name
 ) {
+    CHECK_NULL(repo);
     CHECK_NULL(view);
     CHECK_NULL(arg);
     CHECK_NULL(arena);
-    CHECK_NULL(out_row);
+    CHECK_NULL(out_profile);
+    CHECK_NULL(out_name);
 
-    /* Asked in the key the argument names: a path is the row standing there, a
-     * name its one holder — or, held once per binding, the refusal naming each */
+    /* Asked of the view first, in the key the argument names: a path is the row
+     * standing there, a name its one holder — or, held once per binding, the
+     * refusal naming each */
+    const manifest_row_t *row = NULL;
     error_t err = NULL;
     switch (arg->key) {
         case INPUT_KEY_FILESYSTEM:
-            *out_row = manifest_lookup(view, arg->filesystem_path);
+            row = manifest_lookup(view, arg->filesystem_path);
             break;
 
         case INPUT_KEY_STORAGE:
-            err = manifest_holder(arena, view, arg->storage_path, out_row);
+            err = manifest_holder(arena, view, arg->storage_path, &row);
             break;
     }
-    if (err || *out_row) return err;
+    if (err) return err;
+    if (row) {
+        *out_profile = row->profile;
+        *out_name = row->storage_path;
+        return NULL;
+    }
 
-    /* None: the view's absence, every enabled profile's, the argument in its key */
+    /* A path no row stands at is the view's absence, and why where the view places
+     * claims nowhere: those stand at no path, and their names are the key that
+     * reaches them */
+    if (arg->key == INPUT_KEY_FILESYSTEM) {
+        if (manifest_unbound(view).count > 0) {
+            return error_create(
+                ERR_NOT_FOUND, "'%s' not found in any enabled profile; some of their "
+                "paths have no target on this machine, and only their storage paths "
+                "name them", arg->filesystem_path
+            );
+        }
+        return error_create(
+            ERR_NOT_FOUND, "'%s' not found in any enabled profile", arg->filesystem_path
+        );
+    }
+
+    /* A name no row stands under: each enabled profile asked what its two documents
+     * hold there, in precedence order (core/profiles.h profile_holds) — a file
+     * or a directory, a gitlink being no claim. A profile that will not read
+     * ends the search, whatever a later one would have said: the answer is a
+     * claim about every profile. */
+    const string_array_t *enabled = manifest_profiles(view);
+    string_array_t holders;
+    string_array_init(&holders, arena, 0);
+    for (size_t i = 0; i < enabled->count; i++) {
+        profile_t *profile = NULL;
+        profile_held_t held;
+        err = profile_load(repo, enabled->entries[i], &profile);
+        if (!err) err = profile_holds(profile, arg->storage_path, &held);
+        profile_free(profile);
+        if (err) return err;
+
+        if (held.kind == PROFILE_HELD_FILE || held.kind == PROFILE_HELD_DIRECTORY) {
+            string_array_push(&holders, enabled->entries[i]);
+        }
+    }
+
+    /* Several, each named, and no path beside a name that stands nowhere; else
+     * the one under the name as typed; else the absence, every enabled profile's */
+    if (holders.count > 1) {
+        return error_create(
+            ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s", arg->storage_path,
+            holders.count, string_array_join(arena, &holders, ", ")
+        );
+    }
+    if (holders.count == 1) {
+        *out_profile = holders.entries[0];
+        *out_name = arg->storage_path;
+        return NULL;
+    }
+
     return error_create(
-        ERR_NOT_FOUND, "'%s' not found in any enabled profile",
-        arg->key == INPUT_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path
+        ERR_NOT_FOUND, "'%s' not found in any enabled profile", arg->storage_path
     );
 }
 

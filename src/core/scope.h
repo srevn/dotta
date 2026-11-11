@@ -16,12 +16,14 @@
  * an empty set earns (scope_require_enabled) and which of the set holds a commit
  * (scope_resolve_commit, scope_resolve_range) take the set as a value, and the
  * claim a file argument names (scope_resolve_claim) takes the set's view,
- * precedence resolved. Where the argument names its profile, no set is asked:
- * the name that profile gives it (scope_resolve_name) takes the profile, at the
- * tree its reader selected. The commands that build no scope would give one nothing
- * but the set to carry: sync narrows a set of its own, every enabled row whether
- * its branch is here or not, by the same filter (scope_filter), and every other
- * one's -p names any local profile, enabled or not, and never reads the set.
+ * precedence resolved, and the repository its profiles are asked of where the
+ * view stands no row under a name. Where the argument names its profile, no set
+ * is asked: the name that profile gives it (scope_resolve_name) takes the profile,
+ * at the tree its reader selected. The commands that build no scope would give
+ * one nothing but the set to carry: sync narrows a set of its own, every enabled
+ * row whether its branch is here or not, by the same filter (scope_filter), and
+ * every other one's -p names any local profile, enabled or not, and never reads
+ * the set.
  *
  * A scope answers, for a command that holds the view, "what subset of the view
  * — every enabled profile, each at the revision the run reads it at, precedence
@@ -113,12 +115,11 @@
 
 /* Forward decls: the view's, the profile's, the table's and the state's full
  * APIs live in core/manifest.h, core/profiles.h, infra/mount.h and core/state.h.
- * scope reads the view — its set, and its row for an argument — a named profile's
- * own view of an argument, placed by the table, and the state's enabled rows
- * alone, so the header names the five types and stays free of those dependencies.
- * C11 §6.7p3 permits typedef-name redeclaration. */
+ * scope reads the view — its set, and the claim an argument names in it — a named
+ * profile's own view of an argument, placed by the table, and the state's enabled
+ * rows alone, so the header names the four types and stays free of those
+ * dependencies. C11 §6.7p3 permits typedef-name redeclaration. */
 typedef struct manifest manifest_t;
-typedef struct manifest_row manifest_row_t;
 typedef struct mount_table mount_table_t;
 typedef struct profile profile_t;
 typedef struct state state_t;
@@ -401,42 +402,64 @@ error_t scope_resolve_range(
 );
 
 /**
- * The claim a file argument names in the enabled set: the view's row for it
+ * The claim a file argument names in the enabled set: whose it is, and its name
  *
- * Asked of the set's view (core/manifest.h manifest_build) — every enabled profile
- * at its head, precedence resolved — in the key the argument names (infra/input.h):
- * a path is the row standing there, whatever its name and whoever holds it, the
- * layer's rung among them, a directory no document holds (core/manifest.c
- * manifest_layer); a name keys within one profile, so the view holds it once —
- * under home/ or root/, or one binding — or once per binding under custom/, and
- * then no profile is the answer: the refusal names each holder with the path
- * that tells them apart (core/manifest.h manifest_holder), returned as it is.
+ * Asked first of the set's view (core/manifest.h manifest_build) — every enabled
+ * profile at its head, precedence resolved — in the key the argument names
+ * (infra/input.h): a path is the row standing there, whatever its name and whoever
+ * holds it, the layer's rung among them, a directory no document holds
+ * (core/manifest.c manifest_layer); a name keys within one profile, so the view
+ * holds it once — under home/ or root/, or one binding — or once per binding
+ * under custom/, and then no profile is the answer: the refusal names each holder
+ * with the path that tells them apart (core/manifest.h manifest_holder), returned
+ * as it is.
  *
- * Absence is every enabled profile's, as the commit search's is: ERR_NOT_FOUND,
- * "'<x>' not found in any enabled profile", <x> the argument in its key — the
- * path, or the name with its directory spelling shed — the set's half of the
- * sentence one profile's absence says (core/profiles.h profile_held_kind_t).
- * The view answers what stands, so a claim an enabled profile holds that stands
- * nowhere here — one this machine cannot place, one its profile did not keep,
- * one beneath another profile's blob — is absent all the same, and -p reads a
- * profile's own claims. An empty set is that same absence; both readers refuse
- * an empty enabled set in their own words before they ask.
+ * A name no row stands under is then asked of each enabled profile, in precedence
+ * order: a file or a directory either of its two documents holds at the name
+ * (core/profiles.h profile_holds), a gitlink being no claim — one this machine
+ * cannot place, one its profile did not keep, one another profile's claim stands
+ * over. The one holder is the answer, under the name as typed; several are refused
+ * naming each, no path beside a name that stands nowhere. So a name a row stands
+ * under is answered as it always was, and only an absence turns into an answer
+ * or that refusal. Complete or an error, as the commit search is
+ * (scope_resolve_commit): a profile that will not read ends the search in its
+ * own words. Each head is read after the view read it: a writer landing between
+ * the two lends the later one, a window stated and not closed, as each reader
+ * states its own.
+ *
+ * Absence: ERR_NOT_FOUND, "'<x>' not found in any enabled profile", <x> the
+ * argument in its key — the path, or the name with its directory spelling shed
+ * — the set's half of the sentence one profile's absence says (core/profiles.h
+ * profile_held_kind_t). A name's is every enabled profile's, each one's documents
+ * asked. A path's is the view's, what stands: a claim placed nowhere has no path,
+ * which the sentence says where the view places any — "; some of their paths
+ * have no target on this machine, and only their storage paths name them" — and
+ * a claim beneath another profile's blob stands at none (stated): its name finds
+ * it, as -p does. An empty set is that same absence; both readers refuse an empty
+ * enabled set in their own words before they ask.
  *
  * Readers: cmds/show.c cmd_show and cmds/list.c list_path_history, each without
  * a profile. With one, the profile names the argument (scope_resolve_name).
  *
+ * @param repo The repository, whose enabled profiles a name no row stands under
+ *             is asked of (must not be NULL)
  * @param view The enabled set's view (must not be NULL)
  * @param arg The argument, read (must not be NULL; infra/input.h input_resolve)
  * @param arena Arena a refusal's holders are joined in (must not be NULL)
- * @param out_row The row, borrowed from the view (must not be NULL; NULL beside
- *                a refusal)
+ * @param out_profile Whose claim it is: the view's name for the profile, or a
+ *                    copy in `arena` (must not be NULL; left as it was on a
+ *                    failure)
+ * @param out_name Its name: the row's, or the argument's as typed (must not be
+ *                 NULL; left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t scope_resolve_claim(
+    git_repository *repo,
     const manifest_t *view,
     const input_path_t *arg,
     arena_t *arena,
-    const manifest_row_t **out_row
+    const char **out_profile,
+    const char **out_name
 );
 
 /**

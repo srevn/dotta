@@ -707,15 +707,16 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * Readers: the verbs that act on one name — cmds/show.c show_file, cmds/list.c
  * list_path_history (the history's pre-check) — the search across the local
  * profiles by a name, in each this machine places it nowhere for (cmds/revert.c
- * revert_select_profile), export's name arm, which words a copy with nothing in
- * it by what stands at the name (cmds/export.c export_collect_storage), and
- * remove's directory offer, which offers a claim where no blob stands at its
- * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
- * rung of a way it writes — the two climbs' and a restore's — where whatever
- * the base holds keeps the rung, as a directory it tracks beneath does
- * (profile_capture_ancestors, profile_derive_ancestors, profile_restore_file,
- * profile_restore_directory); and a merge, at a merge-base directory claim a
- * side lacks, where whatever that side holds is its removal
+ * revert_select_profile), the search across the enabled set by a name no row
+ * stands under (core/scope.c scope_resolve_claim), export's name arm, which words
+ * a copy with nothing in it by what stands at the name (cmds/export.c
+ * export_collect_storage), and remove's directory offer, which offers a claim
+ * where no blob stands at its name (cmds/remove.c remove_offer_directory); and
+ * a profile's draft, at each rung of a way it writes — the two climbs' and a
+ * restore's — where whatever the base holds keeps the rung, as a directory it
+ * tracks beneath does (profile_capture_ancestors, profile_derive_ancestors,
+ * profile_restore_file, profile_restore_directory); and a merge, at a merge-base
+ * directory claim a side lacks, where whatever that side holds is its removal
  * (profile_merge_directory) — the four through profile_passes. A reader not on
  * this list is a bug. Four neighbours ask profile_entry instead, the tree alone:
  * revert's preview, the head's entry at the name it shows one file at, where a

@@ -182,7 +182,9 @@ static int workspace_kind_order(const void *a, const void *b) {
     const workspace_item_t *ia = *(const workspace_item_t *const *) a;
     const workspace_item_t *ib = *(const workspace_item_t *const *) b;
 
-    if (ia->item_kind != ib->item_kind) return ia->item_kind == PATH_KIND_DIRECTORY ? -1 : 1;
+    if (ia->item_kind != ib->item_kind) {
+        return ia->item_kind == PATH_KIND_DIRECTORY ? -1 : 1;
+    }
 
     return strcmp(ia->filesystem_path, ib->filesystem_path);
 }
@@ -4312,10 +4314,7 @@ void workspace_buckets_fill(workspace_buckets_t *buckets) {
 /**
  * The managed item at a path, or NULL
  */
-const workspace_item_t *workspace_find(
-    const workspace_t *ws,
-    const char *filesystem_path
-) {
+const workspace_item_t *workspace_find(const workspace_t *ws, const char *filesystem_path) {
     if (!ws || !filesystem_path) return NULL;
 
     /* An active path's item, the clean ones too: each kind's half in its own

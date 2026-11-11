@@ -656,8 +656,8 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
      * a file at a commit names its profile (show_post_parse) */
     CHECK_ARG(opts->commit == NULL, "a file at a commit names its profile");
 
-    /* The owning profile is the view's: the enabled set at HEAD with precedence
-     * resolved, which holds the set it was built from */
+    /* The owning profile is asked of the view first: the enabled set at HEAD
+     * with precedence resolved, which holds the set it was built from */
     manifest_t *manifest = NULL;
     err = manifest_build(repo, state, NULL, ctx->arena, &manifest);
     if (err) goto cleanup;
@@ -674,34 +674,26 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* The claim the argument names there, in its key: the row standing at a path,
-     * a name's one holder (core/scope.h scope_resolve_claim) */
-    const manifest_row_t *row = NULL;
-    err = scope_resolve_claim(manifest, &arg, ctx->arena, &row);
+    /* The claim the argument names there, in its key: the row standing at a path;
+     * a name's one holder, standing, else the one enabled profile holding it
+     * (core/scope.h scope_resolve_claim). The answer names both halves — whose
+     * claim it is, and what it is called — so there is nothing to look up again
+     * in the profile. */
+    const char *holder = NULL;
+    err = scope_resolve_claim(repo, manifest, &arg, ctx->arena, &holder, &storage_path);
     if (err) goto cleanup;
 
-    /* The winner names both halves: whose claim stands there, and what it is
-     * called — the row is that profile's own, so there is nothing to look up
-     * again in the profile. */
-    storage_path = row->storage_path;
+    output_print(out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n", holder);
+    output_print(out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n", storage_path);
 
-    output_print(
-        out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-        row->profile
-    );
-    output_print(
-        out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-        storage_path
-    );
-
-    /* The winning profile at its head, which this arm is always about: the view
-     * is HEAD's, so the row that answered names no commit and there is no
-     * provenance to announce; the profile held as the -p arm holds its own, so
-     * either arm's header is the claim that profile decodes. The head is read
-     * here a second time, moments after the view read it: a writer landing between
-     * the two leaves the answer the later head's under the view's banner, a window
-     * stated and not closed */
-    err = profile_load(repo, row->profile, &profile);
+    /* The holder at its head, which this arm is always about: the view is HEAD's,
+     * so the claim that answered names no commit and there is no provenance to
+     * announce; the profile held as the -p arm holds its own, so either arm's
+     * header is the claim that profile decodes. The head is read here again,
+     * moments after the view read it, and the search where no row stands under
+     * a name: a writer landing between leaves the answer the later head's under
+     * the view's banner, a window stated and not closed */
+    err = profile_load(repo, holder, &profile);
     if (err) goto cleanup;
 
     err = show_file(ctx, profile, storage_path, NULL, NULL);

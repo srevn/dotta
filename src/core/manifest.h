@@ -870,9 +870,9 @@ typedef struct {
  * machine's, in the layer's order, one profile's contiguous, the highest first,
  * each in the order its precedence decides its claims (core/manifest.c
  * manifest_layer). So a profile can appear once a scope, and no reader keys on
- * the order: status filters it per profile, apply and sync list it whole. Each
- * (profile, storage path) once: the sheet holds one directory claim a key, a
- * claim its tree contradicts is one the walk never shows, and the layer decides
+ * the order: status filters it per profile, apply and sync by what the run takes.
+ * Each (profile, storage path) once: the sheet holds one directory claim a key,
+ * a claim its tree contradicts is one the walk never shows, and the layer decides
  * each claim the walk shows once. Empty on every build whose profiles contradict
  * none of their own claims — the common case, costing the build a second
  * classification of each directory claim, and the layer one comparison where a

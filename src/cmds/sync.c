@@ -1248,28 +1248,35 @@ static void sync_print_health(
         );
     }
 
-    /* The third: a claim the profile's own claims leave no room is in the profile
-     * and in no row — a sync's merge composes none (core/profiles.h
-     * profile_draft_merge), but a pull brings one a hand committed elsewhere,
-     * and any act brings a pair of names two of this machine's labels place on
-     * one chain — so the import is where it is first named. The remedy turns on
-     * the pair's shape, which status -v prints, as apply's section says. */
+    /* The third, of the run's profiles: a claim the profile's own claims leave
+     * no room is in the profile and in no row — a sync's merge composes none
+     * (core/profiles.h profile_draft_merge), but a pull brings one a hand committed
+     * elsewhere, and any act brings a pair of names two of this machine's labels
+     * place on one chain — so the import is where it is first named. The remedy
+     * turns on the pair's shape, which status -v prints, as apply's section
+     * says. */
     manifest_contradicted_t contradicted = manifest_contradicted(view);
-    if (contradicted.count > 0) {
+
+    size_t voided = 0;
+    for (size_t i = 0; i < contradicted.count; i++) {
+        if (string_array_contains(profiles, contradicted.entries[i].profile)) voided++;
+    }
+    if (voided > 0) {
         output_section(out, OUTPUT_NORMAL, "Contradicted paths");
-        for (size_t i = 0; i < contradicted.count && i < LIST_LIMIT; i++) {
+
+        size_t shown = 0;
+        for (size_t i = 0; i < contradicted.count && shown < LIST_LIMIT; i++) {
+            const manifest_contradicted_claim_t *claim = &contradicted.entries[i];
+            if (!string_array_contains(profiles, claim->profile)) continue;
+
+            shown++;
             output_print(
                 out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                contradicted.entries[i].storage_path,
-                path_kind_suffix(contradicted.entries[i].kind),
-                contradicted.entries[i].profile
+                claim->storage_path, path_kind_suffix(claim->kind), claim->profile
             );
         }
-        if (contradicted.count > LIST_LIMIT) {
-            output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                contradicted.count - LIST_LIMIT
-            );
+        if (voided > LIST_LIMIT) {
+            output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", voided - LIST_LIMIT);
         }
         output_info(
             out, OUTPUT_NORMAL,

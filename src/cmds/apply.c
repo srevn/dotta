@@ -230,30 +230,45 @@ static void apply_print_health(output_t *out, const scope_t *scope, const manife
         );
     }
 
-    /* The third: the claims a profile's own claims leave no room — in its tree,
-     * a directory claim a file of the same profile stands at or above; on this
-     * machine, where two of its labels place one chain, a claim beneath its own
-     * standing file, or its own file whose place the claims beneath it take. No
-     * row stands for any of them, so no plan lands one. Which verb keeps which
-     * turns on the pair's shape, which only the pair shows: status -v pairs them,
-     * and its legend keys each remedy to the shape, where one line here would
-     * have to be all three. */
+    /* The third: the claims a profile's own claims leave no room, each one the
+     * line takes — in its tree, a directory claim a file of the same profile
+     * stands at or above; on this machine, where two of its labels place one
+     * chain, a claim beneath its own standing file, or its own file whose place
+     * the claims beneath it take. No row stands for any of them, so no plan lands
+     * one. Asked by its name alone, as a claim placed nowhere is: the claim carries
+     * no place, so no filesystem path takes one, and status annotates its profile
+     * on every run. Which verb keeps which turns on the pair's shape, which only
+     * the pair shows: status -v pairs them, and its legend keys each remedy to
+     * the shape, where one line here would have to be all three. */
     manifest_contradicted_t contradicted = manifest_contradicted(view);
-    if (contradicted.count > 0) {
+
+    size_t voided = 0;
+    for (size_t i = 0; i < contradicted.count; i++) {
+        const manifest_contradicted_claim_t *claim = &contradicted.entries[i];
+        if (scope_accepts_path(scope, claim->profile, NULL, claim->storage_path, claim->kind)) {
+            voided++;
+        }
+    }
+    if (voided > 0) {
         output_section(out, OUTPUT_NORMAL, "Contradicted paths");
-        for (size_t i = 0; i < contradicted.count && i < LIST_LIMIT; i++) {
+
+        size_t shown = 0;
+        for (size_t i = 0; i < contradicted.count && shown < LIST_LIMIT; i++) {
+            const manifest_contradicted_claim_t *claim = &contradicted.entries[i];
+            if (!scope_accepts_path(
+                scope, claim->profile, NULL, claim->storage_path, claim->kind
+                )) {
+                continue;
+            }
+
+            shown++;
             output_print(
                 out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                contradicted.entries[i].storage_path,
-                path_kind_suffix(contradicted.entries[i].kind),
-                contradicted.entries[i].profile
+                claim->storage_path, path_kind_suffix(claim->kind), claim->profile
             );
         }
-        if (contradicted.count > LIST_LIMIT) {
-            output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                contradicted.count - LIST_LIMIT
-            );
+        if (voided > LIST_LIMIT) {
+            output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", voided - LIST_LIMIT);
         }
         output_info(
             out, OUTPUT_NORMAL,

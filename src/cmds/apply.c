@@ -120,10 +120,16 @@ static const char *apply_route_label(const workspace_item_t *item) {
 }
 
 /**
- * Print the view's health: what the view holds and stands no row for, a section
- * each — the claims this machine cannot place, the names a profile holds for a
- * path it also names otherwise, the claims a profile's own claims leave no room
- * — and the enabled profiles it found no branch for
+ * Print the view's health, as much of it as the line takes: what the view holds
+ * and stands no row for, a section each — the claims this machine cannot place,
+ * the names a profile holds for a path it also names otherwise, the claims a
+ * profile's own claims leave no room — and the enabled profiles it found no branch
+ * for
+ *
+ * Each subject is asked of what it carries, as any subject is (core/scope.h): a
+ * claim of its names, each section saying which, and a profile with no branch
+ * of itself alone. -e plays no part: it withholds what a run would do to a path
+ * the line takes, where a section says what the line takes that no run lands.
  *
  * Sections in the shape this screen gives every other set of paths it will not
  * touch — the header, the paths, then the cost and the way out on their own lines
@@ -286,20 +292,29 @@ static void apply_print_health(output_t *out, const scope_t *scope, const manife
      * nothing, so what it deployed is an orphan no branch backs, which cleanup
      * releases — named here, where a release would otherwise read as having no
      * cause. A row is the profile, so the repairs name it as generically as the
-     * three above. */
+     * three above. Asked by the profile filter alone, the scope's rule for a
+     * subject that carries no path (core/scope.h scope_accepts_profile): a path
+     * named on its own narrows no profile, and a -p — which never names one with
+     * no branch — or a lone profile:path leaves each out. */
     manifest_missing_t missing = manifest_missing(view);
-    if (missing.count > 0) {
+
+    size_t branchless = 0;
+    for (size_t i = 0; i < missing.count; i++) {
+        if (scope_accepts_profile(scope, missing.entries[i])) branchless++;
+    }
+    if (branchless > 0) {
         output_section(out, OUTPUT_NORMAL, "Profiles with no branch");
-        for (size_t i = 0; i < missing.count && i < LIST_LIMIT; i++) {
-            output_print(
-                out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s\n", missing.entries[i]
-            );
+
+        size_t shown = 0;
+        for (size_t i = 0; i < missing.count && shown < LIST_LIMIT; i++) {
+            const char *profile = missing.entries[i];
+            if (!scope_accepts_profile(scope, profile)) continue;
+
+            shown++;
+            output_print(out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s\n", profile);
         }
-        if (missing.count > LIST_LIMIT) {
-            output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                missing.count - LIST_LIMIT
-            );
+        if (branchless > LIST_LIMIT) {
+            output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", branchless - LIST_LIMIT);
         }
         output_info(
             out, OUTPUT_NORMAL,

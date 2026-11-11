@@ -564,9 +564,10 @@ size_t scope_path_count(const scope_t *s);
  * Asked alone by cmds/status.c — status_print_profiles, status_print_manifest,
  * status_partition, status_write, status_print_summary — whose scope names no
  * path and no profile:path, so every profile matches there where no CLI filter
- * was given; and by the scope's own questions: scope_accepts_path,
- * scope_accepts_beneath, the coverage (scope_coverage_add) and the face. A site
- * that holds a subject's path asks the two as one.
+ * was given; by cmds/apply.c apply_print_health, of a profile with no branch,
+ * the one subject there that carries no path; and by the scope's own questions:
+ * scope_accepts_path, scope_accepts_beneath, the coverage (scope_coverage_add)
+ * and the face. A site that holds a subject's path asks the two as one.
  */
 bool scope_accepts_profile(const scope_t *s, const char *profile);
 

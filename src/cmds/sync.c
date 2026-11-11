@@ -1172,25 +1172,33 @@ static void sync_print_manifest(
  * every path names the profiles, and a path holding a space would paste into a
  * command it breaks.
  */
-static void sync_print_health(output_t *out, const manifest_t *view) {
-    /* The claims the view could not place: no row of the view stands for them */
+static void sync_print_health(
+    output_t *out, const string_array_t *profiles, const manifest_t *view
+) {
+    /* The claims the view could not place, of the run's profiles: no row of the
+     * view stands for them */
     manifest_unbound_t unbound = manifest_unbound(view);
-    if (unbound.count > 0) {
+
+    size_t unplaced = 0;
+    for (size_t i = 0; i < unbound.count; i++) {
+        if (string_array_contains(profiles, unbound.entries[i].profile)) unplaced++;
+    }
+    if (unplaced > 0) {
         output_section(out, OUTPUT_NORMAL, "Paths with no target");
-        for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
+
+        size_t shown = 0;
+        for (size_t i = 0; i < unbound.count && shown < LIST_LIMIT; i++) {
+            const manifest_unbound_claim_t *claim = &unbound.entries[i];
+            if (!string_array_contains(profiles, claim->profile)) continue;
+
+            shown++;
             output_print(
-                out, OUTPUT_NORMAL,
-                "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                unbound.entries[i].storage_path,
-                path_kind_suffix(unbound.entries[i].kind),
-                unbound.entries[i].profile
+                out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                claim->storage_path, path_kind_suffix(claim->kind), claim->profile
             );
         }
-        if (unbound.count > LIST_LIMIT) {
-            output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                unbound.count - LIST_LIMIT
-            );
+        if (unplaced > LIST_LIMIT) {
+            output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", unplaced - LIST_LIMIT);
         }
         output_info(
             out, OUTPUT_NORMAL,
@@ -1811,10 +1819,11 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     manifest_t *after = sync_view(ctx);
     if (before && after) sync_print_manifest(ctx, &enabled_profiles, before, after);
 
-    /* The import's health beneath it: the Manifest block names none of these —
-     * it counts claims standing in a view, and none of them is a row of the view
-     * after — so this is the import moment's only signal of each */
-    if (after) sync_print_health(out, after);
+    /* The import's health beneath it, of the run's profiles: the Manifest block
+     * names none of it — it counts claims standing in a view, and none of these
+     * is a row of the view after — so this is the import moment's only signal
+     * of each */
+    if (after) sync_print_health(out, profiles, after);
 
     /* The run's summary, beneath the receipt and what it did to the view, the
      * remedies its rows call for its last lines */

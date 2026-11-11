@@ -134,26 +134,40 @@ static const char *apply_route_label(const workspace_item_t *item) {
  * profile that carries one, so a filled name would read as the only one, and a
  * path holding a space would paste into a command it breaks.
  */
-static void apply_print_health(output_t *out, const manifest_t *view) {
-    /* The claims the view could not place: no row stands for them, so they are
-     * in no bucket of the plan */
+static void apply_print_health(output_t *out, const scope_t *scope, const manifest_t *view) {
+    /* The claims the view could not place, each one the line takes: no row stands
+     * for them, so they are in no bucket of the plan. Asked by its name alone,
+     * the one key a claim with no place has (core/scope.h scope_accepts_path: a
+     * name the caller does not have is NULL), so no filesystem path takes one. */
     manifest_unbound_t unbound = manifest_unbound(view);
-    if (unbound.count > 0) {
+
+    size_t unplaced = 0;
+    for (size_t i = 0; i < unbound.count; i++) {
+        const manifest_unbound_claim_t *claim = &unbound.entries[i];
+        if (scope_accepts_path(scope, claim->profile, NULL, claim->storage_path, claim->kind)) {
+            unplaced++;
+        }
+    }
+    if (unplaced > 0) {
         output_section(out, OUTPUT_NORMAL, "Paths with no target");
-        for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
+
+        size_t shown = 0;
+        for (size_t i = 0; i < unbound.count && shown < LIST_LIMIT; i++) {
+            const manifest_unbound_claim_t *claim = &unbound.entries[i];
+            if (!scope_accepts_path(
+                scope, claim->profile, NULL, claim->storage_path, claim->kind
+                )) {
+                continue;
+            }
+
+            shown++;
             output_print(
-                out, OUTPUT_NORMAL,
-                "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                unbound.entries[i].storage_path,
-                path_kind_suffix(unbound.entries[i].kind),
-                unbound.entries[i].profile
+                out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                claim->storage_path, path_kind_suffix(claim->kind), claim->profile
             );
         }
-        if (unbound.count > LIST_LIMIT) {
-            output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                unbound.count - LIST_LIMIT
-            );
+        if (unplaced > LIST_LIMIT) {
+            output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", unplaced - LIST_LIMIT);
         }
         output_info(
             out, OUTPUT_NORMAL,
@@ -2751,10 +2765,6 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled  — the persistent enabled set, the CLI filter's bound. Empty
-     *                    is a valid convergence target: every record becomes an
-     *                    orphan and apply cleans them up. Enables the "disable
-     *                    last profile, then apply" workflow.
      *   scope_profiles — operation face (the verbose listing, hook context).
      *
      *   scope_filters_profiles / scope_filters_paths / scope_path_count — the
@@ -2765,13 +2775,15 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *                    (scope_coverage_t).
      *
      * The per-iteration predicates are the two planners' (deploy_plan_build,
-     * cleanup_plan_build): apply reads the scope through the plans and applies
+     * cleanup_plan_build) and the health's (apply_print_health), which asks them
+     * of what no row stands for: apply reads the scope through these and applies
      * no gate of its own.
      *
-     * scope_build borrows the enabled set off the run's view (lenient on empty),
-     * checks every profile the line names against it, and compiles the paths —
-     * those named on their own, and each profile:path profile's — and the
-     * excludes. */
+     * scope_build borrows the enabled set off the run's view — lenient on empty,
+     * a valid convergence target: every record becomes an orphan and apply cleans
+     * them up, the "disable the last profile, then apply" workflow — checks every
+     * profile the line names against it, and compiles the paths — those named
+     * on their own, and each profile:path profile's — and the excludes. */
     scope_inputs_t scope_inputs = {
         .profiles         = opts->profiles,
         .profile_count    = opts->profile_count,
@@ -2866,7 +2878,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* The view's health speaks before the plan: what it names is in no bucket
      * below, and silence at the deploy moment is exactly what the old hard error
      * existed to prevent */
-    apply_print_health(out, manifest);
+    apply_print_health(out, scope, manifest);
 
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *

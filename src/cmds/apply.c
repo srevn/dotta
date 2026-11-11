@@ -179,29 +179,45 @@ static void apply_print_health(output_t *out, const scope_t *scope, const manife
         );
     }
 
-    /* Its sibling: the paths a profile holds for a path it also names otherwise.
-     * These are in no bucket either: the group's kept name is the one that can
-     * stand there, wherever no other claim stands over it, and the rest are in
-     * the profile and in no row. `--dry-run` is the safety on the way out: dropping
+    /* Its sibling: the paths a profile holds for a path it also names otherwise,
+     * each one the line takes. These are in no bucket either: the group's kept
+     * name is the one that can stand there, wherever no other claim stands over
+     * it, and the rest are in the profile and in no row. Asked of both keys it
+     * carries, as a managed path is: its own name, and the path every name of
+     * its group resolves to. `--dry-run` is the safety on the way out: dropping
      * a directory name takes every claim beneath it, and the preview shows that
      * rather than asserting it. */
     manifest_unkept_t unkept = manifest_unkept(view);
-    if (unkept.count > 0) {
+
+    size_t unused = 0;
+    for (size_t i = 0; i < unkept.count; i++) {
+        const manifest_unkept_claim_t *claim = &unkept.entries[i];
+        if (scope_accepts_path(
+            scope, claim->profile, claim->filesystem_path, claim->storage_path, claim->kind
+            )) {
+            unused++;
+        }
+    }
+    if (unused > 0) {
         output_section(out, OUTPUT_NORMAL, "Unused paths");
-        for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
+
+        size_t shown = 0;
+        for (size_t i = 0; i < unkept.count && shown < LIST_LIMIT; i++) {
+            const manifest_unkept_claim_t *claim = &unkept.entries[i];
+            if (!scope_accepts_path(
+                scope, claim->profile, claim->filesystem_path, claim->storage_path, claim->kind
+                )) {
+                continue;
+            }
+
+            shown++;
             output_print(
-                out, OUTPUT_NORMAL,
-                "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                unkept.entries[i].storage_path,
-                path_kind_suffix(unkept.entries[i].kind),
-                unkept.entries[i].profile
+                out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                claim->storage_path, path_kind_suffix(claim->kind), claim->profile
             );
         }
-        if (unkept.count > LIST_LIMIT) {
-            output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                unkept.count - LIST_LIMIT
-            );
+        if (unused > LIST_LIMIT) {
+            output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", unused - LIST_LIMIT);
         }
         output_info(
             out, OUTPUT_NORMAL,

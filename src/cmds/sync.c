@@ -1210,27 +1210,32 @@ static void sync_print_health(
         );
     }
 
-    /* Its sibling: a name the view did not keep is in the profile and in no row
-     * either. `--dry-run` is the safety on the way out — dropping a directory
-     * name takes every claim beneath it, and the preview shows that rather than
-     * asserting it. */
+    /* Its sibling, of the run's profiles: a name the view did not keep is in
+     * the profile and in no row either. `--dry-run` is the safety on the way
+     * out — dropping a directory name takes every claim beneath it, and the preview
+     * shows that rather than asserting it. */
     manifest_unkept_t unkept = manifest_unkept(view);
-    if (unkept.count > 0) {
+
+    size_t unused = 0;
+    for (size_t i = 0; i < unkept.count; i++) {
+        if (string_array_contains(profiles, unkept.entries[i].profile)) unused++;
+    }
+    if (unused > 0) {
         output_section(out, OUTPUT_NORMAL, "Unused paths");
-        for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
+
+        size_t shown = 0;
+        for (size_t i = 0; i < unkept.count && shown < LIST_LIMIT; i++) {
+            const manifest_unkept_claim_t *claim = &unkept.entries[i];
+            if (!string_array_contains(profiles, claim->profile)) continue;
+
+            shown++;
             output_print(
-                out, OUTPUT_NORMAL,
-                "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                unkept.entries[i].storage_path,
-                path_kind_suffix(unkept.entries[i].kind),
-                unkept.entries[i].profile
+                out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                claim->storage_path, path_kind_suffix(claim->kind), claim->profile
             );
         }
-        if (unkept.count > LIST_LIMIT) {
-            output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                unkept.count - LIST_LIMIT
-            );
+        if (unused > LIST_LIMIT) {
+            output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", unused - LIST_LIMIT);
         }
         output_info(
             out, OUTPUT_NORMAL,

@@ -120,6 +120,155 @@ static const char *apply_route_label(const workspace_item_t *item) {
 }
 
 /**
+ * Print the view's health: what the view holds and stands no row for, a section
+ * each — the claims this machine cannot place, the names a profile holds for a
+ * path it also names otherwise, the claims a profile's own claims leave no room
+ * — and the enabled profiles it found no branch for
+ *
+ * Sections in the shape this screen gives every other set of paths it will not
+ * touch — the header, the paths, then the cost and the way out on their own lines
+ * — rather than a warning and a hint, which is how this file speaks about a run
+ * and not about a list of paths. The slices arrive grouped by profile, so each
+ * listing reads by profile unsorted, and each caps where every list in this file
+ * caps. The repairs name neither a profile nor a path: a line above names every
+ * profile that carries one, so a filled name would read as the only one, and a
+ * path holding a space would paste into a command it breaks.
+ */
+static void apply_print_health(output_t *out, const manifest_t *view) {
+    /* The claims the view could not place: no row stands for them, so they are
+     * in no bucket of the plan */
+    manifest_unbound_t unbound = manifest_unbound(view);
+    if (unbound.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Paths with no target");
+        for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                unbound.entries[i].storage_path,
+                path_kind_suffix(unbound.entries[i].kind),
+                unbound.entries[i].profile
+            );
+        }
+        if (unbound.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                unbound.count - LIST_LIMIT
+            );
+        }
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Their profile has no target here, so nothing lands them"
+        );
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Set one with 'dotta profile enable <profile> --target /path'"
+        );
+    }
+
+    /* Its sibling: the paths a profile holds for a path it also names otherwise.
+     * These are in no bucket either: the group's kept name is the one that can
+     * stand there, wherever no other claim stands over it, and the rest are in
+     * the profile and in no row. `--dry-run` is the safety on the way out: dropping
+     * a directory name takes every claim beneath it, and the preview shows that
+     * rather than asserting it. */
+    manifest_unkept_t unkept = manifest_unkept(view);
+    if (unkept.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Unused paths");
+        for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                unkept.entries[i].storage_path,
+                path_kind_suffix(unkept.entries[i].kind),
+                unkept.entries[i].profile
+            );
+        }
+        if (unkept.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                unkept.count - LIST_LIMIT
+            );
+        }
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  The same profile names each of these places otherwise; "
+            "'dotta status -v' pairs them"
+        );
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Drop one with 'dotta remove --dry-run <profile> <path>'"
+        );
+    }
+
+    /* The third: the claims a profile's own claims leave no room — in its tree,
+     * a directory claim a file of the same profile stands at or above; on this
+     * machine, where two of its labels place one chain, a claim beneath its own
+     * standing file, or its own file whose place the claims beneath it take. No
+     * row stands for any of them, so no plan lands one. Which verb keeps which
+     * turns on the pair's shape, which only the pair shows: status -v pairs them,
+     * and its legend keys each remedy to the shape, where one line here would
+     * have to be all three. */
+    manifest_contradicted_t contradicted = manifest_contradicted(view);
+    if (contradicted.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Contradicted paths");
+        for (size_t i = 0; i < contradicted.count && i < LIST_LIMIT; i++) {
+            output_print(
+                out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                contradicted.entries[i].storage_path,
+                path_kind_suffix(contradicted.entries[i].kind),
+                contradicted.entries[i].profile
+            );
+        }
+        if (contradicted.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                contradicted.count - LIST_LIMIT
+            );
+        }
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Another claim of the same profile leaves each no room, so nothing "
+            "lands them"
+        );
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  'dotta status -v' pairs each with its file or directory, and says how to "
+            "keep one or the other"
+        );
+    }
+
+    /* The fourth: an enabled profile the build found no branch for contributes
+     * nothing, so what it deployed is an orphan no branch backs, which cleanup
+     * releases — named here, where a release would otherwise read as having no
+     * cause. A row is the profile, so the repairs name it as generically as the
+     * three above. */
+    manifest_missing_t missing = manifest_missing(view);
+    if (missing.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Profiles with no branch");
+        for (size_t i = 0; i < missing.count && i < LIST_LIMIT; i++) {
+            output_print(
+                out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s\n", missing.entries[i]
+            );
+        }
+        if (missing.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                missing.count - LIST_LIMIT
+            );
+        }
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Enabled, but Git holds no branch for them, so they contribute nothing"
+        );
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Drop one with 'dotta profile disable <profile>', or bring its branch "
+            "back with 'dotta sync <profile>' where the remote holds it"
+        );
+    }
+}
+
+/**
  * Print the deploy skips: what the run will not do, and why
  *
  * The skips are reported and the run goes on: the verdicts already exclude them,
@@ -2714,155 +2863,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     );
     output_print(out, OUTPUT_VERBOSE, "Workspace loaded: %s\n", loaded);
 
-    /* The claims the view could not place speak before the plan: they are in no
-     * bucket below, and silence at the deploy moment is exactly what the old
-     * hard error existed to prevent. Sections in the shape this screen gives
-     * every other set of paths it will not touch — the header, the paths, then
-     * the cost and the way out on their own lines — rather than a warning and a
-     * hint, which is how this file speaks about a run and not about a list of
-     * paths. The slices arrive grouped by profile, so each listing reads by profile
-     * unsorted, and each caps where every list in this file caps.
-     *
-     * The repairs name neither a profile nor a path: a line above names every
-     * profile that carries one, so a filled name would read as the only one,
-     * and a path holding a space would paste into a command it breaks. */
-    {
-        manifest_unbound_t unbound = manifest_unbound(manifest);
-        if (unbound.count > 0) {
-            output_section(out, OUTPUT_NORMAL, "Paths with no target");
-            for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                    unbound.entries[i].storage_path,
-                    path_kind_suffix(unbound.entries[i].kind),
-                    unbound.entries[i].profile
-                );
-            }
-            if (unbound.count > LIST_LIMIT) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                    unbound.count - LIST_LIMIT
-                );
-            }
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Their profile has no target here, so nothing lands them"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Set one with 'dotta profile enable <profile> --target /path'"
-            );
-        }
-    }
-
-    /* Its sibling: the paths a profile holds for a path it also names otherwise.
-     * These are in no bucket either: the group's kept name is the one that can
-     * stand there, wherever no other claim stands over it, and the rest are in
-     * the profile and in no row. `--dry-run` is the safety on the way out: dropping
-     * a directory name takes every claim beneath it, and the preview shows that
-     * rather than asserting it. */
-    {
-        manifest_unkept_t unkept = manifest_unkept(manifest);
-        if (unkept.count > 0) {
-            output_section(out, OUTPUT_NORMAL, "Unused paths");
-            for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                    unkept.entries[i].storage_path,
-                    path_kind_suffix(unkept.entries[i].kind),
-                    unkept.entries[i].profile
-                );
-            }
-            if (unkept.count > LIST_LIMIT) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                    unkept.count - LIST_LIMIT
-                );
-            }
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  The same profile names each of these places otherwise; "
-                "'dotta status -v' pairs them"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Drop one with 'dotta remove --dry-run <profile> <path>'"
-            );
-        }
-    }
-
-    /* The third: the claims a profile's own claims leave no room — in its tree,
-     * a directory claim a file of the same profile stands at or above; on this
-     * machine, where two of its labels place one chain, a claim beneath its own
-     * standing file, or its own file whose place the claims beneath it take. No
-     * row stands for any of them, so nothing below lands one. Which verb keeps
-     * which turns on the pair's shape, which only the pair shows: status -v pairs
-     * them, and its legend keys each remedy to the shape, where one line here
-     * would have to be all three. */
-    {
-        manifest_contradicted_t contradicted = manifest_contradicted(manifest);
-        if (contradicted.count > 0) {
-            output_section(out, OUTPUT_NORMAL, "Contradicted paths");
-            for (size_t i = 0; i < contradicted.count && i < LIST_LIMIT; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                    contradicted.entries[i].storage_path,
-                    path_kind_suffix(contradicted.entries[i].kind),
-                    contradicted.entries[i].profile
-                );
-            }
-            if (contradicted.count > LIST_LIMIT) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                    contradicted.count - LIST_LIMIT
-                );
-            }
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Another claim of the same profile leaves each no room, so nothing "
-                "lands them"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  'dotta status -v' pairs each with its file or directory, and says how to "
-                "keep one or the other"
-            );
-        }
-    }
-
-    /* The fourth: an enabled profile the build found no branch for contributes
-     * nothing, so what it deployed is an orphan no branch backs, which cleanup
-     * releases — named here, where a release would otherwise read as having no
-     * cause. A row is the profile, so the repairs name it as generically as the
-     * three above. */
-    {
-        manifest_missing_t missing = manifest_missing(manifest);
-        if (missing.count > 0) {
-            output_section(out, OUTPUT_NORMAL, "Profiles with no branch");
-            for (size_t i = 0; i < missing.count && i < LIST_LIMIT; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s\n", missing.entries[i]
-                );
-            }
-            if (missing.count > LIST_LIMIT) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                    missing.count - LIST_LIMIT
-                );
-            }
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Enabled, but Git holds no branch for them, so they contribute nothing"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Drop one with 'dotta profile disable <profile>', or bring its branch "
-                "back with 'dotta sync <profile>' where the remote holds it"
-            );
-        }
-    }
+    /* The view's health speaks before the plan: what it names is in no bucket
+     * below, and silence at the deploy moment is exactly what the old hard error
+     * existed to prevent */
+    apply_print_health(out, manifest);
 
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *

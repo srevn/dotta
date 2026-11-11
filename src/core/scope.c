@@ -234,7 +234,8 @@ error_t scope_require_enabled(
 
     /* Every row's branch is gone — the set holds each row whose branch is here
      * (the header) — named in apply's words for the same fact (cmds/apply.c
-     * cmd_apply's Profiles with no branch), in the arena the caller lent */
+     * apply_print_health's Profiles with no branch), in the arena the caller
+     * lent */
     string_array_t names;
     string_array_init(&names, arena, enabled_profiles.count);
     for (size_t i = 0; i < enabled_profiles.count; i++) {

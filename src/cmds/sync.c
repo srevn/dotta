@@ -972,7 +972,7 @@ static void sync_print_receipt(
  * so a pulled profile the build refuses is no reason the pull that brings its
  * repair cannot run. A pulled custom/ claim this machine cannot place does not
  * fail the build, nor does a pulled claim the profile's own tree contradicts:
- * the health sections after the block are their signal (cmd_sync).
+ * the health sections after the block are their signal (sync_print_health).
  */
 static manifest_t *sync_view(const dotta_ctx_t *ctx) {
     manifest_t *view = NULL;
@@ -1160,6 +1160,114 @@ static void sync_print_manifest(
             sep = ", ";
         }
         output_endline(out, OUTPUT_NORMAL);
+    }
+}
+
+/**
+ * Print the import's health: the paths a profile carries that this machine will
+ * not land, a section each, in the receipt's own shape and apply's
+ *
+ * The import is the moment the paths are worth naming rather than counting, an
+ * import being what brought them. Every repair is generic: the (from P) beside
+ * every path names the profiles, and a path holding a space would paste into a
+ * command it breaks.
+ */
+static void sync_print_health(output_t *out, const manifest_t *view) {
+    /* The claims the view could not place: no row of the view stands for them */
+    manifest_unbound_t unbound = manifest_unbound(view);
+    if (unbound.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Paths with no target");
+        for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                unbound.entries[i].storage_path,
+                path_kind_suffix(unbound.entries[i].kind),
+                unbound.entries[i].profile
+            );
+        }
+        if (unbound.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                unbound.count - LIST_LIMIT
+            );
+        }
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Their profile has no target here, so nothing lands them"
+        );
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Set one with 'dotta profile enable <profile> --target /path'"
+        );
+    }
+
+    /* Its sibling: a name the view did not keep is in the profile and in no row
+     * either. `--dry-run` is the safety on the way out — dropping a directory
+     * name takes every claim beneath it, and the preview shows that rather than
+     * asserting it. */
+    manifest_unkept_t unkept = manifest_unkept(view);
+    if (unkept.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Unused paths");
+        for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                unkept.entries[i].storage_path,
+                path_kind_suffix(unkept.entries[i].kind),
+                unkept.entries[i].profile
+            );
+        }
+        if (unkept.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                unkept.count - LIST_LIMIT
+            );
+        }
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  The same profile names each of these places otherwise; "
+            "'dotta status -v' pairs them"
+        );
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Drop one with 'dotta remove --dry-run <profile> <path>'"
+        );
+    }
+
+    /* The third: a claim the profile's own claims leave no room is in the profile
+     * and in no row — a sync's merge composes none (core/profiles.h
+     * profile_draft_merge), but a pull brings one a hand committed elsewhere,
+     * and any act brings a pair of names two of this machine's labels place on
+     * one chain — so the import is where it is first named. The remedy turns on
+     * the pair's shape, which status -v prints, as apply's section says. */
+    manifest_contradicted_t contradicted = manifest_contradicted(view);
+    if (contradicted.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Contradicted paths");
+        for (size_t i = 0; i < contradicted.count && i < LIST_LIMIT; i++) {
+            output_print(
+                out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                contradicted.entries[i].storage_path,
+                path_kind_suffix(contradicted.entries[i].kind),
+                contradicted.entries[i].profile
+            );
+        }
+        if (contradicted.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                contradicted.count - LIST_LIMIT
+            );
+        }
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  Another claim of the same profile leaves each no room, so nothing "
+            "lands them"
+        );
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  'dotta status -v' pairs each with its file or directory, and says how to "
+            "keep one or the other"
+        );
     }
 }
 
@@ -1703,113 +1811,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     manifest_t *after = sync_view(ctx);
     if (before && after) sync_print_manifest(ctx, &enabled_profiles, before, after);
 
-    if (after) {
-        /* The import's health, in the receipt's own shape and apply's: the paths
-         * a profile carries that this machine will not land, a section each.
-         * The Manifest block above names none of them — it counts claims standing
-         * in a view, and none of them is a row of the view after — so this is
-         * the import moment's only signal of each, and the moment the paths are
-         * worth naming rather than counting, an import being what brought them.
-         * Every repair is generic: the (from P) beside every path names the
-         * profiles, and a path holding a space would paste into a command it
-         * breaks. */
-        manifest_unbound_t unbound = manifest_unbound(after);
-        if (unbound.count > 0) {
-            output_section(out, OUTPUT_NORMAL, "Paths with no target");
-            for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                    unbound.entries[i].storage_path,
-                    path_kind_suffix(unbound.entries[i].kind),
-                    unbound.entries[i].profile
-                );
-            }
-            if (unbound.count > LIST_LIMIT) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                    unbound.count - LIST_LIMIT
-                );
-            }
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Their profile has no target here, so nothing lands them"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Set one with 'dotta profile enable <profile> --target /path'"
-            );
-        }
-
-        /* Its sibling: a name the view did not keep is in the profile and in no
-         * row either. `--dry-run` is the safety on the way out — dropping a
-         * directory name takes every claim beneath it, and the preview shows
-         * that rather than asserting it. */
-        manifest_unkept_t unkept = manifest_unkept(after);
-        if (unkept.count > 0) {
-            output_section(out, OUTPUT_NORMAL, "Unused paths");
-            for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                    unkept.entries[i].storage_path,
-                    path_kind_suffix(unkept.entries[i].kind),
-                    unkept.entries[i].profile
-                );
-            }
-            if (unkept.count > LIST_LIMIT) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                    unkept.count - LIST_LIMIT
-                );
-            }
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  The same profile names each of these places otherwise; "
-                "'dotta status -v' pairs them"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Drop one with 'dotta remove --dry-run <profile> <path>'"
-            );
-        }
-
-        /* The third: a claim the profile's own claims leave no room is in the
-         * profile and in no row — a sync's merge composes none (core/profiles.h
-         * profile_draft_merge), but a pull brings one a hand committed elsewhere,
-         * and any act brings a pair of names two of this machine's labels place
-         * on one chain — so the import is where it is first named. The remedy
-         * turns on the pair's shape, which status -v prints, as apply's section
-         * says. */
-        manifest_contradicted_t contradicted = manifest_contradicted(after);
-        if (contradicted.count > 0) {
-            output_section(out, OUTPUT_NORMAL, "Contradicted paths");
-            for (size_t i = 0; i < contradicted.count && i < LIST_LIMIT; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
-                    contradicted.entries[i].storage_path,
-                    path_kind_suffix(contradicted.entries[i].kind),
-                    contradicted.entries[i].profile
-                );
-            }
-            if (contradicted.count > LIST_LIMIT) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
-                    contradicted.count - LIST_LIMIT
-                );
-            }
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Another claim of the same profile leaves each no room, so nothing "
-                "lands them"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  'dotta status -v' pairs each with its file or directory, and says how to "
-                "keep one or the other"
-            );
-        }
-    }
+    /* The import's health beneath it: the Manifest block names none of these —
+     * it counts claims standing in a view, and none of them is a row of the view
+     * after — so this is the import moment's only signal of each */
+    if (after) sync_print_health(out, after);
 
     /* The run's summary, beneath the receipt and what it did to the view, the
      * remedies its rows call for its last lines */

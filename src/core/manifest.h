@@ -686,16 +686,16 @@ error_t manifest_mount_table(
  * profile_counts_t's rule: a derived one is the way to a claim, held apart for
  * the restore that writes it back (manifest_derived). Recorded, never dropped
  * in silence — the health consumers surface these (cmds/status.c
- * status_print_profiles, cmds/apply.c cmd_apply, cmds/sync.c cmd_sync); export
- * reads the count alone, for the reason its refusal gives (cmds/export.c
- * export_collect_filesystem); a restore writes the commit's beneath a name the
- * argument places nowhere, each under its own (cmds/revert.c revert_restore_path);
- * and an enable that names an enabled profile holding them says so (cmds/profile.c
- * profile_enable). The repair is one command (`profile enable <p> --target /path`),
- * the untracking another (`remove`). The screen says **no target** or **needs a
- * target**, never "unbound": the header's word is what the build could not do,
- * the screen's is what the user must give. Strings are the build arena's, same
- * lifetime as the rows.
+ * status_print_profiles, cmds/apply.c apply_print_health, cmds/sync.c
+ * sync_print_health); export reads the count alone, for the reason its refusal
+ * gives (cmds/export.c export_collect_filesystem); a restore writes the commit's
+ * beneath a name the argument places nowhere, each under its own (cmds/revert.c
+ * revert_restore_path); and an enable that names an enabled profile holding them
+ * says so (cmds/profile.c profile_enable). The repair is one command (`profile
+ * enable <p> --target /path`), the untracking another (`remove`). The screen
+ * says **no target** or **needs a target**, never "unbound": the header's word
+ * is what the build could not do, the screen's is what the user must give. Strings
+ * are the build arena's, same lifetime as the rows.
  */
 typedef struct {
     const char *profile;
@@ -806,11 +806,11 @@ typedef struct {
  * (manifest_holds_name).
  *
  * Readers: status's health listing (cmds/status.c status_print_profiles), apply's
- * section (cmds/apply.c cmd_apply) and sync's after its Git phase (cmds/sync.c
- * cmd_sync), and the completed selection's refusal in add (cmds/add.c
- * add_refuse_moves) — which reads the slice as every name its claims can move,
- * since no group can grow under an uncommitted claim and only which member is
- * kept can change; which side of a place they move is another question
+ * section (cmds/apply.c apply_print_health) and sync's after its Git phase
+ * (cmds/sync.c sync_print_health), and the completed selection's refusal in add
+ * (cmds/add.c add_refuse_moves) — which reads the slice as every name its claims
+ * can move, since no group can grow under an uncommitted claim and only which
+ * member is kept can change; which side of a place they move is another question
  * (manifest_moved_place).
  *
  * @param manifest Manifest (NULL returns an empty slice)
@@ -879,10 +879,10 @@ typedef struct {
  * blob and a claim leave each other no room.
  *
  * Readers: status's health listing (cmds/status.c status_print_profiles), apply's
- * section (cmds/apply.c cmd_apply) and sync's after its Git phase (cmds/sync.c
- * cmd_sync); and add's own remedy over its one profile's view, a file it captures
- * at a claim's own name taking it — a documents' entry, this machine's never
- * meeting its blob at one name (cmds/add.c cmd_add).
+ * section (cmds/apply.c apply_print_health) and sync's after its Git phase
+ * (cmds/sync.c sync_print_health); and add's own remedy over its one profile's
+ * view, a file it captures at a claim's own name taking it — a documents' entry,
+ * this machine's never meeting its blob at one name (cmds/add.c cmd_add).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
@@ -918,8 +918,8 @@ typedef struct {
  * back where the remote holds it, or the profile a disable lets go of.
  *
  * Readers: status's health listing (cmds/status.c status_print_profiles) and
- * apply's (cmds/apply.c cmd_apply); and an enable that names one says so
- * (cmds/profile.c profile_enable).
+ * apply's (cmds/apply.c apply_print_health); and an enable that names one says
+ * so (cmds/profile.c profile_enable).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the profiles' names, valid for the arena's lifetime

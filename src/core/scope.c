@@ -422,7 +422,7 @@ error_t scope_resolve_claim(
 
 error_t scope_resolve_name(
     profile_t *profile, const mount_table_t *mounts, const input_path_t *arg,
-    arena_t *arena, const char **out_name
+    arena_t *arena, const char **out_name, const manifest_t **out_view
 ) {
     CHECK_NULL(profile);
     CHECK_NULL(mounts);
@@ -449,6 +449,10 @@ error_t scope_resolve_name(
             *out_name = arg->storage_path;
             break;
     }
+
+    /* The view that named a path, to a reader that asks for it: what it places
+     * nowhere is why a path that reaches nothing does. A name lends none. */
+    if (!err && out_view) *out_view = view;
 
     return err;
 }

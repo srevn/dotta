@@ -455,9 +455,15 @@ error_t scope_resolve_claim(
  *
  * A path costs that view — one tree walk, and the sheet loaded at its first
  * question — and is refused where the sheet will not load, where a name proceeds.
+ * The view is lent to a reader that asks for it, for the one thing it says that
+ * the name does not: why a path reaches nothing, where it does — a claim this
+ * machine places nowhere stands at no path, and its name alone reaches it
+ * (core/manifest.h manifest_unbound). A name is that key already, and no view
+ * names it.
  *
  * Readers: cmds/show.c cmd_show and cmds/list.c list_path_history, each with a
- * profile named, and cmds/completion.c changes_emit, the commit slot after a path.
+ * profile named, each taking the view; and cmds/completion.c changes_emit, the
+ * commit slot after a path, which takes none.
  *
  * @param profile The profile, at the tree its reader selected (must not be NULL;
  *                for a path, its sheet is read through it)
@@ -467,6 +473,8 @@ error_t scope_resolve_claim(
  * @param arena Arena a path's view and its name live in (must not be NULL)
  * @param out_name The name: the argument's own for a name, the arena's for a
  *                 path (must not be NULL; left as it was on a failure)
+ * @param out_view The view that named a path, the arena's; NULL for a name (NULL:
+ *                 none is lent; left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t scope_resolve_name(
@@ -474,7 +482,8 @@ error_t scope_resolve_name(
     const mount_table_t *mounts,
     const input_path_t *arg,
     arena_t *arena,
-    const char **out_name
+    const char **out_name,
+    const manifest_t **out_view
 );
 
 /* -------------------------------------------------------------------- */

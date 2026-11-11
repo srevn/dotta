@@ -411,7 +411,8 @@ static bool remove_contradicted(
  *
  * Every argument takes a claim or refuses the removal, naming itself — in the
  * reader's words where it is no spelling of a path, else as not found, in the
- * one sentence every verb says of it (core/profiles.h profile_held_kind_t) —
+ * one sentence every verb says of it (core/profiles.h profile_held_kind_t), a
+ * path's adding why where the profile holds a claim that keeps a NULL path —
  * whatever --force says: the flag answers the questions a removal asks, never
  * an absence. So the claims taken are never none, the arguments never being none
  * (remove_post_parse).
@@ -519,7 +520,20 @@ static error_t remove_resolve(
             taken[j] = true;
         }
 
+        /* None taken: not found, and where a path took nothing while the profile
+         * holds claims this machine places nowhere, why — those stand at no path,
+         * and their names are the key that reaches them */
         if (matches_found == 0) {
+            for (size_t j = 0; !by_name && j < claim_count; j++) {
+                if (!claims[j].filesystem_path) {
+                    return error_create(
+                        ERR_NOT_FOUND, "'%s' not found in profile '%s'; some of the "
+                        "profile's paths have no target on this machine, and only their "
+                        "storage paths name them", opts->paths[i], opts->profile
+                    );
+                }
+            }
+
             return error_create(
                 ERR_NOT_FOUND, "'%s' not found in profile '%s'",
                 opts->paths[i], opts->profile

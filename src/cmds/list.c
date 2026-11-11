@@ -866,9 +866,11 @@ static error_t list_path_history(
 
     /* A profile named: the name it gives the argument at that head (core/scope.h
      * scope_resolve_name) — a name as typed, which the pre-check below decides
-     * the profile holds, and a path its own view's */
+     * the profile holds, and a path its own view's, the view kept for why a path
+     * that reaches nothing does */
+    const manifest_t *view = NULL;
     if (opts->profile) {
-        err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
+        err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path, &view);
     }
 
     /* What the head holds at the name, asked of the profile's two documents at
@@ -921,6 +923,17 @@ static error_t list_path_history(
         );
     }
     if (history.count == 0) {
+        /* The search's, where a path named a name the head does not hold and
+         * the view that named it places claims of the profile nowhere: those
+         * stand at no path, which is why, and their names are the key that reaches
+         * them. A directory the sheet holds was reached, and has no why. */
+        if (held.kind == PROFILE_HELD_NOTHING && manifest_unbound(view).count > 0) {
+            return error_create(
+                ERR_NOT_FOUND, "No history found for '%s' in profile '%s'; some of the "
+                "profile's paths have no target on this machine, and only their storage "
+                "paths name them", storage_path, name
+            );
+        }
         return error_create(
             ERR_NOT_FOUND, "No history found for '%s' in profile '%s'", storage_path,
             name

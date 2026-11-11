@@ -487,9 +487,10 @@ static void changes_emit(
     if (err) return;
 
     /* The profile at the head names the path (core/scope.h scope_resolve_name):
-     * a name as typed, a path its own view's */
+     * a name as typed, a path its own view's — the view not taken: an offer refuses
+     * nothing, and has no why to say */
     const char *storage_path = NULL;
-    err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
+    err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path, NULL);
     profile_free(profile);
     if (err) return;
 

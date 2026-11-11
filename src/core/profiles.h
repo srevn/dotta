@@ -605,16 +605,20 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out);
  * export_collect_storage) — and ", at its head or at commit <c>" where both sides
  * hold nothing, revert's, what was typed (cmds/revert.c cmd_revert). The same
  * absence asked another way is the same sentence: a path the profile's view places
- * nothing at (cmds/export.c export_collect_filesystem, which adds why where some
- * of the profile's claims stand nowhere here), and an argument as typed that
- * reaches no claim of the profile's (cmds/remove.c remove_resolve). The other
- * answers are each verb's own: show, which acts on one file, refuses a DIRECTORY
- * or a SUBMODULE by its noun; list, which shows a path's history, walks a DIRECTORY
- * as it does a FILE, refuses a SUBMODULE by its noun, and reads NOTHING as a
- * path the head lacks, whose history it searches (cmds/list.c list_path_history).
- * A merge's content conflict names each side's answer where the two differ in
- * what they are — a file, a symlink, a directory, a submodule, and none for NOTHING
- * (cmds/sync.c sync_entry_noun).
+ * nothing at (cmds/export.c export_collect_filesystem), and an argument as typed
+ * that reaches no claim of the profile's (cmds/remove.c remove_resolve). Asked
+ * by a path, each adds why where some of the profile's claims stand nowhere here
+ * — "; some of the profile's paths have no target on this machine, and only their
+ * storage paths name them" — since no path reaches those and their names do:
+ * export's and remove's, show's and revert's (show_file, cmd_revert), and list's
+ * search that finds nothing (list_path_history). The other answers are each verb's
+ * own: show, which acts on one file, refuses a DIRECTORY or a SUBMODULE by its
+ * noun; list, which shows a path's history, walks a DIRECTORY as it does a FILE,
+ * refuses a SUBMODULE by its noun, and reads NOTHING as a path the head lacks,
+ * whose history it searches (cmds/list.c list_path_history). A merge's content
+ * conflict names each side's answer where the two differ in what they are — a
+ * file, a symlink, a directory, a submodule, and none for NOTHING (cmds/sync.c
+ * sync_entry_noun).
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */

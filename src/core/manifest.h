@@ -488,14 +488,15 @@ error_t manifest_build(
  * stands there, which is what manifest_lookup_claim's own note is about; the
  * name a profile gives a path argument, over whatever tree its reader selected
  * (core/scope.c scope_resolve_name, which asks it manifest_claim_name for the
- * -p arms of show and list, and for completion's commit slot after a path); add,
- * which builds one over its draft's base (core/profiles.h profile_draft_base)
- * and asks it every naming question for the length of the command (cmds/add.c
- * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); the two
- * cross-profile searches, which build one per local profile (cmds/revert.c
- * revert_select_profile, its rows at or beneath a path or the place a typed name
- * stands at, and cmds/remove.c remove_overlaps); and a restore's two, at its
- * draft's base and at the commit it restores from (cmds/revert.c
+ * -p arms of show and list, and for completion's commit slot after a path, and
+ * lends it to the first two for why a path reaches nothing); add, which builds
+ * one over its draft's base (core/profiles.h profile_draft_base) and asks it
+ * every naming question for the length of the command (cmds/add.c cmd_add); `ignore
+ * --test`'s named arm (cmds/ignore.c ignore_test); the two cross-profile searches,
+ * which build one per local profile (cmds/revert.c revert_select_profile, its
+ * rows at or beneath a path or the place a typed name stands at, and what it
+ * places nowhere, and cmds/remove.c remove_overlaps); and a restore's two, at
+ * its draft's base and at the commit it restores from (cmds/revert.c
  * revert_restore_path).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
@@ -688,15 +689,20 @@ error_t manifest_mount_table(
  * in silence — the health consumers surface these (cmds/status.c
  * status_print_profiles, cmds/apply.c apply_print_health, cmds/sync.c
  * sync_print_health), and apply's coverage reads each as a subject its line's
- * paths may reach (cmds/apply.c cmd_apply); export reads the count alone, for
- * the reason its refusal gives (cmds/export.c export_collect_filesystem); a restore
+ * paths may reach (cmds/apply.c cmd_apply); the refusals of a path that reaches
+ * nothing read the count alone, for the reason they give — no path reaches such
+ * a claim, and its name does — each over the views it holds: export's over its
+ * profile's (cmds/export.c export_collect_filesystem), show's and list's over
+ * the view that named the path (cmds/show.c show_file, cmds/list.c
+ * list_path_history), a restore's over its two (cmds/revert.c revert_restore_path)
+ * and revert's search over each it builds (revert_select_profile); a restore
  * writes the commit's beneath a name the argument places nowhere, each under
- * its own (cmds/revert.c revert_restore_path); and an enable that names an enabled
- * profile holding them says so (cmds/profile.c profile_enable). The repair is
- * one command (`profile enable <p> --target /path`), the untracking another
- * (`remove`). The screen says **no target** or **needs a target**, never "unbound":
- * the header's word is what the build could not do, the screen's is what the
- * user must give. Strings are the build arena's, same lifetime as the rows.
+ * its own (revert_restore_path); and an enable that names an enabled profile
+ * holding them says so (cmds/profile.c profile_enable). The repair is one command
+ * (`profile enable <p> --target /path`), the untracking another (`remove`). The
+ * screen says **no target** or **needs a target**, never "unbound": the header's
+ * word is what the build could not do, the screen's is what the user must give.
+ * Strings are the build arena's, same lifetime as the rows.
  */
 typedef struct {
     const char *profile;

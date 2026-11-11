@@ -246,7 +246,8 @@ static void show_provenance(output_t *out, const git_commit *commit) {
  * profile holds no blob beneath — is refused as the directory it is, because
  * the profile does hold it and "not found" would be the wrong word. Only a name
  * neither document holds is not found, in the one sentence every verb says of
- * it (core/profiles.h profile_held_kind_t).
+ * it (core/profiles.h profile_held_kind_t), a path's adding why where the view
+ * that named it places some of the profile's claims nowhere.
  *
  * The caption stands over the answer, each of the four (show_provenance): never
  * over a refusal of what stands at the name itself — a sheet that will not load
@@ -262,13 +263,17 @@ static void show_provenance(output_t *out, const git_commit *commit) {
  * @param storage_path The name the profile gives the argument (must not be NULL)
  * @param commit The commit the profile was opened at, which captions the answer;
  *               NULL at a head, which captions nothing
+ * @param view The profile's own view, where it named a path (core/scope.h
+ *             scope_resolve_name); NULL where a name was given, or the enabled
+ *             set found the claim
  * @return Error or NULL on success
  */
 static error_t show_file(
     const dotta_ctx_t *ctx,
     profile_t *profile,
     const char *storage_path,
-    const git_commit *commit
+    const git_commit *commit,
+    const manifest_t *view
 ) {
     /* What stands at the name, asked of the profile's two documents at once and
      * strictly: a sheet that will not load refuses a name the tree is silent
@@ -313,6 +318,16 @@ static error_t show_file(
             );
 
         case PROFILE_HELD_NOTHING:
+            /* A path that reaches nothing, where the view that named it places
+             * claims of the profile nowhere: those stand at no path, which is
+             * why, and their names are the key that reaches them */
+            if (manifest_unbound(view).count > 0) {
+                return error_create(
+                    ERR_NOT_FOUND, "'%s' not found in profile '%s'; some of the profile's "
+                    "paths have no target on this machine, and only their storage paths "
+                    "name them", storage_path, profile_name(profile)
+                );
+            }
             return error_create(
                 ERR_NOT_FOUND, "'%s' not found in profile '%s'", storage_path,
                 profile_name(profile)
@@ -625,13 +640,15 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
         /* The name the profile gives the argument at that commit (core/scope.h
          * scope_resolve_name): a name as typed, which show_file's own question
-         * of the profile decides it holds, and a path its own view's */
-        err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path);
+         * of the profile decides it holds, and a path its own view's, the view
+         * kept for why a path that reaches nothing does */
+        const manifest_t *view = NULL;
+        err = scope_resolve_name(profile, mounts, &arg, ctx->arena, &storage_path, &view);
         if (err) goto cleanup;
 
         /* The answer, under the caption of the commit named, where one was
          * (show_file) */
-        err = show_file(ctx, profile, storage_path, source);
+        err = show_file(ctx, profile, storage_path, source, view);
         goto cleanup;
     }
 
@@ -687,7 +704,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     err = profile_load(repo, row->profile, &profile);
     if (err) goto cleanup;
 
-    err = show_file(ctx, profile, storage_path, NULL);
+    err = show_file(ctx, profile, storage_path, NULL, NULL);
 
 cleanup:
     git_commit_free(source);

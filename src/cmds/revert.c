@@ -59,9 +59,11 @@
  * beside its own name for the argument, the way through the clause; none is refused
  * as an absence, whose way through is -p: a profile that deleted the path is
  * the case a revert exists for, and a profile named is not asked what its head
- * holds. A profile holding the path only by a name its view did not keep, or by
- * a claim its own claims contradict, stands no row there and is not found at
- * its place; -p reaches it (stated).
+ * holds. A path held by none says why too, where a view the search built places
+ * claims nowhere: those stand at no path, and their names reach them. A profile
+ * holding the path only by a name its view did not keep, or by a claim its own
+ * claims contradict, stands no row there and is not found at its place; -p reaches
+ * it (stated).
  *
  * Complete or an error: a profile the search cannot read stops it whichever profile
  * it is, since a list short by one is a falsely unique answer, and the refusal's
@@ -115,10 +117,12 @@ static error_t revert_select_profile(
      * names a path once and holds a name once, so each answers once at most.
      * The first holder is kept as itself, and every holder is spelled as found
      * beside its own name for the argument, which is all the refusal for several
-     * reads. */
+     * reads; and each view's claims placed nowhere are counted, for the refusal
+     * of none. */
     const char *holder = NULL;
     string_array_t holders;
     string_array_init(&holders, ctx->arena, 0);
+    size_t unplaced = 0;
     for (size_t i = 0; !err && i < profiles.count; i++) {
         profile_t *profile = NULL;
         err = profile_load(repo, profiles.entries[i], &profile);
@@ -137,12 +141,14 @@ static error_t revert_select_profile(
         const char *name = NULL;
         if (place) {
             /* A row at the place or beneath it, the profile's name for the place
-             * itself said */
+             * itself said; and what the view places nowhere, which no place reaches
+             * (none, where it would not build) */
             manifest_t *view = NULL;
             err = manifest_build_profile(profile, ctx->run.mounts, frame, &view);
             if (!err && (manifest_lookup(view, place) || manifest_active_beneath(view, place))) {
                 name = manifest_claim_name(ctx->arena, view, profile_name(profile), place);
             }
+            unplaced += manifest_unbound(view).count;
         } else {
             /* A name placed nowhere: a file or a directory at it, as typed — a
              * gitlink there is no claim, as the view holds none */
@@ -174,8 +180,17 @@ static error_t revert_select_profile(
 
     /* Held at no head, every profile having answered: naming the profile is what
      * reaches a path it deleted — a profile named is not asked what its head
-     * holds */
+     * holds. And a path, where the views place claims nowhere: those stand at
+     * no path, and their names are the key that reaches them; a name is that
+     * key already. */
     if (holders.count == 0) {
+        if (arg->key == INPUT_KEY_FILESYSTEM && unplaced > 0) {
+            return error_create(
+                ERR_NOT_FOUND, "'%s' is not held by any profile; -p restores it into a "
+                "profile that deleted it; some profiles' paths have no target on this "
+                "machine, and only their storage paths name them", subject
+            );
+        }
         return error_create(
             ERR_NOT_FOUND, "'%s' is not held by any profile; -p restores it into a "
             "profile that deleted it", subject
@@ -401,11 +416,14 @@ static error_t revert_take_claim(const profile_claim_t *claim, void *payload) {
  * commit's behind each name it writes. So the restore answers both of what a
  * preview reads: the count, and the file it writes at the argument itself where
  * that file is all the argument reaches — its name, the head's at its place or
- * else the commit's own, and the commit's claim, whose name may be another.
+ * else the commit's own, and the commit's claim, whose name may be another. And
+ * what its refusal reads, which no reader holds once the frame is gone: the claims
+ * its two views place nowhere, which no path reaches.
  *
  * Reader: cmd_revert, a revert at a path: it refuses an argument that reaches
- * no claim, and says whole the file the restore writes at the argument, where
- * that file is all the argument reaches.
+ * no claim — a path's saying why, where either side places claims nowhere — and
+ * says whole the file the restore writes at the argument, where that file is
+ * all the argument reaches.
  *
  * @param ctx Dispatch context: this machine's table, which places the argument
  *            and both sides, the arena the answer's name lives in, and the key
@@ -418,6 +436,8 @@ static error_t revert_take_claim(const profile_claim_t *claim, void *payload) {
  * @param out_found The claims the argument reaches, the commit's and the head's,
  *                  a claim both hold counted once and a derivation, a way, none
  *                  (must not be NULL; 0 after an error)
+ * @param out_unplaced The claims its two views place nowhere, each view's own
+ *                     counted (must not be NULL; 0 after an error)
  * @param out_file The write at the argument itself, where it is a file's and
  *                 all the argument reaches: its name in ctx->arena, its claim
  *                 lent by `from` for the handle's life (must not be NULL; zeroed
@@ -426,16 +446,18 @@ static error_t revert_take_claim(const profile_claim_t *claim, void *payload) {
  */
 static error_t revert_restore_path(
     const dotta_ctx_t *ctx, profile_draft_t *draft, const input_path_t *arg,
-    profile_t *from, size_t *out_found, revert_write_t *out_file
+    profile_t *from, size_t *out_found, size_t *out_unplaced, revert_write_t *out_file
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(draft);
     CHECK_NULL(arg);
     CHECK_NULL(from);
     CHECK_NULL(out_found);
+    CHECK_NULL(out_unplaced);
     CHECK_NULL(out_file);
 
     *out_found = 0;
+    *out_unplaced = 0;
     *out_file = (revert_write_t){ 0 };
 
     /* Everything the selection spells — the argument's place, the two views,
@@ -520,12 +542,16 @@ static error_t revert_restore_path(
             : profile_restore_file(draft, w->storage_path, w->claim, from, ctx->run.keymgr);
     }
 
-    /* The answer, on success: the claims reached, and the file at the argument
+    /* The answer, on success: the claims reached; the claims the two views place
+     * nowhere, each view's, which no path reaches; and the file at the argument
      * itself where it is all the argument reaches — a claim taken beside it,
      * the head's at the file's own name among them, being a second, which no
      * list of the draft's changes tells from the file's own write. Its name leaves
      * the frame as a copy, its claim as the commit's profile's loan */
-    if (!err) *out_found = r.found;
+    if (!err) {
+        *out_found = r.found;
+        *out_unplaced = manifest_unbound(r.head).count + manifest_unbound(historical).count;
+    }
     if (!err && r.found == 1 && r.file) {
         out_file->storage_path = arena_strdup(ctx->arena, r.file->storage_path);
         out_file->claim = r.file->claim;
@@ -1173,16 +1199,27 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the commit together, and the file it writes at the path itself where that
      * file is all the path reaches. None is no revert to make — usually a typo
      * — and refused as an absence on both sides, naming what was typed: "nothing
-     * to revert" is the change test's, for a path a side holds. */
+     * to revert" is the change test's, for a path a side holds. A path says why
+     * too, where either side places claims nowhere: those stand at no path, and
+     * their names are the key that reaches them; a name is that key already. */
     size_t found = 0;
+    size_t unplaced = 0;
     revert_write_t file = { 0 };
     if (opts->path) {
-        err = revert_restore_path(ctx, draft, &arg, target_profile, &found, &file);
+        err = revert_restore_path(ctx, draft, &arg, target_profile, &found, &unplaced, &file);
         if (!err && found == 0) {
-            err = error_create(
-                ERR_NOT_FOUND, "'%s' not found in profile '%s', at its head or at commit %s",
-                subject, profile, oid_str
-            );
+            if (arg.key == INPUT_KEY_FILESYSTEM && unplaced > 0) {
+                err = error_create(
+                    ERR_NOT_FOUND, "'%s' not found in profile '%s', at its head or at commit "
+                    "%s; some of the profile's paths have no target on this machine, and only "
+                    "their storage paths name them", subject, profile, oid_str
+                );
+            } else {
+                err = error_create(
+                    ERR_NOT_FOUND, "'%s' not found in profile '%s', at its head or at commit %s",
+                    subject, profile, oid_str
+                );
+            }
         }
     } else {
         err = profile_restore_tree(draft, target_profile);

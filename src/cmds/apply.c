@@ -2817,8 +2817,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *                    build's shape, for the verbose path count and the
      *                    nothing-to-do exit.
      *   the coverage   — each path argument answered alone over the managed
-     *                    paths, the profiles its word names read beside it
-     *                    (scope_coverage_t).
+     *                    paths and the claims no row stands for, the profiles
+     *                    its word names read beside it (scope_coverage_t).
      *
      * The per-iteration predicates are the two planners' (deploy_plan_build,
      * cleanup_plan_build) and the health's (apply_print_health), which asks them
@@ -3106,9 +3106,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Each path argument answered alone, over apply's universe, the managed paths:
-     * the workspace's items, active and orphaned, whatever bucket a plan holds
-     * each in — so what a flag withholds counts as reached, and an entry that
+    /* Each path argument answered alone, over apply's universe: the managed paths
+     * — the workspace's items, active and orphaned, whatever bucket a plan holds
+     * each in — and the claims no row stands for, each of the names its health
+     * section asks it by (apply_print_health) — so what a flag withholds counts
+     * as reached, an argument a section answers is no miss, and an entry that
      * reached only what its word's profiles leave out names the first one's profile
      * (core/scope.h scope_coverage_t): a path's miss beside the filter that hid
      * it, -p, and a profile:path's alone, its own word naming another profile.
@@ -3133,6 +3135,37 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             if (!scope_coverage_add(
                 coverage, item->profile, item->filesystem_path, item->storage_path,
                 item->item_kind
+                )) {
+                break;
+            }
+        }
+
+        manifest_unbound_t unbound = manifest_unbound(manifest);
+        for (size_t i = 0; i < unbound.count; i++) {
+            const manifest_unbound_claim_t *claim = &unbound.entries[i];
+            if (!scope_coverage_add(
+                coverage, claim->profile, NULL, claim->storage_path, claim->kind
+                )) {
+                break;
+            }
+        }
+
+        manifest_unkept_t unkept = manifest_unkept(manifest);
+        for (size_t i = 0; i < unkept.count; i++) {
+            const manifest_unkept_claim_t *claim = &unkept.entries[i];
+            if (!scope_coverage_add(
+                coverage, claim->profile, claim->filesystem_path, claim->storage_path,
+                claim->kind
+                )) {
+                break;
+            }
+        }
+
+        manifest_contradicted_t contradicted = manifest_contradicted(manifest);
+        for (size_t i = 0; i < contradicted.count; i++) {
+            const manifest_contradicted_claim_t *claim = &contradicted.entries[i];
+            if (!scope_coverage_add(
+                coverage, claim->profile, NULL, claim->storage_path, claim->kind
                 )) {
                 break;
             }

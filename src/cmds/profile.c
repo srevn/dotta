@@ -69,8 +69,10 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
     }
 
     /* Print enabled profiles: the name, what the profile holds, and the binding
-     * beside the name when the row has one — the thing is never printed without
-     * the where. */
+     * beside the name when the row has one, else the mark where the profile holds
+     * what a binding places (core/profiles.h profile_counts_t, its custom/ tally)
+     * — the thing is never printed without the where, or without saying it has
+     * none. */
     if (enabled_profiles.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Enabled profiles (in layering order)");
         for (size_t i = 0; i < enabled_profiles.count; i++) {
@@ -116,6 +118,8 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
                 char shown[PATH_MAX];
                 output_format_path(entry->target, identity()->home, shown, sizeof(shown));
                 output_print(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
+            } else if (count.custom_file_count + count.custom_directory_count > 0) {
+                output_print(out, OUTPUT_NORMAL, " {dim}(no target){reset}");
             }
             output_endline(out, OUTPUT_NORMAL);
         }
@@ -123,12 +127,12 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
         output_info(out, OUTPUT_NORMAL, "No enabled profiles");
     }
 
-    /* Print available (disabled) profiles, marking the ones that need a target:
-     * such a profile is enabled only with one, so this is the mark on exactly
-     * the profile clone and --all left here, and the answer is the profile's
-     * own, its counts' custom/ tally (core/profiles.h profile_counts_t). One
-     * walk counts the row and marks it, and a row that would not count says so
-     * rather than marking nothing in silence. */
+    /* Print available (disabled) profiles, each marked where it holds what a
+     * binding places, as an enabled row with none is: a disabled row holds no
+     * binding, and such a profile is enabled only with one, so this is the mark
+     * on exactly the profile clone and --all left here. One walk counts the row
+     * and marks it, and a row that would not count says so rather than marking
+     * nothing in silence. */
     if (available.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available.count; i++) {
@@ -157,9 +161,10 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
                 output_print(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)", name, counts
                 );
-                if (count.custom_file_count + count.custom_directory_count > 0) {
-                    output_print(out, OUTPUT_NORMAL, " {dim}(needs a target){reset}");
-                }
+            }
+
+            if (count.custom_file_count + count.custom_directory_count > 0) {
+                output_print(out, OUTPUT_NORMAL, " {dim}(no target){reset}");
             }
             output_endline(out, OUTPUT_NORMAL);
         }

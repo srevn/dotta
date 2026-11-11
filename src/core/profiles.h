@@ -564,18 +564,19 @@ typedef struct {
  * already, the handle keeping it — about 0.13 µs a claim past the parse, measured
  * at 0.165.12.
  *
- * Readers: the screens that name what a profile holds — `dotta list -v`'s profile
- * rows and the file listing's no-files arm (cmds/list.c list_profiles, list_files),
- * `profile list`'s enabled and available rows, the custom/ tally its available
- * row's mark (cmds/profile.c profile_list), the deletion's preview and confirmation
- * (cmds/remove.c remove_profile), and the encrypted files `key status` sums over
- * the enabled profiles (cmds/key.c key_status); and the custom/ tally where a
- * profile is enabled only with a target — `profile enable` and clone, each asking
- * it before the row is written (cmds/profile.c profile_enable, cmds/clone.c
- * cmd_clone), and the editor's seed, its mark and its OFF→ON gate, which absorbs
- * a profile that will not read as the row's (cmds/interactive.c read_targets).
- * A reader not on this list is a bug, and a screen that counts what a profile
- * holds beside this one is the second producer these counts exist to prevent.
+ * Readers: the screens that name what a profile holds — `dotta list`'s profile
+ * rows in every mode, the custom/ tally their mark, and the file listing's no-files
+ * arm (cmds/list.c list_profiles, list_files), `profile list`'s enabled and
+ * available rows, the custom/ tally their mark (cmds/profile.c profile_list),
+ * the deletion's preview and confirmation (cmds/remove.c remove_profile), and
+ * the encrypted files `key status` sums over the enabled profiles (cmds/key.c
+ * key_status); and the custom/ tally where a profile is enabled only with a target
+ * — `profile enable` and clone, each asking it before the row is written
+ * (cmds/profile.c profile_enable, cmds/clone.c cmd_clone), and the editor's seed,
+ * its mark and its OFF→ON gate, which absorbs a profile that will not read into
+ * its row's (unreadable) (cmds/interactive.c read_targets). A reader not on this
+ * list is a bug, and a screen that counts what a profile holds beside this one
+ * is the second producer these counts exist to prevent.
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param out The counts (must not be NULL; written on success alone)

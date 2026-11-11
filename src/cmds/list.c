@@ -44,18 +44,20 @@
 #define LIST_SUMMARY_MAX 40
 
 /**
- * One verbose profile line's facts
+ * One profile line's facts
  *
- * Read off the branch's head before anything prints: what it holds and what that
- * weighs, whose two phrases set columns measured across every profile, the way
- * the name column already is, and its last commit. One head, read once, so the
- * line is one snapshot's. Empty phrases are a profile whose count or size could
- * not be read, a commit with no summary one whose head could not — its line still
- * prints, without them.
+ * Read off the branch's head before anything prints, in every mode: what it holds,
+ * whose custom/ tally marks a row with no target; and at verbose what that weighs,
+ * whose two phrases set columns measured across every profile, the way the name
+ * column already is, and its last commit. One head, read once, so the line is
+ * one snapshot's. Zero counts and empty phrases are a profile whose count or
+ * size could not be read, a commit with no summary one whose head could not —
+ * its line still prints, without them.
  *
  * Buffer sizes are the minimums output_format_counts and output_format_size state.
  */
 typedef struct {
+    profile_counts_t count;  /* what the head holds; zero where the line did not read */
     char counts[64];
     char size[32];
     commit_info_t commit;    /* the head's; no summary where it did not read */
@@ -124,12 +126,17 @@ static error_t list_size_claim(const profile_claim_t *claim, void *payload) {
  * the row's words and under the title status's remote section prints (cmds/status.c
  * status_print_remote) — the glyph beside its phrase, so no legend keys it —
  * the names padded to one column, where status's rows follow a name by one space.
- * And beneath them in every mode, each enabled row Git lists no branch for, starred
+ * In every mode a row with no target whose profile holds what a binding places,
+ * its custom/ tally (core/profiles.h profile_counts_t), ends marked (no target),
+ * as profile list marks its row (cmds/profile.c profile_list). So every mode
+ * reads what each profile holds — its claims walked and its sheet parsed, 3.3
+ * to 4.1 ms per 1,000 claims, the price the mark puts on a plain listing. And
+ * beneath them in every mode, each enabled row Git lists no branch for, starred
  * and marked (no branch) where a branch's facts would stand, as profile list
- * marks its row (cmds/profile.c profile_list): the fact the view says as
- * core/manifest.h manifest_missing, read off the rows and the listing, since
- * list declares no view. Every mode closes on the total: the profiles listed,
- * the enabled among them, and at verbose what they weigh.
+ * marks its row: the fact the view says as core/manifest.h manifest_missing,
+ * read off the rows and the listing, since list declares no view. Every mode
+ * closes on the total: the profiles listed, the enabled among them, and at verbose
+ * what they weigh.
  */
 static error_t list_profiles(
     const dotta_ctx_t *ctx,
@@ -208,87 +215,89 @@ static error_t list_profiles(
         }
     }
 
-    /* Read what each profile holds and what that weighs, and measure the columns
-     * they need. Both are as wide as the profiles make them — the counts phrase
-     * names only the kinds a profile actually has, and a size runs from "0 B"
-     * to four digits and a unit — so neither is guessed. The size, a header read
-     * per file, is the expensive part of a verbose line, and runs here rather
-     * than again at render time; a profile that cannot be read is warned about
-     * and left with empty phrases, in the words the other screen of this file
-     * uses for the count's refusal: what failed is the line's account of what
-     * the profile holds, however far down the read it failed. The sizes that
-     * read are summed for the total, short by a profile that did not, as the
-     * file listing's total is short by a row it could not size (list_files). */
-    list_line_t *lines = NULL;
+    /* Read what each profile holds, in every mode, and at verbose what that weighs,
+     * and measure the columns the two need. Both are as wide as the profiles
+     * make them — the counts phrase names only the kinds a profile actually has,
+     * and a size runs from "0 B" to four digits and a unit — so neither is guessed.
+     * The size, a header read per file, is the expensive part of a verbose line,
+     * and runs here rather than again at render time; a profile that cannot be
+     * read is warned about, in every mode, and left with no counts and empty
+     * phrases, in the words the other screen of this file uses for the count's
+     * refusal: what failed is the line's account of what the profile holds, however
+     * far down the read it failed, and a row the warning names carries no mark.
+     * The sizes that read are summed for the total, short by a profile that did
+     * not, as the file listing's total is short by a row it could not size
+     * (list_files). */
+    list_line_t *lines = arena_calloc(ctx->arena, profiles.count, sizeof(*lines));
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
     size_t total_size = 0;
-    if (verbose) {
-        lines = arena_calloc(ctx->arena, profiles.count, sizeof(*lines));
+    for (size_t i = 0; i < profiles.count; i++) {
+        const char *name = profiles.entries[i];
 
-        for (size_t i = 0; i < profiles.count; i++) {
-            const char *name = profiles.entries[i];
-
-            /* The branch read once, at its head: what it holds and its last commit
-             * are that one commit's. A head that will not read leaves the line
-             * neither, its error warned and dropped, one per such branch. */
-            git_commit *head = NULL;
-            err = gitops_load_branch_commit(repo, name, &head);
-            if (err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
-                    name, error_message(error_root(err))
-                );
-                continue;
-            }
-
-            /* Its last commit, kept for the line's tail */
-            lines[i].commit = stats_commit_info(ctx->arena, head);
-
-            /* What it holds, counted over the profile at the same commit
-             * (core/profiles.h profile_counts); a tree or a count that will not
-             * read leaves the line its commit, its error warned and dropped */
-            profile_t *profile = NULL;
-            err = profile_open(name, head, &profile);
-            git_commit_free(head);
-            profile_counts_t count = { 0 };
-            if (!err) err = profile_counts(profile, &count);
-
-            /* And what that weighs, folded over the same profile through one
-             * handle on the object database (list_size_claim): the line's two
-             * phrases are one snapshot's, so a size that will not read leaves
-             * it neither */
-            list_size_t size = { 0 };
-            if (!err) {
-                int rc = git_repository_odb(&size.odb, repo);
-                err = rc < 0 ? error_git(rc, "Cannot open the object database")
-                             : profile_walk(profile, PROFILE_READ_STRICT, list_size_claim, &size);
-            }
-            git_odb_free(size.odb);
-            profile_free(profile);
-            if (err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
-                    name, error_message(error_root(err))
-                );
-                continue;
-            }
-
-            output_format_counts(
-                count.file_count, count.directory_count,
-                lines[i].counts, sizeof(lines[i].counts)
+        /* The branch read once, at its head: what it holds and its last commit
+         * are that one commit's. A head that will not read leaves the line neither,
+         * its error warned and dropped, one per such branch. */
+        git_commit *head = NULL;
+        err = gitops_load_branch_commit(repo, name, &head);
+        if (err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
+                name, error_message(error_root(err))
             );
-            output_format_size(size.total, lines[i].size, sizeof(lines[i].size));
-            total_size += size.total;
+            continue;
+        }
 
-            size_t len = strlen(lines[i].counts);
-            if (len > max_counts_len) {
-                max_counts_len = len;
-            }
-            len = strlen(lines[i].size);
-            if (len > max_size_len) {
-                max_size_len = len;
-            }
+        /* Its last commit, kept for a verbose line's tail */
+        if (verbose) lines[i].commit = stats_commit_info(ctx->arena, head);
+
+        /* What it holds, counted over the profile at the same commit
+         * (core/profiles.h profile_counts); a tree or a count that will not read
+         * leaves the line its commit, its error warned and dropped */
+        profile_t *profile = NULL;
+        err = profile_open(name, head, &profile);
+        git_commit_free(head);
+        profile_counts_t count = { 0 };
+        if (!err) err = profile_counts(profile, &count);
+
+        /* And at verbose what that weighs, folded over the same profile through
+         * one handle on the object database (list_size_claim): the line's facts
+         * are one snapshot's, so a size that will not read leaves it no count */
+        list_size_t size = { 0 };
+        if (!err && verbose) {
+            int rc = git_repository_odb(&size.odb, repo);
+            err = rc < 0 ? error_git(rc, "Cannot open the object database")
+                         : profile_walk(profile, PROFILE_READ_STRICT, list_size_claim, &size);
+        }
+        git_odb_free(size.odb);
+        profile_free(profile);
+        if (err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
+                name, error_message(error_root(err))
+            );
+            continue;
+        }
+
+        /* The line keeps what it read: the counts in every mode, and at verbose
+         * the two phrases, each measured for its column */
+        lines[i].count = count;
+        if (!verbose) continue;
+
+        output_format_counts(
+            count.file_count, count.directory_count,
+            lines[i].counts, sizeof(lines[i].counts)
+        );
+        output_format_size(size.total, lines[i].size, sizeof(lines[i].size));
+        total_size += size.total;
+
+        size_t len = strlen(lines[i].counts);
+        if (len > max_counts_len) {
+            max_counts_len = len;
+        }
+        len = strlen(lines[i].size);
+        if (len > max_size_len) {
+            max_size_len = len;
         }
     }
 
@@ -304,19 +313,12 @@ static error_t list_profiles(
         output_section(out, OUTPUT_NORMAL, "Profiles");
     }
 
-    /* List profiles, the enabled ones starred */
+    /* List profiles, the enabled ones starred, each row one shape in every mode:
+     * the name, padded where a column follows it; the columns verbose and remote
+     * add; the mark; the line's end */
     for (size_t i = 0; i < profiles.count; i++) {
         const char *profile = profiles.entries[i];
         const char *indicator = state_enabled(state, profile) ? "* " : "  ";
-
-        /* Simple mode: Just name with enabled indicator */
-        if (!verbose && !show_remote) {
-            output_print(
-                out, OUTPUT_NORMAL, "  %s{cyan}%s{reset}\n",
-                indicator, profile
-            );
-            continue;
-        }
 
         /* Start line with indicator and name */
         output_print(
@@ -325,7 +327,7 @@ static error_t list_profiles(
         );
 
         /* Verbose: what the profile holds, in the column measured for it */
-        if (lines && lines[i].counts[0] != '\0') {
+        if (lines[i].counts[0] != '\0') {
             output_print(
                 out, OUTPUT_VERBOSE, "  %-*s  %*s",
                 (int) max_counts_len, lines[i].counts,
@@ -335,7 +337,7 @@ static error_t list_profiles(
 
         /* Verbose: its last commit, read off the head its counts were, printed
          * as a file row prints its own */
-        if (lines && lines[i].commit.summary) {
+        if (lines[i].commit.summary) {
             const commit_info_t *last = &lines[i].commit;
             char oid_str[LIST_SHORT_OID_BUF_SIZE];
             git_oid_tostr(oid_str, sizeof(oid_str), &last->oid);
@@ -373,6 +375,15 @@ static error_t list_profiles(
                     remote_state_symbol(relation.state), phrase
                 );
             }
+        }
+
+        /* Last, where the row holds no target and its profile holds what one
+         * places, the mark in profile list's word and colour: a disabled row
+         * holds none (core/state.h state_target), and the tally is the head's
+         * the line read, zero where it did not */
+        if (!state_target(state, profile) &&
+            lines[i].count.custom_file_count + lines[i].count.custom_directory_count > 0) {
+            output_print(out, OUTPUT_NORMAL, "  {dim}(no target){reset}");
         }
 
         output_endline(out, OUTPUT_NORMAL);

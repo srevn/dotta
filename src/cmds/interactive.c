@@ -37,8 +37,8 @@
 
 /* Row prefix: "  " + cursor + " " + checkbox + " " = 6 visible columns. */
 #define ROW_PREFIX_COLS       6
-/* Worst static annotation: " (needs a target)" = 17 visible columns. */
-#define ROW_ANNOTATION_COLS   17
+/* Worst static annotation: " (unreadable)" = 13 visible columns. */
+#define ROW_ANNOTATION_COLS   13
 
 /* The prompt's reserved bytes; an append past them grows as any buffer grows. */
 #define PROMPT_INITIAL_CAP    256
@@ -49,7 +49,7 @@ typedef struct {
     const char *name;      /* Profile name: the listing's, or a copy of the store's (missing) */
     const char *target;    /* The store's spelling, or text this session typed */
     bool enabled;          /* Selected for save; toggled by space, persisted by view_save */
-    bool needs_target;     /* A claim of the profile needs a binding (core/profiles.h) */
+    bool holds_custom;     /* The profile holds custom/ files or tracked directories */
     bool unreadable;       /* The profile would not read: the seed absorbed it, the row says so */
     bool missing;          /* Enabled with no branch: nothing to read, the row says so */
 } item_t;
@@ -58,7 +58,7 @@ typedef struct {
     buffer_t buffer;       /* The input typed so far: the heap's, given back at the session's end */
     size_t item_index;     /* Row anchor (view->items index) the prompt is over */
     bool active;           /* True while the prompt overlay is open */
-    bool enable;           /* True iff opened by space on a row that needs a target (commit flips enabled) */
+    bool enable;           /* True iff opened by space's OFF→ON gate (commit flips enabled) */
 } prompt_t;
 
 typedef struct {
@@ -195,10 +195,10 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
 }
 
 /* Pass two, the target column of every row: the binding an enabled row holds
- * (its arrow), and, where Git holds its branch, whether its profile needs one
- * (its mark, and the OFF→ON gate) — both read up front so a keystroke never reads
- * Git: the gate is a field test, where a lazy probe would be a tree read inside
- * a raw-mode handler, visible latency on the first space.
+ * (its arrow), and, where Git holds its branch, whether its profile holds what
+ * one places (its mark, and the OFF→ON gate) — both read up front so a keystroke
+ * never reads Git: the gate is a field test, where a lazy probe would be a tree
+ * read inside a raw-mode handler, visible latency on the first space.
  *
  * The binding first, and it cannot fail: the row's target is the store's fact
  * whatever the profile says, so a profile that will not read keeps its arrow.
@@ -206,7 +206,7 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
  * state_enable/disable/reorder; save runs those much later, so the copy — the
  * view's arena's — crosses the boundary now.
  *
- * The need is absorbed, not propagated: the editor is the way out of an enabled
+ * The tally is absorbed, not propagated: the editor is the way out of an enabled
  * set the next load cannot build. A sheet this build refuses on one enabled profile
  * kills status; here SPACE disables the profile and `w` saves, plan_check building
  * over the post-mutation set — the recovery that tests/test-claims.sh pins for
@@ -228,9 +228,9 @@ static void read_targets(git_repository *repo, state_t *deploy_state, view_t *vi
          * gated, its mark the branch it lacks (row_render) */
         if (it->missing) continue;
 
-        /* The need, absorbed (above): what the profile holds under custom/, counted
-         * at its head (core/profiles.h profile_counts_t), the error dropped,
-         * one per row whose profile will not read. */
+        /* The tally, absorbed (above): what the profile holds under custom/,
+         * counted at its head (core/profiles.h profile_counts_t), the error
+         * dropped, one per row whose profile will not read. */
         profile_t *profile = NULL;
         profile_counts_t count = { 0 };
         error_t err = profile_load(repo, it->name, &profile);
@@ -239,7 +239,7 @@ static void read_targets(git_repository *repo, state_t *deploy_state, view_t *vi
         if (err) {
             it->unreadable = true;
         } else {
-            it->needs_target = count.custom_file_count + count.custom_directory_count > 0;
+            it->holds_custom = count.custom_file_count + count.custom_directory_count > 0;
         }
     }
 }
@@ -314,11 +314,11 @@ static void plan_collect(view_t *view, plan_t *plan) {
  * A row's target is the store's own spelling or the text the session typed
  * (handle_key_prompt), told apart by the question the save asks of it: does the
  * store hold this binding as written? A NULL target is legitimate on every row:
- * one that needs no target has nothing to place, and one that needs a target
- * and is saved without it is a normal lifecycle stage the view's health names
- * (core/manifest.h manifest_unbound) — the OFF→ON prompt asks for a target, a
- * row already enabled without one keeps that, and nothing downstream refuses
- * either. No second guard here. */
+ * one whose profile holds nothing under custom/ has nothing to place, and one
+ * whose profile does and is saved without one is a normal lifecycle stage the
+ * view's health names (core/manifest.h manifest_unbound) — the OFF→ON prompt
+ * asks for a target, a row already enabled without one keeps that, and nothing
+ * downstream refuses either. No second guard here. */
 static error_t plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) {
     state_profiles_t persisted = state_profiles(deploy_state);
 
@@ -508,7 +508,7 @@ rollback:
 /* Five row shapes, all the same line count:
  *   1. Prompt-active   "  ▶   Target: <buffer>_"
  *   2. Bound           "  ▶ ✓ name → <target>"
- *   3. Needs a target  "    name (needs a target)"
+ *   3. No target       "    name (no target)"
  *   4. Unreadable      "    name (unreadable)"
  *   5. No branch       "  ▶ ✓ name (no branch)", a bound row's after its arrow
  *
@@ -543,17 +543,17 @@ static void row_render(output_t *out, const view_t *view, size_t i) {
      * this session's? Shown wherever one is held: on a home-only row bound on
      * purpose, as profile list and status show it; and on a disabled row, where
      * it is what the next toggle-on writes (view_save releases it if no save
-     * takes it). Could the seed not say? Does the profile need a binding it has
-     * not got — the same answer status prints for an enabled row, and here `t`
-     * is the remedy. */
+     * takes it). Could the seed not say? Does the profile hold what a binding
+     * places, with none to place it — the mark profile list puts on the row,
+     * the fact status counts for an enabled one, and here `t` places it. */
     if (it->target) {
         char shown[PATH_MAX];
         output_format_path(it->target, identity()->home, shown, sizeof(shown));
         output_draw(out, " {dim}→ %s{reset}", shown);
     } else if (it->unreadable) {
         output_draw(out, " {dim}(unreadable){reset}");
-    } else if (it->needs_target) {
-        output_draw(out, " {dim}(needs a target){reset}");
+    } else if (it->holds_custom) {
+        output_draw(out, " {dim}(no target){reset}");
     }
 
     /* And a fourth, whatever those answered: has the profile a branch? A row
@@ -717,17 +717,17 @@ static interactive_result_t handle_key_normal(view_t *view, int key) {
             item_t *it = &view->items[view->cursor];
             bool toggling_on = !it->enabled;
 
-            /* Three-gate trigger: prompt opens iff (1) the profile needs a target,
-             * (2) toggle is OFF→ON, (3) no target captured or seeded yet. The
-             * captured target survives transient toggle-off / toggle-on cycles
-             * within a session, so a re-enable skips the prompt naturally via
-             * gate 3 (until a save releases it: view_save). A row the seed could
-             * not read needs nothing it can say, so it toggles without a prompt
-             * and plan_check refuses the save that would enable it. A row with
-             * no branch toggles likewise, and its save stands either way: such
-             * a profile contributes nothing to the view plan_check builds
-             * (core/manifest.h manifest_missing). */
-            if (toggling_on && it->needs_target && it->target == NULL) {
+            /* Three-gate trigger: prompt opens iff (1) the profile holds what a
+             * target places, (2) toggle is OFF→ON, (3) no target captured or
+             * seeded yet. The captured target survives transient toggle-off /
+             * toggle-on cycles within a session, so a re-enable skips the prompt
+             * naturally via gate 3 (until a save releases it: view_save). A row
+             * the seed could not read needs nothing it can say, so it toggles
+             * without a prompt and plan_check refuses the save that would enable
+             * it. A row with no branch toggles likewise, and its save stands
+             * either way: such a profile contributes nothing to the view plan_check
+             * builds (core/manifest.h manifest_missing). */
+            if (toggling_on && it->holds_custom && it->target == NULL) {
                 prompt_open_capture(&view->prompt, view->cursor);
                 return INTERACTIVE_CONTINUE;
             }
@@ -801,11 +801,10 @@ static interactive_result_t view_handle_key(view_t *view, int key) {
 /* Reject the session if the terminal can't host the static row layout.
  *
  * Row geometry: "  " + cursor + " " + checkbox + " " + name + annotation.
- * The static prefix is ROW_PREFIX_COLS; the worst static annotation is " (needs
- * a target)" at ROW_ANNOTATION_COLS. The dynamic "→ <target>" can run longer
- * than that, but it is user data and its visual overflow is allowed to wrap rather
- * than block startup. Same logic applies to the mid-session "Target: <buffer>"
- * overlay. */
+ * The static prefix is ROW_PREFIX_COLS; the worst static annotation is
+ * ROW_ANNOTATION_COLS. The dynamic "→ <target>" can run longer than that, but
+ * it is user data and its visual overflow is allowed to wrap rather than block
+ * startup. Same logic applies to the mid-session "Target: <buffer>" overlay. */
 static error_t check_screen(const view_t *view) {
     terminal_size_t size;
     error_t err = terminal_get_size(&size);
@@ -939,7 +938,7 @@ const args_command_t spec_interactive = {
         "Notes:\n"
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
-        "  - Toggling on a profile that needs a target opens an inline target prompt\n"
+        "  - Toggling on a profile marked (no target) opens an inline target prompt\n"
         "  - A profile marked (no branch) stays enabled until toggled off and saved\n"
         "  - A relative target is resolved from this directory, like a shell's\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",

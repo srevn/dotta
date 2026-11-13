@@ -97,17 +97,19 @@ typedef struct {
  * A row of the run: its branch against the remote, what the run decided, what
  * the act did
  *
- * Each column is written once, by its phase: the decision the relation, the verdict
- * and of a merge its draft and the conflicts its open met — refusing it, or each
- * settled for the run's side; the act the outcome, what its push sent, and of a
- * merge that landed the names its two sides took one deleting and one removing.
- * The row's error is the failure the run met for it, whichever phase met it —
- * said on the row's line, counted and named by sync_failure. A row whose relation
- * failed has no verdict, and every reader asks its error before its reading: a
- * failed relation's zeroed state reads as up to date otherwise.
+ * Each column is written once, by its phase: the decision its ref, the relation,
+ * the verdict and of a merge its draft and the conflicts its open met — refusing
+ * it, or each settled for the run's side; the act the outcome, what its push
+ * sent, and of a merge that landed the names its two sides took one deleting
+ * and one removing. The row's error is the failure the run met for it, whichever
+ * phase met it — said on the row's line, counted and named by sync_failure. A
+ * row whose ref or relation failed has no verdict, and every reader asks its
+ * error before its reading: a failed relation's zeroed state reads as up to date
+ * otherwise.
  */
 typedef struct {
     const char *profile;                 /* The run's name, borrowed */
+    const char *ref;                     /* Its branch's ref, spelled at the decision through the branch rule */
     remote_relation_t relation;          /* Its branch against the remote: the heads every act writes from */
     sync_verdict_t verdict;              /* The act the reading calls for */
     profile_draft_t *draft;              /* A merge's, opened at the decision, committed at the act; NULL elsewhere */
@@ -194,23 +196,27 @@ static bool sync_acts(const sync_row_t *row, bool no_push) {
 
 /**
  * Decide the run whole, before any row acts: a row a profile of `profiles`, in
- * its order, each read against the remote three ways (sys/remote.h
- * remote_relation), given the act its reading calls for (sync_verdict), and of
- * a merge the draft opened — each conflict settled for --conflicts' side, or
- * the open refused naming each where the run named none (core/profiles.h
- * profile_draft_merge) — so a conflict refuses its row before anything moves,
- * in a dry run too
+ * its order, its branch's ref spelled once, each read against the remote three
+ * ways (sys/remote.h remote_relation), given the act its reading calls for
+ * (sync_verdict), and of a merge the draft opened — each conflict settled for
+ * --conflicts' side, or the open refused naming each where the run named none
+ * (core/profiles.h profile_draft_merge) — so a conflict refuses its row before
+ * anything moves, in a dry run too
  *
- * A relation that fails is its row's error, which no verdict reads; an open that
- * fails is its row's too. The open hands its conflicts back where it succeeds
- * and where they refuse it, and nowhere else, in the command arena the receipt
- * reads them from: a merge whose conflicts stand listed with no draft is their
- * refusal, said as the row's own off the list, each conflict beneath it — the
- * row naming its profile, as the push's compare is said (sync_push) — and every
- * other refusal of the open stands whole. The open reads the branch's head itself
- * (sys/stage.h stage_merge), moments after the relation read it: a commit another
- * process lands between the two is merged with the rest, and the push is refused
- * where that process pushed (stated).
+ * The ref is spelled through the branch rule (sys/gitops.h gitops_branch_refname),
+ * which the relation passes the name through too: a name the rule refuses is
+ * its row's error, in the words the relation would refuse it in, and every act
+ * after reads the ref spelled here: the pull's write, and the push. A relation
+ * that fails is its row's error, which no verdict reads; an open that fails is
+ * its row's too. The open hands its conflicts back where it succeeds and where
+ * they refuse it, and nowhere else, in the command arena the receipt reads them
+ * from: a merge whose conflicts stand listed with no draft is their refusal,
+ * said as the row's own off the list, each conflict beneath it — the row naming
+ * its profile, as the push's compare is said (sync_push) — and every other refusal
+ * of the open stands whole. The open reads the branch's head itself (sys/stage.h
+ * stage_merge), moments after the relation read it: a commit another process
+ * lands between the two is merged with the rest, and the push is refused where
+ * that process pushed (stated).
  *
  * @param ctx Dispatch context: the store, and the command arena the rows and
  *            their conflicts live in (must not be NULL)
@@ -237,6 +243,12 @@ static sync_rows_t sync_decide(
         sync_row_t *row = &rows.entries[i];
 
         row->profile = profiles->entries[i];
+
+        char ref[DOTTA_REFNAME_MAX];
+        row->error = gitops_branch_refname(ref, sizeof(ref), row->profile);
+        if (row->error) continue;
+        row->ref = arena_strdup(ctx->arena, ref);
+
         row->error = remote_relation(remote, row->profile, &row->relation);
         if (row->error) continue;
 
@@ -271,11 +283,7 @@ static sync_rows_t sync_decide(
  * is the push's, the remote's words where it refused the ref.
  */
 static error_t sync_push(remote_t *remote, sync_row_t *row, const git_oid *target) {
-    char ref[DOTTA_REFNAME_MAX];
-    error_t err = gitops_branch_refname(ref, sizeof(ref), row->profile);
-    if (err) return err;
-
-    err = remote_push(remote, ref, target, &row->relation.remote, &row->sent);
+    error_t err = remote_push(remote, row->ref, target, &row->relation.remote, &row->sent);
     if (error_code(err) == ERR_CONFLICT) {
         return error_create(ERR_CONFLICT, "The remote's branch moved since this sync read it");
     }
@@ -520,22 +528,17 @@ static void sync_execute(
                 row->error = sync_push(remote, row, &relation->local);
                 break;
 
-            case SYNC_VERDICT_PULL: {
+            case SYNC_VERDICT_PULL:
                 /* The remote's head onto the branch, from the head the relation
                  * read — its commits, or the line it recreated, the branch holding
                  * nothing beyond the old one — then the remote's line taken */
-                char ref[DOTTA_REFNAME_MAX];
-                row->error = gitops_branch_refname(ref, sizeof(ref), row->profile);
-                if (!row->error) {
-                    row->error = gitops_write_reference(
-                        repo, ref, &relation->remote, &relation->local, action, "%s %s/%s",
-                        relation->state == REMOTE_STATE_RECREATED
-                            ? "recreated from" : "fast-forward to", remote_name, row->profile
-                    );
-                }
+                row->error = gitops_write_reference(
+                    repo, row->ref, &relation->remote, &relation->local, action, "%s %s/%s",
+                    relation->state == REMOTE_STATE_RECREATED
+                        ? "recreated from" : "fast-forward to", remote_name, row->profile
+                );
                 if (!row->error) remote_take(remote, row->profile);
                 break;
-            }
 
             case SYNC_VERDICT_MERGE:
                 /* Its outcome its own: a push that fails after the commit leaves

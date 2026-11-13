@@ -34,16 +34,30 @@
  *
  * A push is one update — a ref, the commit it is to name or Git's null id (a
  * deletion), and the head its writer read the remote naming or Git's null id (a
- * create) — on a connection of its own: connected for receive-pack and listed,
- * it is sent only where that listing names what the writer read, the commit itself
- * and never a ref read again, libgit2's fast-forward check lifted. A smart server
- * compares the old id the push names again under its lock
+ * create) — on a connection of its own, through a handle of its own: the open's
+ * duplicated, its name, both URLs and its refspecs, never its transport
+ * (lib/libgit2/src/libgit2/remote.c git_remote_dup), whose URL is the push URL
+ * alone, as the lookup rewrote it (git_remote_lookup) — remote.<name>.pushurl
+ * under insteadOf, else the url under a pushInsteadOf that matches it, else the
+ * url. Its transport is then the one libgit2 routes that URL to, as it routes
+ * the open's (transport.c transport_find_fn), and a path remote writes the
+ * repository the push URL names (transports/local.c local_push reads the handle's
+ * URL). Routed so, a path holding ':' is dialled over SSH, file:// its way around,
+ * and a path push URL where no directory stands reads "unsupported URL protocol",
+ * naming no path, where the open says its own URL's missing directory
+ * (remote_open).
+ *
+ * Connected for receive-pack and listed, the push is sent only where that listing
+ * names what the writer read, the commit itself and never a ref read again,
+ * libgit2's fast-forward check lifted. A writer reads the remote off the open's
+ * listing, the fetch URL's (remote_advertised), so a push URL naming another
+ * repository — a mirror — reads moved by another writer, nothing sent there. A
+ * smart server compares the old id the push names again under its lock
  * (lib/git/builtin/receive-pack.c update); a path remote compares only a create's
- * absence (transports/local.c local_push_update_remote_ref), and writes the
- * repository the fetch URL names whatever pushurl says (local_push). A branch's
- * push that lands moves its tracking ref after it, from its read; a tracking
- * ref that will not follow is left as it stands, the next fetch's to move where
- * the remote's head continues its line, else the next act's on the branch.
+ * absence (transports/local.c local_push_update_remote_ref). A branch's push
+ * that lands moves its tracking ref after it, from its read; a tracking ref that
+ * will not follow is left as it stands, the next fetch's to move where the remote's
+ * head continues its line, else the next act's on the branch.
  *
  * Every op takes the proxy git's configuration names, as git's own transfers
  * do, which libgit2 takes only where asked (GIT_PROXY_AUTO): remote.<name>.proxy,
@@ -288,17 +302,19 @@ error_t remote_fetch(
  * the id its writer read the remote naming, Git's null id where it read none (a
  * create). Both null is a caller's bug.
  *
- * The listing's connection is closed first, and the push connects for receive-pack,
- * the connect an op of its own as the open's is: listed there, the ref is compared
- * with `expected` before anything is sent, and the upload, its own op on that
- * connection, is the commit itself, forced — `+<id>:<ref>`, or `:<ref>` — so
- * libgit2's own fast-forward check is lifted (lib/libgit2/src/libgit2/push.c
- * queue_objects) and the compare is the push's one rule. The '+' is libgit2's
- * alone: the command a server reads names the old head and the new
- * (transports/smart_protocol.c gen_pktline), so a server that refuses a
- * non-fast-forward (receive.denyNonFastForwards) refuses it still. A ref the
- * remote refuses is the push's failure in the remote's words (sys/transfer.h
- * transfer_push_status_callback). The connection is closed after.
+ * The listing's connection is closed first, and the push connects a handle of
+ * its own for receive-pack, its URL the push URL (the header), the connect an
+ * op of its own as the open's is: listed there, the ref is compared with `expected`
+ * before anything is sent, and the upload, its own op on that connection, is
+ * the commit itself, forced — `+<id>:<ref>`, or `:<ref>` — so libgit2's own
+ * fast-forward check is lifted (lib/libgit2/src/libgit2/push.c queue_objects)
+ * and the compare is the push's one rule. The '+' is libgit2's alone: the command
+ * a server reads names the old head and the new (transports/smart_protocol.c
+ * gen_pktline), so a server that refuses a non-fast-forward
+ * (receive.denyNonFastForwards) refuses it still. A ref the remote refuses is
+ * the push's failure in the remote's words (sys/transfer.h
+ * transfer_push_status_callback). The handle is let go after, its connection
+ * with it, whatever the push did.
  *
  * A branch's push that landed (refname under refs/heads/) moves its tracking
  * ref after it, from its read — to `target`, or deleted where the push deleted

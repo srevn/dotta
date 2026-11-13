@@ -2,18 +2,18 @@
  * remote.c - The store's remote, met once a command: implementation
  *
  * See remote.h. Every op the session makes is one libgit2 network call — the
- * connect, the download, a push's connect and upload — wrapped in sys/transfer's
- * op and handed its options whole, as a connected remote takes the options each
- * op hands it in place of the last (lib/libgit2/src/libgit2/remote.c
- * connect_or_reset_options): transfer's callbacks for its direction, and the
- * proxy git's configuration names, no credential callback beside it, so the
- * remote's credential is never a proxy's answer. Its failure's sentence is read
- * before anything closes: a close may set libgit2's error over the op's
- * (transports/smart.c git_smart__close writes a flush to the connection). Every
- * ref written here, in the store or on the remote, is written from its writer's
- * read: a tracking ref through sys/gitops' writers (gitops_write_reference,
- * gitops_delete_reference) — the session's and the forget's — the remote's through
- * the push's compare.
+ * connect, the download, a push's connect and upload on a handle of its own —
+ * wrapped in sys/transfer's op and handed its options whole, as a connected remote
+ * takes the options each op hands it in place of the last
+ * (lib/libgit2/src/libgit2/remote.c connect_or_reset_options): transfer's callbacks
+ * for its direction, and the proxy git's configuration names, no credential
+ * callback beside it, so the remote's credential is never a proxy's answer. Its
+ * failure's sentence is read before anything closes: a close may set libgit2's
+ * error over the op's (transports/smart.c git_smart__close writes a flush to
+ * the connection). Every ref written here, in the store or on the remote, is
+ * written from its writer's read: a tracking ref through sys/gitops' writers
+ * (gitops_write_reference, gitops_delete_reference) — the session's and the
+ * forget's — the remote's through the push's compare.
  */
 
 #include "sys/remote.h"
@@ -41,7 +41,7 @@
 struct remote {
     arena_t *arena;             /* The handle's own: itself, the listing it copies, the names it lends */
     git_repository *repo;       /* Borrowed */
-    git_remote *git;            /* libgit2's, looked up once; connected from the open to its fetch or push */
+    git_remote *git;            /* libgit2's, looked up once; connected from the open to its fetch, a push on a handle of its own */
     transfer_context_t *xfer;   /* What libgit2 calls back into during each op */
     const char *action;         /* The command's word, every reflog line's; borrowed */
     hashmap_t *advertised;      /* Every ref the open listed: its name, and its id (git_oid *) */
@@ -219,10 +219,10 @@ error_t remote_open(
          * URL protocol" (lib/libgit2/src/libgit2/transport.c transport_find_fn),
          * so there the cause is what libgit2 found, looked at as it looks — a
          * stat through a link, as the invoker: a raw call (sys/filesystem.h) —
-         * and the path is said, which carries no credential. The open's connect
-         * alone chooses a transport: a push's reuses it (remote.c
-         * git_remote_connect_ext), and a path gone since reads libgit2's words,
-         * which name it. */
+         * and the path is said, which carries no credential. The branch is the
+         * open's alone: a push's own handle is routed as this one is (remote_push),
+         * and a path no directory stands at reads libgit2's words there, which
+         * name no path. */
         const char *url = git_remote_url(git);
         struct stat st;
         error_t err;
@@ -523,12 +523,9 @@ error_t remote_push(
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
 
-    /* The listing's connection closed first, where it stands: a path remote's
-     * connect answers from the connection it holds (transports/local.c
-     * local_connect), so the push would compare and negotiate against the open's
-     * listing; and a smart one's close says goodbye (transports/smart.c
-     * git_smart__close), where a connect over it drops it unsaid
-     * (git_smart__connect) */
+    /* The listing's connection closed first, where it stands: nothing reads it
+     * past a push — a fetch after one is a caller's bug (remote_fetch) — so it
+     * is never held open beside the push's own */
     git_remote_disconnect(remote->git);
 
     git_push_options opts;
@@ -536,23 +533,32 @@ error_t remote_push(
     transfer_configure_callbacks(&opts.callbacks, remote->xfer, GIT_DIRECTION_PUSH);
     opts.proxy_opts.type = GIT_PROXY_AUTO;
 
-    /* The push's own connection, for receive-pack, its op the connect alone as
-     * the open's is: its listing, read on it, names the ref as the remote holds
-     * it now */
-    transfer_op_begin(remote->xfer);
-    int rc = git_remote_connect(
-        remote->git, GIT_DIRECTION_PUSH, &opts.callbacks, &opts.proxy_opts, NULL
-    );
-    transfer_op_end(remote->xfer, rc);
+    /* The push's own handle, the open's duplicated — its name, both URLs and
+     * its refspecs, never its transport (lib/libgit2/src/libgit2/remote.c
+     * git_remote_dup) — whose URL is the push URL alone: the push URL the lookup
+     * read, where it read one, in place of the url it keeps (the header) */
+    git_remote *push = NULL;
+    transfer_wire_t wire = { 0 };
+    int rc = git_remote_dup(&push, remote->git);
+    if (rc == 0 && git_remote_pushurl(push)) {
+        rc = git_remote_set_instance_url(push, git_remote_pushurl(push));
+    }
+
+    /* Its connection, for receive-pack, through the transport its URL names,
+     * its op the connect alone as the open's is: its listing, read on it, names
+     * the ref as the remote holds it now */
+    if (rc == 0) {
+        transfer_op_begin(remote->xfer);
+        rc = git_remote_connect(push, GIT_DIRECTION_PUSH, &opts.callbacks, &opts.proxy_opts, NULL);
+        transfer_op_end(remote->xfer, rc);
+    }
 
     const git_remote_head **heads = NULL;
     size_t count = 0;
-    if (rc == 0) rc = git_remote_ls(&heads, &count, remote->git);
+    if (rc == 0) rc = git_remote_ls(&heads, &count, push);
     if (rc < 0) {
-        /* The sentence before the close, which may set one of its own */
         err = error_git(rc, "Cannot push '%s' to remote '%s'", refname, name);
-        git_remote_disconnect(remote->git);
-        return err;
+        goto done;
     }
 
     /* Sent only where that listing names what its writer read, the null id where
@@ -566,21 +572,26 @@ error_t remote_push(
         }
     }
     if (!git_oid_equal(&listed, expected)) {
-        git_remote_disconnect(remote->git);
-        return error_create(
+        err = error_create(
             ERR_CONFLICT, "Reference '%s' on remote '%s' was changed by another writer "
             "since this command read it", refname, name
         );
+        goto done;
     }
 
     /* The upload, on that connection (remote.c connect_or_reset_options), an op
-     * of its own: its sentence read before the close, the remote's words where
-     * it refused the ref (sys/transfer.h transfer_push_status_callback) */
+     * of its own: the remote's words where it refused the ref (sys/transfer.h
+     * transfer_push_status_callback) */
     transfer_op_begin(remote->xfer);
-    rc = git_remote_upload(remote->git, &refs, &opts);
-    const transfer_wire_t wire = transfer_op_end(remote->xfer, rc);
-    err = rc < 0 ? error_git(rc, "Cannot push '%s' to remote '%s'", refname, name) : NULL;
-    git_remote_disconnect(remote->git);
+    rc = git_remote_upload(push, &refs, &opts);
+    wire = transfer_op_end(remote->xfer, rc);
+    if (rc < 0) err = error_git(rc, "Cannot push '%s' to remote '%s'", refname, name);
+
+done:
+    /* The handle let go whatever the push did, its connection closed and its
+     * transport freed with it: every sentence is read above, before the close
+     * may set one of its own (transports/smart.c git_smart__close) */
+    git_remote_free(push);
     if (err) return err;
 
     if (sent) *sent = wire;

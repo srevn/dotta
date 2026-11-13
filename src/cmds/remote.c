@@ -350,9 +350,7 @@ static error_t remote_rename(
  *
  * The two URLs are the answer, said as the run's summary (base/output.h
  * output_summary) in git's labels. The push URL is the one configured for pushes,
- * else the fetch URL, as a push connects (lib/libgit2/src/libgit2/remote.c
- * git_remote__urlfordirection) — save on a path remote, whose push libgit2 writes
- * through the fetch URL whatever this one says (sys/remote.h). A URL the
+ * else the fetch URL, as a push connects (sys/remote.h remote_push). A URL the
  * configuration holds none of, a remote written by hand, is none, as remote_list
  * says it.
  *

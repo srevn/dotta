@@ -89,10 +89,8 @@ struct transfer_context_s {
 transfer_context_t *transfer_context_create(output_t *output) {
     CHECK_NULL(output);
 
-    transfer_context_t *xfer = heap_calloc(1, sizeof(*xfer));
-
-    xfer->output = output;
-    /* All other fields zero-initialized by heap_calloc. */
+    transfer_context_t *xfer = heap_alloc(sizeof(*xfer));
+    *xfer = (transfer_context_t){ .output = output };
 
     return xfer;
 }

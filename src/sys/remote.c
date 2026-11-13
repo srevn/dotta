@@ -188,12 +188,14 @@ error_t remote_open(
      * URL's (lib/libgit2/src/libgit2/remote.c git_remote__urlfordirection), and
      * judged there (sys/transfer.h). */
     arena_t *arena = arena_create(0);
-    remote_t *remote = arena_calloc(arena, 1, sizeof(*remote));
-    remote->arena = arena;
-    remote->repo = repo;
-    remote->git = git;
-    remote->action = action;
-    remote->xfer = transfer_context_create(output);
+    remote_t *remote = arena_alloc(arena, sizeof(*remote));
+    *remote = (remote_t){
+        .arena = arena,
+        .repo = repo,
+        .git = git,
+        .action = action,
+        .xfer = transfer_context_create(output),
+    };
 
     /* The open's one op: the connect for upload-pack, which reads the remote's
      * advertisement — no byte of a pack moves, so no frame is drawn */

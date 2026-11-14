@@ -31,7 +31,7 @@
  */
 #define DOTTA_VERSION_MAJOR 0
 #define DOTTA_VERSION_MINOR 191
-#define DOTTA_VERSION_PATCH 2
+#define DOTTA_VERSION_PATCH 3
 
 /**
  * Pre-release suffix, including a leading dash when present.
@@ -70,39 +70,40 @@
 /**
  * Build metadata injected by the Makefile via `-D` flags.
  *
- * Each value is a string literal defined by the build system:
+ * Each value is a string literal defined by the build system, "" where it learned
+ * none — the banner prints nothing of an empty one:
  *
  *   -DDOTTA_BUILD_COMMIT="abc1234-dirty"   short git SHA + dirty flag
  *   -DDOTTA_BUILD_BRANCH="main"            current git branch
  *   -DDOTTA_BUILD_PLATFORM="darwin/arm64"  kernel name + machine arch
- *   -DDOTTA_BUILD_TYPE="release"           "release" | "debug"
+ *   -DDOTTA_BUILD_TYPE="release"           "release" | "debug" | "coverage"
  *   -DDOTTA_BUILD_CC="clang version ..."   compiler identity
  *
  * The `#ifndef` fallbacks below keep the header self-contained when the translation
  * unit is built outside the project Makefile (e.g., by an IDE's language server).
- * `BUILD_DATE` and `BUILD_TIME` fall back to the standard `__DATE__` / `__TIME__`
- * predefined macros.
  */
 #ifndef DOTTA_BUILD_COMMIT
-#define DOTTA_BUILD_COMMIT "unknown"
+#define DOTTA_BUILD_COMMIT ""
 #endif
 #ifndef DOTTA_BUILD_BRANCH
-#define DOTTA_BUILD_BRANCH "unknown"
+#define DOTTA_BUILD_BRANCH ""
 #endif
 #ifndef DOTTA_BUILD_PLATFORM
-#define DOTTA_BUILD_PLATFORM "unknown"
+#define DOTTA_BUILD_PLATFORM ""
 #endif
 #ifndef DOTTA_BUILD_TYPE
 #define DOTTA_BUILD_TYPE "release"
 #endif
 #ifndef DOTTA_BUILD_CC
-#define DOTTA_BUILD_CC "unknown"
+#define DOTTA_BUILD_CC ""
 #endif
-#ifndef DOTTA_BUILD_DATE
+
+/**
+ * What the compilation knows of itself, from the compiler's own macros: when it
+ * ran — the time SOURCE_DATE_EPOCH names, where the environment sets it, so two
+ * builds of one commit can print one date.
+ */
 #define DOTTA_BUILD_DATE __DATE__
-#endif
-#ifndef DOTTA_BUILD_TIME
 #define DOTTA_BUILD_TIME __TIME__
-#endif
 
 #endif /* DOTTA_VERSION_H */

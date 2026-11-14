@@ -57,10 +57,16 @@ ifeq ($(filter /%,$(AR)),)
 AR := ar
 endif
 
-# Version information (captured at build time)
-GIT_COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
-GIT_DIRTY := $(shell git diff-index --quiet HEAD -- 2>/dev/null || echo "-dirty")
-GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+# Version information (captured at build time). git is asked of this directory
+# alone, as git's own build asks: a tree inside another repository, an unpacked
+# archive among them, names no commit. The commit as `git log --oneline`
+# abbreviates it; -dirty where a tracked file's bytes differ (git diff reads a
+# file whose stat alone moved, which diff-index calls changed, and refreshes the
+# index as git status does); no branch where HEAD is detached
+GIT := GIT_CEILING_DIRECTORIES="$(CURDIR)/.." git
+GIT_COMMIT := $(shell $(GIT) rev-parse -q --verify --short HEAD 2>/dev/null)
+GIT_DIRTY := $(if $(GIT_COMMIT),$(shell $(GIT) diff --quiet HEAD -- 2>/dev/null || echo -dirty))
+GIT_BRANCH := $(shell $(GIT) symbolic-ref -q --short HEAD 2>/dev/null)
 BUILD_ARCH := $(shell uname -m)
 CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n1)
 
@@ -74,7 +80,7 @@ LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/tomlc17 -I$(LIB_DIR)/monocypher
 # Include paths
 INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
 
-# Version build flags — the banner's compile-time constants
+# Version build flags — the banner's compile-time constants, "" where unknown
 VERSION_FLAGS := -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
                  -DDOTTA_BUILD_BRANCH="\"$(GIT_BRANCH)\"" \
                  -DDOTTA_BUILD_PLATFORM="\"$(BUILD_OS)/$(BUILD_ARCH)\"" \

@@ -9,7 +9,6 @@
 
 #include <git2.h>
 #include <sqlite3.h>
-#include <string.h>
 #include <version.h>
 
 void version_print(FILE *out) {
@@ -20,16 +19,16 @@ void version_print(FILE *out) {
     fprintf(out, "dotta version %s\n", DOTTA_VERSION_STRING);
 
     /* Print git information */
-    if (strcmp(DOTTA_BUILD_COMMIT, "unknown") != 0) {
+    if (DOTTA_BUILD_COMMIT[0] != '\0') {
         fprintf(out, "Git: %s", DOTTA_BUILD_COMMIT);
-        if (strcmp(DOTTA_BUILD_BRANCH, "unknown") != 0) {
+        if (DOTTA_BUILD_BRANCH[0] != '\0') {
             fprintf(out, " (%s)", DOTTA_BUILD_BRANCH);
         }
         fputc('\n', out);
     }
 
     /* Print platform information */
-    if (strcmp(DOTTA_BUILD_PLATFORM, "unknown") != 0) {
+    if (DOTTA_BUILD_PLATFORM[0] != '\0') {
         fprintf(out, "Platform: %s\n", DOTTA_BUILD_PLATFORM);
     }
 
@@ -38,7 +37,7 @@ void version_print(FILE *out) {
     fprintf(out, " - %s %s\n", DOTTA_BUILD_DATE, DOTTA_BUILD_TIME);
 
     /* Print compiler information */
-    if (strcmp(DOTTA_BUILD_CC, "unknown") != 0) {
+    if (DOTTA_BUILD_CC[0] != '\0') {
         fprintf(out, "Compiler: %s\n", DOTTA_BUILD_CC);
     }
 

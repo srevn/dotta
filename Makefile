@@ -204,7 +204,7 @@ BUILD_STAMP := $(CC_VERSION) $(CFLAGS) $(INCLUDES) \
 FORCE:
 
 $(BUILD_CONFIG): FORCE | $(BUILD_DIR)
-	@NEW='$(BUILD_STAMP)'; \
+	@NEW='$(subst ','\'',$(BUILD_STAMP))'; \
 	 OLD=$$(cat $@ 2>/dev/null || true); \
 	 if [ "$$NEW" = "$$OLD" ]; then exit 0; fi; \
 	 [ -z "$$OLD" ] || echo "Build config changed — rebuilding all objects"; \
@@ -215,7 +215,7 @@ $(BUILD_CONFIG): FORCE | $(BUILD_DIR)
 VERSION_CONFIG := $(BUILD_DIR)/.version-config
 
 $(VERSION_CONFIG): FORCE | $(BUILD_DIR)
-	@NEW='$(VERSION_FLAGS)'; \
+	@NEW='$(subst ','\'',$(VERSION_FLAGS))'; \
 	 OLD=$$(cat $@ 2>/dev/null || true); \
 	 [ "$$NEW" = "$$OLD" ] || printf '%s\n' "$$NEW" > $@
 

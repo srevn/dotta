@@ -30,6 +30,12 @@ ifeq ($(filter $(BUILD_TYPE),release debug coverage),)
 $(error BUILD_TYPE must be 'release', 'debug' or 'coverage' (got '$(BUILD_TYPE)'))
 endif
 
+# Dependencies: system | bundled
+DEPS ?= system
+ifeq ($(filter $(DEPS),system bundled),)
+$(error DEPS must be 'system' or 'bundled' (got '$(DEPS)'))
+endif
+
 # The build's own flags, by build type. The user's CPPFLAGS, CFLAGS and LDFLAGS
 # come after them and win: CFLAGS=-Wno-error keeps a warning a warning
 BUILD_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Werror $(FEATURE_MACROS)
@@ -74,64 +80,6 @@ VERSION_FLAGS := -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
                  -DDOTTA_BUILD_PLATFORM="\"$(BUILD_OS)/$(BUILD_ARCH)\"" \
                  -DDOTTA_BUILD_TYPE="\"$(BUILD_TYPE)\"" \
                  -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
-
-# Dependencies — PKG_CONFIG may carry a flag (pkg-config --static)
-PKG_CONFIG ?= pkg-config
-HAVE_PKG_CONFIG := $(shell command -v $(firstword $(PKG_CONFIG)) 2>/dev/null)
-
-# Version floors
-LIBGIT2_MIN := 1.9
-SQLITE3_MIN := 3.40
-
-LIBGIT2_VERSION := $(shell $(PKG_CONFIG) --modversion libgit2 2>/dev/null)
-LIBGIT2_OK := $(shell $(PKG_CONFIG) --atleast-version=$(LIBGIT2_MIN) libgit2 2>/dev/null && echo 1)
-LIBGIT2_CFLAGS := $(shell $(PKG_CONFIG) --cflags libgit2 2>/dev/null)
-LIBGIT2_LIBS := $(shell $(PKG_CONFIG) --libs libgit2 2>/dev/null)
-
-SQLITE3_VERSION := $(shell $(PKG_CONFIG) --modversion sqlite3 2>/dev/null)
-SQLITE3_OK := $(shell $(PKG_CONFIG) --atleast-version=$(SQLITE3_MIN) sqlite3 2>/dev/null && echo 1)
-SQLITE3_CFLAGS := $(shell $(PKG_CONFIG) --cflags sqlite3 2>/dev/null)
-SQLITE3_LIBS := $(shell $(PKG_CONFIG) --libs sqlite3 2>/dev/null)
-
-# Package-manager hint
-ifeq ($(BUILD_OS),darwin)
-define INSTALL_HINT
-  brew install pkg-config libgit2 sqlite
-endef
-else ifeq ($(BUILD_OS),freebsd)
-define INSTALL_HINT
-  pkg install pkgconf libgit2 sqlite3
-endef
-else
-define INSTALL_HINT
-  Debian:    sudo apt install pkg-config libgit2-dev libsqlite3-dev
-  Fedora:    sudo dnf install pkgconf-pkg-config libgit2-devel sqlite-devel
-  Arch:      sudo pacman -S pkgconf libgit2 sqlite
-endef
-endif
-export INSTALL_HINT
-
-# Goals that need no compiler and no libraries
-BUILDLESS_GOALS := clean help check-deps format format-all format-check reflow reflow-check uninstall uninstall-completions
-
-# Fail at the point of misconfiguration
-ifneq ($(filter-out $(BUILDLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
-ifeq ($(HAVE_PKG_CONFIG),)
-$(error pkg-config not found — install it, then run 'make check-deps')
-endif
-ifeq ($(LIBGIT2_VERSION),)
-$(error libgit2 not found by pkg-config — run 'make check-deps')
-endif
-ifeq ($(LIBGIT2_OK),)
-$(error libgit2 $(LIBGIT2_MIN)+ required, found $(LIBGIT2_VERSION) — run 'make check-deps')
-endif
-ifeq ($(SQLITE3_VERSION),)
-$(error sqlite3 not found by pkg-config — run 'make check-deps')
-endif
-ifeq ($(SQLITE3_OK),)
-$(error sqlite3 $(SQLITE3_MIN)+ required, found $(SQLITE3_VERSION) — run 'make check-deps')
-endif
-endif
 
 # Uncrustify config
 UNCRUSTIFY_CFG := .uncrustify.cfg
@@ -199,11 +147,12 @@ $(BUILD_DIR) $(BIN_DIR) $(BUILD_SUBDIRS):
 	@mkdir -p $@
 
 # Build configuration sentinel: every flag a compile or a link reads, and the
-# compiler by version, since $(CC) is a word PATH resolves.
+# compiler by version, since $(CC) is a word PATH resolves. Expanded when it
+# runs, once the bundled libraries it waits for stand.
 BUILD_CONFIG := $(BUILD_DIR)/.build-config
-BUILD_STAMP := $(CC_VERSION) $(BUILD_CFLAGS) $(INCLUDES) $(CPPFLAGS) \
-               $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(CFLAGS) \
-               $(LDFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
+BUILD_STAMP = $(CC_VERSION) $(BUILD_CFLAGS) $(INCLUDES) $(CPPFLAGS) \
+              $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(CFLAGS) \
+              $(LDFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
 
 .PHONY: FORCE
 FORCE:
@@ -223,6 +172,279 @@ $(VERSION_CONFIG): FORCE | $(BUILD_DIR)
 	@NEW='$(subst ','\'',$(VERSION_FLAGS))'; \
 	 OLD=$$(cat $@ 2>/dev/null || true); \
 	 [ "$$NEW" = "$$OLD" ] || printf '%s\n' "$$NEW" > $@
+
+# The libraries: the system's, as pkg-config finds them, or libgit2's and
+# SQLite's latest releases built under build/deps. Read below all, so none of
+# their rules becomes the default goal. PKG_CONFIG may carry a flag
+# (pkg-config --static)
+PKG_CONFIG ?= pkg-config
+HAVE_PKG_CONFIG := $(shell command -v $(firstword $(PKG_CONFIG)) 2>/dev/null)
+
+# Goals that need no compiler and no libraries
+BUILDLESS_GOALS := clean help check-deps format format-all format-check reflow reflow-check uninstall uninstall-completions
+
+ifeq ($(DEPS),system)
+# Version floors
+LIBGIT2_MIN := 1.9
+SQLITE3_MIN := 3.40
+
+LIBGIT2_VERSION := $(shell $(PKG_CONFIG) --modversion libgit2 2>/dev/null)
+LIBGIT2_OK := $(shell $(PKG_CONFIG) --atleast-version=$(LIBGIT2_MIN) libgit2 2>/dev/null && echo 1)
+LIBGIT2_CFLAGS := $(shell $(PKG_CONFIG) --cflags libgit2 2>/dev/null)
+LIBGIT2_LIBS := $(shell $(PKG_CONFIG) --libs libgit2 2>/dev/null)
+
+SQLITE3_VERSION := $(shell $(PKG_CONFIG) --modversion sqlite3 2>/dev/null)
+SQLITE3_OK := $(shell $(PKG_CONFIG) --atleast-version=$(SQLITE3_MIN) sqlite3 2>/dev/null && echo 1)
+SQLITE3_CFLAGS := $(shell $(PKG_CONFIG) --cflags sqlite3 2>/dev/null)
+SQLITE3_LIBS := $(shell $(PKG_CONFIG) --libs sqlite3 2>/dev/null)
+
+# Package-manager hint
+ifeq ($(BUILD_OS),darwin)
+define INSTALL_HINT
+  brew install pkg-config libgit2 sqlite
+endef
+else ifeq ($(BUILD_OS),freebsd)
+define INSTALL_HINT
+  pkg install pkgconf libgit2 sqlite3
+endef
+else
+define INSTALL_HINT
+  Debian:    sudo apt install pkg-config libgit2-dev libsqlite3-dev
+  Fedora:    sudo dnf install pkgconf-pkg-config libgit2-devel sqlite-devel
+  Arch:      sudo pacman -S pkgconf libgit2 sqlite
+endef
+endif
+export INSTALL_HINT
+
+# Fail at the point of misconfiguration
+ifneq ($(filter-out $(BUILDLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
+ifeq ($(HAVE_PKG_CONFIG),)
+$(error pkg-config not found — install it, then run 'make check-deps')
+endif
+ifeq ($(LIBGIT2_VERSION),)
+$(error libgit2 not found by pkg-config — run 'make check-deps')
+endif
+ifeq ($(LIBGIT2_OK),)
+$(error libgit2 $(LIBGIT2_MIN)+ required, found $(LIBGIT2_VERSION) — run 'make check-deps')
+endif
+ifeq ($(SQLITE3_VERSION),)
+$(error sqlite3 not found by pkg-config — run 'make check-deps')
+endif
+ifeq ($(SQLITE3_OK),)
+$(error sqlite3 $(SQLITE3_MIN)+ required, found $(SQLITE3_VERSION) — run 'make check-deps')
+endif
+endif
+
+# Check dependencies
+.PHONY: check-deps
+check-deps:
+	@echo "Checking dependencies..."
+	@fail=0; \
+	 if [ -n "$(HAVE_PKG_CONFIG)" ]; then \
+	   printf '  %-12s %s\n' "pkg-config" "$(HAVE_PKG_CONFIG)"; \
+	 else \
+	   printf '  %-12s %s\n' "pkg-config" "NOT FOUND (required to locate libgit2 and sqlite3)"; \
+	   fail=1; \
+	 fi; \
+	 if command -v $(firstword $(CC)) >/dev/null 2>&1; then \
+	   printf '  %-12s %s\n' "$(CC)" "$$($(CC) --version | head -n1)"; \
+	 else \
+	   printf '  %-12s %s\n' "$(CC)" "NOT FOUND"; \
+	   fail=1; \
+	 fi; \
+	 if [ -z "$(LIBGIT2_VERSION)" ]; then \
+	   printf '  %-12s %s\n' "libgit2" "NOT FOUND (need >= $(LIBGIT2_MIN))"; \
+	   fail=1; \
+	 elif [ -z "$(LIBGIT2_OK)" ]; then \
+	   printf '  %-12s %s\n' "libgit2" "$(LIBGIT2_VERSION) — TOO OLD (need >= $(LIBGIT2_MIN))"; \
+	   fail=1; \
+	 else \
+	   printf '  %-12s %s\n' "libgit2" "$(LIBGIT2_VERSION) (>= $(LIBGIT2_MIN))"; \
+	 fi; \
+	 if [ -z "$(SQLITE3_VERSION)" ]; then \
+	   printf '  %-12s %s\n' "sqlite3" "NOT FOUND (need >= $(SQLITE3_MIN))"; \
+	   fail=1; \
+	 elif [ -z "$(SQLITE3_OK)" ]; then \
+	   printf '  %-12s %s\n' "sqlite3" "$(SQLITE3_VERSION) — TOO OLD (need >= $(SQLITE3_MIN))"; \
+	   fail=1; \
+	 else \
+	   printf '  %-12s %s\n' "sqlite3" "$(SQLITE3_VERSION) (>= $(SQLITE3_MIN))"; \
+	 fi; \
+	 echo ""; \
+	 if [ $$fail -ne 0 ]; then \
+	   echo "Missing or outdated dependencies. Install with:"; \
+	   printf '%s\n' "$$INSTALL_HINT"; \
+	   exit 1; \
+	 fi; \
+	 echo "All dependencies satisfied."
+else
+DEPS_DIR := $(BUILD_ROOT)/deps
+LIBGIT2_DIR := $(DEPS_DIR)/libgit2
+SQLITE3_DIR := $(DEPS_DIR)/sqlite3
+
+# Each archive by its path, so no -L of the user's reaches a system copy. What
+# libgit2's .pc names besides is still searched along it first: on macOS, a
+# prefix holding GNU libiconv fails the link
+LIBGIT2_ARCHIVE := $(LIBGIT2_DIR)/lib/libgit2.a
+LIBGIT2_CFLAGS := -I$(LIBGIT2_DIR)/include
+LIBGIT2_LIBS = $(patsubst -lgit2,$(LIBGIT2_ARCHIVE),$(shell $(PKG_CONFIG) --static --libs $(LIBGIT2_DIR)/lib/pkgconfig/libgit2.pc))
+SQLITE3_ARCHIVE := $(SQLITE3_DIR)/lib/libsqlite3.a
+SQLITE3_CFLAGS := -I$(SQLITE3_DIR)/include
+SQLITE3_LIBS := $(SQLITE3_ARCHIVE)
+
+# Nothing compiles before both stand
+$(BUILD_CONFIG): | $(LIBGIT2_ARCHIVE) $(SQLITE3_ARCHIVE)
+
+# An archive is fetched under a temporary name and dated now: fetch keeps the
+# server's date, older than the release file it follows
+ifeq ($(BUILD_OS),freebsd)
+DOWNLOAD := fetch -q -o
+else
+DOWNLOAD := curl -fsSL -o
+endif
+
+# The newest release of the major dotta is written against
+LIBGIT2_MAJOR := 1
+LIBGIT2_URL := https://github.com/libgit2/libgit2
+
+# The machine's TLS and its SHA-256, save on Linux: libssl loads there at the
+# first HTTPS contact, and its SHA-256 would load it as libgit2 starts
+ifeq ($(BUILD_OS),linux)
+LIBGIT2_HTTPS := OpenSSL-Dynamic
+LIBGIT2_SHA256 := Builtin
+else ifeq ($(BUILD_OS),darwin)
+LIBGIT2_HTTPS := SecureTransport
+LIBGIT2_SHA256 := HTTPS
+else
+LIBGIT2_HTTPS := OpenSSL
+LIBGIT2_SHA256 := HTTPS
+endif
+
+# Every option that could link a library the machine may lack is named
+LIBGIT2_OPTIONS := -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_LIBDIR=lib \
+                   -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_CLI=OFF \
+                   -DUSE_HTTPS=$(LIBGIT2_HTTPS) -DUSE_SHA1=CollisionDetection -DUSE_SHA256=$(LIBGIT2_SHA256) \
+                   -DUSE_SSH=exec -DUSE_BUNDLED_ZLIB=ON -DREGEX_BACKEND=builtin \
+                   -DUSE_HTTP_PARSER=builtin -DUSE_NTLMCLIENT=OFF -DUSE_GSSAPI=OFF
+
+$(LIBGIT2_DIR)/release:
+	@mkdir -p $(@D)
+	@tag=$$(git ls-remote --sort=v:refname --tags --refs $(LIBGIT2_URL) 'v$(LIBGIT2_MAJOR).*' | \
+	        sed -n 's|.*refs/tags/\(v$(LIBGIT2_MAJOR)\.[0-9][0-9]*\.[0-9][0-9]*\)$$|\1|p' | tail -n 1); \
+	 [ -n "$$tag" ] || { echo "No libgit2 $(LIBGIT2_MAJOR).x release read from $(LIBGIT2_URL)" >&2; exit 1; }; \
+	 echo "$$tag" > $@
+
+$(LIBGIT2_DIR)/release.tar.gz: $(LIBGIT2_DIR)/release
+	@echo "FETCH $(LIBGIT2_URL)/archive/refs/tags/$$(cat $<).tar.gz"
+	@$(DOWNLOAD) $@.part $(LIBGIT2_URL)/archive/refs/tags/$$(cat $<).tar.gz
+	@touch $@.part
+	@mv $@.part $@
+
+# The libraries serve every build type, so the user's flags and DESTDIR, which
+# make exports and CMake reads, are cleared; make -C shares make's job slots
+$(LIBGIT2_ARCHIVE): $(LIBGIT2_DIR)/release.tar.gz
+	@echo "CMAKE libgit2 $$(cat $(LIBGIT2_DIR)/release) ($(LIBGIT2_DIR)/build.log)"
+	@rm -rf $(LIBGIT2_DIR)/src $(LIBGIT2_DIR)/build
+	@mkdir -p $(LIBGIT2_DIR)/src
+	@tar -xzf $< -C $(LIBGIT2_DIR)/src --strip-components=1
+	@CC='$(CC)' CFLAGS= CPPFLAGS= LDFLAGS= cmake -S $(LIBGIT2_DIR)/src -B $(LIBGIT2_DIR)/build -G 'Unix Makefiles' \
+	    -DCMAKE_INSTALL_PREFIX=$(CURDIR)/$(LIBGIT2_DIR) $(LIBGIT2_OPTIONS) > $(LIBGIT2_DIR)/build.log 2>&1 \
+	    || { tail -n 30 $(LIBGIT2_DIR)/build.log; exit 1; }
+	@$(MAKE) -C $(LIBGIT2_DIR)/build >> $(LIBGIT2_DIR)/build.log 2>&1 \
+	    || { tail -n 30 $(LIBGIT2_DIR)/build.log; exit 1; }
+	@DESTDIR= cmake --install $(LIBGIT2_DIR)/build >> $(LIBGIT2_DIR)/build.log 2>&1 \
+	    || { tail -n 30 $(LIBGIT2_DIR)/build.log; exit 1; }
+
+# SQLite's recommended options for one thread and no extension
+# (sqlite.org/compile.html)
+SQLITE3_URL := https://sqlite.org
+SQLITE3_OPTIONS := -DSQLITE_DQS=0 -DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 \
+                   -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_OMIT_DECLTYPE -DSQLITE_OMIT_DEPRECATED \
+                   -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_OMIT_SHARED_CACHE \
+                   -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_USE_ALLOCA
+
+$(SQLITE3_DIR)/release:
+	@mkdir -p $(@D)
+	@path=$$($(DOWNLOAD) - $(SQLITE3_URL)/download.html | \
+	         sed -n 's|^PRODUCT,[^,]*,\([^,]*/sqlite-autoconf-[0-9]*\.tar\.gz\),.*|\1|p' | head -n 1); \
+	 [ -n "$$path" ] || { echo "No SQLite release read from $(SQLITE3_URL)/download.html" >&2; exit 1; }; \
+	 echo "$$path" > $@
+
+$(SQLITE3_DIR)/release.tar.gz: $(SQLITE3_DIR)/release
+	@echo "FETCH $(SQLITE3_URL)/$$(cat $<)"
+	@$(DOWNLOAD) $@.part $(SQLITE3_URL)/$$(cat $<)
+	@touch $@.part
+	@mv $@.part $@
+
+$(SQLITE3_ARCHIVE): $(SQLITE3_DIR)/release.tar.gz
+	@rm -rf $(SQLITE3_DIR)/src
+	@mkdir -p $(SQLITE3_DIR)/src $(SQLITE3_DIR)/include $(@D)
+	@tar -xzf $< -C $(SQLITE3_DIR)/src --strip-components=1
+	@echo "CC $(SQLITE3_DIR)/src/sqlite3.c"
+	@$(CC) -O2 $(SQLITE3_OPTIONS) -c $(SQLITE3_DIR)/src/sqlite3.c -o $(SQLITE3_DIR)/sqlite3.o
+	@cp $(SQLITE3_DIR)/src/sqlite3.h $(SQLITE3_DIR)/include/
+	@echo "AR $@"
+	@rm -f $@
+	@$(AR) rcs $@ $(SQLITE3_DIR)/sqlite3.o
+
+# Package-manager hint
+ifeq ($(BUILD_OS),darwin)
+define INSTALL_HINT
+  brew install pkg-config cmake
+endef
+else ifeq ($(BUILD_OS),freebsd)
+define INSTALL_HINT
+  pkg install pkgconf cmake-core git
+endef
+else
+define INSTALL_HINT
+  Debian:    sudo apt install pkg-config cmake git curl
+  Fedora:    sudo dnf install pkgconf-pkg-config cmake git curl
+  Arch:      sudo pacman -S pkgconf cmake git curl
+endef
+endif
+export INSTALL_HINT
+
+# Fail at the point of misconfiguration
+ifneq ($(filter-out $(BUILDLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
+ifeq ($(HAVE_PKG_CONFIG),)
+$(error pkg-config not found — install it, then run 'make check-deps DEPS=bundled')
+endif
+endif
+
+# Check dependencies
+.PHONY: check-deps
+check-deps:
+	@echo "Checking dependencies (DEPS=bundled)..."
+	@fail=0; \
+	 if [ -n "$(HAVE_PKG_CONFIG)" ]; then \
+	   printf '  %-12s %s\n' "pkg-config" "$(HAVE_PKG_CONFIG)"; \
+	 else \
+	   printf '  %-12s %s\n' "pkg-config" "NOT FOUND (required to link libgit2)"; \
+	   fail=1; \
+	 fi; \
+	 if command -v $(firstword $(CC)) >/dev/null 2>&1; then \
+	   printf '  %-12s %s\n' "$(CC)" "$$($(CC) --version | head -n1)"; \
+	 else \
+	   printf '  %-12s %s\n' "$(CC)" "NOT FOUND"; \
+	   fail=1; \
+	 fi; \
+	 for program in cmake git tar $(firstword $(DOWNLOAD)); do \
+	   if found=$$(command -v $$program); then \
+	     printf '  %-12s %s\n' "$$program" "$$found"; \
+	   else \
+	     printf '  %-12s %s\n' "$$program" "NOT FOUND"; \
+	     fail=1; \
+	   fi; \
+	 done; \
+	 echo ""; \
+	 if [ $$fail -ne 0 ]; then \
+	   echo "Missing dependencies. Install with:"; \
+	   printf '%s\n' "$$INSTALL_HINT"; \
+	   exit 1; \
+	 fi; \
+	 echo "All dependencies satisfied."
+endif
 
 # Header dependencies
 DEPFLAGS = -MMD -MP
@@ -484,11 +706,12 @@ reflow-check:
 	fi
 	@echo "All comments reflowed correctly."
 
-# Static analysis with clang-tidy (requires compile_commands.json)
+# Static analysis with clang-tidy (requires compile_commands.json), over this
+# tree's src/ alone
 TIDY ?= clang-tidy
 RUN_TIDY ?= run-clang-tidy
 TIDY_JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
-TIDY_FILTER ?= ^.*/src/.*\.c$$
+TIDY_FILTER ?= ^$(CURDIR)/src/.*\.c$$
 TIDY_FILES ?= $(LIB_SRC) $(MAIN_SRC)
 
 .PHONY: tidy
@@ -523,49 +746,6 @@ compile-commands:
 	@$(MAKE) clean
 	@bear -- $(MAKE) -j$$(sysctl -n hw.ncpu 2>/dev/null || nproc) all $(TESTS_BIN)
 
-# Check dependencies
-.PHONY: check-deps
-check-deps:
-	@echo "Checking dependencies..."
-	@fail=0; \
-	 if [ -n "$(HAVE_PKG_CONFIG)" ]; then \
-	   printf '  %-12s %s\n' "pkg-config" "$(HAVE_PKG_CONFIG)"; \
-	 else \
-	   printf '  %-12s %s\n' "pkg-config" "NOT FOUND (required to locate libgit2 and sqlite3)"; \
-	   fail=1; \
-	 fi; \
-	 if command -v $(firstword $(CC)) >/dev/null 2>&1; then \
-	   printf '  %-12s %s\n' "$(CC)" "$$($(CC) --version | head -n1)"; \
-	 else \
-	   printf '  %-12s %s\n' "$(CC)" "NOT FOUND"; \
-	   fail=1; \
-	 fi; \
-	 if [ -z "$(LIBGIT2_VERSION)" ]; then \
-	   printf '  %-12s %s\n' "libgit2" "NOT FOUND (need >= $(LIBGIT2_MIN))"; \
-	   fail=1; \
-	 elif [ -z "$(LIBGIT2_OK)" ]; then \
-	   printf '  %-12s %s\n' "libgit2" "$(LIBGIT2_VERSION) — TOO OLD (need >= $(LIBGIT2_MIN))"; \
-	   fail=1; \
-	 else \
-	   printf '  %-12s %s\n' "libgit2" "$(LIBGIT2_VERSION) (>= $(LIBGIT2_MIN))"; \
-	 fi; \
-	 if [ -z "$(SQLITE3_VERSION)" ]; then \
-	   printf '  %-12s %s\n' "sqlite3" "NOT FOUND (need >= $(SQLITE3_MIN))"; \
-	   fail=1; \
-	 elif [ -z "$(SQLITE3_OK)" ]; then \
-	   printf '  %-12s %s\n' "sqlite3" "$(SQLITE3_VERSION) — TOO OLD (need >= $(SQLITE3_MIN))"; \
-	   fail=1; \
-	 else \
-	   printf '  %-12s %s\n' "sqlite3" "$(SQLITE3_VERSION) (>= $(SQLITE3_MIN))"; \
-	 fi; \
-	 echo ""; \
-	 if [ $$fail -ne 0 ]; then \
-	   echo "Missing or outdated dependencies. Install with:"; \
-	   printf '%s\n' "$$INSTALL_HINT"; \
-	   exit 1; \
-	 fi; \
-	 echo "All dependencies satisfied."
-
 # Help
 .PHONY: help
 help:
@@ -599,6 +779,11 @@ help:
 	@echo "Build type: 'debug' as a goal or BUILD_TYPE=debug sets the whole invocation,"
 	@echo "so 'make debug test-all' runs the suites under ASan/UBSan; 'coverage' likewise."
 	@echo "Each type has its own tree (build/<type>/) and binary, so the three coexist."
+	@echo ""
+	@echo "Dependencies: DEPS=bundled builds libgit2's and SQLite's latest releases in"
+	@echo "build/deps and links them in, where the system's are missing or too old. It"
+	@echo "needs cmake, git, curl or fetch, and the network; 'make check-deps DEPS=bundled'"
+	@echo "says which are missing, and 'make clean' takes the libraries with the rest."
 	@echo ""
 	@echo "Installation paths:"
 	@echo "  Binary:       $(DESTDIR)$(BINDIR)/dotta"

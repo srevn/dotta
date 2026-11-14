@@ -105,8 +105,6 @@ make
 sudo make install  # optional, installs to /usr/local
 ```
 
-`CC` picks the compiler, and `CPPFLAGS`, `CFLAGS` and `LDFLAGS` add to the build's own flags, so `CFLAGS=-Wno-error` lets a build finish past a compiler's warning. `PREFIX` moves the install and `DESTDIR` stages it for a package: `make install PREFIX=/usr DESTDIR=/tmp/pkg`.
-
 ## Configuration
 
 Default config: `~/.config/dotta/config.toml`

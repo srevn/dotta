@@ -31,7 +31,7 @@
  */
 #define DOTTA_VERSION_MAJOR 0
 #define DOTTA_VERSION_MINOR 191
-#define DOTTA_VERSION_PATCH 3
+#define DOTTA_VERSION_PATCH 4
 
 /**
  * Pre-release suffix, including a leading dash when present.
@@ -73,11 +73,11 @@
  * Each value is a string literal defined by the build system, "" where it learned
  * none — the banner prints nothing of an empty one:
  *
- *   -DDOTTA_BUILD_COMMIT="abc1234-dirty"   short git SHA + dirty flag
- *   -DDOTTA_BUILD_BRANCH="main"            current git branch
- *   -DDOTTA_BUILD_PLATFORM="darwin/arm64"  kernel name + machine arch
- *   -DDOTTA_BUILD_TYPE="release"           "release" | "debug" | "coverage"
- *   -DDOTTA_BUILD_CC="clang version ..."   compiler identity
+ *   -DDOTTA_BUILD_COMMIT="abc1234-dirty"        short git SHA + dirty flag
+ *   -DDOTTA_BUILD_BRANCH="main"                 current git branch
+ *   -DDOTTA_BUILD_PLATFORM="aarch64-linux-gnu"  the compiler's target
+ *   -DDOTTA_BUILD_TYPE="release"                "release" | "debug" | "coverage"
+ *   -DDOTTA_BUILD_CC="clang version ..."        compiler identity
  *
  * The `#ifndef` fallbacks below keep the header self-contained when the translation
  * unit is built outside the project Makefile (e.g., by an IDE's language server).

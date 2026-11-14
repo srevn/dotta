@@ -23,7 +23,7 @@
  * Emits (in order):
  *   - `dotta version <X.Y.Z-suffix>`
  *   - `Git: <commit> (<branch>)`      (skipped if unknown; no branch if detached)
- *   - `Platform: <os>/<arch>`         (skipped if unknown)
+ *   - `Platform: <target>`            (the compiler's target; skipped if unknown)
  *   - `Build: <type> - <date> <time>`
  *   - `Compiler: <cc>`                (skipped if unknown)
  *   - `Libraries: libgit2 <major>.<minor>.<rev>, sqlite <version>`

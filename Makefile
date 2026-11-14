@@ -6,7 +6,8 @@ ifeq ($(origin CC),default)
 CC := clang
 endif
 
-# Version information
+# The system make runs on: the feature macros, the paths and hints, and the
+# bundled libraries' TLS read it
 BUILD_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 
 # Platform-specific feature test macros
@@ -62,13 +63,15 @@ endif
 # archive among them, names no commit. The commit as `git log --oneline`
 # abbreviates it; -dirty where a tracked file's bytes differ (git diff reads a
 # file whose stat alone moved, which diff-index calls changed, and refreshes the
-# index as git status does); no branch where HEAD is detached
+# index as git status does); no branch where HEAD is detached. The compiler names
+# itself, and the target it compiles for under the user's CFLAGS (-arch among
+# them): what the binary is built for, never the machine building it
 GIT := GIT_CEILING_DIRECTORIES="$(CURDIR)/.." git
 GIT_COMMIT := $(shell $(GIT) rev-parse -q --verify --short HEAD 2>/dev/null)
 GIT_DIRTY := $(if $(GIT_COMMIT),$(shell $(GIT) diff --quiet HEAD -- 2>/dev/null || echo -dirty))
 GIT_BRANCH := $(shell $(GIT) symbolic-ref -q --short HEAD 2>/dev/null)
-BUILD_ARCH := $(shell uname -m)
 CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n1)
+CC_MACHINE := $(shell $(CC) $(CFLAGS) -dumpmachine 2>/dev/null)
 
 # Vendor libraries
 LIB_DIR := lib
@@ -83,7 +86,7 @@ INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
 # Version build flags — the banner's compile-time constants, "" where unknown
 VERSION_FLAGS := -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
                  -DDOTTA_BUILD_BRANCH="\"$(GIT_BRANCH)\"" \
-                 -DDOTTA_BUILD_PLATFORM="\"$(BUILD_OS)/$(BUILD_ARCH)\"" \
+                 -DDOTTA_BUILD_PLATFORM="\"$(CC_MACHINE)\"" \
                  -DDOTTA_BUILD_TYPE="\"$(BUILD_TYPE)\"" \
                  -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
 

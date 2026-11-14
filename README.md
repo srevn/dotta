@@ -92,6 +92,7 @@ dotta apply
 - libgit2 1.9+
 - sqlite3 3.40+
 - C11 compiler (clang recommended)
+- GNU make (`gmake` on FreeBSD) and pkg-config
 - POSIX system (macOS, Linux, FreeBSD)
 
 ### Build
@@ -103,6 +104,8 @@ make check-deps
 make
 sudo make install  # optional, installs to /usr/local
 ```
+
+`CC` picks the compiler, and `CPPFLAGS`, `CFLAGS` and `LDFLAGS` add to the build's own flags, so `CFLAGS=-Wno-error` lets a build finish past a compiler's warning. `PREFIX` moves the install and `DESTDIR` stages it for a package: `make install PREFIX=/usr DESTDIR=/tmp/pkg`.
 
 ## Configuration
 

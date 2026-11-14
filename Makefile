@@ -1,8 +1,10 @@
 # Dotta - Dotfile Manager Makefile
 # C11, libgit2 1.9+
 
-# Compiler and flags
+# Compiler: the user's CC, else clang
+ifeq ($(origin CC),default)
 CC := clang
+endif
 
 # Version information
 BUILD_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
@@ -28,13 +30,15 @@ ifeq ($(filter $(BUILD_TYPE),release debug coverage),)
 $(error BUILD_TYPE must be 'release', 'debug' or 'coverage' (got '$(BUILD_TYPE)'))
 endif
 
-CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Werror $(FEATURE_MACROS)
+# The build's own flags, by build type. The user's CPPFLAGS, CFLAGS and LDFLAGS
+# come after them and win: CFLAGS=-Wno-error keeps a warning a warning
+BUILD_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Werror $(FEATURE_MACROS)
 ifeq ($(BUILD_TYPE),debug)
-CFLAGS += -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+BUILD_CFLAGS += -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 else ifeq ($(BUILD_TYPE),coverage)
-CFLAGS += -g -O0 -fprofile-instr-generate -fcoverage-mapping
+BUILD_CFLAGS += -g -O0 -fprofile-instr-generate -fcoverage-mapping
 else
-CFLAGS += -O2 -flto
+BUILD_CFLAGS += -O2 -flto
 endif
 
 # The archiver behind the unit binaries' library. A release object is LLVM
@@ -71,9 +75,9 @@ VERSION_FLAGS := -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
                  -DDOTTA_BUILD_TYPE="\"$(BUILD_TYPE)\"" \
                  -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
 
-# Dependencies
+# Dependencies — PKG_CONFIG may carry a flag (pkg-config --static)
 PKG_CONFIG ?= pkg-config
-HAVE_PKG_CONFIG := $(shell command -v $(PKG_CONFIG) 2>/dev/null)
+HAVE_PKG_CONFIG := $(shell command -v $(firstword $(PKG_CONFIG)) 2>/dev/null)
 
 # Version floors
 LIBGIT2_MIN := 1.9
@@ -139,7 +143,7 @@ BUILD_DIR := $(BUILD_ROOT)/$(BUILD_TYPE)
 BIN_DIR := bin
 ETC_DIR := etc
 
-# Installation directories
+# Installation directories, staged under DESTDIR by a package build
 PREFIX ?= /usr/local
 BINDIR := $(PREFIX)/bin
 DATADIR := $(PREFIX)/share/dotta
@@ -194,11 +198,12 @@ BUILD_SUBDIRS := $(BUILD_LAYER_DIRS) $(BUILD_DIR)/lib $(BUILD_DIR)/completions
 $(BUILD_DIR) $(BIN_DIR) $(BUILD_SUBDIRS):
 	@mkdir -p $@
 
-# Build configuration sentinel: how this tree's objects were produced — the
-# flags, and the compiler by version, since $(CC) is a word PATH resolves.
+# Build configuration sentinel: every flag a compile or a link reads, and the
+# compiler by version, since $(CC) is a word PATH resolves.
 BUILD_CONFIG := $(BUILD_DIR)/.build-config
-BUILD_STAMP := $(CC_VERSION) $(CFLAGS) $(INCLUDES) \
-               $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
+BUILD_STAMP := $(CC_VERSION) $(BUILD_CFLAGS) $(INCLUDES) $(CPPFLAGS) \
+               $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(CFLAGS) \
+               $(LDFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
 
 .PHONY: FORCE
 FORCE:
@@ -222,34 +227,36 @@ $(VERSION_CONFIG): FORCE | $(BUILD_DIR)
 # Header dependencies
 DEPFLAGS = -MMD -MP
 
-# Compile source files
+# Compile source files: dotta's headers, then the user's, then the libraries'
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(BUILD_CONFIG) | $(BUILD_LAYER_DIRS)
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) -c $< -o $@
+	@$(CC) $(BUILD_CFLAGS) $(DEPFLAGS) $(INCLUDES) $(CPPFLAGS) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) \
+	    $(CFLAGS) -c $< -o $@
 
 # The banner renderer: the one translation unit that reads VERSION_FLAGS, so
 # the one that carries them and follows the version sentinel.
 $(BUILD_DIR)/utils/version.o: $(SRC_DIR)/utils/version.c $(BUILD_CONFIG) $(VERSION_CONFIG) | $(BUILD_LAYER_DIRS)
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
+	@$(CC) $(BUILD_CFLAGS) $(DEPFLAGS) $(INCLUDES) $(CPPFLAGS) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) \
+	    $(CFLAGS) $(VERSION_FLAGS) -c $< -o $@
 
 # Compile vendor files
 $(BUILD_DIR)/lib/cJSON.o: $(CJSON_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) -c $< -o $@
+	@$(CC) $(BUILD_CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/lib/tomlc17.o: $(TOML_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) -c $< -o $@
+	@$(CC) $(BUILD_CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/lib/monocypher.o: $(MONOCYPHER_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) -c $< -o $@
+	@$(CC) $(BUILD_CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 # Link main executable
 $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 	@echo "LD $@ ($(BUILD_TYPE))"
-	@$(CC) $(CFLAGS) $^ $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
+	@$(CC) $(BUILD_CFLAGS) $(CFLAGS) $(LDFLAGS) $^ $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
 
 # Debug build
 .PHONY: debug
@@ -280,8 +287,8 @@ $(TESTS_BIN_DIR):
 
 $(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(LIBDOTTA) | $(TESTS_BIN_DIR)
 	@echo "CC TEST $<"
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) \
-	    $< $(LIBDOTTA) $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
+	@$(CC) $(BUILD_CFLAGS) $(DEPFLAGS) $(INCLUDES) $(CPPFLAGS) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) \
+	    $(CFLAGS) $(LDFLAGS) $< $(LIBDOTTA) $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
 
 # Suites are independent; run this many at a time (JOBS=1 keeps start order)
 JOBS ?= 8
@@ -347,35 +354,35 @@ clean:
 .PHONY: install
 install: $(TARGET)
 	@echo "Installing binary..."
-	@install -d $(BINDIR)
-	@install -m 755 $(TARGET) $(BINDIR)/dotta
-	@echo "  Installed: $(BINDIR)/dotta"
+	@install -d $(DESTDIR)$(BINDIR)
+	@install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)/dotta
+	@echo "  Installed: $(DESTDIR)$(BINDIR)/dotta"
 	@echo ""
 	@echo "Installing configuration examples..."
-	@install -d $(DATADIR)
-	@install -m 644 $(ETC_DIR)/config.example.toml $(DATADIR)/config.example.toml
-	@echo "  Installed: $(DATADIR)/config.example.toml"
+	@install -d $(DESTDIR)$(DATADIR)
+	@install -m 644 $(ETC_DIR)/config.example.toml $(DESTDIR)$(DATADIR)/config.example.toml
+	@echo "  Installed: $(DESTDIR)$(DATADIR)/config.example.toml"
 	@echo ""
 	@echo "Installing hook samples..."
-	@install -d $(DATADIR)/hooks
+	@install -d $(DESTDIR)$(DATADIR)/hooks
 	@for f in $(ETC_DIR)/hooks/*.sample; do \
-		install -m 755 "$$f" "$(DATADIR)/hooks/$$(basename "$$f")"; \
+		install -m 755 "$$f" "$(DESTDIR)$(DATADIR)/hooks/$$(basename "$$f")"; \
 	done
-	@install -m 644 $(ETC_DIR)/hooks/README.md $(DATADIR)/hooks/README.md
-	@echo "  Installed: $(DATADIR)/hooks/*.sample"
-	@echo "  Installed: $(DATADIR)/hooks/README.md"
+	@install -m 644 $(ETC_DIR)/hooks/README.md $(DESTDIR)$(DATADIR)/hooks/README.md
+	@echo "  Installed: $(DESTDIR)$(DATADIR)/hooks/*.sample"
+	@echo "  Installed: $(DESTDIR)$(DATADIR)/hooks/README.md"
 	@echo ""
 
 # Uninstall
 .PHONY: uninstall
 uninstall:
 	@echo "Uninstalling dotta..."
-	@rm -f $(BINDIR)/dotta
-	@echo "  Removed: $(BINDIR)/dotta"
-	@rm -rf $(DATADIR)
-	@echo "  Removed: $(DATADIR)"
-	@rm -f $(FISHDIR)/dotta.fish
-	@echo "  Removed: $(FISHDIR)/dotta.fish"
+	@rm -f $(DESTDIR)$(BINDIR)/dotta
+	@echo "  Removed: $(DESTDIR)$(BINDIR)/dotta"
+	@rm -rf $(DESTDIR)$(DATADIR)
+	@echo "  Removed: $(DESTDIR)$(DATADIR)"
+	@rm -f $(DESTDIR)$(FISHDIR)/dotta.fish
+	@echo "  Removed: $(DESTDIR)$(FISHDIR)/dotta.fish"
 	@echo ""
 	@echo "Note: User configurations in ~/.config/dotta were not removed"
 	@echo "To remove user configs: rm -rf ~/.config/dotta"
@@ -397,20 +404,20 @@ completions: $(COMPLETIONS_GEN)
 .PHONY: install-completions
 install-completions: $(COMPLETIONS_GEN)
 	@echo "Installing shell completions..."
-	@if [ -d "$(FISHDIR)" ] || [ ! -e "$(FISHDIR)" ]; then \
-		install -d "$(FISHDIR)" && \
-		install -m 644 $(COMPLETIONS_GEN) "$(FISHDIR)/dotta.fish" && \
-		echo "  Installed: $(FISHDIR)/dotta.fish"; \
+	@if [ -d "$(DESTDIR)$(FISHDIR)" ] || [ ! -e "$(DESTDIR)$(FISHDIR)" ]; then \
+		install -d "$(DESTDIR)$(FISHDIR)" && \
+		install -m 644 $(COMPLETIONS_GEN) "$(DESTDIR)$(FISHDIR)/dotta.fish" && \
+		echo "  Installed: $(DESTDIR)$(FISHDIR)/dotta.fish"; \
 	else \
-		echo "  Skipped fish completions ($(FISHDIR) exists but is not a directory)"; \
+		echo "  Skipped fish completions ($(DESTDIR)$(FISHDIR) exists but is not a directory)"; \
 	fi
 
 # Uninstall shell completions
 .PHONY: uninstall-completions
 uninstall-completions:
 	@echo "Removing shell completions..."
-	@rm -f "$(FISHDIR)/dotta.fish"
-	@echo "  Removed: $(FISHDIR)/dotta.fish"
+	@rm -f "$(DESTDIR)$(FISHDIR)/dotta.fish"
+	@echo "  Removed: $(DESTDIR)$(FISHDIR)/dotta.fish"
 
 # Install all (binary + completions)
 .PHONY: install-all
@@ -527,7 +534,7 @@ check-deps:
 	   printf '  %-12s %s\n' "pkg-config" "NOT FOUND (required to locate libgit2 and sqlite3)"; \
 	   fail=1; \
 	 fi; \
-	 if command -v $(CC) >/dev/null 2>&1; then \
+	 if command -v $(firstword $(CC)) >/dev/null 2>&1; then \
 	   printf '  %-12s %s\n' "$(CC)" "$$($(CC) --version | head -n1)"; \
 	 else \
 	   printf '  %-12s %s\n' "$(CC)" "NOT FOUND"; \
@@ -572,10 +579,10 @@ help:
 	@echo "  coverage-report       - Re-render the last coverage run without re-running it"
 	@echo "  clean                 - Remove build artifacts (both build types)"
 	@echo "  completions           - Generate the fish completion script from the binary"
-	@echo "  install               - Install binary, configs, and hooks to $(PREFIX)"
+	@echo "  install               - Install binary, configs, and hooks to $(DESTDIR)$(PREFIX)"
 	@echo "  install-completions   - Install fish shell completions"
 	@echo "  install-all           - Install binary, configs, hooks, and completions"
-	@echo "  uninstall             - Remove installed files from $(PREFIX)"
+	@echo "  uninstall             - Remove installed files from $(DESTDIR)$(PREFIX)"
 	@echo "  uninstall-completions - Remove shell completions only"
 	@echo "  format                - Format the git-modified .c/.h files with uncrustify"
 	@echo "  format-all            - Format every .c/.h file in the tree"
@@ -594,12 +601,15 @@ help:
 	@echo "Each type has its own tree (build/<type>/) and binary, so the three coexist."
 	@echo ""
 	@echo "Installation paths:"
-	@echo "  Binary:       $(BINDIR)/dotta"
-	@echo "  Configs:      $(DATADIR)/"
-	@echo "  Hooks:        $(DATADIR)/hooks/"
-	@echo "  Completions:  $(FISHDIR)/dotta.fish"
+	@echo "  Binary:       $(DESTDIR)$(BINDIR)/dotta"
+	@echo "  Configs:      $(DESTDIR)$(DATADIR)/"
+	@echo "  Hooks:        $(DESTDIR)$(DATADIR)/hooks/"
+	@echo "  Completions:  $(DESTDIR)$(FISHDIR)/dotta.fish"
 	@echo ""
-	@echo "Override PREFIX with: make install PREFIX=/custom/path"
+	@echo "PREFIX moves the install, and DESTDIR stages it for a package:"
+	@echo "  make install PREFIX=/usr DESTDIR=/tmp/pkg"
+	@echo "CC picks the compiler; CPPFLAGS, CFLAGS and LDFLAGS add to the build's own"
+	@echo "flags, so CFLAGS=-Wno-error lets a build finish past a compiler's warning."
 
 # Dependency tracking
 -include $(LIB_OBJ:.o=.d)

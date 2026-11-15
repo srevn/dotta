@@ -301,10 +301,7 @@ static error_t credential_helper_run(
         );
     }
 
-    /* `env` locates `git` on PATH; process_run does no PATH lookup of its own
-     * (argv[0] must be an absolute path). */
     char *const argv[] = {
-        "/usr/bin/env",
         "git",
         "credential",
         (char *) subcommand,

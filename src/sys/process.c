@@ -1,14 +1,16 @@
 /**
- * process.c - Unified subprocess primitive implementation
+ * process.c - A child: its program found as git finds one, and two ways to wait
+ * for it: implementation
  *
- * Single linear procedure: validate spec → open what the child reads and where
- * it writes (process_stdin_open, process_output_open) and the exec's pipe → fork
- * → the child sets up its environment and execs (process_child) → the parent
- * drains a pipe's output by poll() to the limit's deadline (process_drain), keeping
- * what a capture asks for (process_capture_t) → parent reaps the child by the
- * same deadline (process_reap), escalating SIGTERM→SIGKILL where the limit came
- * first (process_kill) → parent reports the reaped child into the result struct
- * (process_report), and reads a file's output (process_read_file).
+ * process_run is one linear procedure: validate spec → find the program
+ * (process_find) → open what the child reads and where it writes
+ * (process_stdin_open, process_output_open) and the exec's pipe → fork → the
+ * child sets up its environment and execs (process_child, process_exec) → the
+ * parent drains a pipe's output by poll() to the limit's deadline (process_drain),
+ * keeping what a capture asks for (process_capture_t) → parent reaps the child
+ * by the same deadline (process_reap), escalating SIGTERM→SIGKILL where the limit
+ * came first (process_kill) → parent reports the reaped child into the result
+ * struct (process_report), and reads a file's output (process_read_file).
  *
  * One cleanup label handles all error paths. Every resource (descriptors, capture
  * buffer, stray child) is initialized to a sentinel so cleanup is unconditional
@@ -20,6 +22,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <paths.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -72,7 +75,7 @@
  * in this time, we abandon and let init reap. */
 #define PROCESS_GRACE_ORPHAN_SECONDS 1
 
-/* The shell a file the kernel will not execute is handed to (process_child):
+/* The shell a file the kernel will not execute is handed to (process_exec):
  * POSIX's, git's SHELL_PATH by default */
 #define PROCESS_SHELL "/bin/sh"
 
@@ -329,7 +332,62 @@ static error_t process_output_open(
 }
 
 /**
- * A child's signals, made its own before exec — both primitives' children
+ * The exec's vector over argv's program, found as git finds one (the header):
+ * PROCESS_SHELL, the program's path, then argv's arguments — from its second
+ * element the program's own, its path its argv[0], and whole the shell's, for a
+ * file the kernel will not execute (process_exec). NULL where no PATH entry holds
+ * the program.
+ *
+ * One allocation, freed by the caller: the pointers, then room for the longest
+ * path the lookup builds, each built in place; argv's strings borrowed. Called
+ * before the fork, since the child allocates nothing.
+ */
+static char **process_find(char *const argv[]) {
+    size_t argc = 0;
+    while (argv[argc]) argc++;
+
+    /* dotta's own PATH, never the child's, and where it is unset the system's
+     * default, which git sets at its start (lib/git/exec-cmd.c setup_path) */
+    const char *search_path = getenv("PATH");
+    if (!search_path) search_path = _PATH_DEFPATH;
+
+    const char *name = argv[0];
+    size_t room = strlen(search_path) + strlen(name) + 2;
+    char **shell_argv = heap_alloc((argc + 2) * sizeof(*shell_argv) + room);
+    shell_argv[0] = PROCESS_SHELL;
+    memcpy(shell_argv + 1, argv, (argc + 1) * sizeof(*shell_argv));
+
+    /* A name holding a '/' is run as given */
+    if (strchr(name, '/')) return shell_argv;
+
+    /* Any other is the first "<entry>/<name>" along PATH, ':' apart, that is a
+     * regular file its owner may execute — the mode's owner bit, never access(2)
+     * (lib/git/run-command.c locate_in_PATH, is_executable). An empty entry is
+     * the working directory, the name alone (POSIX), and so is an empty PATH,
+     * as git's own reads: its exec path, a ':', then PATH (setup_path). */
+    char *candidate = (char *) (shell_argv + argc + 2);
+    for (const char *entry = search_path, *end;; entry = end + 1) {
+        end = entry + strcspn(entry, ":");
+        snprintf(
+            candidate, room, "%.*s%s%s", (int) (end - entry), entry,
+            end > entry ? "/" : "", name
+        );
+
+        struct stat st;
+        if (stat(candidate, &st) == 0 && S_ISREG(st.st_mode) && (st.st_mode & S_IXUSR)) {
+            shell_argv[1] = candidate;
+            return shell_argv;
+        }
+
+        if (*end == '\0') break;
+    }
+
+    free(shell_argv);
+    return NULL;
+}
+
+/**
+ * A child's signals, made its own before exec — every child's
  *
  * No handler of the parent's runs between fork and exec: execve() resets a caught
  * signal to SIG_DFL itself, and this covers the window before it the way execve()
@@ -358,8 +416,7 @@ static void process_child_signals(void) {
 /**
  * A child's failure before its exec, or its exec's: the errno over the exec's
  * pipe, which the parent reads into the result (exec_failed, exec_errno), then
- * the exit — 126 for a step of the setup, 127 for the exec. Both primitives'
- * children.
+ * the exit — 126 for a step of the setup, 127 for the exec. Every child's.
  */
 static _Noreturn void process_child_fail(int errfd, int code) {
     int e = errno;
@@ -368,17 +425,38 @@ static _Noreturn void process_child_fail(int errfd, int code) {
 }
 
 /**
+ * The child's exec, its last step: the program found, by its path, handed the
+ * vector past the shell (process_find) — every child's. A failure is its errno
+ * over the exec's pipe and the exit 127 (process_child_fail). No error_t, no
+ * malloc, no return.
+ */
+static _Noreturn void process_exec(
+    char *const shell_argv[], char *const envp[], int errfd
+) {
+    execve(shell_argv[1], shell_argv + 1, envp);
+
+    /* A file the kernel will not execute — a script with no #! line — is read
+     * by the shell, its path the shell's first argument, as git runs every command
+     * (lib/git/run-command.c prepare_cmd, start_command). Where the shell cannot
+     * run either, the file's own errno is the one reported. */
+    if (errno == ENOEXEC) {
+        execve(shell_argv[0], shell_argv, envp);
+        errno = ENOEXEC;
+    }
+    process_child_fail(errfd, 127);
+}
+
+/**
  * The child, from the fork to its exec: its signals, the invoker's identity,
  * its stdin and its output, every other descriptor closed, its working directory
- * — then the exec
+ * — then the exec (process_exec)
  *
  * `in` is what the stdin policy opened for the child, -1 for dotta's own
  * (process_stdin_open), `out` what the output policy opened for it, -1 for dotta's
  * own (process_output_open), `errfd` the exec's pipe's write end: each above 2
  * (main.c), so no dup2 here overwrites another's source. `shell_argv` is the
- * shell's vector over the program, PROCESS_SHELL then argv whole, for a file
- * the kernel will not execute. No error_t, no malloc, no return: a failure is
- * its errno over the exec's pipe (process_child_fail).
+ * exec's vector over the program found (process_find). No error_t, no malloc,
+ * no return: a failure is its errno over the exec's pipe (process_child_fail).
  */
 static _Noreturn void process_child(
     const process_spec_t *spec, int in, int out, int errfd, char *const *shell_argv
@@ -418,25 +496,14 @@ static _Noreturn void process_child(
         process_child_fail(errfd, 126);
     }
 
-    execve(spec->argv[0], spec->argv, spec->envp);
-
-    /* A file the kernel will not execute — a script with no #! line — is read
-     * by the shell, its path the shell's first argument, as git runs every command
-     * (lib/git/run-command.c prepare_cmd, start_command) and execvp every file
-     * (process_foreground). Where the shell cannot run either, the file's own
-     * errno is the one reported. */
-    if (errno == ENOEXEC) {
-        execve(PROCESS_SHELL, shell_argv, spec->envp);
-        errno = ENOEXEC;
-    }
-    process_child_fail(errfd, 127);
+    process_exec(shell_argv, spec->envp, errfd);
 }
 
 /**
  * A reaped child, reported into its result: the errno its exec's pipe holds,
  * where the child wrote one before its exit (process_child_fail), and its wait
  * status — the code it exited with, or the signal that ended it and 128 past
- * it. Both primitives' children.
+ * it. Every child's.
  *
  * Read once the child is reaped, so the read never waits: the pipe's write end
  * closed at the exec (FD_CLOEXEC) or at the child's exit, and the child forks
@@ -694,6 +761,17 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         "a payload past PROCESS_STDIN_BUFFER_MAX"
     );
 
+    /* The program, found before anything is opened (process_find). One no PATH
+     * entry holds reads as an exec that failed — ENOENT, and 127, the status a
+     * shell gives a command it cannot find — with no child made */
+    char **shell_argv = process_find(spec->argv);
+    if (!shell_argv) {
+        *result = (process_result_t) {
+            .exit_code = 127, .exec_failed = true, .exec_errno = ENOENT
+        };
+        return NULL;
+    }
+
     /* Zero result so every path through cleanup leaves callers with a well-defined
      * struct. */
     *result = (process_result_t) { 0 };
@@ -705,7 +783,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     int output_parent = -1;
     int output_child = -1;
     int errfd[2] = { -1, -1 };
-    char **shell_argv = NULL;
     pid_t pid = -1;
     process_capture_t capture = { 0 };
     int status = 0;
@@ -723,15 +800,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * success, FD_CLOEXEC closes the write end and parent reads EOF). */
     err = process_pipe(errfd, program);
     if (err) goto cleanup;
-
-    /* The shell's vector over the program, PROCESS_SHELL then argv whole, for a
-     * file the kernel will not execute (process_child): made here, since the
-     * child allocates nothing. */
-    size_t argc = 0;
-    while (spec->argv[argc]) argc++;
-    shell_argv = heap_alloc((argc + 2) * sizeof(*shell_argv));
-    shell_argv[0] = PROCESS_SHELL;
-    memcpy(shell_argv + 1, spec->argv, (argc + 1) * sizeof(*shell_argv));
 
     /* The capture, made before the fork where the policy keeps the output. */
     if (spec->output_policy == PROCESS_OUTPUT_CAPTURE ||
@@ -869,9 +937,21 @@ void process_result_deinit(process_result_t *result) {
 }
 
 error_t process_foreground(char *const argv[], process_result_t *result) {
+    extern char **environ;
+
     CHECK_NULL(argv);
     CHECK_NULL(argv[0]);
     CHECK_NULL(result);
+
+    /* The program, found and missed as process_run's is, before anything is opened
+     * (process_find) */
+    char **shell_argv = process_find(argv);
+    if (!shell_argv) {
+        *result = (process_result_t) {
+            .exit_code = 127, .exec_failed = true, .exec_errno = ENOENT
+        };
+        return NULL;
+    }
 
     *result = (process_result_t) { 0 };
 
@@ -879,7 +959,14 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
      * that could not be run is told from one that exited 127. */
     int errfd[2] = { -1, -1 };
     error_t err = process_pipe(errfd, argv[0]);
-    if (err) return err;
+    if (err) {
+        free(shell_argv);
+        return err;
+    }
+
+    /* What dotta wrote lands ahead of anything the child writes: every stream
+     * flushed before the fork, as process_run flushes (the header). */
+    (void) fflush(NULL);
 
     /* The keyboard's signals held across the fork, until the parent ignores them
      * below: a Ctrl-C in between is neither dotta's death nor lost to the child,
@@ -896,6 +983,7 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
         (void) sigprocmask(SIG_SETMASK, &before, NULL);
         close(errfd[0]);
         close(errfd[1]);
+        free(shell_argv);
         return err;
     }
 
@@ -910,11 +998,14 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
         /* The invoker's child, for good (sys/identity), before the exec. */
         if (identity_drop_child() != 0) process_child_fail(errfd[1], 126);
 
-        execvp(argv[0], argv);
-        process_child_fail(errfd[1], 127);
+        /* The program found, in dotta's own environment (process_exec) */
+        process_exec(shell_argv, environ, errfd[1]);
     }
 
     /* ───── Parent ──────────────────────────────────────────────── */
+
+    /* The child holds its own copy of the vector. */
+    free(shell_argv);
 
     /* The keyboard's signals are the child's until it is reaped (the header):
      * ignored here, and a pending one discarded with the ignore — it reached

@@ -17,14 +17,14 @@
 /**
  * Run git on the store, as asked
  *
- * No shell between: execvp's argv, so the line reaches git as typed, and every
+ * No shell between: the exec's argv, so the line reaches git as typed, and every
  * stdio stream — a terminal, a pipe, a redirect — is git's own.
  */
 error_t cmd_git(const dotta_ctx_t *ctx, const cmd_git_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    /* The line for execvp: "git" "-C" "<the store>" <the line as typed> NULL.
+    /* The line for the exec: "git" "-C" "<the store>" <the line as typed> NULL.
      * No command at all is git's to answer as well (its usage, status 1), so
      * the line is handed over whatever it holds. */
     int total_args = 3 + opts->arg_count + 1;  /* git + -C + path + args + NULL */
@@ -32,7 +32,7 @@ error_t cmd_git(const dotta_ctx_t *ctx, const cmd_git_options_t *opts) {
 
     argv[0] = "git";
     argv[1] = "-C";
-    argv[2] = (char *) ctx->config->repo_dir;  /* Cast away const for execvp */
+    argv[2] = (char *) ctx->config->repo_dir;  /* execve's type; never written */
 
     for (int i = 0; i < opts->arg_count; i++) {
         argv[3 + i] = opts->args[i];

@@ -1,12 +1,21 @@
 /**
- * process.h - Unified subprocess primitive
+ * process.h - A child: its program found as git finds one, and two ways to wait
+ * for it
  *
- * One linear procedure for "fork, build env, send the output where the caller
- * says, enforce timeout, reap" — replacing the parallel implementations previously
- * in utils/hooks.c and sys/bootstrap.c — and its one sibling for a child in the
- * foreground, which takes the terminal while dotta waits (process_foreground:
- * the editor, `dotta git`). Both children make their signals their own the same
- * way before exec, and report into one result.
+ * A child's program is found before its fork and exec'd by its path, one way
+ * for every child, as git runs a command (lib/git/run-command.c prepare_cmd,
+ * start_command). A name holding a '/' is run as given; any other is the first
+ * regular file of that name along PATH whose owner may execute it — dotta's own
+ * PATH, never the environment a caller builds for the child, and the system's
+ * default where it is unset, as git makes it (locate_in_PATH; exec-cmd.c
+ * setup_path). A name no PATH entry holds is an exec that failed, ENOENT, and
+ * no child is made. The program is handed its path as argv[0], as git hands it.
+ *
+ * Two ways to wait for it, each reporting into one result:
+ *   process_run         to its end, by a time limit, its output where the caller
+ *                       says: a hook, a bootstrap script, a credential helper
+ *   process_foreground  in the foreground, the terminal its own while dotta
+ *                       waits: the editor, `dotta git`
  *
  * Design principles:
  * - The time limit is one deadline on the monotonic clock, counted in the time
@@ -25,8 +34,8 @@
  *   ENOENT) instead of a misleading proxy.
  * - A file the kernel will not execute (ENOEXEC: a script with no #! line) is
  *   read by /bin/sh, its path the shell's first argument — git's retry for every
- *   command it runs (lib/git/run-command.c prepare_cmd, start_command), and
- *   execvp's (process_foreground) — so both primitives run such a file alike.
+ *   command it runs (lib/git/run-command.c prepare_cmd, start_command), made by
+ *   the one exec every child takes, never a libc's: musl's execvp makes none.
  * - Result struct is stack-allocated by the caller and populated on every code
  *   path.
  *
@@ -47,9 +56,9 @@
  *   stays ignored, as execve keeps it — resets SIGPIPE, dotta's own ignore, and
  *   clears its signal mask before exec, so no handler of the parent's runs between
  *   fork and exec.
- * - The child becomes the invoker for good before exec (identity_drop_child,
- *   sys/identity): under sudo a hook or a script never runs as root. A failure
- *   there is reported like an exec failure, errno over the self-pipe.
+ * - Every child becomes the invoker for good before exec (identity_drop_child,
+ *   sys/identity): under sudo no child runs as root. A failure there is reported
+ *   like an exec failure, errno over the self-pipe.
  * - Every child runs in dotta's process group, part of the job the user started,
  *   as git runs every child it starts (lib/git/run-command.c start_command sets
  *   no group). The terminal's signals — Ctrl+C, Ctrl+\, a hangup — reach it as
@@ -197,9 +206,8 @@ typedef enum {
  * a spec is built by code, never read from a user, so one that breaks it is a
  * bug and dies there — and a caller whose payload a user's data sizes bounds it
  * first (PROCESS_STDIN_BUFFER_MAX).
- * - argv non-NULL; argv[0] non-NULL and non-empty. The primitive does NOT perform
- *   PATH lookup — argv[0] should be an absolute path the caller has already
- *   resolved.
+ * - argv non-NULL; argv[0] non-NULL and non-empty: a name, found as git finds
+ *   one, or a path, run as given (the header).
  * - envp non-NULL. Use { NULL } for an empty environment.
  * - timeout_seconds >= 0. Zero means no timeout (wait forever).
  * - work_dir / work_dir_fallback NULL means "inherit". If both are set, the child
@@ -214,7 +222,7 @@ typedef enum {
  *   the real cause.
  */
 typedef struct {
-    char *const *argv;              /* argv[0] = absolute path; NULL-terminated */
+    char *const *argv;              /* argv[0] a name or a path; NULL-terminated */
     char *const *envp;              /* environment, NULL-terminated */
     process_stdin_t stdin_policy;
     const char *stdin_content;      /* non-NULL iff stdin_policy == BUFFER */
@@ -239,24 +247,27 @@ typedef struct {
  * - exit_code      : WEXITSTATUS for normal termination, 128+signal_num
  *                    for signal termination. Reflects what the wait status actually
  *                    said — never overloaded with a timeout sentinel (use timed_out
- *                    for that).
+ *                    for that) — and 127 where no child was made, the status a
+ *                    shell gives a command it cannot find.
  * - signal_num     : 0 if normal exit; signal that killed the child
  *                    otherwise. When a timeout fires, this is SIGTERM or SIGKILL
  *                    (whichever finally reaped the child).
  * - timed_out      : true if the primitive killed the child for
  *                    exceeding spec.timeout_seconds. Independent of
  *                    exit_code/signal_num — caller checks this first.
- * - exec_failed    : true if the child reached execve() and execve returned, OR a
+ * - exec_failed    : true if no PATH entry holds the program, no child made; if
+ *                    the child reached execve() and execve returned; OR if a
  *                    child-side setup step (dup2, chdir) failed before exec.
  *                    exec_errno carries the errno from the failure.
  * - exec_errno     : errno value reported by the child via the
- *                    self-pipe. Zero when exec_failed is false.
+ *                    self-pipe, ENOENT for a program not found. Zero when
+ *                    exec_failed is false.
  * - output         : capture buffer, NUL-terminated. Non-NULL whenever the
  *                    output policy keeps the output (PROCESS_OUTPUT_CAPTURE,
- *                    FILE) and the run returned no error — "" for a child that
- *                    wrote nothing. Caller may take ownership by setting
- *                    result.output = NULL before dispose; otherwise dispose wipes
- *                    and frees it.
+ *                    FILE), a child was made and the run returned no error — ""
+ *                    for a child that wrote nothing. Caller may take ownership
+ *                    by setting result.output = NULL before dispose; otherwise
+ *                    dispose wipes and frees it.
  * - output_len     : number of bytes in output, excluding the
  *                    terminating NUL. Zero when output is NULL. At most
  *                    PROCESS_CAPTURE_MAX.
@@ -282,7 +293,8 @@ typedef struct {
  * "the primitive succeeded mechanically" — even when:
  *   - the child exited non-zero (caller checks result->exit_code),
  *   - the child timed out and was killed (result->timed_out is true),
- *   - exec failed in the child (result->exec_failed + exec_errno).
+ *   - the program could not be run: no PATH entry holds it, or its exec failed
+ *     in the child (result->exec_failed + exec_errno).
  *
  * Returns non-NULL only for a failure of the primitive itself, each naming the
  * program it was handed (argv[0]), so no caller names it again: what a policy
@@ -316,9 +328,10 @@ void process_result_deinit(process_result_t *result);
  *
  * The child takes the terminal: dotta's stdin, stdout and stderr, in dotta's
  * process group — for a program the user drives, the editor (sys/editor) and
- * `dotta git` with the pager git starts. argv[0] is looked up on PATH, the
- * environment is dotta's own, and the child is the invoker's (sys/identity) with
- * its signals made its own before exec, as process_run's child's are.
+ * `dotta git` with the pager git starts. Its program is found as every child's
+ * is (the header), the environment is dotta's own, and the child is the invoker's
+ * (sys/identity) with its signals made its own before exec, as process_run's
+ * child's are.
  *
  * The keyboard's signals are the child's to answer while it runs: a terminal
  * sends SIGINT and SIGQUIT to dotta's whole group, so dotta ignores both until
@@ -330,9 +343,9 @@ void process_result_deinit(process_result_t *result);
  *
  * Populates *result on every path, as process_run does: exit_code and signal_num
  * from the wait status, exec_failed and exec_errno when the program could not
- * be run (the child's errno, over a self-pipe); no capture, no timeout. Returns
- * non-NULL only for a failure of the primitive itself — the pipe, the fork or
- * the wait — naming argv[0], as process_run's do.
+ * be run (not found, or the child's errno, over a self-pipe); no capture, no
+ * timeout. Returns non-NULL only for a failure of the primitive itself — the
+ * pipe, the fork or the wait — naming argv[0], as process_run's do.
  *
  * @param argv NULL-terminated; argv[0] a program name or path (must not be NULL)
  * @param result Outcome (must not be NULL)

@@ -108,9 +108,9 @@
  * every user name and every "is this run root's" answer in the process is
  * identity()'s; a second getenv("HOME"), getuid() or SUDO_UID reader is a bug.
  * The raise pair is sys/filesystem's syscall tier's alone; the child drop is
- * every fork's (sys/process, cmds/git, sys/editor). The two rules identity_init
- * applies are public beneath it, so a suite can pin them without root
- * (tests/test-identity.c); identity_init is their only production caller.
+ * sys/process's, every child's. The two rules identity_init applies are public
+ * beneath it, so a suite can pin them without root (tests/test-identity.c);
+ * identity_init is their only production caller.
  */
 
 #ifndef DOTTA_SYS_IDENTITY_H
@@ -202,8 +202,8 @@ void identity_lower(void);
  *
  * Real, effective and saved ids all the invoker's, so nothing the child execs
  * can raise. Async-signal-safe (the setuid family and nothing else). A run that
- * holds no root, or root's own, changes nothing. Every fork site calls it and
- * reports a failure in its own words.
+ * holds no root, or root's own, changes nothing. Every child sys/process makes
+ * calls it, a failure reported as its exec's.
  *
  * @return 0, or -1 with errno
  */

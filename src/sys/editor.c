@@ -6,7 +6,6 @@
 
 #include <errno.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 #include "base/buffer.h"
@@ -56,23 +55,16 @@ error_t editor_launch(const char *editor, const char *file_path) {
         );
     }
 
-    /* A command line is a value holding a character the shell reads — git's set,
-     * and git's script: the line, then "$@", so the file reaches the editor as
-     * one argument the shell never splits or expands (lib/git/run-command.c
-     * prepare_shell_cmd). Anything else is a program, run as named. */
-    char *line = editor[strcspn(editor, "|&;<>()$`\\\"' \t\n*?[#~=%")] != '\0'
-        ? heap_str_format("%s \"$@\"", editor)
-        : NULL;
-    char *const program[] = { (char *) editor, (char *) file_path, NULL };
-    char *const shell[] = {
-        "/bin/sh", "-c", line, (char *) editor, (char *) file_path, NULL
-    };
+    /* The value is a command line a person configured, the file its one argument:
+     * a program run as named, or the shell's (sys/process.h process_shell) */
+    char *const line[] = { (char *) editor, (char *) file_path, NULL };
+    char **argv = process_shell(line);
 
     /* The editor takes the terminal while it runs, and the keyboard's signals
      * are its own (sys/process.h process_foreground). */
     process_result_t result;
-    error_t err = process_foreground(line ? shell : program, &result);
-    free(line);
+    error_t err = process_foreground(argv, &result);
+    free(argv);
     if (err) return err;
 
     /* An editor that could not be run says why: the errno's word, and ERR_NOT_FOUND

@@ -26,15 +26,15 @@ const char *editor_from_env(void);
 /**
  * Launch editor for a file, in the foreground
  *
- * As git runs its own editor (lib/git/run-command.c prepare_shell_cmd): a value
- * holding no character the shell reads is a program, its name or its path, run
- * as named with no shell between; any other — `code --wait`, `vim -u NONE` — is
- * a command line, run by /bin/sh with the file its first argument ("$@"), so
- * the file's name is never read as words. Blocks until the editor exits. The
- * editor takes the terminal, and the keyboard's signals are its own while it
- * runs (sys/process.h process_foreground): a Ctrl-C it answers never ends dotta
- * underneath it, and one that kills it abandons the edit as any failure does,
- * the caller's cleanup running.
+ * As git runs its own editor (sys/process.h process_shell): a value holding no
+ * character the shell reads is a program, its name or its path, run as named
+ * with no shell between; any other — `code --wait`, `vim -u NONE` — is a command
+ * line, run by /bin/sh with the file its first argument ("$@"), so the file's
+ * name is never read as words. Blocks until the editor exits. The editor takes
+ * the terminal, and the keyboard's signals are its own while it runs (sys/process.h
+ * process_foreground): a Ctrl-C it answers never ends dotta underneath it, and
+ * one that kills it abandons the edit as any failure does, the caller's cleanup
+ * running.
  *
  * @param editor Editor command to launch (must not be NULL)
  * @param file_path Path to file to edit (must not be NULL)

@@ -17,6 +17,10 @@
  *   process_foreground  in the foreground, the terminal its own while dotta
  *                       waits: the editor, `dotta git`
  *
+ * A command line a person configured — an editor — becomes an argv by git's rule,
+ * which its caller applies (process_shell): never a wait, so never to a path a
+ * caller made.
+ *
  * Design principles:
  * - The time limit is one deadline on the monotonic clock, counted in the time
  *   that passed: the drain's poll() and the reap's waits both end by it — no
@@ -352,5 +356,25 @@ void process_result_deinit(process_result_t *result);
  * @return Error or NULL on success
  */
 error_t process_foreground(char *const argv[], process_result_t *result);
+
+/**
+ * A command line a person configured, as the argv a wait runs: git's rule
+ * (lib/git/run-command.c prepare_shell_cmd)
+ *
+ * argv[0] is the line, the rest its arguments. A line holding a character the
+ * shell reads — git's set: `code --wait`, `vim -u NONE` — is the shell's to run,
+ * /bin/sh -c '<line> "$@"' with the line its $0 and the arguments after it, so
+ * each reaches the program as one word the shell never splits or expands; with
+ * no argument, the line alone. Any other line is a program, its name or its path,
+ * run as named with no shell between: argv's own vector. Never applied to a path
+ * a caller made, where a directory holding a space would read as a line.
+ *
+ * Readers: sys/editor.c editor_launch.
+ *
+ * @param argv The line, then its arguments, NULL-terminated (must not be NULL,
+ *             nor argv[0])
+ * @return The vector, the heap's: the caller frees it; argv's strings borrowed
+ */
+char **process_shell(char *const argv[]);
 
 #endif /* DOTTA_PROCESS_H */

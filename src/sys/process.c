@@ -75,8 +75,8 @@
  * in this time, we abandon and let init reap. */
 #define PROCESS_GRACE_ORPHAN_SECONDS 1
 
-/* The shell a file the kernel will not execute is handed to (process_exec):
- * POSIX's, git's SHELL_PATH by default */
+/* The shell a file the kernel will not execute is handed to (process_exec), and
+ * a command line's (process_shell): POSIX's, git's SHELL_PATH by default */
 #define PROCESS_SHELL "/bin/sh"
 
 /**
@@ -1036,4 +1036,34 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
     if (!err) process_report(errfd[0], status, result);
     close(errfd[0]);
     return err;
+}
+
+char **process_shell(char *const argv[]) {
+    CHECK_NULL(argv);
+    CHECK_NULL(argv[0]);
+
+    size_t argc = 0;
+    while (argv[argc]) argc++;
+
+    /* A line holding no character the shell reads — git's set — is a program,
+     * run as named: argv's own vector */
+    const char *line = argv[0];
+    if (line[strcspn(line, "|&;<>()$`\\\"' \t\n*?[#~=%")] == '\0') {
+        char **copy = heap_alloc((argc + 1) * sizeof(*copy));
+        memcpy(copy, argv, (argc + 1) * sizeof(*copy));
+        return copy;
+    }
+
+    /* Any other is the shell's: the line its $0, and its script — the line, then
+     * "$@" where arguments follow, so each reaches the program as one word —
+     * built past the pointers */
+    size_t room = strlen(line) + sizeof(" \"$@\"");
+    char **shell = heap_alloc((argc + 4) * sizeof(*shell) + room);
+    char *script = (char *) (shell + argc + 4);
+    snprintf(script, room, argc > 1 ? "%s \"$@\"" : "%s", line);
+    shell[0] = PROCESS_SHELL;
+    shell[1] = "-c";
+    shell[2] = script;
+    memcpy(shell + 3, argv, (argc + 1) * sizeof(*shell));
+    return shell;
 }

@@ -1442,12 +1442,12 @@ typedef struct {
  * not choose or read, and a listing --all could not make, are a warning in its
  * place and no section, and an empty set is no section, unsaid. The contact,
  * unless --no-fetch, is the half's one write, each profile's remote-tracking
- * ref (sys/remote.h remote_fetch): a progress line at -v while it runs, on a
- * terminal; its failure a warning at -v. Then each profile is read against the
- * remote while the session stands (sys/remote.h remote_relation), the session
- * left after it; or, with no contact — --no-fetch, or one that failed — against
- * its tracking ref, the remote as last seen (remote_last_relation), which the
- * answer says: the section prints values.
+ * ref (sys/remote.h remote_fetch): a progress line while it runs, on a terminal,
+ * on the row the section's title then takes; its failure a warning at -v. Then
+ * each profile is read against the remote while the session stands (sys/remote.h
+ * remote_relation), the session left after it; or, with no contact — --no-fetch,
+ * or one that failed — against its tracking ref, the remote as last seen
+ * (remote_last_relation), which the answer says: the section prints values.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options: --remote, --all and --no-fetch (must not be NULL)
@@ -1521,12 +1521,16 @@ static status_remote_t status_remote(
 
     /* The contact, unless --no-fetch: the remote met once and the set fetched
      * from it (sys/remote.h), its listing what the rows read the remote's heads
-     * off. While it runs, a progress line at -v: a terminal's alone, drawn over
-     * by transfer's frames while objects move (sys/transfer.h transfer_op_end),
-     * never a line of the report (base/output.h output_progress), and taken down
-     * once the fetch is done, whichever way it went */
+     * off. While it runs, a progress line, a terminal's alone and never a line
+     * of the report, on the row the section's title then takes: the section's
+     * boundary asked first, the line stands past its blank (base/output.h
+     * output_progress) — drawn over by transfer's frames while objects move
+     * (sys/transfer.h transfer_op_end), and stepping aside for a credential's
+     * fill (transfer_credentials_callback) — and is taken down once the fetch
+     * is done, whichever way it went, its title landing where it stood */
     if (!opts->no_fetch) {
-        output_progress(out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name);
+        output_gap(out, OUTPUT_NORMAL);
+        output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
         remote_t *remote = NULL;
         err = remote_open(repo, remote_name, "status", out, &remote);
         if (!err) err = remote_fetch(remote, profiles, NULL, NULL);

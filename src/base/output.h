@@ -585,16 +585,16 @@ void output_section(
  * the row the report's next line lands on: where the cursor stands, or past the
  * blank of a boundary the report owes, drawn first — so a block that asks its
  * boundary before its act's line has the line stand where the block's first line
- * then lands. Over one that stands it is drawn from that row's start, the row
- * erased in the same write, as a take-down erases it (output_clear_line). The
- * layer keeps where one stands (output_progress_t), and the line as it was drawn,
- * for a writer it cannot see to have it drawn again (output_suspend_line), so
- * every line that lands, on the report's stream or on stderr, takes it down first:
- * a refusal, a warning, a remote's words each stand on a row of their own. Its
- * act's end takes it down. sys/transfer's frames are such lines, drawn over it
- * while objects move and taken down when their op ends (sys/transfer.h
- * transfer_op_end). Off a terminal nothing is drawn: a redirected report holds
- * what an act did, never that it ran.
+ * then lands (cmds/status.c status_remote). Over one that stands it is drawn
+ * from that row's start, the row erased in the same write, as a take-down erases
+ * it (output_clear_line). The layer keeps where one stands (output_progress_t),
+ * and the line as it was drawn, for a writer it cannot see to have it drawn again
+ * (output_suspend_line), so every line that lands, on the report's stream or on
+ * stderr, takes it down first: a refusal, a warning, a remote's words each stand
+ * on a row of their own. Its act's end takes it down. sys/transfer's frames are
+ * such lines, drawn over it while objects move and taken down when their op ends
+ * (sys/transfer.h transfer_op_end). Off a terminal nothing is drawn: a redirected
+ * report holds what an act did, never that it ran.
  *
  * Readers: cmds/sync.c cmd_sync, cmds/profile.c profile_fetch, cmds/status.c
  * status_remote, each over its fetch; cmds/clone.c cmd_clone, over its contact

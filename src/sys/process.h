@@ -8,8 +8,9 @@
  * regular file of that name along PATH whose owner may execute it — dotta's own
  * PATH, never the environment a caller builds for the child, and the system's
  * default where it is unset, as git makes it (locate_in_PATH; exec-cmd.c
- * setup_path). A name no PATH entry holds is an exec that failed, ENOENT, and
- * no child is made. The program is handed its path as argv[0], as git hands it.
+ * setup_path). A name no PATH entry holds — the empty one among them, as git
+ * reads it — is an exec that failed, ENOENT, and no child is made. The program
+ * is handed its path as argv[0], as git hands it.
  *
  * Two ways to wait for it, each reporting into one result:
  *   process_run         to its end, by a time limit, its output where the caller
@@ -49,6 +50,11 @@
  * - The standard descriptors: the host program has 0, 1 and 2 open from its start
  *   (main.c main, its first lines), so no descriptor the primitive opens sits
  *   at one of them for a child's dup2 to overwrite.
+ * - Every other descriptor: process_run's child, its streams placed where its
+ *   policies say, has every descriptor past them closed before its exec, so no
+ *   handle of libgit2's or SQLite's reaches a hook; the foreground's keeps every
+ *   descriptor dotta holds, so one the shell handed dotta reaches the program
+ *   (`GIT_TRACE=3 dotta git … 3>log`).
  * - SIGPIPE: caller must have SIGPIPE ignored (typically via signal(SIGPIPE,
  *   SIG_IGN) at process startup), so a payload written to a child that is gone,
  *   or a copy to a reader that went away (PROCESS_OUTPUT_STREAM), is EPIPE and
@@ -210,8 +216,8 @@ typedef enum {
  * a spec is built by code, never read from a user, so one that breaks it is a
  * bug and dies there — and a caller whose payload a user's data sizes bounds it
  * first (PROCESS_STDIN_BUFFER_MAX).
- * - argv non-NULL; argv[0] non-NULL and non-empty: a name, found as git finds
- *   one, or a path, run as given (the header).
+ * - argv non-NULL; argv[0] non-NULL: a name, found as git finds one, or a path,
+ *   run as given (the header).
  * - envp non-NULL. Use { NULL } for an empty environment.
  * - timeout_seconds >= 0. Zero means no timeout (wait forever).
  * - work_dir / work_dir_fallback NULL means "inherit". If both are set, the child
@@ -333,7 +339,8 @@ void process_result_deinit(process_result_t *result);
  * The child takes the terminal: dotta's stdin, stdout and stderr, in dotta's
  * process group — for a program the user drives, the editor (sys/editor) and
  * `dotta git` with the pager git starts. Its program is found as every child's
- * is (the header), the environment is dotta's own, and the child is the invoker's
+ * is (the header); its environment, its working directory and every descriptor
+ * dotta holds are dotta's own (the header); and the child is the invoker's
  * (sys/identity) with its signals made its own before exec, as process_run's
  * child's are.
  *

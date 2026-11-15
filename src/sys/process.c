@@ -2,19 +2,26 @@
  * process.c - A child: its program found as git finds one, and two ways to wait
  * for it: implementation
  *
- * process_run is one linear procedure: validate spec → find the program
- * (process_find) → open what the child reads and where it writes
- * (process_stdin_open, process_output_open) and the exec's pipe → fork → the
- * child sets up its environment and execs (process_child, process_exec) → the
- * parent drains a pipe's output by poll() to the limit's deadline (process_drain),
- * keeping what a capture asks for (process_capture_t) → parent reaps the child
- * by the same deadline (process_reap), escalating SIGTERM→SIGKILL where the limit
- * came first (process_kill) → parent reports the reaped child into the result
- * struct (process_report), and reads a file's output (process_read_file).
+ * Every child is made one way: its program found before anything is opened
+ * (process_find), then spawned (process_spawn) — the exec's pipe, every stdio
+ * stream flushed, the fork — and in the child its signals, the invoker's identity,
+ * the setup its wait places it in, or none (process_setup_t), and the exec
+ * (process_child, process_exec). The waits differ in what they open before the
+ * spawn and how they wait after it.
  *
- * One cleanup label handles all error paths. Every resource (descriptors, capture
- * buffer, stray child) is initialized to a sentinel so cleanup is unconditional
- * and order-independent.
+ * process_run is one linear procedure: validate spec → find the program → open
+ * what the child reads and where it writes (process_stdin_open,
+ * process_output_open) → spawn → the parent drains a pipe's output by poll() to
+ * the limit's deadline (process_drain), keeping what a capture asks for
+ * (process_capture_t) → parent reaps the child by the same deadline (process_reap),
+ * escalating SIGTERM→SIGKILL where the limit came first (process_kill) → parent
+ * reports the reaped child into the result struct (process_report), and reads a
+ * file's output (process_read_file). One cleanup label handles all its error
+ * paths. Every resource (descriptors, capture buffer, stray child) is initialized
+ * to a sentinel so cleanup is unconditional and order-independent.
+ *
+ * process_foreground spawns a child placed nowhere, the keyboard's signals held
+ * across the spawn and ignored until the child is reaped.
  */
 
 #include "sys/process.h"
@@ -447,19 +454,32 @@ static _Noreturn void process_exec(
 }
 
 /**
- * The child, from the fork to its exec: its signals, the invoker's identity,
- * its stdin and its output, every other descriptor closed, its working directory
- * — then the exec (process_exec)
+ * Where a wait places its child (process_child): the descriptor each of its three
+ * streams is set from, and the directory it enters
  *
- * `in` is what the stdin policy opened for the child, -1 for dotta's own
- * (process_stdin_open), `out` what the output policy opened for it, -1 for dotta's
- * own (process_output_open), `errfd` the exec's pipe's write end: each above 2
- * (main.c), so no dup2 here overwrites another's source. `shell_argv` is the
- * exec's vector over the program found (process_find). No error_t, no malloc,
- * no return: a failure is its errno over the exec's pipe (process_child_fail).
+ * Each descriptor is one its wait opened before the spawn — above 2 (main.c),
+ * so no dup2 overwrites another's source — or -1 for dotta's own stream. A placed
+ * child closes every other descriptor before its exec. A child placed nowhere
+ * (NULL: process_foreground's) keeps every descriptor dotta holds and dotta's
+ * working directory.
+ */
+typedef struct {
+    int streams[3];                 /* stdin, stdout, stderr: from this, -1 for dotta's own */
+    const char *work_dir;           /* NULL: dotta's own */
+    const char *work_dir_fallback;  /* entered where work_dir is not; NULL: none */
+} process_setup_t;
+
+/**
+ * The child, from the fork to its exec — every child's: its signals, the invoker's
+ * identity, then where `setup` places it its three streams, every other descriptor
+ * closed and its working directory (process_setup_t) — then the exec (process_exec)
+ *
+ * `shell_argv` is the exec's vector over the program found (process_find), `errfd`
+ * the exec's pipe's write end. No error_t, no malloc, no return: a failure is
+ * its errno over the exec's pipe (process_child_fail).
  */
 static _Noreturn void process_child(
-    const process_spec_t *spec, int in, int out, int errfd, char *const *shell_argv
+    char *const shell_argv[], char *const envp[], const process_setup_t *setup, int errfd
 ) {
     /* The child's signals, its own before exec (process_child_signals). */
     process_child_signals();
@@ -469,9 +489,14 @@ static _Noreturn void process_child(
      * errno over the self-pipe, 126. */
     if (identity_drop_child() != 0) process_child_fail(errfd, 126);
 
-    if (in >= 0 && dup2(in, STDIN_FILENO) < 0) process_child_fail(errfd, 126);
-    if (out >= 0 && (dup2(out, STDOUT_FILENO) < 0 || dup2(out, STDERR_FILENO) < 0)) {
-        process_child_fail(errfd, 126);
+    /* A child placed nowhere keeps dotta's own: its streams, its working directory
+     * and every other descriptor, one the shell handed dotta among them */
+    if (!setup) process_exec(shell_argv, envp, errfd);
+
+    for (int fd = STDIN_FILENO; fd <= STDERR_FILENO; fd++) {
+        if (setup->streams[fd] >= 0 && dup2(setup->streams[fd], fd) < 0) {
+            process_child_fail(errfd, 126);
+        }
     }
 
     /* Close every other inherited fd below the cap (PROCESS_FD_CAP): the parent's
@@ -491,12 +516,61 @@ static _Noreturn void process_child(
         }
     }
 
-    if (spec->work_dir && chdir(spec->work_dir) != 0 &&
-        (!spec->work_dir_fallback || chdir(spec->work_dir_fallback) != 0)) {
+    if (setup->work_dir && chdir(setup->work_dir) != 0 &&
+        (!setup->work_dir_fallback || chdir(setup->work_dir_fallback) != 0)) {
         process_child_fail(errfd, 126);
     }
 
-    process_exec(shell_argv, spec->envp, errfd);
+    process_exec(shell_argv, envp, errfd);
+}
+
+/**
+ * A child made — every wait's: the exec's pipe, every stdio stream flushed, the
+ * fork, and the child placed by `setup`, or nowhere where NULL (process_child)
+ *
+ * *pid is the child, *exec_fd the exec's pipe's read end, the wait's to read
+ * and close (process_report): the exec closes the write end, or the child's failure
+ * writes its errno there first. A refusal — the pipe, the fork — makes no child,
+ * names `program` as its wait was handed it, and leaves both -1.
+ */
+static error_t process_spawn(
+    const char *program, char *const shell_argv[], char *const envp[],
+    const process_setup_t *setup, pid_t *pid, int *exec_fd
+) {
+    *pid = -1;
+    *exec_fd = -1;
+
+    /* Exec-errno self-pipe (child writes errno+_exit on exec failure; on exec
+     * success, FD_CLOEXEC closes the write end and parent reads EOF), so a program
+     * that could not be run is told from one that exited 127. */
+    int errfd[2];
+    error_t err = process_pipe(errfd, program);
+    if (err) return err;
+
+    /* What dotta wrote lands ahead of anything the child writes: a line still
+     * in a stdio buffer would follow the child's output wherever both go, so
+     * every stream is flushed before the fork, as git flushes before every child
+     * (lib/git/run-command.c start_command). */
+    (void) fflush(NULL);
+
+    pid_t child = fork();
+    if (child < 0) {
+        err = error_errno(errno, "Failed to fork '%s'", program);
+        close(errfd[0]);
+        close(errfd[1]);
+        return err;
+    }
+
+    if (child == 0) {
+        process_child(shell_argv, envp, setup, errfd[1]);
+    }
+
+    /* The write end is the child's: its exec, or its exit, closes the last. */
+    close(errfd[1]);
+
+    *pid = child;
+    *exec_fd = errfd[0];
+    return NULL;
 }
 
 /**
@@ -734,15 +808,12 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     CHECK_NULL(spec);
     CHECK_NULL(result);
     CHECK_NULL(spec->argv);
+    CHECK_NULL(spec->argv[0]);
     CHECK_NULL(spec->envp);
 
     /* The spec's shape is its caller's to keep (process_spec_t): a stdin payload
      * is load-bearing only for BUFFER, so one set under INHERIT or DEVNULL is a
      * payload the caller expected and the child would never read */
-    CHECK_ARG(
-        spec->argv[0] != NULL && spec->argv[0][0] != '\0',
-        "argv[0] names no program"
-    );
     CHECK_ARG(
         spec->timeout_seconds >= 0,
         "a time limit below zero"
@@ -782,13 +853,13 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     int stdin_child = -1;
     int output_parent = -1;
     int output_child = -1;
-    int errfd[2] = { -1, -1 };
+    int exec_fd = -1;
     pid_t pid = -1;
     process_capture_t capture = { 0 };
     int status = 0;
     error_t err = NULL;
 
-    /* What the child reads and where it writes, each opened before the fork
+    /* What the child reads and where it writes, each opened before the spawn
      * (process_stdin_open, process_output_open). */
     err = process_stdin_open(spec, &stdin_parent, &stdin_child);
     if (err) goto cleanup;
@@ -796,37 +867,25 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     err = process_output_open(spec, &output_parent, &output_child);
     if (err) goto cleanup;
 
-    /* Exec-errno self-pipe (child writes errno+_exit on exec failure; on exec
-     * success, FD_CLOEXEC closes the write end and parent reads EOF). */
-    err = process_pipe(errfd, program);
-    if (err) goto cleanup;
-
-    /* The capture, made before the fork where the policy keeps the output. */
+    /* The capture, made before the spawn where the policy keeps the output. */
     if (spec->output_policy == PROCESS_OUTPUT_CAPTURE ||
         spec->output_policy == PROCESS_OUTPUT_FILE) {
         process_capture_init(&capture);
     }
 
-    /* What dotta wrote lands ahead of anything the child writes: a line still
-     * in a stdio buffer would follow the child's output wherever both go, so
-     * every stream is flushed before the fork, as git flushes before every child
-     * (lib/git/run-command.c start_command). */
-    (void) fflush(NULL);
+    /* The child placed where its policies opened its stdin and its output — stderr
+     * with stdout — dotta's own where they opened nothing, in its directory
+     * (process_spawn) */
+    process_setup_t setup = {
+        .streams           = { stdin_child, output_child, output_child },
+        .work_dir          = spec->work_dir,
+        .work_dir_fallback = spec->work_dir_fallback,
+    };
+    err = process_spawn(program, shell_argv, spec->envp, &setup, &pid, &exec_fd);
+    if (err) goto cleanup;
 
-    pid = fork();
-    if (pid < 0) {
-        err = error_errno(errno, "Failed to fork '%s'", program);
-        goto cleanup;
-    }
-
-    if (pid == 0) {
-        process_child(spec, stdin_child, output_child, errfd[1], shell_argv);
-    }
-
-    /* ───── Parent ──────────────────────────────────────────────── */
-
-    /* Close the child's ends — what it reads, where it writes, the exec's pipe's
-     * write end: the child holds its own of each. */
+    /* Close the child's ends — what it reads, where it writes: the child holds
+     * its own of each. */
     if (stdin_child >= 0) {
         close(stdin_child);
         stdin_child = -1;
@@ -835,8 +894,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         close(output_child);
         output_child = -1;
     }
-    close(errfd[1]);
-    errfd[1] = -1;
 
     /* Deliver the stdin payload before the output is read. The spec-entry cap
      * on stdin_content_len keeps the payload within any POSIX-conformant pipe
@@ -888,7 +945,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     pid = -1;
 
     /* The child reaped, reported (process_report) */
-    process_report(errfd[0], status, result);
+    process_report(exec_fd, status, result);
 
     /* A file's output, read once its child is reaped (process_read_file) */
     if (spec->output_policy == PROCESS_OUTPUT_FILE) {
@@ -908,8 +965,7 @@ cleanup:
     if (stdin_child >= 0) close(stdin_child);
     if (output_parent >= 0) close(output_parent);
     if (output_child >= 0) close(output_child);
-    if (errfd[0] >= 0) close(errfd[0]);
-    if (errfd[1] >= 0) close(errfd[1]);
+    if (exec_fd >= 0) close(exec_fd);
 
     /* Reap any stray child. We get here with pid > 0 only if a mid-execution
      * failure prevented the normal wait paths from running. Best-effort; if it
@@ -955,61 +1011,32 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
 
     *result = (process_result_t) { 0 };
 
-    /* The exec's errno comes back over a self-pipe the exec closes, so a program
-     * that could not be run is told from one that exited 127. */
-    int errfd[2] = { -1, -1 };
-    error_t err = process_pipe(errfd, argv[0]);
-    if (err) {
-        free(shell_argv);
-        return err;
-    }
-
-    /* What dotta wrote lands ahead of anything the child writes: every stream
-     * flushed before the fork, as process_run flushes (the header). */
-    (void) fflush(NULL);
-
-    /* The keyboard's signals held across the fork, until the parent ignores them
-     * below: a Ctrl-C in between is neither dotta's death nor lost to the child,
-     * which clears its mask before exec and hears the terminal's own. */
+    /* The keyboard's signals held across the spawn, until the parent ignores
+     * them below: a Ctrl-C once the child is made is neither dotta's death nor
+     * lost to the child, which clears its mask before exec and hears the terminal's
+     * own. One sent before the fork, while the spawn flushes, is held and
+     * dropped. */
     sigset_t keyboard, before;
     sigemptyset(&keyboard);
     sigaddset(&keyboard, SIGINT);
     sigaddset(&keyboard, SIGQUIT);
     (void) sigprocmask(SIG_BLOCK, &keyboard, &before);
 
-    pid_t pid = fork();
-    if (pid < 0) {
-        err = error_errno(errno, "Failed to fork '%s'", argv[0]);
+    /* The child placed nowhere: dotta's own streams, descriptors and directory,
+     * in dotta's own environment (process_spawn). It holds its own copy of the
+     * vector. */
+    pid_t pid = -1;
+    int exec_fd = -1;
+    error_t err = process_spawn(argv[0], shell_argv, environ, NULL, &pid, &exec_fd);
+    free(shell_argv);
+    if (err) {
         (void) sigprocmask(SIG_SETMASK, &before, NULL);
-        close(errfd[0]);
-        close(errfd[1]);
-        free(shell_argv);
         return err;
     }
 
-    if (pid == 0) {
-        /* ───── Child ─────────────────────────────────────────────
-         *
-         * As process_run's: no error_t / no malloc until exec, and a failure
-         * writes its errno to the self-pipe and exits (process_child_fail). */
-        close(errfd[0]);
-        process_child_signals();
-
-        /* The invoker's child, for good (sys/identity), before the exec. */
-        if (identity_drop_child() != 0) process_child_fail(errfd[1], 126);
-
-        /* The program found, in dotta's own environment (process_exec) */
-        process_exec(shell_argv, environ, errfd[1]);
-    }
-
-    /* ───── Parent ──────────────────────────────────────────────── */
-
-    /* The child holds its own copy of the vector. */
-    free(shell_argv);
-
     /* The keyboard's signals are the child's until it is reaped (the header):
-     * ignored here, and a pending one discarded with the ignore — it reached
-     * the child too. */
+     * ignored here, and a pending one sent since the fork discarded with the
+     * ignore — it reached the child too. */
     struct sigaction ignore = { 0 };
     ignore.sa_handler = SIG_IGN;
     sigemptyset(&ignore.sa_mask);
@@ -1017,9 +1044,6 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
     (void) sigaction(SIGINT, &ignore, &saved_int);
     (void) sigaction(SIGQUIT, &ignore, &saved_quit);
     (void) sigprocmask(SIG_SETMASK, &before, NULL);
-
-    /* The child's end closed: the exec, or the child's exit, closes the last. */
-    close(errfd[1]);
 
     /* Reaped whatever it is doing, however long it takes: no timeout, for the
      * user is driving it. */
@@ -1033,8 +1057,8 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
     (void) sigaction(SIGQUIT, &saved_quit, NULL);
 
     /* Reported as process_run reports its child, once reaped (process_report) */
-    if (!err) process_report(errfd[0], status, result);
-    close(errfd[0]);
+    if (!err) process_report(exec_fd, status, result);
+    close(exec_fd);
     return err;
 }
 

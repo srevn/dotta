@@ -1111,11 +1111,19 @@ void output_progress(
     /* The act's line, never the report's: opened as every line is and never landed,
      * so no boundary is paid and the report stays where it stood. Over a line
      * that stands it is drawn from the row's start, the row erased, in the line's
-     * one write */
+     * one write; where none stands, on the row the report's next line lands on
+     * — past the blank of a boundary the report owes, drawn here and still owed */
     static const char erase[] = "\r" ANSI_CLEAR_LINE;
     line_t line;
     output_open(&line, ctx, ctx->stream);
-    if (ctx->progress_drawn) output_bytes(&line, erase, sizeof(erase) - 1);
+    if (ctx->progress != OUTPUT_PROGRESS_NONE) {
+        output_bytes(&line, erase, sizeof(erase) - 1);
+    } else if (ctx->report == OUTPUT_REPORT_GAP) {
+        output_bytes(&line, "\n", 1);
+        ctx->progress = OUTPUT_PROGRESS_GAP;
+    } else {
+        ctx->progress = OUTPUT_PROGRESS_LINE;
+    }
 
     va_list args;
     va_start(args, fmt);
@@ -1127,17 +1135,20 @@ void output_progress(
     /* No newline ends it, and the report's stream is line-buffered (main.c main).
      * It stands until it is taken down (output_clear_line). */
     fflush(ctx->stream);
-    ctx->progress_drawn = true;
 }
 
 void output_clear_line(output_t *ctx) {
     /* Where none stands nothing is written: none drawn below its level, none
      * off a terminal, none since a take-down */
-    if (!ctx || !ctx->progress_drawn) return;
+    if (!ctx || ctx->progress == OUTPUT_PROGRESS_NONE) return;
 
+    /* The row erased; and where the line stood past a boundary's blank, the cursor
+     * back up on the blank, the report as it stood, for the next line that lands
+     * to pay the boundary over it */
     fputs("\r" ANSI_CLEAR_LINE, ctx->stream);
+    if (ctx->progress == OUTPUT_PROGRESS_GAP) fprintf(ctx->stream, ANSI_CURSOR_UP, 1);
     fflush(ctx->stream);
-    ctx->progress_drawn = false;
+    ctx->progress = OUTPUT_PROGRESS_NONE;
 }
 
 void output_draw(output_t *ctx, const char *fmt, ...) {

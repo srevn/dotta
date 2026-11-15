@@ -167,8 +167,10 @@ void transfer_configure_callbacks(
  *
  * A helper's fill runs on a row of its own: git asks at the terminal where no
  * helper answers (lib/git/prompt.c git_prompt), past the output layer, so the
- * progress line that stands is taken down first, a caller's around the op among
- * it (base/output.h output_clear_line).
+ * progress line that stands, a caller's around the op among it, steps aside for
+ * the fill and is drawn again once it returns — on its row where git asked nothing,
+ * beneath git's questions where it asked; a warning the fill's failure says stands
+ * above it (base/output.h output_suspend_line).
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  */

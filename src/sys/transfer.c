@@ -439,12 +439,15 @@ int transfer_credentials_callback(
         /* None yet: a fresh fill from the helper. The fill may ask at the terminal
          * itself — git prompts there where no helper answers (lib/git/prompt.c
          * git_prompt) — past the output layer, which sees none of it: the progress
-         * line that stands, a caller's around the op, is taken down first, so
-         * the prompt stands on a row of its own */
+         * line that stands, a caller's around the op, steps aside for it, so
+         * the prompt stands on a row of its own, and is drawn again once the
+         * fill returns, the op still running — on its row where git asked nothing,
+         * beneath git's questions where it asked (base/output.h
+         * output_suspend_line) */
         char *fresh_user = NULL;
         char *fresh_pass = NULL;
         if (!err) {
-            output_clear_line(xfer->output);
+            output_suspend_line(xfer->output);
             err = credential_helper_fill(
                 &u, username_from_url, &fresh_user, &fresh_pass
             );
@@ -455,6 +458,7 @@ int transfer_credentials_callback(
                  * words: they name the helper ('git credential fill'). */
                 output_warning(xfer->output, OUTPUT_NORMAL, "%s", error_line(err));
             }
+            output_resume_line(xfer->output);
         }
 
         if (fresh_user && fresh_pass) {

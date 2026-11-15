@@ -1099,6 +1099,32 @@ void output_section(
     output_put(&line);
 }
 
+/**
+ * Open the progress line on the row it stands on
+ *
+ * The act's line, never the report's: opened as every line is and never landed,
+ * so no boundary is paid and the report stays where it stood. Over a line that
+ * stands it is drawn from the row's start, the row erased, in the line's one
+ * write; where none stands, on the row the report's next line lands on — past
+ * the blank of a boundary the report owes, drawn here and still owed. A line's
+ * first draw and its resume both open here, so a line drawn again takes the row
+ * a line first drawn would.
+ */
+static void output_open_progress(line_t *line, output_t *ctx) {
+    static const char erase[] = "\r" ANSI_CLEAR_LINE;
+
+    output_open(line, ctx, ctx->stream);
+    if (ctx->progress == OUTPUT_PROGRESS_LINE ||
+        ctx->progress == OUTPUT_PROGRESS_GAP) {
+        output_bytes(line, erase, sizeof(erase) - 1);
+    } else if (ctx->report == OUTPUT_REPORT_GAP) {
+        output_bytes(line, "\n", 1);
+        ctx->progress = OUTPUT_PROGRESS_GAP;
+    } else {
+        ctx->progress = OUTPUT_PROGRESS_LINE;
+    }
+}
+
 void output_progress(
     output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
@@ -1108,27 +1134,25 @@ void output_progress(
     /* Off a terminal nothing is drawn: nothing there could take it down */
     if (!output_is_tty(ctx)) return;
 
-    /* The act's line, never the report's: opened as every line is and never landed,
-     * so no boundary is paid and the report stays where it stood. Over a line
-     * that stands it is drawn from the row's start, the row erased, in the line's
-     * one write; where none stands, on the row the report's next line lands on
-     * — past the blank of a boundary the report owes, drawn here and still owed */
-    static const char erase[] = "\r" ANSI_CLEAR_LINE;
+    /* The line opened on its row, then its text, a style the text leaves open
+     * closed where it ends — a progress line ends in no newline — so what is
+     * kept below is what the terminal receives */
     line_t line;
-    output_open(&line, ctx, ctx->stream);
-    if (ctx->progress != OUTPUT_PROGRESS_NONE) {
-        output_bytes(&line, erase, sizeof(erase) - 1);
-    } else if (ctx->report == OUTPUT_REPORT_GAP) {
-        output_bytes(&line, "\n", 1);
-        ctx->progress = OUTPUT_PROGRESS_GAP;
-    } else {
-        ctx->progress = OUTPUT_PROGRESS_LINE;
-    }
+    output_open_progress(&line, ctx);
+    const size_t prefix = line.len;
 
     va_list args;
     va_start(args, fmt);
     output_walk(&line, fmt, &args);
     va_end(args);
+    output_style(&line, OUTPUT_COLOR_RESET);
+
+    /* Kept as the terminal receives it, to be drawn again (output_resume_line);
+     * a line too long to keep keeps nothing */
+    size_t len = line.len - prefix;
+    if (len >= sizeof(ctx->progress_line)) len = 0;
+    memcpy(ctx->progress_line, line.data + prefix, len);
+    ctx->progress_line[len] = '\0';
 
     output_put(&line);
 
@@ -1139,8 +1163,11 @@ void output_progress(
 
 void output_clear_line(output_t *ctx) {
     /* Where none stands nothing is written: none drawn below its level, none
-     * off a terminal, none since a take-down */
-    if (!ctx || ctx->progress == OUTPUT_PROGRESS_NONE) return;
+     * off a terminal, none since a take-down, and none suspended, which stands
+     * nowhere until its resume */
+    if (!ctx) return;
+    if (ctx->progress != OUTPUT_PROGRESS_LINE &&
+        ctx->progress != OUTPUT_PROGRESS_GAP) return;
 
     /* The row erased; and where the line stood past a boundary's blank, the cursor
      * back up on the blank, the report as it stood, for the next line that lands
@@ -1149,6 +1176,32 @@ void output_clear_line(output_t *ctx) {
     if (ctx->progress == OUTPUT_PROGRESS_GAP) fprintf(ctx->stream, ANSI_CURSOR_UP, 1);
     fflush(ctx->stream);
     ctx->progress = OUTPUT_PROGRESS_NONE;
+}
+
+void output_suspend_line(output_t *ctx) {
+    /* Where none stands there is nothing to take down, nor to draw again */
+    if (!ctx) return;
+    if (ctx->progress != OUTPUT_PROGRESS_LINE &&
+        ctx->progress != OUTPUT_PROGRESS_GAP) return;
+
+    /* Taken down as every take-down is, and kept as it was last drawn */
+    output_clear_line(ctx);
+    ctx->progress = OUTPUT_PROGRESS_SUSPENDED;
+}
+
+void output_resume_line(output_t *ctx) {
+    if (!ctx || ctx->progress != OUTPUT_PROGRESS_SUSPENDED) return;
+
+    /* Drawn again as it was kept, on the row a line first drawn would take; a
+     * line too long to keep stays down */
+    ctx->progress = OUTPUT_PROGRESS_NONE;
+    if (ctx->progress_line[0] == '\0') return;
+
+    line_t line;
+    output_open_progress(&line, ctx);
+    output_bytes(&line, ctx->progress_line, strlen(ctx->progress_line));
+    output_put(&line);
+    fflush(ctx->stream);
 }
 
 void output_draw(output_t *ctx, const char *fmt, ...) {

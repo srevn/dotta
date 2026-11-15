@@ -1,6 +1,6 @@
 /**
- * process.h - A child: its program found as git finds one, and two ways to wait
- * for it
+ * process.h - A child: its program found as git finds one, and three ways to
+ * wait for it
  *
  * A child's program is found before its fork and exec'd by its path, one way
  * for every child, as git runs a command (lib/git/run-command.c prepare_cmd,
@@ -12,11 +12,16 @@
  * reads it — is an exec that failed, ENOENT, and no child is made. The program
  * is handed its path as argv[0], as git hands it.
  *
- * Two ways to wait for it, each reporting into one result:
+ * Three ways to wait for it, each reporting into one result:
  *   process_run         to its end, by a time limit, its output where the caller
  *                       says: a hook, a bootstrap script, a credential helper
  *   process_foreground  in the foreground, the terminal its own while dotta
  *                       waits: the editor, `dotta git`
+ *   process_start       in conversation, its caller writing what it reads and
+ *                       reading what it writes, then waiting at process_finish
+ *                       with no limit, as git waits for its ssh
+ *                       (lib/git/run-command.c finish_command): a program that
+ *                       carries a protocol on its stdin and stdout
  *
  * A command line a person configured — an editor — becomes an argv by git's rule,
  * which its caller applies (process_shell): never a wait, so never to a path a
@@ -36,7 +41,8 @@
  * - Child reports execve() failure to the parent over a CLOEXEC self-pipe carrying
  *   errno, so the parent can distinguish "exec failed" from "the script exited
  *   127" — letting callers report the specific reason (a missing interpreter's
- *   ENOENT) instead of a misleading proxy.
+ *   ENOENT) instead of a misleading proxy. The start reads it before it answers,
+ *   so a started child is a program that runs.
  * - A file the kernel will not execute (ENOEXEC: a script with no #! line) is
  *   read by /bin/sh, its path the shell's first argument — git's retry for every
  *   command it runs (lib/git/run-command.c prepare_cmd, start_command), made by
@@ -50,15 +56,16 @@
  * - The standard descriptors: the host program has 0, 1 and 2 open from its start
  *   (main.c main, its first lines), so no descriptor the primitive opens sits
  *   at one of them for a child's dup2 to overwrite.
- * - Every other descriptor: process_run's child, its streams placed where its
- *   policies say, has every descriptor past them closed before its exec, so no
- *   handle of libgit2's or SQLite's reaches a hook; the foreground's keeps every
- *   descriptor dotta holds, so one the shell handed dotta reaches the program
- *   (`GIT_TRACE=3 dotta git … 3>log`).
+ * - Every other descriptor: a child process_run or process_start places, its
+ *   streams where its wait says, has every descriptor past them closed before
+ *   its exec, so no handle of libgit2's or SQLite's reaches a hook or a started
+ *   program, and a child spawned while a started one stands never holds that
+ *   one's stdin; the foreground's keeps every descriptor dotta holds, so one
+ *   the shell handed dotta reaches the program (`GIT_TRACE=3 dotta git … 3>log`).
  * - SIGPIPE: caller must have SIGPIPE ignored (typically via signal(SIGPIPE,
  *   SIG_IGN) at process startup), so a payload written to a child that is gone,
- *   or a copy to a reader that went away (PROCESS_OUTPUT_STREAM), is EPIPE and
- *   never dotta's death.
+ *   a write to a started child that is gone (process_write), or a copy to a reader
+ *   that went away (PROCESS_OUTPUT_STREAM), is EPIPE and never dotta's death.
  * - SIGCHLD: caller must NOT install a SIGCHLD handler. The implementation uses
  *   waitpid() with default disposition.
  * - The child resets each terminating signal it finds caught
@@ -363,6 +370,81 @@ void process_result_deinit(process_result_t *result);
  * @return Error or NULL on success
  */
 error_t process_foreground(char *const argv[], process_result_t *result);
+
+/**
+ * A started child: its program running, its stdin and its stdout the caller's
+ * to write and read, until its finish frees it (process_start … process_finish);
+ * NULL is none
+ */
+typedef struct process process_t;
+
+/**
+ * Start a child its caller talks to, and leave it running.
+ *
+ * Its stdin is a pipe the caller writes (process_write), its stdout one the caller
+ * reads (process_read), its stderr dotta's own — what it says to a person reaches
+ * the person, as git leaves ssh's. Its program is found as every child's is (the
+ * header), in the environment `envp`, every other descriptor closed, in dotta's
+ * working directory.
+ *
+ * The start answers once the program runs, as git's start_command reads its exec's
+ * pipe: one that could not be run — no PATH entry holds it, its exec or a step
+ * before it failed — is the start's refusal in its errno's words, "Cannot run
+ * '<argv[0]>'", with no child left. The pipe or the fork it could not make is a
+ * refusal naming argv[0], as process_run's are.
+ *
+ * @param argv NULL-terminated; argv[0] a name or a path (must not be NULL)
+ * @param envp The child's environment, NULL-terminated (must not be NULL)
+ * @param out The started child, the caller's to finish; NULL on a refusal
+ * @return Error or NULL on success
+ */
+error_t process_start(char *const argv[], char *const envp[], process_t **out);
+
+/**
+ * Write every byte of `data` to a started child's stdin, a short write resumed
+ * and a signal's interruption asked again. A child that is gone — its stdin closed,
+ * or its end — is the refusal EPIPE (SIGPIPE ignored: the header). Each refusal
+ * names its program.
+ *
+ * @param child Started child (must not be NULL)
+ * @param data The bytes (must not be NULL where size is above 0)
+ * @param size Byte count
+ * @return Error or NULL on success
+ */
+error_t process_write(process_t *child, const void *data, size_t size);
+
+/**
+ * Read what a started child wrote to its stdout: one read, of at most `size`
+ * bytes, waiting until the child writes or ends — its count in *out_len, 0 at
+ * the child's end of output. A signal's interruption is asked again; a failed
+ * read is a refusal naming its program.
+ *
+ * @param child Started child (must not be NULL)
+ * @param data Where the bytes land (must not be NULL)
+ * @param size Room in data, above 0: a read of no bytes could not tell the end
+ * @param out_len Bytes read (must not be NULL); 0 on a refusal
+ * @return Error or NULL on success
+ */
+error_t process_read(process_t *child, void *data, size_t size, size_t *out_len);
+
+/**
+ * Finish a started child: end what its caller holds of it, wait for it, report
+ * how it ended, and free it.
+ *
+ * Its stdin is closed, then its stdout — a child that reads its stdin to its
+ * end exits, and one still writing meets its reader gone (SIGPIPE) — and it is
+ * reaped with no limit, as git's finish_command waits: one that will not end
+ * once its stdin closes holds the finish until it ends or is killed. *result is
+ * its wait status, as process_run reports it: no exec failure, which the start
+ * answered for, no capture, no timeout. The handle is freed on every path, the
+ * refusal of a wait that failed among them, naming its program. NULL is none:
+ * *result zeroed.
+ *
+ * @param child Started child, or NULL
+ * @param result Outcome (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t process_finish(process_t *child, process_result_t *result);
 
 /**
  * A command line a person configured, as the argv a wait runs: git's rule

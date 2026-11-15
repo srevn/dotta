@@ -1,6 +1,6 @@
 /**
- * process.c - A child: its program found as git finds one, and two ways to wait
- * for it: implementation
+ * process.c - A child: its program found as git finds one, and three ways to
+ * wait for it: implementation
  *
  * Every child is made one way: its program found before anything is opened
  * (process_find), then spawned (process_spawn) — the exec's pipe, every stdio
@@ -22,6 +22,10 @@
  *
  * process_foreground spawns a child placed nowhere, the keyboard's signals held
  * across the spawn and ignored until the child is reaped.
+ *
+ * process_start spawns a child placed on two pipes, reads the exec's pipe before
+ * it answers (process_exec_errno), and hands its caller the pipes' other ends
+ * (process_t); process_finish closes them and reaps it with no limit.
  */
 
 #include "sys/process.h"
@@ -88,12 +92,13 @@
 
 /**
  * Write all `n` bytes of `buf` to `fd`, retrying on partial writes and EINTR,
- * until done or refused. A refusal costs the bytes alone, whoever the caller: a
- * payload whose child is gone, a copy whose reader went away (EPIPE, SIGPIPE
- * ignored: the header), a child's errno, whose exit code (126, 127) then reports
- * the failure alone.
+ * until done or refused: 0, or -1 with errno. A started child's refusal is its
+ * write's (process_write); every other caller's costs the bytes alone: a payload
+ * whose child is gone, a copy whose reader went away (EPIPE, SIGPIPE ignored:
+ * the header), a child's errno, whose exit code (126, 127) then reports the failure
+ * alone.
  */
-static void process_write(int fd, const void *buf, size_t n) {
+static int process_write_fd(int fd, const void *buf, size_t n) {
     const char *p = buf;
     while (n > 0) {
         ssize_t w = write(fd, p, n);
@@ -101,11 +106,13 @@ static void process_write(int fd, const void *buf, size_t n) {
             if (errno == EINTR) {
                 continue;
             }
-            return;
+            return -1;
         }
         p += w;
         n -= (size_t) w;
     }
+
+    return 0;
 }
 
 /* The monotonic instant `seconds` from now, immune to wall-clock jumps */
@@ -427,7 +434,7 @@ static void process_child_signals(void) {
  */
 static _Noreturn void process_child_fail(int errfd, int code) {
     int e = errno;
-    process_write(errfd, &e, sizeof(e));
+    (void) process_write_fd(errfd, &e, sizeof(e));
     _exit(code);
 }
 
@@ -529,9 +536,9 @@ static _Noreturn void process_child(
  * fork, and the child placed by `setup`, or nowhere where NULL (process_child)
  *
  * *pid is the child, *exec_fd the exec's pipe's read end, the wait's to read
- * and close (process_report): the exec closes the write end, or the child's failure
- * writes its errno there first. A refusal — the pipe, the fork — makes no child,
- * names `program` as its wait was handed it, and leaves both -1.
+ * and close (process_exec_errno): the exec closes the write end, or the child's
+ * failure writes its errno there first. A refusal — the pipe, the fork — makes
+ * no child, names `program` as its wait was handed it, and leaves both -1.
  */
 static error_t process_spawn(
     const char *program, char *const shell_argv[], char *const envp[],
@@ -574,24 +581,30 @@ static error_t process_spawn(
 }
 
 /**
- * A reaped child, reported into its result: the errno its exec's pipe holds,
- * where the child wrote one before its exit (process_child_fail), and its wait
- * status — the code it exited with, or the signal that ended it and 128 past
- * it. Every child's.
- *
- * Read once the child is reaped, so the read never waits: the pipe's write end
- * closed at the exec (FD_CLOEXEC) or at the child's exit, and the child forks
- * nothing before its exec — where a read before the reap would wait out a child
- * held before its exec, past any limit.
+ * The errno a child's exec failed with, read off the exec's pipe (process_spawn)
+ * to its end: 0 where the exec closed it. Every step that fails at the exec or
+ * before it sets errno, so a child that could not run writes none that is 0
+ * (process_child_fail). The read waits for the exec or the child's exit:
+ * process_run and the foreground read it once the child is reaped, the start
+ * before it answers. Every child's.
  */
-static void process_report(int errfd, int status, process_result_t *result) {
+static int process_exec_errno(int fd) {
     int exec_errno = 0;
     ssize_t got;
     do {
-        got = read(errfd, &exec_errno, sizeof(exec_errno));
+        got = read(fd, &exec_errno, sizeof(exec_errno));
     } while (got < 0 && errno == EINTR);
 
-    if (got == (ssize_t) sizeof(exec_errno)) {
+    return got == (ssize_t) sizeof(exec_errno) ? exec_errno : 0;
+}
+
+/**
+ * A reaped child, reported into its result: the errno its exec failed with, 0
+ * where it ran (process_exec_errno), and its wait status — the code it exited
+ * with, or the signal that ended it and 128 past it. Every child's.
+ */
+static void process_report(int exec_errno, int status, process_result_t *result) {
+    if (exec_errno != 0) {
         result->exec_failed = true;
         result->exec_errno = exec_errno;
     }
@@ -748,7 +761,7 @@ static error_t process_drain(
         if (spec->output_policy == PROCESS_OUTPUT_CAPTURE) {
             process_capture_add(capture, chunk, (size_t) n);
         } else {
-            process_write(STDOUT_FILENO, chunk, (size_t) n);
+            (void) process_write_fd(STDOUT_FILENO, chunk, (size_t) n);
         }
     }
 
@@ -903,7 +916,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * surface the real cause. */
     if (stdin_parent >= 0) {
         if (spec->stdin_content_len > 0) {
-            process_write(stdin_parent, spec->stdin_content, spec->stdin_content_len);
+            (void) process_write_fd(stdin_parent, spec->stdin_content, spec->stdin_content_len);
         }
         close(stdin_parent);
         stdin_parent = -1;
@@ -944,8 +957,12 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     }
     pid = -1;
 
-    /* The child reaped, reported (process_report) */
-    process_report(exec_fd, status, result);
+    /* The child reaped, reported (process_report): its exec's pipe read once it
+     * is reaped, so the read never waits — the write end closed at the exec or
+     * at the child's exit, and the child forks nothing before its exec — where
+     * a read before the reap would wait out a child held before its exec, past
+     * any limit */
+    process_report(process_exec_errno(exec_fd), status, result);
 
     /* A file's output, read once its child is reaped (process_read_file) */
     if (spec->output_policy == PROCESS_OUTPUT_FILE) {
@@ -1057,8 +1074,158 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
     (void) sigaction(SIGQUIT, &saved_quit, NULL);
 
     /* Reported as process_run reports its child, once reaped (process_report) */
-    if (!err) process_report(exec_fd, status, result);
+    if (!err) process_report(process_exec_errno(exec_fd), status, result);
     close(exec_fd);
+    return err;
+}
+
+/* A started child (process_t): its pid, the parent's ends of its two pipes, each
+ * close-on-exec (process_pipe), and its program as its caller named it, which
+ * each refusal names */
+struct process {
+    pid_t pid;
+    int in;                         /* its stdin's write end */
+    int out;                        /* its stdout's read end */
+    char program[];                 /* argv[0], as handed to the start */
+};
+
+error_t process_start(char *const argv[], char *const envp[], process_t **out) {
+    CHECK_NULL(argv);
+    CHECK_NULL(argv[0]);
+    CHECK_NULL(envp);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    /* The program, found before anything is opened (process_find): one no PATH
+     * entry holds is the start's refusal, as an exec that failed is, with no
+     * child made */
+    const char *program = argv[0];
+    char **shell_argv = process_find(argv);
+    if (!shell_argv) {
+        return error_errno(ENOENT, "Cannot run '%s'", program);
+    }
+
+    int stdin_pipe[2] = { -1, -1 };
+    int stdout_pipe[2] = { -1, -1 };
+    int exec_fd = -1;
+    pid_t pid = -1;
+    error_t err = NULL;
+
+    /* Its stdin and its stdout, each a pipe whose parent end is close-on-exec
+     * (process_pipe): a child spawned while this one stands never holds them,
+     * so its finish ends it */
+    err = process_pipe(stdin_pipe, program);
+    if (err) goto cleanup;
+
+    err = process_pipe(stdout_pipe, program);
+    if (err) goto cleanup;
+
+    /* The child placed on the pipes' far ends, its stderr dotta's own — what it
+     * says to a person reaches the person, as git leaves ssh's (lib/git/connect.c
+     * git_connect) — in dotta's working directory (process_spawn) */
+    process_setup_t setup = { .streams = { stdin_pipe[0], stdout_pipe[1], -1 } };
+    err = process_spawn(program, shell_argv, envp, &setup, &pid, &exec_fd);
+    if (err) goto cleanup;
+
+    /* Close the child's ends — what it reads, where it writes: the child holds
+     * its own of each, so a write to it once it is gone is EPIPE, and a read at
+     * its end of output is 0. */
+    close(stdin_pipe[0]);
+    stdin_pipe[0] = -1;
+    close(stdout_pipe[1]);
+    stdout_pipe[1] = -1;
+
+    /* The exec's pipe read to its end before the start answers, as git's
+     * start_command reads it: the exec closes it, or the child writes its errno
+     * and exits, so neither waits. A program that could not be run is the start's
+     * refusal, its child reaped. */
+    int exec_errno = process_exec_errno(exec_fd);
+    if (exec_errno != 0) {
+        int status = 0;
+        (void) process_reap(pid, NULL, &status);
+        err = error_errno(exec_errno, "Cannot run '%s'", program);
+        goto cleanup;
+    }
+
+    /* The started child, its ends handed to it, and its program's name copied
+     * for each refusal */
+    size_t size = strlen(program) + 1;
+    process_t *child = heap_alloc(sizeof(*child) + size);
+    child->pid = pid;
+    child->in = stdin_pipe[1];
+    child->out = stdout_pipe[0];
+    memcpy(child->program, program, size);
+    stdin_pipe[1] = -1;
+    stdout_pipe[0] = -1;
+    *out = child;
+
+cleanup:
+    if (stdin_pipe[0] >= 0) close(stdin_pipe[0]);
+    if (stdin_pipe[1] >= 0) close(stdin_pipe[1]);
+    if (stdout_pipe[0] >= 0) close(stdout_pipe[0]);
+    if (stdout_pipe[1] >= 0) close(stdout_pipe[1]);
+    if (exec_fd >= 0) close(exec_fd);
+    free(shell_argv);
+
+    return err;
+}
+
+error_t process_write(process_t *child, const void *data, size_t size) {
+    CHECK_NULL(child);
+    CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
+
+    if (process_write_fd(child->in, data, size) < 0) {
+        return error_errno(errno, "Failed to write to '%s'", child->program);
+    }
+
+    return NULL;
+}
+
+error_t process_read(process_t *child, void *data, size_t size, size_t *out_len) {
+    CHECK_NULL(child);
+    CHECK_NULL(data);
+    CHECK_NULL(out_len);
+    CHECK_ARG(size > 0, "a read of no bytes, which cannot tell the child's end");
+
+    *out_len = 0;
+
+    /* One read, whatever it gives: the bytes the child wrote, or 0 at its end */
+    ssize_t got;
+    do {
+        got = read(child->out, data, size);
+    } while (got < 0 && errno == EINTR);
+
+    if (got < 0) {
+        return error_errno(errno, "Failed to read the output of '%s'", child->program);
+    }
+
+    *out_len = (size_t) got;
+    return NULL;
+}
+
+error_t process_finish(process_t *child, process_result_t *result) {
+    CHECK_NULL(result);
+
+    *result = (process_result_t) { 0 };
+    if (!child) return NULL;
+
+    /* Its stdin closed, then its stdout: a child that reads its stdin to its
+     * end exits, and one still writing meets its reader gone (SIGPIPE) */
+    close(child->in);
+    close(child->out);
+
+    /* Reaped however long it takes: no limit, as git's finish_command waits. */
+    int status = 0;
+    error_t err = NULL;
+    if (process_reap(child->pid, NULL, &status) < 0) {
+        err = error_errno(errno, "Failed to wait for '%s'", child->program);
+    }
+
+    /* Reported as every child is, once reaped (process_report): its exec the
+     * start's to answer for, so no errno of its own */
+    if (!err) process_report(0, status, result);
+    free(child);
     return err;
 }
 

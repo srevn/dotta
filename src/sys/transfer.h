@@ -10,12 +10,12 @@
  * and nowhere else, refused at the second ask within one op, judged by the ops
  * it served and its verdict told the helper where an op reaches it, so a push
  * URL on another host is asked of the helper once, never handed the fetch host's
- * pair, and stored by the helper once its push lands; the op's progress — its
- * counts drawn as base/output's progress line while objects move, a push that
- * sends nothing drawing none, the frame taken down at the op's end; what the op
- * moved, answered there; the remote's words a push's side band carries, said by
- * the hooks' rule; and a ref the remote refused, the push's failure in the remote's
- * words.
+ * pair, and stored by the helper once the remote takes it — at the push's connect,
+ * before a hook may refuse the push; the op's progress — its counts drawn as
+ * base/output's progress line while objects move, a push that sends nothing drawing
+ * none, the frame taken down at the op's end; what the op moved, answered there;
+ * the remote's words a push's side band carries, said by the hooks' rule; and a
+ * ref the remote refused, the push's failure in the remote's words.
  *
  * Created by the session alone (sys/remote.h remote_open), which wraps each libgit2
  * network call it makes in transfer_op_begin and transfer_op_end, and freed by

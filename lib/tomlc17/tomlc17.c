@@ -318,6 +318,8 @@ struct scanner_state_t {
   const char *cur; // points into scanner_t::src[]
   int lineno;      // current line number
   const char *line_start;
+  int bracket_level;
+  int brace_level;
 };
 
 // A scan token
@@ -2918,60 +2920,16 @@ static int scan_nonstring_literal(scanner_t *sp, token_t *tok) {
   return SETERROR(sp->ebuf, lineno, "invalid value");
 }
 
-// Return true if Unicode codepoint is allowed in a TOML 1.1 bare key.
-// Ranges taken verbatim from the TOML 1.1 spec grammar for bare-key-char.
-static bool is_unicode_bare_key_char(uint32_t cp) {
-  if (cp == 0xB2 || cp == 0xB3 || cp == 0xB9)
-    return true;
-  if (0xBC <= cp && cp <= 0xBE)
-    return true;
-  if (0xC0 <= cp && cp <= 0xD6)
-    return true;
-  if (0xD8 <= cp && cp <= 0xF6)
-    return true;
-  if (0xF8 <= cp && cp <= 0x37D)
-    return true;
-  if (0x37F <= cp && cp <= 0x1FFF)
-    return true;
-  if (cp == 0x200C || cp == 0x200D)
-    return true;
-  if (0x203F <= cp && cp <= 0x2040)
-    return true;
-  if (0x2070 <= cp && cp <= 0x218F)
-    return true;
-  if (0x2460 <= cp && cp <= 0x24FF)
-    return true;
-  if (0x2C00 <= cp && cp <= 0x2FEF)
-    return true;
-  if (0x3001 <= cp && cp <= 0xD7FF)
-    return true;
-  if (0xF900 <= cp && cp <= 0xFDCF)
-    return true;
-  if (0xFDF0 <= cp && cp <= 0xFFFD)
-    return cp != 0xFEFF; // BOM: stripped when leading, an error anywhere else
-  if (0x10000 <= cp && cp <= 0xEFFFF)
-    return true;
-  return false;
-}
-
 // Scan a literal
 static int scan_literal(scanner_t *sp, token_t *tok) {
   *tok = mktoken(sp, TOK_LIT);
   const char *p = sp->cur;
-  while (p < sp->endp) {
-    if (isalnum((unsigned char)*p) || *p == '_' || *p == '-') {
-      p++;
-      continue;
-    }
-    if ((unsigned char)*p >= 0x80) {
-      uint32_t cp;
-      int n = utf8_to_ucs(p, sp->endp - p, &cp);
-      if (n > 0 && is_unicode_bare_key_char(cp)) {
-        p += n;
-        continue;
-      }
-    }
-    break;
+  // Bare keys are ASCII only: A-Z a-z 0-9 - _ (not isalnum(); it is
+  // locale-dependent).
+  while (p < sp->endp &&
+         (('A' <= *p && *p <= 'Z') || ('a' <= *p && *p <= 'z') ||
+          ('0' <= *p && *p <= '9') || *p == '_' || *p == '-')) {
+    p++;
   }
   tok->str.len = p - tok->str.ptr;
   sp->cur = p;
@@ -2985,6 +2943,8 @@ static scanner_state_t scan_mark(scanner_t *sp) {
   mark.cur = sp->cur;
   mark.lineno = sp->lineno;
   mark.line_start = sp->line_start;
+  mark.bracket_level = sp->bracket_level;
+  mark.brace_level = sp->brace_level;
   return mark;
 }
 
@@ -2994,6 +2954,8 @@ static void scan_restore(scanner_t *sp, scanner_state_t mark) {
   sp->cur = mark.cur;
   sp->lineno = mark.lineno;
   sp->line_start = mark.line_start;
+  sp->bracket_level = mark.bracket_level;
+  sp->brace_level = mark.brace_level;
 }
 
 // Return the next token
@@ -3126,6 +3088,9 @@ static int scan_value(scanner_t *sp, token_t *tok) {
  * Return #bytes consumed or -1 on failure.
  */
 static int utf8_to_ucs(const char *orig, int len, uint32_t *ret) {
+  if (len <= 0) {
+    return -1;
+  }
   const unsigned char *buf = (const unsigned char *)orig;
   unsigned i = *buf++;
   uint32_t v;
@@ -3134,8 +3099,6 @@ static int utf8_to_ucs(const char *orig, int len, uint32_t *ret) {
      0xxxxxxx
   */
   if (0 == (i >> 7)) {
-    if (len < 1)
-      return -1;
     v = i;
     return *ret = v, 1;
   }

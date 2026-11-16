@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <git2/errors.h>
+#include <git2/sys/errors.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -116,6 +117,16 @@ error_t error_git(int git_error_code, const char *fmt, ...) {
     snprintf(message + prose, total - prose + 1, ": %s", why);
 
     return error_node((struct error){ .code = ERR_GIT, .message = message });
+}
+
+int error_to_git(error_t err) {
+    if (!err) return 0;
+
+    /* One class for every failure: libgit2 reads none of a callback's, and
+     * error_git reads the sentence alone */
+    (void) git_error_set_str(GIT_ERROR_CALLBACK, err->line);
+
+    return GIT_ERROR;
 }
 
 error_code_t error_errno_code(int errno_val) {

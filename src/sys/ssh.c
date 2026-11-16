@@ -125,17 +125,6 @@ static error_t ssh_string(git_config *config, const char *key, const char **out)
 }
 
 /**
- * A connection's failure, handed to libgit2: its line in libgit2's slot, where
- * the op's caller reads the op's cause (base/error.h error_git), and libgit2's
- * code — what sys/process.c process_child_fail is to the exec's pipe, one layer up
- */
-static int ssh_fail(error_t err) {
-    (void) git_error_set_str(GIT_ERROR_SSH, error_line(err));
-
-    return GIT_ERROR;
-}
-
-/**
  * How a child that failed ended, as its error; NULL for one that exited 0
  *
  * The subject is ssh, the role, whatever program the person named: what went
@@ -238,7 +227,7 @@ done:
     git_config_free(config);
     arena_free(frame);
 
-    return err ? ssh_fail(err) : 0;
+    return error_to_git(err);
 }
 
 /**
@@ -259,7 +248,7 @@ static int ssh_finish(ssh_t *ssh, error_t cause) {
     if (!err) err = ssh_failure(&result);
     if (!err) err = cause;
 
-    return err ? ssh_fail(err) : 0;
+    return error_to_git(err);
 }
 
 /**

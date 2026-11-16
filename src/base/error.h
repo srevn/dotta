@@ -172,6 +172,23 @@ error_t error_git(int git_error_code, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
+ * Answer libgit2 with an outcome decided on dotta's side
+ *
+ * error_git's counterpart, for what libgit2 calls into — a transport, a callback
+ * — and hears a failure from as its own: the error's line set in libgit2's slot,
+ * where the failing call's caller reads the op's cause back (error_git), and
+ * libgit2's code for a failure. No error is libgit2's success, its slot left as
+ * it stands, as error_wrap wraps nothing for none: a call into dotta ends on
+ * this whichever way it went.
+ *
+ * Readers: sys/ssh.c ssh_start and ssh_finish, a connection's start and its end.
+ *
+ * @param err The outcome (NULL: none)
+ * @return 0 for none; GIT_ERROR for a failure, its line in libgit2's slot
+ */
+int error_to_git(error_t err);
+
+/**
  * The error code an errno names
  *
  * One mapping, for every site that turns a kernel refusal into an error a caller

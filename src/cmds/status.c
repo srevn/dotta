@@ -1536,8 +1536,8 @@ static status_remote_t status_remote(
         if (!err) err = remote_fetch(remote, profiles, NULL, NULL);
         output_clear_line(out);
 
-        /* Each profile against the session's heads, then the session left, its
-         * credential's verdict told (sys/remote.h remote_free) */
+        /* Each profile against the session's heads, then the session left
+         * (sys/remote.h remote_free) */
         if (!err) {
             for (size_t i = 0; i < profiles->count; i++) {
                 status_remote_row_t *row = &rows[i];

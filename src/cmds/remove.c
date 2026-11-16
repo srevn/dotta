@@ -1442,8 +1442,7 @@ static error_t remove_profile(
 cleanup:
     /* The profile is freed once its count is read; here only a refusal before
      * that frees it. The record phase ended its own transaction. The session,
-     * where one was met: its free commits the credential helper's verdict
-     * (sys/remote.h remote_free). */
+     * where one was met. */
     profile_free(profile);
     remote_free(remote);
 

@@ -1857,10 +1857,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
 cleanup:
     /* The handles the run holds: each merge's draft, whose free undoes nothing
-     * in the repository (core/profiles.h profile_draft_free), and the remote,
-     * whose free commits the credential helper's verdict (sys/remote.h
-     * remote_free). state is borrowed from the dispatcher, and sync opens no
-     * transaction and writes nothing; the rows are the command arena's. */
+     * in the repository (core/profiles.h profile_draft_free), and the remote.
+     * state is borrowed from the dispatcher, and sync opens no transaction and
+     * writes nothing; the rows are the command arena's. */
     for (size_t i = 0; i < rows.count; i++) {
         profile_draft_free(rows.entries[i].draft);
     }

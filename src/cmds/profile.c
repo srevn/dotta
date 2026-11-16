@@ -230,8 +230,7 @@ static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t 
     }
 
 cleanup:
-    /* The remote, where --remote met it: its free commits the credential helper's
-     * verdict (sys/remote.h remote_free) */
+    /* The remote, where --remote met it */
     remote_free(remote);
 
     return err;
@@ -440,8 +439,7 @@ static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t
     }
 
 cleanup:
-    /* The one handle the run holds: the remote, whose free commits the credential
-     * helper's verdict (sys/remote.h remote_free) */
+    /* The one handle the run holds: the remote */
     remote_free(remote);
 
     return err;

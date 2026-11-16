@@ -627,8 +627,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
 
 cleanup:
-    /* The remote first, which borrows the store: its free commits the credential
-     * helper's verdict (sys/remote.h remote_free) */
+    /* The remote first, which borrows the store */
     remote_free(remote);
     if (repo) {
         gitops_close_repository(repo);

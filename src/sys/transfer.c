@@ -29,7 +29,8 @@
  *
  * A pair is born ACQUIRED, of the helper's fill, and judged by the ops it served.
  * Terminal states (VALIDATED, REJECTED) are absorbing: once reached, further
- * ops cannot change the verdict that will be told at transfer_context_free().
+ * ops cannot change the verdict, told the helper by the op that reached it
+ * (transfer_op_end).
  */
 typedef enum {
     CRED_STATE_ACQUIRED,          /* Helper filled it; outcome pending. */
@@ -67,8 +68,9 @@ typedef struct transfer_pair {
  *
  * Per-op scratch is reset by transfer_op_begin; transfer_op_end answers its wire,
  * says the remote's words it kept, and judges the pair it offered on the op's
- * return code. A key is filled at most once a session, by the first helper fill
- * that answers it, and its pair replayed to the key's later asks.
+ * return code, telling the helper the verdict it reaches. A key is filled at
+ * most once a session, by the first helper fill that answers it, and its pair
+ * replayed to the key's later asks.
  */
 struct transfer_context_s {
     output_t *output;               /* Borrowed. */
@@ -101,45 +103,15 @@ transfer_context_t *transfer_context_create(output_t *output) {
 }
 
 /**
- * Commit a pair's verdict to the helper.
- *
- * Approve on VALIDATED (a successful op confirmed it), reject on REJECTED (an
- * auth-failed op invalidated it), against the key it was filled for. A pair no
- * op judged — every op it served failed some other way — is told nothing.
- *
- * Helper IPC errors (exec failure, timeout) are surfaced as warnings so users
- * have a breadcrumb when the helper subprocess misbehaves; "helper has nothing
- * to say about approve/reject" (a non-zero exit from a read-only helper) is
- * intentionally not surfaced.
- */
-static void transfer_commit_credential_decision(
-    transfer_context_t *xfer, const transfer_pair_t *pair
-) {
-    if (pair->state == CRED_STATE_ACQUIRED) return;
-
-    error_t err = pair->state == CRED_STATE_VALIDATED
-        ? credential_helper_approve(&pair->url, pair->username, pair->password)
-        : credential_helper_reject(&pair->url, pair->username, pair->password);
-
-    /* In the refusal's own words: they name the helper ('git credential approve',
-     * or reject), so nothing leads them */
-    if (err) {
-        output_warning(xfer->output, OUTPUT_NORMAL, "%s", error_line(err));
-    }
-}
-
-/**
  * Free transfer context
  */
 void transfer_context_free(transfer_context_t *xfer) {
     if (!xfer) return;
 
-    /* Each pair told its verdict, in the order filled, then let go, its secrets
-     * wiped */
+    /* Each pair let go, its secrets wiped: its verdict, where an op reached one,
+     * was told there (transfer_op_end) */
     for (transfer_pair_t *pair = xfer->pairs, *next; pair; pair = next) {
         next = pair->next;
-        transfer_commit_credential_decision(xfer, pair);
-
         secure_free_string(pair->username);
         secure_free_string(pair->password);
         credential_url_deinit(&pair->url);
@@ -218,8 +190,8 @@ void transfer_op_begin(transfer_context_t *xfer) {
 
 /**
  * End an op — draw again the line its connection put aside, take its frame down,
- * say the remote's words, advance the credential state machine, and answer what
- * it moved.
+ * say the remote's words, judge the pair it offered and tell the helper, and
+ * answer what it moved.
  */
 transfer_wire_t transfer_op_end(transfer_context_t *xfer, int rc) {
     CHECK_NULL(xfer);
@@ -261,24 +233,39 @@ transfer_wire_t transfer_op_end(transfer_context_t *xfer, int rc) {
     }
 
     /* The helper's pair this op offered, judged by it — where no verdict was
-     * reached yet: an op that offered none (the anonymous pair, no ask at all)
-     * judges nothing, and the terminal states (VALIDATED, REJECTED) absorb any
-     * outcome without transitioning. An op that succeeded validates it. GIT_EAUTH,
-     * libgit2's auth-failure code, rejects it definitively: the credential callback
-     * returns it when it gives up (transfer_credentials_callback), and libgit2
-     * where a remote asks for credentials no callback could give (transports/http.c
-     * handle_auth). Any other failure leaves the pair pending, for a later op
-     * to validate or reject: a network hiccup, a run that exhausts libgit2's
-     * own replay budget — GIT_ERROR, "the exact cause is unclear" in its words
+     * reached yet — and the helper told the verdict here, against the key the
+     * pair was filled for, as git tells its helpers at the request that reaches
+     * one (lib/git/http.c handle_curl_result): a run that ends past the op has
+     * stored what served it. An op that offered none (the anonymous pair, no
+     * ask at all) judges nothing, and the terminal states (VALIDATED, REJECTED)
+     * absorb any outcome without transitioning, so each is told once. An op that
+     * succeeded validates it: approve. GIT_EAUTH, libgit2's auth-failure code,
+     * rejects it definitively: reject. The credential callback returns it when
+     * it gives up (transfer_credentials_callback), and libgit2 where a remote
+     * asks for credentials no callback could give (transports/http.c handle_auth).
+     * Any other failure leaves the pair pending and untold, for a later op to
+     * validate or reject: a network hiccup, a run that exhausts libgit2's own
+     * replay budget — GIT_ERROR, "the exact cause is unclear" in its words
      * (transports/http.c http_stream_read) — and the auth failures some TLS paths
-     * surface as other errors. */
+     * surface as other errors. A helper that could not be told is warned of, in
+     * the refusal's own words, which name it ('git credential approve', or reject);
+     * one that has nothing to say — a read-only helper's non-zero exit — is not. */
     transfer_pair_t *pair = xfer->op.offered;
     if (pair && pair->state == CRED_STATE_ACQUIRED) {
+        error_t err = NULL;
         if (rc == 0) {
             pair->state = CRED_STATE_VALIDATED;
+            err = credential_helper_approve(
+                &pair->url, pair->username, pair->password
+            );
         } else if (rc == GIT_EAUTH) {
             pair->state = CRED_STATE_REJECTED;
+            err = credential_helper_reject(
+                &pair->url, pair->username, pair->password
+            );
         }
+
+        if (err) output_warning(xfer->output, OUTPUT_NORMAL, "%s", error_line(err));
     }
 
     /* What the op moved, where it succeeded: one that failed moved nothing a

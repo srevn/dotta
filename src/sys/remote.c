@@ -659,8 +659,8 @@ void remote_free(remote_t *remote) {
 
     /* What the arena does not hold first, read off the handle while it stands:
      * the remote, its listing's connection closed where it stands (remote.c
-     * git_remote_free), then the transfer — each credential's verdict, told the
-     * helper; then the arena, and the handle with it and every name it lent */
+     * git_remote_free), then the transfer; then the arena, and the handle with
+     * it and every name it lent */
     git_remote_free(remote->git);
     transfer_context_free(remote->xfer);
     arena_free(remote->arena);

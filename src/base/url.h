@@ -8,8 +8,11 @@
  * which protocol reaches it, asked at every contact and costing nothing
  * (url_protocol); and what ssh is handed for one SSH reaches — the host, the
  * port and the path, split and decoded as git splits and decodes them (url_ssh;
- * connect.c host_end, get_host_and_port, get_port). Every reading decodes a URL's
- * escapes one way, git's (url_decode; url.c url_decode_mem).
+ * connect.c host_end, get_host_and_port, get_port). A third is asked of a
+ * configuration section a URL names — whether it applies to another, the reading
+ * git makes of credential.<url>.* and http.<url>.* (url_normalize, url_match;
+ * urlmatch.c). Every reading decodes a URL's escapes one way, git's (url_decode;
+ * url.c url_decode_mem).
  *
  * The protocol is git's name for it: the key of git's policy
  * (protocol.<name>.allow, transport.c is_transport_allowed) and the word its
@@ -121,5 +124,72 @@ typedef struct {
  * @return Error or NULL on success
  */
 error_t url_ssh(const char *url, arena_t *arena, url_ssh_t *out);
+
+/**
+ * A URL as git normalizes one to match a configuration section against it
+ * (lib/git/urlmatch.c url_normalize_1); every part the arena's
+ */
+typedef struct {
+    const char *scheme;    /* Lowercased */
+    const char *user;      /* The userinfo to its first ':'; NULL where it names none, "" the empty one */
+    const char *host;      /* Lowercased; "" where a file: URL names none */
+    const char *port;      /* Its leading zeros off; NULL where it names none, or its scheme's own */
+    const char *path;      /* From its '/', its dot segments resolved, then all that follows it */
+} url_normal_t;
+
+/**
+ * Normalize a URL as git normalizes one to match a configuration section against
+ * it (lib/git/urlmatch.c url_normalize_1)
+ *
+ * The scheme: letters, digits and "+.-", opening with a letter, then "://";
+ * lowercased. The userinfo, where an '@' stands before the path, and the user
+ * its bytes to their first ':', a ':' escaped being none. The host, which a file:
+ * URL alone may leave unnamed: letters, digits, ".-_", an IPv6 address's "[:]"
+ * and a section's wildcard '*'; lowercased. The port, past the last ':' outside
+ * the brackets: its leading zeros off, none where it is empty or its scheme's
+ * own (http's 80, https's 443), else a number from 1 to 65535 — and none at all
+ * on a file: URL that names no host. The path from its '/', which it gains where
+ * it has none: a "." taken out, and a ".." with the segment before it; then all
+ * that follows it, a query and a fragment.
+ *
+ * The userinfo's, the path's and the rest's escapes are normalized: one that
+ * need not stand, written as its byte; a byte that must stand escaped, as its
+ * escape, in upper-case hex; a delimiter, as it was written, escaped or not.
+ *
+ * Not a URL git normalizes, false, and *out untouched: a scheme not so spelled,
+ * no host where the scheme is not file, a byte no host holds, a port that is no
+ * number from 1 to 65535 or that a file: URL naming no host names, a '%' that
+ * is no escape, a ".." with no segment before it. Its reader reads such a section
+ * otherwise, or not at all.
+ *
+ * '*' is a host's byte here for a section's sake (url_match), where git refuses
+ * one in the URL a section is matched against (urlmatch.c url_normalize, beside
+ * url_normalize_pattern): a URL formatted with every such byte escaped holds
+ * none bare, and a reader whose URL is a person's spelling re-reads this.
+ *
+ * @param url The URL (must not be NULL)
+ * @param arena Arena the parts live in (must not be NULL)
+ * @param out The parts (must not be NULL)
+ * @return Whether git normalizes it
+ */
+bool url_normalize(const char *url, arena_t *arena, url_normal_t *out);
+
+/**
+ * Whether a configuration section's URL applies to a URL, both normalized
+ * (lib/git/urlmatch.c match_urls)
+ *
+ * The same scheme and the same port; the section's user, where it names one,
+ * the URL's own; the host component by component between its dots, a section's
+ * "*" any one, neither naming one the other lacks — a trailing dot names none;
+ * and the section's path, less a '/' it ends on, the URL's own or a prefix of
+ * it ending where a segment does. Whether it applies, never how closely: the
+ * closest section for a key of one value is git's question of its http.<url>.*
+ * (urlmatch.c cmp_matches), which no reader here asks.
+ *
+ * @param url The URL (must not be NULL)
+ * @param section The section's URL (must not be NULL)
+ * @return Whether the section applies to the URL
+ */
+bool url_match(const url_normal_t *url, const url_normal_t *section);
 
 #endif /* DOTTA_URL_H */

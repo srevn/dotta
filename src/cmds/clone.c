@@ -23,7 +23,6 @@
 #include <config.h>
 #include <git2.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "base/args.h"
 #include "base/array.h"
@@ -331,13 +330,17 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     err = repo_create_target(config, ctx->arena, opts->path, &local_path, &elsewhere);
     if (err) goto cleanup;
 
-    /* origin's URL, as every later command reads it: one with no ':' is a path
-     * to libgit2 (lib/libgit2/src/libgit2/transport.c transport_find_fn), read
-     * against the working directory of whichever run reads it, which dotta never
-     * moves — so it is stored absolute, as git's clone stores a local path
-     * (lib/git/builtin/clone.c cmd_clone, absolute_pathdup) */
+    /* origin's URL, as every later command reads it: a directory standing at
+     * the argument is a path, whatever ':' it holds, as git's clone asks the
+     * disk before it reads a URL (lib/git/builtin/clone.c cmd_clone, get_repo_path)
+     * — read against the working directory of whichever run reads it, which dotta
+     * never moves, so it is stored absolute, as git's clone stores it
+     * (absolute_pathdup). Any other argument is stored as typed, read as git
+     * reads a URL at each contact (sys/transfer.h transfer_transport_callback):
+     * a relative path standing nowhere fails this clone's own contact, which
+     * the rollback undoes, so none is ever stored */
     const char *url = opts->url;
-    if (!strchr(url, ':')) {
+    if (fs_is_directory(url)) {
         err = fs_make_absolute(opts->url, ctx->arena, &url);
         if (err) goto cleanup;
     }

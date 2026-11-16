@@ -878,9 +878,10 @@ const char *fs_tmpdir(void);
  * Readers: the store's directory, the one reading its two sources share so that
  * the two can be compared — the configured one, settled at load (utils/config.c
  * config_load), and a create-style command's positional (utils/repo.c
- * repo_create_target); the hooks' directory beside it; and the configuration's
- * own file, settled before the load reads it, so a child of the run handed it
- * reads the same file from any directory (utils/config.h config_child_env). A
+ * repo_create_target); the hooks' directory beside it; the configuration's own
+ * file, settled before the load reads it, so a child of the run handed it reads
+ * the same file from any directory (utils/config.h config_child_env); and a clone's
+ * remote that is a path, stored for every later run (cmds/clone.c cmd_clone). A
  * CLI argument that names a key goes to the argument's reading instead
  * (infra/input.h), which spells the working directory for a key before it joins
  * and folds by the string alone.

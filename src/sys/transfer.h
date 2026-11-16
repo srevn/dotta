@@ -2,7 +2,8 @@
  * transfer.h - What libgit2 calls back into while one network op runs
  *
  * libgit2 hands every callback of an op one pointer (git_remote_callbacks'
- * payload), so what they share is one context, one a session: the credentials
+ * payload), so what they share is one context, one a session: which transport a
+ * connection takes, read off its handle's URL as git reads one; the credentials
  * the helper fills, each pair kept under the key git keeps it by — the protocol
  * and host of the URL that asked, and the user where that URL names one
  * (lib/git/credential.c credential_match) — replayed where its key asks again
@@ -133,11 +134,12 @@ void transfer_wire_phrase(
 /**
  * Wire transfer context into a libgit2 remote_callbacks struct.
  *
- * Installs the credential callback (always), the progress callback matching
- * `direction`, and for a push the per-ref status (transfer_push_status_callback),
- * without which a ref the remote refused reads as pushed, and the side band
- * (transfer_push_sideband_callback), the remote's words. A fetch's side band is
- * left uninstalled: it carries the server's packing progress alone.
+ * Installs the transport callback and the credential callback (always), the
+ * progress callback matching `direction`, and for a push the per-ref status
+ * (transfer_push_status_callback), without which a ref the remote refused reads
+ * as pushed, and the side band (transfer_push_sideband_callback), the remote's
+ * words. A fetch's side band is left uninstalled: it carries the server's packing
+ * progress alone.
  *
  * Readers: sys/remote.c remote_open (the connect), remote_fetch (the download)
  * and remote_push (the push's connect and its upload).
@@ -155,6 +157,27 @@ void transfer_configure_callbacks(
     transfer_context_t *xfer,
     git_direction direction
 );
+
+/**
+ * libgit2 transport callback (payload = transfer_context_t *).
+ *
+ * Which transport a connection takes, read off its handle's URL as git reads
+ * one (base/url.h url_protocol): the handle's URL is its connection's, the open's
+ * its url and a push's the push URL its own handle was given (sys/remote.h). A
+ * URL git reads no protocol of — a remote helper's, rsync:, a "://" no scheme
+ * stands before — is refused before any contact, "unsupported URL protocol
+ * '<name>'", naming the bytes before its first ':'. A path or file:// is libgit2's
+ * local transport, named: a path is a path in every build, whatever ':' it holds,
+ * and one where no repository stands is that transport's to say, naming it. ssh,
+ * git, http and https are left to libgit2's own routing, which reaches the protocol
+ * git's reading names.
+ *
+ * Installed by transfer_configure_callbacks. Not intended for direct use.
+ *
+ * @return 0, a transport named or left to libgit2; GIT_ERROR for a refusal, its
+ *         sentence in libgit2's slot
+ */
+int transfer_transport_callback(git_transport **out, git_remote *owner, void *payload);
 
 /**
  * libgit2 credential callback (payload = transfer_context_t *).

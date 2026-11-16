@@ -11,12 +11,15 @@
 
 #include <git2/errors.h>
 #include <git2/sys/errors.h>
+#include <git2/sys/transport.h>
 
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/output.h"
 #include "base/secure.h"
+#include "base/string.h"
+#include "base/url.h"
 #include "sys/credentials.h"
 
 /**
@@ -306,6 +309,7 @@ void transfer_configure_callbacks(
     CHECK_NULL(cb);
     CHECK_NULL(xfer);
 
+    cb->transport = transfer_transport_callback;
     cb->credentials = transfer_credentials_callback;
     cb->payload = xfer;
 
@@ -316,6 +320,47 @@ void transfer_configure_callbacks(
     } else {
         cb->transfer_progress = transfer_fetch_progress_callback;
     }
+}
+
+/**
+ * libgit2 transport callback: which transport a connection takes
+ */
+int transfer_transport_callback(git_transport **out, git_remote *owner, void *payload) {
+    (void) payload;
+
+    /* The protocol git reads off the handle's URL, which is its connection's:
+     * libgit2 resolves the connect's URL and hands the callback the handle alone
+     * (lib/libgit2/src/libgit2/remote.c git_remote_connect_ext), and each handle
+     * sys/remote connects has one URL — a remote with none fails the open's connect
+     * before it asks (git_remote__urlfordirection) */
+    const char *url = git_remote_url(owner);
+    const char *protocol = url_protocol(url);
+
+    /* None: refused before any contact, where libgit2's routing would hand a
+     * scheme it matches in any case to its own transport, and any other URL holding
+     * a ':' to whatever answers ssh:// (transport.c transport_find_fn). Said in
+     * libgit2's slot, naming what the URL spells — the bytes before its first
+     * ':', a helper's name, a scheme or rsync, as git names the helper or the
+     * protocol it cannot run — and never what follows, where a URL's userinfo
+     * stands; where an scp form's ':' comes before a "://", git names all before
+     * the "://", 'x:/a' of x:/a://b (connect.c parse_connect_url) */
+    if (!protocol) {
+        git_error_set(
+            GIT_ERROR_NET, "unsupported URL protocol '%.*s'",
+            (int) strcspn(url, ":"), url
+        );
+        return GIT_ERROR;
+    }
+
+    /* A path or file://, named: libgit2's routing reads a path only where a
+     * directory stands — and, built with an SSH, only where no ':' stands — and
+     * otherwise names no transport, where the local transport names the path it
+     * cannot open (transports/local.c local_connect) */
+    if (str_equal(protocol, "file")) return git_transport_local(out, owner, NULL);
+
+    /* ssh, git, http and https: libgit2's own routing, which reaches the protocol
+     * git's reading names — a scheme by its prefix, the scp form by its ':' */
+    return 0;
 }
 
 /**

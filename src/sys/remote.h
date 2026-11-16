@@ -39,13 +39,10 @@
  * (lib/libgit2/src/libgit2/remote.c git_remote_dup), whose URL is the push URL
  * alone, as the lookup rewrote it (git_remote_lookup) — remote.<name>.pushurl
  * under insteadOf, else the url under a pushInsteadOf that matches it, else the
- * url. Its transport is then the one libgit2 routes that URL to, as it routes
- * the open's (transport.c transport_find_fn), and a path remote writes the
- * repository the push URL names (transports/local.c local_push reads the handle's
- * URL). Routed so, a path holding ':' is dialled over SSH, file:// its way around,
- * and a path push URL where no directory stands reads "unsupported URL protocol",
- * naming no path, where the open says its own URL's missing directory
- * (remote_open).
+ * url. Its transport is read off that URL as the open's is off its own, as git
+ * reads a URL (sys/transfer.h transfer_transport_callback), and a path remote
+ * writes the repository the push URL names (transports/local.c local_push reads
+ * the handle's URL).
  *
  * Connected for receive-pack and listed, the push is sent only where that listing
  * names what the writer read, the commit itself and never a ref read again,
@@ -139,12 +136,10 @@ error_t remote_default(git_repository *repo, arena_t *arena, const char **out);
  *
  * Every failure is the session's whole, nothing kept: a name Git refuses or no
  * remote by it, a remote with no URL, the connect and the listing, each "Cannot
- * reach remote '<name>'" over libgit2's cause, read before anything closes —
- * save a URL libgit2 reads as a path where no directory stands, whose cause is
- * "no directory at '<url>'" (ERR_NOT_FOUND), where libgit2's names a protocol.
- * The branch names the listing held are kept once it is copied
- * (remote_last_branches), and a keep that fails is no failure of the open's:
- * completion alone reads them, and the next open keeps them again.
+ * reach remote '<name>'" over libgit2's cause, read before anything closes. The
+ * branch names the listing held are kept once it is copied (remote_last_branches),
+ * and a keep that fails is no failure of the open's: completion alone reads them,
+ * and the next open keeps them again.
  *
  * Readers: cmds/sync.c cmd_sync; cmds/status.c status_remote; cmds/profile.c
  * profile_fetch and profile_list; cmds/clone.c cmd_clone; cmds/remove.c

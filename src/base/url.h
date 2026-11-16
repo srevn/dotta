@@ -41,6 +41,9 @@
  * '/' before its first, is a path, and any other is ssh's. Nothing is allocated
  * and nothing refused: a URL no transport here reaches is its reader's to refuse.
  *
+ * Reader: sys/transfer.c transfer_transport_callback, which transport a connection
+ * takes.
+ *
  * @param url The URL (must not be NULL)
  * @return The name, static; NULL where git hands the URL to a helper or refuses it
  */

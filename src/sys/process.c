@@ -26,6 +26,10 @@
  * process_start spawns a child placed on two pipes, reads the exec's pipe before
  * it answers (process_exec_errno), and hands its caller the pipes' other ends
  * (process_t); process_finish closes them and reaps it with no limit.
+ *
+ * process_exchange spawns a child placed on a pipe or dotta's own stdin and on
+ * a pipe or /dev/null, reads the exec's pipe before it writes, writes the child
+ * its request, reads its answer into a capture and reaps it with no limit.
  */
 
 #include "sys/process.h"
@@ -50,6 +54,11 @@
 #include "base/secure.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
+
+/* dotta's own environment, handed whole to a child that runs in it
+ * (process_foreground, process_exchange): declared here, since no header this
+ * build reads declares it — POSIX leaves it to the program */
+extern char **environ;
 
 /* Initial capture buffer size; doubles on demand up to the bound
  * (PROCESS_CAPTURE_MAX, and its NUL). */
@@ -94,9 +103,9 @@
  * Write all `n` bytes of `buf` to `fd`, retrying on partial writes and EINTR,
  * until done or refused: 0, or -1 with errno. A started child's refusal is its
  * write's (process_write); every other caller's costs the bytes alone: a payload
- * whose child is gone, a copy whose reader went away (EPIPE, SIGPIPE ignored:
- * the header), a child's errno, whose exit code (126, 127) then reports the failure
- * alone.
+ * or a request whose child is gone, a copy whose reader went away (EPIPE, SIGPIPE
+ * ignored: the header), a child's errno, whose exit code (126, 127) then reports
+ * the failure alone.
  */
 static int process_write_fd(int fd, const void *buf, size_t n) {
     const char *p = buf;
@@ -586,7 +595,7 @@ static error_t process_spawn(
  * before it sets errno, so a child that could not run writes none that is 0
  * (process_child_fail). The read waits for the exec or the child's exit:
  * process_run and the foreground read it once the child is reaped, the start
- * before it answers. Every child's.
+ * before it answers, the exchange before it writes. Every child's.
  */
 static int process_exec_errno(int fd) {
     int exec_errno = 0;
@@ -1010,8 +1019,6 @@ void process_result_deinit(process_result_t *result) {
 }
 
 error_t process_foreground(char *const argv[], process_result_t *result) {
-    extern char **environ;
-
     CHECK_NULL(argv);
     CHECK_NULL(argv[0]);
     CHECK_NULL(result);
@@ -1226,6 +1233,155 @@ error_t process_finish(process_t *child, process_result_t *result) {
      * start's to answer for, so no errno of its own */
     if (!err) process_report(0, status, result);
     free(child);
+    return err;
+}
+
+error_t process_exchange(
+    char *const argv[], const void *request, size_t size, process_result_t *result
+) {
+    CHECK_NULL(argv);
+    CHECK_NULL(argv[0]);
+    CHECK_ARG(request != NULL || size == 0, "a request's size with no request");
+
+    if (result) *result = (process_result_t) { 0 };
+
+    /* The program, found before anything is opened (process_find): one no PATH
+     * entry holds is the exchange's refusal, as the start's is, with no child
+     * made */
+    const char *program = argv[0];
+    char **shell_argv = process_find(argv);
+    if (!shell_argv) {
+        return error_errno(ENOENT, "Cannot run '%s'", program);
+    }
+
+    int stdin_pipe[2] = { -1, -1 };
+    int stdout_pipe[2] = { -1, -1 };
+    int exec_fd = -1;
+    pid_t pid = -1;
+    process_capture_t capture = { 0 };
+    error_t err = NULL;
+
+    /* Its stdin a pipe its request is written into, or dotta's own where it is
+     * handed none, as git leaves an askpass's (lib/git/prompt.c do_askpass) */
+    if (request) {
+        err = process_pipe(stdin_pipe, program);
+        if (err) goto cleanup;
+    }
+
+    /* Its stdout a pipe its answer is read from, or /dev/null in the pipe's place
+     * where no answer is wanted — git's no_stdout for a helper's store and erase
+     * (lib/git/credential.c run_credential_helper) — opened here, where its failure
+     * is a refusal: the child could only keep dotta's stdout in its place */
+    if (result) {
+        err = process_pipe(stdout_pipe, program);
+        if (err) goto cleanup;
+    } else {
+        stdout_pipe[1] = open("/dev/null", O_WRONLY | O_CLOEXEC);
+        if (stdout_pipe[1] < 0) {
+            err = error_errno(errno, "Failed to open /dev/null for '%s'", program);
+            goto cleanup;
+        }
+    }
+
+    /* The child placed on what it reads and where it writes, its stderr dotta's
+     * own — what it says to a person reaches the person, as git leaves a helper's
+     * and an askpass's — in dotta's own environment, as git hands either its
+     * own, and in dotta's working directory (process_spawn) */
+    process_setup_t setup = { .streams = { stdin_pipe[0], stdout_pipe[1], -1 } };
+    err = process_spawn(program, shell_argv, environ, &setup, &pid, &exec_fd);
+    if (err) goto cleanup;
+
+    /* Close the child's ends — what it reads, where it writes: the child holds
+     * its own of each, so a write to it once it is gone is EPIPE, and a read at
+     * its end of output is 0. */
+    if (stdin_pipe[0] >= 0) close(stdin_pipe[0]);
+    stdin_pipe[0] = -1;
+    close(stdout_pipe[1]);
+    stdout_pipe[1] = -1;
+
+    /* The exec's pipe read before the child is written anything, as git's
+     * start_command reads it: the exec closes it, or the child writes its errno
+     * and exits, so neither waits. A program that could not be run is the
+     * exchange's refusal, its child reaped and its request never written. */
+    int exec_errno = process_exec_errno(exec_fd);
+    if (exec_errno != 0) {
+        int status = 0;
+        (void) process_reap(pid, NULL, &status);
+        err = error_errno(exec_errno, "Cannot run '%s'", program);
+        goto cleanup;
+    }
+
+    /* The request, whole, then its end, so a child that reads it to its end
+     * answers. One gone before it read it is no refusal (EPIPE, SIGPIPE ignored:
+     * the header): what it answered is read all the same, as git ignores the
+     * pipe its helper broke (lib/git/credential.c run_credential_helper). */
+    if (request) {
+        (void) process_write_fd(stdin_pipe[1], request, size);
+        close(stdin_pipe[1]);
+        stdin_pipe[1] = -1;
+    }
+
+    /* The answer, where one is wanted: read to its end, a signal's interruption
+     * asked again, and kept to the bound, the rest counted (process_capture_add)
+     * — so a task the child left holding its stdout holds the read until that
+     * task ends */
+    if (result) {
+        process_capture_init(&capture);
+
+        char chunk[PROCESS_READ_CHUNK];
+        for (;;) {
+            ssize_t n = read(stdout_pipe[0], chunk, sizeof(chunk));
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                err = error_errno(errno, "Failed to read the output of '%s'", program);
+                break;
+            }
+            if (n == 0) break;  /* the child's end of output */
+
+            process_capture_add(&capture, chunk, (size_t) n);
+        }
+
+        /* The chunk last held the tail of the answer: wiped as the drain's is */
+        secure_wipe(chunk, sizeof(chunk));
+
+        /* Closed before the wait, so a child still writing past a read that failed
+         * meets its reader gone (SIGPIPE) and ends */
+        close(stdout_pipe[0]);
+        stdout_pipe[0] = -1;
+    }
+
+    /* Reaped with no limit, as git's finish_command waits — after a read that
+     * failed too, as git finishes a helper whose answer it could not read; that
+     * read's refusal outranks the wait's */
+    int status = 0;
+    if (process_reap(pid, NULL, &status) < 0 && !err) {
+        err = error_errno(errno, "Failed to wait for '%s'", program);
+    }
+    if (err) goto cleanup;
+
+    /* How it ended and its answer, where wanted: reported as every child is,
+     * once reaped (process_report) — its exec the exchange's to answer for, so
+     * no errno of its own — and the capture handed over, wiped at the result's
+     * deinit (process_result_deinit) */
+    if (result) {
+        process_report(0, status, result);
+        result->output = capture.bytes;
+        result->output_len = capture.len;
+        result->output_dropped = capture.dropped;
+        capture.bytes = NULL;
+    }
+
+cleanup:
+    if (stdin_pipe[0] >= 0) close(stdin_pipe[0]);
+    if (stdin_pipe[1] >= 0) close(stdin_pipe[1]);
+    if (stdout_pipe[0] >= 0) close(stdout_pipe[0]);
+    if (stdout_pipe[1] >= 0) close(stdout_pipe[1]);
+    if (exec_fd >= 0) close(exec_fd);
+
+    /* The capture, where ownership was not transferred (process_capture_deinit) */
+    process_capture_deinit(&capture);
+    free(shell_argv);
+
     return err;
 }
 

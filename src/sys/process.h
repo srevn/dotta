@@ -22,6 +22,11 @@
  *                       with no limit, as git waits for its ssh
  *                       (lib/git/run-command.c finish_command): ssh, carrying
  *                       libgit2's protocol on its stdin and stdout (sys/ssh)
+ *   process_exchange    the same for one exchange: its request written whole
+ *                       where there is one, then its answer read to its end where
+ *                       one is wanted, as git runs a credential helper and an
+ *                       askpass (lib/git/credential.c run_credential_helper,
+ *                       prompt.c do_askpass)
  *
  * A command line a person configured — an editor, an ssh command — becomes an
  * argv by git's rule, which its caller applies (process_shell): never a wait,
@@ -32,17 +37,23 @@
  *   that passed: the drain's poll() and the reap's waits both end by it — no
  *   SIGALRM mutation, no global signal-handler state, no prev_alarm restoration
  *   dance.
- * - Caller chooses the load-bearing knobs (stdin policy, output policy, working
- *   directory, time limit); the primitive does not homogenize behavior that callers
- *   genuinely need to differ on.
+ * - Caller chooses the load-bearing knobs (process_run's stdin policy, output
+ *   policy, working directory and time limit; an exchange's request and result);
+ *   the primitive does not homogenize behavior that callers genuinely need to
+ *   differ on.
+ * - A child's stderr is placed by its wait: process_run's with its stdout, wherever
+ *   its output policy sends it; dotta's own where the child's stdout is a program's
+ *   to read or nobody's (process_start, process_exchange), so what it says to a
+ *   person reaches the person, as git leaves ssh's and a helper's.
  * - What dotta wrote lands ahead of anything the child writes: every stdio stream
  *   is flushed before the fork, as git flushes before every child
  *   (lib/git/run-command.c start_command).
  * - Child reports execve() failure to the parent over a CLOEXEC self-pipe carrying
  *   errno, so the parent can distinguish "exec failed" from "the script exited
  *   127" — letting callers report the specific reason (a missing interpreter's
- *   ENOENT) instead of a misleading proxy. The start reads it before it answers,
- *   so a started child is a program that runs.
+ *   ENOENT) instead of a misleading proxy. The start reads it before it answers
+ *   and the exchange before it writes, so a started child is a program that runs
+ *   and a request is never written to one that could not.
  * - A file the kernel will not execute (ENOEXEC: a script with no #! line) is
  *   read by /bin/sh, its path the shell's first argument — git's retry for every
  *   command it runs (lib/git/run-command.c prepare_cmd, start_command), made by
@@ -56,16 +67,17 @@
  * - The standard descriptors: the host program has 0, 1 and 2 open from its start
  *   (main.c main, its first lines), so no descriptor the primitive opens sits
  *   at one of them for a child's dup2 to overwrite.
- * - Every other descriptor: a child process_run or process_start places, its
- *   streams where its wait says, has every descriptor past them closed before
- *   its exec, so no handle of libgit2's or SQLite's reaches a hook or a started
- *   program, and a child spawned while a started one stands never holds that
- *   one's stdin; the foreground's keeps every descriptor dotta holds, so one
- *   the shell handed dotta reaches the program (`GIT_TRACE=3 dotta git … 3>log`).
+ * - Every other descriptor: a child process_run, process_start or process_exchange
+ *   places, its streams where its wait says, has every descriptor past them closed
+ *   before its exec, so no handle of libgit2's or SQLite's reaches it, and a
+ *   child spawned while a started one stands never holds that one's stdin; the
+ *   foreground's keeps every descriptor dotta holds, so one the shell handed
+ *   dotta reaches the program (`GIT_TRACE=3 dotta git … 3>log`).
  * - SIGPIPE: caller must have SIGPIPE ignored (typically via signal(SIGPIPE,
- *   SIG_IGN) at process startup), so a payload written to a child that is gone,
- *   a write to a started child that is gone (process_write), or a copy to a reader
- *   that went away (PROCESS_OUTPUT_STREAM), is EPIPE and never dotta's death.
+ *   SIG_IGN) at process startup), so a payload or a request written to a child
+ *   that is gone (process_exchange), a write to a started child that is gone
+ *   (process_write), or a copy to a reader that went away (PROCESS_OUTPUT_STREAM),
+ *   is EPIPE and never dotta's death.
  * - SIGCHLD: caller must NOT install a SIGCHLD handler. The implementation uses
  *   waitpid() with default disposition.
  * - The child resets each terminating signal it finds caught
@@ -200,7 +212,8 @@ typedef enum {
 
 /**
  * The most a policy that keeps a child's output keeps of it (CAPTURE, FILE),
- * stdout and stderr together.
+ * stdout and stderr together, and an exchange of its answer, its stdout alone
+ * (process_exchange).
  *
  * What a child writes is the child's to size, never the memory dotta holds for
  * it: past the bound the capture keeps nothing more and counts the rest
@@ -281,10 +294,11 @@ typedef struct {
  *                    exec_failed is false.
  * - output         : capture buffer, NUL-terminated. Non-NULL whenever the
  *                    output policy keeps the output (PROCESS_OUTPUT_CAPTURE,
- *                    FILE), a child was made and the run returned no error — ""
- *                    for a child that wrote nothing. Caller may take ownership
- *                    by setting result.output = NULL before dispose; otherwise
- *                    dispose wipes and frees it.
+ *                    FILE) or an exchange wants its answer (process_exchange),
+ *                    a child was made and the wait returned no error — "" for a
+ *                    child that wrote nothing. Caller may take ownership by setting
+ *                    result.output = NULL before dispose; otherwise dispose wipes
+ *                    and frees it.
  * - output_len     : number of bytes in output, excluding the
  *                    terminating NUL. Zero when output is NULL. At most
  *                    PROCESS_CAPTURE_MAX.
@@ -445,6 +459,48 @@ error_t process_read(process_t *child, void *data, size_t size, size_t *out_len)
  * @return Error or NULL on success
  */
 error_t process_finish(process_t *child, process_result_t *result);
+
+/**
+ * Exchange a request and an answer with a child, once, and wait for it — as git
+ * runs a credential helper and an askpass (lib/git/credential.c
+ * run_credential_helper, prompt.c do_askpass).
+ *
+ * Its stdin is a pipe its request is written into whole, then ended — or, with
+ * no request (NULL), dotta's own, as git leaves an askpass's. Its stdout is a
+ * pipe its answer is read from to its end — or, with no result wanted (NULL),
+ * /dev/null, git's no_stdout for a helper's store and erase, and how it ended
+ * is nobody's. Its stderr is dotta's own — what it says to a person reaches the
+ * person, as git leaves a helper's. Its program is found as every child's is
+ * (the header), in dotta's own environment, as git hands a helper and an askpass
+ * its own, every other descriptor closed, in dotta's working directory.
+ *
+ * The exchange answers once the program runs, as the start does: one that could
+ * not be run — no PATH entry holds it, its exec or a step before it failed — is
+ * its refusal in its errno's words, "Cannot run '<argv[0]>'", before anything
+ * is written to it and with no child left. The request is written before the
+ * answer is read, as git writes it: a child gone before it read it is no refusal
+ * (EPIPE, SIGPIPE ignored: the header), and one that answers past a pipe's room
+ * before it reads a request past one holds the exchange, as it holds git's. The
+ * answer is read to its end and kept to PROCESS_CAPTURE_MAX, the rest counted,
+ * as a policy's capture keeps a child's output (process_output_t) — so a task
+ * the child leaves holding its stdout holds the exchange until that task ends.
+ * The child is reaped with no limit, as git's finish_command waits — a child
+ * whose answer could not be read among them, its stdout closed first.
+ *
+ * *result, where wanted, is how it ended, as process_run reports it, and its
+ * answer in output: no exec failure, which the exchange answered for, no timeout;
+ * zeroed on a refusal. The pipe, /dev/null, the fork, the read or the wait it
+ * could not make is a refusal naming argv[0], as process_run's are.
+ *
+ * @param argv NULL-terminated; argv[0] a name or a path (must not be NULL)
+ * @param request What the child reads on its stdin, or NULL for none
+ * @param size The request's bytes (0 where there is none)
+ * @param result How it ended and its answer, or NULL for neither
+ * @return Error or NULL on success
+ */
+error_t process_exchange(
+    char *const argv[], const void *request, size_t size, process_result_t *result
+);
 
 /**
  * A command line a person configured, as the argv a wait runs: git's rule

@@ -74,10 +74,10 @@
  *   foreground's keeps every descriptor dotta holds, so one the shell handed
  *   dotta reaches the program (`GIT_TRACE=3 dotta git … 3>log`).
  * - SIGPIPE: caller must have SIGPIPE ignored (typically via signal(SIGPIPE,
- *   SIG_IGN) at process startup), so a payload or a request written to a child
- *   that is gone (process_exchange), a write to a started child that is gone
- *   (process_write), or a copy to a reader that went away (PROCESS_OUTPUT_STREAM),
- *   is EPIPE and never dotta's death.
+ *   SIG_IGN) at process startup), so a request written to a child that is gone
+ *   (process_exchange), a write to a started child that is gone (process_write),
+ *   or a copy to a reader that went away (PROCESS_OUTPUT_STREAM), is EPIPE and
+ *   never dotta's death.
  * - SIGCHLD: caller must NOT install a SIGCHLD handler. The implementation uses
  *   waitpid() with default disposition.
  * - The child resets each terminating signal it finds caught
@@ -133,58 +133,25 @@
  *           non-interactive children that must never block on a terminal read.
  *           Opened before the fork: one that cannot be opened refuses the run,
  *           never leaves the child dotta's stdin.
- * BUFFER  — child's STDIN_FILENO reads from a pipe the primitive
- *           fills with spec->stdin_content (stdin_content_len bytes) and closes.
- *           Use for subprocesses that consume a small fixed payload on stdin.
- *           Payload is capped at PROCESS_STDIN_BUFFER_MAX so the single synchronous
- *           write performed before the output is read never blocks on a pipe-buffer
- *           shortage.
  */
 typedef enum {
     PROCESS_STDIN_INHERIT,
     PROCESS_STDIN_DEVNULL,
-    PROCESS_STDIN_BUFFER,
 } process_stdin_t;
-
-/**
- * Upper bound on stdin_content_len for PROCESS_STDIN_BUFFER.
- *
- * The primitive writes the entire payload synchronously before the child's output
- * is read. For that write to be non-blocking even when the child has not yet
- * reached its consuming read, the payload must fit in the pipe buffer. POSIX
- * guarantees PIPE_BUF-sized writes are atomic, and the minimum PIPE_BUF
- * (_POSIX_PIPE_BUF) is 512 bytes; Linux's default pipe capacity is 65536 and
- * macOS's is 16384, with PIPE_BUF itself at 4096 / 512 respectively. Picking
- * 4096 is a comfortable ceiling across realistic targets — larger payloads need
- * a future extension that interleaves the payload's writes with the output's reads.
- *
- * The caller's contract, checked at entry: a payload a user's data sizes is bounded
- * where it is built, in the words of what it carries. No caller hands one: a
- * credential's helper is written its request by an exchange, which bounds none
- * (process_exchange).
- */
-#define PROCESS_STDIN_BUFFER_MAX 4096
 
 /**
  * Output policy for the spawned child: where its stdout and stderr go, together
  * — and so what the wait on it ends at.
  *
- * A pipe (CAPTURE, STREAM) is read to its end: the wait ends once it is drained
- * and the child reaped, so a task the child leaves holding the pipe holds the
- * wait. Every other policy waits on the child alone: the wait ends at its exit,
- * and a task it leaves runs on, writing where the child wrote.
+ * A pipe (STREAM) is read to its end: the wait ends once it is drained and the
+ * child reaped, so a task the child leaves holding the pipe holds the wait. Every
+ * other policy waits on the child alone: the wait ends at its exit, and a task
+ * it leaves runs on, writing where the child wrote.
  *
  * INHERIT — dotta's own stdout and stderr: what the user watches live, between
  *           dotta's own lines, as the child writes it — a hook under -v
  *           (utils/hooks) — nothing of it kept. A reader that goes away ends
  *           the child at its next write (SIGPIPE).
- * DEVNULL — /dev/null: output nobody reads. Opened before the fork: one that
- *           cannot be opened refuses the run, never leaves the child dotta's
- *           output.
- * CAPTURE — onto a pipe read into memory as the child writes, kept to the bound
- *           and counted past it (PROCESS_CAPTURE_MAX): an answer the caller parses.
- *           Nothing of it touches a disk — the policy for an output that holds
- *           a secret.
  * STREAM  — onto a pipe copied to dotta's stdout as it comes, and drained to the
  *           child's end whatever the reader does: a reader that went away costs
  *           the copy, never the child — a bootstrap script (utils/bootstrap).
@@ -195,23 +162,20 @@ typedef enum {
  *           bound fills it while it runs, and what it writes stands there until
  *           the file's last close — its own, or that of a task it left writing on.
  *
- * What a policy keeps (CAPTURE, FILE) is kept as a secret is, whatever wrote it
- * — no policy can tell an output that holds one from one that does not: every
- * buffer that held a byte of it is wiped before the allocator has it back, the
- * result's by process_result_deinit.
+ * A child's output is held as a secret is, whatever wrote it — no policy can
+ * tell an output that holds one from one that does not: every buffer that held
+ * a byte of it, the chunk STREAM copies it through and what FILE keeps alike,
+ * is wiped before it is let go, the result's by process_result_deinit.
  */
 typedef enum {
     PROCESS_OUTPUT_INHERIT,
-    PROCESS_OUTPUT_DEVNULL,
-    PROCESS_OUTPUT_CAPTURE,
     PROCESS_OUTPUT_STREAM,
     PROCESS_OUTPUT_FILE,
 } process_output_t;
 
 /**
- * The most a policy that keeps a child's output keeps of it (CAPTURE, FILE),
- * stdout and stderr together, and an exchange of its answer, its stdout alone
- * (process_exchange).
+ * The most FILE keeps of a child's output, stdout and stderr together, and an
+ * exchange of its answer, its stdout alone (process_exchange).
  *
  * What a child writes is the child's to size, never the memory dotta holds for
  * it: past the bound the capture keeps nothing more and counts the rest
@@ -232,8 +196,7 @@ typedef enum {
  *
  * Its shape is the caller's contract, checked at entry (base/error.h CHECK_ARG):
  * a spec is built by code, never read from a user, so one that breaks it is a
- * bug and dies there — and a caller whose payload a user's data sizes bounds it
- * first (PROCESS_STDIN_BUFFER_MAX).
+ * bug and dies there.
  * - argv non-NULL; argv[0] non-NULL: a name, found as git finds one, or a path,
  *   run as given (the header).
  * - envp non-NULL. Use { NULL } for an empty environment.
@@ -241,20 +204,11 @@ typedef enum {
  * - work_dir / work_dir_fallback NULL means "inherit". If both are set, the child
  *   tries work_dir first; on chdir failure, falls back to work_dir_fallback. If
  *   both fail, child exits with exec_failed=true and exec_errno=<chdir errno>.
- * - stdin_content / stdin_content_len: both zero (NULL / 0) unless stdin_policy
- *   == PROCESS_STDIN_BUFFER. When BUFFER, stdin_content must be non-NULL if
- *   stdin_content_len > 0, and stdin_content_len must not exceed
- *   PROCESS_STDIN_BUFFER_MAX. The primitive writes the full buffer once before
- *   the output is read; if the child exits before consuming it (EPIPE on the
- *   write), that is not a primitive-level error — exec_failed / exit_code carry
- *   the real cause.
  */
 typedef struct {
     char *const *argv;              /* argv[0] a name or a path; NULL-terminated */
     char *const *envp;              /* environment, NULL-terminated */
     process_stdin_t stdin_policy;
-    const char *stdin_content;      /* non-NULL iff stdin_policy == BUFFER */
-    size_t stdin_content_len;       /* bytes in stdin_content (≤ MAX) */
     process_output_t output_policy;
     const char *work_dir;           /* NULL = inherit parent's CWD */
     const char *work_dir_fallback;  /* NULL = no fallback */
@@ -291,10 +245,10 @@ typedef struct {
  *                    self-pipe, ENOENT for a program not found. Zero when
  *                    exec_failed is false.
  * - output         : capture buffer, NUL-terminated. Non-NULL whenever the
- *                    output policy keeps the output (PROCESS_OUTPUT_CAPTURE,
- *                    FILE) or an exchange wants its answer (process_exchange),
- *                    a child was made and the wait returned no error — "" for a
- *                    child that wrote nothing. Caller may take ownership by setting
+ *                    output policy keeps the output (PROCESS_OUTPUT_FILE) or an
+ *                    exchange wants its answer (process_exchange), a child was
+ *                    made and the wait returned no error — "" for a child that
+ *                    wrote nothing. Caller may take ownership by setting
  *                    result.output = NULL before dispose; otherwise dispose wipes
  *                    and frees it.
  * - output_len     : number of bytes in output, excluding the
@@ -480,10 +434,10 @@ error_t process_finish(process_t *child, process_result_t *result);
  * (EPIPE, SIGPIPE ignored: the header), and one that answers past a pipe's room
  * before it reads a request past one holds the exchange, as it holds git's. The
  * answer is read to its end and kept to PROCESS_CAPTURE_MAX, the rest counted,
- * as a policy's capture keeps a child's output (process_output_t) — so a task
- * the child leaves holding its stdout holds the exchange until that task ends.
- * The child is reaped with no limit, as git's finish_command waits — a child
- * whose answer could not be read among them, its stdout closed first.
+ * as FILE keeps a child's output (process_output_t) — so a task the child leaves
+ * holding its stdout holds the exchange until that task ends. The child is reaped
+ * with no limit, as git's finish_command waits — a child whose answer could not
+ * be read among them, its stdout closed first.
  *
  * *result, where wanted, is how it ended, as process_run reports it, and its
  * answer in output: no exec failure, which the exchange answered for, no timeout;

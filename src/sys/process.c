@@ -12,11 +12,11 @@
  * process_run is one linear procedure: validate spec → find the program → open
  * what the child reads and where it writes (process_stdin_open,
  * process_output_open) → spawn → the parent drains a pipe's output by poll() to
- * the limit's deadline (process_drain), keeping what a capture asks for
- * (process_capture_t) → parent reaps the child by the same deadline (process_reap),
- * escalating SIGTERM→SIGKILL where the limit came first (process_kill) → parent
- * reports the reaped child into the result struct (process_report), and reads a
- * file's output (process_read_file). One cleanup label handles all its error
+ * the limit's deadline, copying it to dotta's stdout (process_drain) → parent
+ * reaps the child by the same deadline (process_reap), escalating SIGTERM→SIGKILL
+ * where the limit came first (process_kill) → parent reports the reaped child
+ * into the result struct (process_report), and reads a file's output into a capture
+ * (process_read_file, process_capture_t). One cleanup label handles all its error
  * paths. Every resource (descriptors, capture buffer, stray child) is initialized
  * to a sentinel so cleanup is unconditional and order-independent.
  *
@@ -102,10 +102,10 @@ extern char **environ;
 /**
  * Write all `n` bytes of `buf` to `fd`, retrying on partial writes and EINTR,
  * until done or refused: 0, or -1 with errno. A started child's refusal is its
- * write's (process_write); every other caller's costs the bytes alone: a payload
- * or a request whose child is gone, a copy whose reader went away (EPIPE, SIGPIPE
- * ignored: the header), a child's errno, whose exit code (126, 127) then reports
- * the failure alone.
+ * write's (process_write); every other caller's costs the bytes alone: a request
+ * whose child is gone, a copy whose reader went away (EPIPE, SIGPIPE ignored:
+ * the header), a child's errno, whose exit code (126, 127) then reports the failure
+ * alone.
  */
 static int process_write_fd(int fd, const void *buf, size_t n) {
     const char *p = buf;
@@ -258,16 +258,11 @@ static error_t process_file(int fds[2], const char *program) {
 }
 
 /**
- * The descriptors a stdin policy needs before the fork: what the child reads,
- * `*child`, and the end the parent writes its payload into, `*parent` — a pipe's
- * two ends (BUFFER), /dev/null for the child alone (DEVNULL), neither (INHERIT).
- * Each -1 where the policy has none, and both on a refusal, which names the
- * program.
+ * The descriptor a stdin policy needs before the fork, what the child reads,
+ * `*child`: /dev/null (DEVNULL), or none (INHERIT). -1 where the policy has none,
+ * and on a refusal, which names the program.
  */
-static error_t process_stdin_open(
-    const process_spec_t *spec, int *parent, int *child
-) {
-    *parent = -1;
+static error_t process_stdin_open(const process_spec_t *spec, int *child) {
     *child = -1;
 
     switch (spec->stdin_policy) {
@@ -285,16 +280,6 @@ static error_t process_stdin_open(
                 );
             }
             return NULL;
-
-        case PROCESS_STDIN_BUFFER: {
-            int fds[2];
-            error_t err = process_pipe(fds, spec->argv[0]);
-            if (err) return err;
-
-            *child = fds[0];
-            *parent = fds[1];
-            return NULL;
-        }
     }
 
     CHECK_ARG(false, "a stdin policy no enumerator names");
@@ -302,10 +287,9 @@ static error_t process_stdin_open(
 
 /**
  * The descriptors an output policy needs before the fork: where the child writes,
- * `*child`, and what the parent reads, `*parent` — a pipe's two ends (CAPTURE,
- * STREAM), a file's (FILE), /dev/null for the child alone (DEVNULL), neither
- * (INHERIT). Each -1 where the policy has none, and both on a refusal, which
- * names the program.
+ * `*child`, and what the parent reads, `*parent` — a pipe's two ends (STREAM),
+ * a file's (FILE), neither (INHERIT). Each -1 where the policy has none, and
+ * both on a refusal, which names the program.
  */
 static error_t process_output_open(
     const process_spec_t *spec, int *parent, int *child
@@ -317,19 +301,6 @@ static error_t process_output_open(
         case PROCESS_OUTPUT_INHERIT:
             return NULL;
 
-        case PROCESS_OUTPUT_DEVNULL:
-            /* Opened here, where its failure is a refusal: the child could only
-             * keep dotta's output in its place */
-            *child = open("/dev/null", O_WRONLY | O_CLOEXEC);
-            if (*child < 0) {
-                return error_errno(
-                    errno, "Failed to open /dev/null for '%s'",
-                    spec->argv[0]
-                );
-            }
-            return NULL;
-
-        case PROCESS_OUTPUT_CAPTURE:
         case PROCESS_OUTPUT_STREAM: {
             int fds[2];
             error_t err = process_pipe(fds, spec->argv[0]);
@@ -703,15 +674,13 @@ static void process_capture_deinit(process_capture_t *capture) {
 }
 
 /**
- * Read a pipe's output to its end or to the deadline (none where NULL), whichever
- * comes first — *timed_out says which. CAPTURE keeps it (process_capture_add);
- * STREAM copies it to dotta's stdout as it comes, a copy its reader refused lost
- * alone. Kept or copied, every chunk is read, so a child past the bound or past
+ * Copy a pipe's output to dotta's stdout as it comes (STREAM), to its end or to
+ * the deadline (none where NULL), whichever comes first — *timed_out says which.
+ * A copy its reader refused is lost alone: every chunk is read, so a child past
  * its reader never blocks on a full pipe and runs to its own end.
  */
 static error_t process_drain(
-    const process_spec_t *spec, int fd, const struct timespec *deadline,
-    process_capture_t *capture, bool *timed_out
+    const process_spec_t *spec, int fd, const struct timespec *deadline, bool *timed_out
 ) {
     char chunk[PROCESS_READ_CHUNK];
     error_t err = NULL;
@@ -767,16 +736,11 @@ static error_t process_drain(
             break;  /* child closed its end of the pipe */
         }
 
-        if (spec->output_policy == PROCESS_OUTPUT_CAPTURE) {
-            process_capture_add(capture, chunk, (size_t) n);
-        } else {
-            (void) process_write_fd(STDOUT_FILENO, chunk, (size_t) n);
-        }
+        (void) process_write_fd(STDOUT_FILENO, chunk, (size_t) n);
     }
 
-    /* The chunk last held the tail of what the child wrote, its bytes past the
-     * bound among them — wiped as every buffer that held one is
-     * (process_output_t) */
+    /* The chunk last held the tail of what the child wrote: wiped as every buffer
+     * that held a child's output is (process_output_t) */
     secure_wipe(chunk, sizeof(chunk));
 
     return err;
@@ -833,26 +797,8 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     CHECK_NULL(spec->argv[0]);
     CHECK_NULL(spec->envp);
 
-    /* The spec's shape is its caller's to keep (process_spec_t): a stdin payload
-     * is load-bearing only for BUFFER, so one set under INHERIT or DEVNULL is a
-     * payload the caller expected and the child would never read */
-    CHECK_ARG(
-        spec->timeout_seconds >= 0,
-        "a time limit below zero"
-    );
-    CHECK_ARG(
-        spec->stdin_policy == PROCESS_STDIN_BUFFER ||
-        (spec->stdin_content == NULL && spec->stdin_content_len == 0),
-        "a payload the stdin policy never delivers"
-    );
-    CHECK_ARG(
-        spec->stdin_content != NULL || spec->stdin_content_len == 0,
-        "a payload length with no payload"
-    );
-    CHECK_ARG(
-        spec->stdin_content_len <= PROCESS_STDIN_BUFFER_MAX,
-        "a payload past PROCESS_STDIN_BUFFER_MAX"
-    );
+    /* The spec's shape is its caller's to keep (process_spec_t) */
+    CHECK_ARG(spec->timeout_seconds >= 0, "a time limit below zero");
 
     /* The program, found before anything is opened (process_find). One no PATH
      * entry holds reads as an exec that failed — ENOENT, and 127, the status a
@@ -871,7 +817,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
 
     /* All resources initialized to safe sentinels. */
     const char *program = spec->argv[0];
-    int stdin_parent = -1;
     int stdin_child = -1;
     int output_parent = -1;
     int output_child = -1;
@@ -883,17 +828,11 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
 
     /* What the child reads and where it writes, each opened before the spawn
      * (process_stdin_open, process_output_open). */
-    err = process_stdin_open(spec, &stdin_parent, &stdin_child);
+    err = process_stdin_open(spec, &stdin_child);
     if (err) goto cleanup;
 
     err = process_output_open(spec, &output_parent, &output_child);
     if (err) goto cleanup;
-
-    /* The capture, made before the spawn where the policy keeps the output. */
-    if (spec->output_policy == PROCESS_OUTPUT_CAPTURE ||
-        spec->output_policy == PROCESS_OUTPUT_FILE) {
-        process_capture_init(&capture);
-    }
 
     /* The child placed where its policies opened its stdin and its output — stderr
      * with stdout — dotta's own where they opened nothing, in its directory
@@ -917,20 +856,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         output_child = -1;
     }
 
-    /* Deliver the stdin payload before the output is read. The spec-entry cap
-     * on stdin_content_len keeps the payload within any POSIX-conformant pipe
-     * buffer, so the write returns immediately even if the child has not yet
-     * reached its consuming read. EPIPE (child exec failed or exited before
-     * reading) is benign — the exec-errno drain and wait-status decode below
-     * surface the real cause. */
-    if (stdin_parent >= 0) {
-        if (spec->stdin_content_len > 0) {
-            (void) process_write_fd(stdin_parent, spec->stdin_content, spec->stdin_content_len);
-        }
-        close(stdin_parent);
-        stdin_parent = -1;
-    }
-
     /* The limit's deadline, monotonic (process_deadline), or none */
     struct timespec limit = process_deadline(spec->timeout_seconds);
     const struct timespec *deadline = spec->timeout_seconds > 0 ? &limit : NULL;
@@ -938,9 +863,8 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     /* A pipe is read to its end before its child is reaped, so a task the child
      * leaves holding it holds the wait; every other policy waits on the child
      * alone (process_output_t). */
-    if (spec->output_policy == PROCESS_OUTPUT_CAPTURE ||
-        spec->output_policy == PROCESS_OUTPUT_STREAM) {
-        err = process_drain(spec, output_parent, deadline, &capture, &result->timed_out);
+    if (spec->output_policy == PROCESS_OUTPUT_STREAM) {
+        err = process_drain(spec, output_parent, deadline, &result->timed_out);
         if (err) goto cleanup;
     }
 
@@ -973,8 +897,10 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * any limit */
     process_report(process_exec_errno(exec_fd), status, result);
 
-    /* A file's output, read once its child is reaped (process_read_file) */
+    /* A file's output, read once its child is reaped into a capture made for it
+     * (process_read_file) */
     if (spec->output_policy == PROCESS_OUTPUT_FILE) {
+        process_capture_init(&capture);
         err = process_read_file(spec, output_parent, &capture);
         if (err) goto cleanup;
     }
@@ -987,7 +913,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     capture.bytes = NULL;
 
 cleanup:
-    if (stdin_parent >= 0) close(stdin_parent);
     if (stdin_child >= 0) close(stdin_child);
     if (output_parent >= 0) close(output_parent);
     if (output_child >= 0) close(output_child);

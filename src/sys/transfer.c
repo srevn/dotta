@@ -18,43 +18,38 @@
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/output.h"
-#include "base/secure.h"
 #include "base/string.h"
 #include "base/url.h"
 #include "sys/credentials.h"
 #include "sys/ssh.h"
 
 /**
- * A pair's states (file-local).
+ * What the ops a credential served say of it (file-local).
  *
- * A pair is born ACQUIRED, of the helper's fill, and judged by the ops it served.
- * Terminal states (VALIDATED, REJECTED) are absorbing: once reached, further
- * ops cannot change the verdict, told the helper by the op that reached it
- * (transfer_op_end).
+ * A credential is kept pending, of its fill, and judged by the ops it served.
+ * The other two absorb: once reached, no later op changes what its helpers were
+ * told, by the op that reached it (transfer_op_end).
  */
 typedef enum {
-    CRED_STATE_ACQUIRED,          /* Helper filled it; outcome pending. */
-    CRED_STATE_VALIDATED,         /* At least one op it served succeeded. Terminal. */
-    CRED_STATE_REJECTED           /* Auth failed with no prior success. Terminal. */
-} credential_state_t;
+    TRANSFER_VERDICT_PENDING,       /* Filled; no op has said yet. */
+    TRANSFER_VERDICT_APPROVED,      /* An op it served succeeded: every helper told "store". */
+    TRANSFER_VERDICT_REJECTED       /* The remote refused it: every helper told "erase". */
+} transfer_verdict_t;
 
 /**
- * A pair the helper filled (file-local): the answer to one key, kept for that
- * key's later asks in the session.
+ * A credential the session keeps (file-local): the answer to one request, kept
+ * whole for that request's later calls.
  *
- * Its key is git's own (lib/git/credential.c credential_match): the protocol
- * and host of the URL that asked, parsed once at the fill (sys/credentials.h
- * credential_url_parse) and the one its verdict is told against, and the user
- * the helper gave, which an ask naming a user must name. A session's pairs are
- * a list in the order filled.
+ * Its key is git's own (sys/credentials.h credential_match): the protocol and
+ * the host that asked, the path where the configuration keeps one, and the user
+ * where the asking URL or the configuration names one. A session's credentials
+ * are a list in the order filled.
  */
-typedef struct transfer_pair {
-    credential_url_t url;           /* Owned. The protocol and host it was filled for. */
-    char *username;                 /* Owned, heap, wiped on free. */
-    char *password;                 /* Owned, heap, wiped on free. */
-    credential_state_t state;       /* Its verdict, once an op reaches one. */
-    struct transfer_pair *next;     /* The pair filled after it. */
-} transfer_pair_t;
+typedef struct transfer_credential {
+    credential_t credential;            /* Owned: its request, its answer, its helpers. */
+    transfer_verdict_t verdict;         /* What its ops said of it. */
+    struct transfer_credential *next;   /* The credential filled after it. */
+} transfer_credential_t;
 
 /**
  * Transfer context.
@@ -63,41 +58,44 @@ typedef struct transfer_pair {
  *   - Progress reporting (the op's frames, drawn once an object moved)
  *   - What the op moved (its wire, answered at its end)
  *   - The remote's words (a push's side band, an op's at a time)
- *   - The credentials: the pairs the helper filled, one a key the session met,
- *     each judged by the ops it served (acquisition → validation / rejection)
+ *   - The credentials: each filled as git fills one (sys/credentials.h), one a
+ *     request the session met, judged by the ops it served and its helpers told
+ *     where an op reaches a verdict
  *
  * Per-op scratch is reset by transfer_op_begin; transfer_op_end answers its wire,
- * says the remote's words it kept, and judges the pair it offered on the op's
- * return code, telling the helper the verdict it reaches. A key is filled at
- * most once a session, by the first helper fill that answers it, and its pair
- * replayed to the key's later asks.
+ * says the remote's words it kept, and judges the credential it offered on the
+ * op's return code. A request is filled at most once a session, and its credential
+ * replayed to the request's later calls.
  */
 struct transfer_context_s {
+    git_repository *repo;           /* Borrowed: the store, whose configuration a fill reads. */
     output_t *output;               /* Borrowed. */
 
     /* Per-op scratch. Written by the callbacks as the op runs: the progress
      * callbacks' counts, answered by transfer_op_end where the op succeeded;
      * the remote's words, said by the side band's callback or by transfer_op_end;
-     * and the credential callback's asks, and the pair it offered, judged by
-     * transfer_op_end. Reset by transfer_op_begin. */
+     * and the credential callback's calls, and the credential it offered, judged
+     * by transfer_op_end. Reset by transfer_op_begin. */
     struct {
-        transfer_wire_t wire;       /* What it moved: the callbacks' latest counts. */
-        buffer_t sideband;          /* The remote's words not yet said: under -v the
-                                     * line still open, else every byte, to
-                                     * TRANSFER_SIDEBAND_MAX. */
-        size_t sideband_dropped;    /* The bytes past the bound, never kept. */
-        int attempts;               /* The credential callback's asks: the anti-loop. */
-        transfer_pair_t *offered;   /* The pair it offered; NULL where none. */
+        transfer_wire_t wire;           /* What it moved: the callbacks' latest counts. */
+        buffer_t sideband;              /* The remote's words not yet said: under -v the
+                                         * line still open, else every byte, to
+                                         * TRANSFER_SIDEBAND_MAX. */
+        size_t sideband_dropped;        /* The bytes past the bound, never kept. */
+        int attempts;                   /* The credential callback's calls: a second
+                                         * is the first's offer refused. */
+        transfer_credential_t *offered; /* The credential it offered; NULL where none. */
     } op;
 
-    transfer_pair_t *pairs;         /* Owned. Every pair the helper filled, in the order filled. */
+    transfer_credential_t *credentials;   /* Owned. Every credential filled, in the order filled. */
 };
 
-transfer_context_t *transfer_context_create(output_t *output) {
+transfer_context_t *transfer_context_create(git_repository *repo, output_t *output) {
+    CHECK_NULL(repo);
     CHECK_NULL(output);
 
     transfer_context_t *xfer = heap_alloc(sizeof(*xfer));
-    *xfer = (transfer_context_t){ .output = output };
+    *xfer = (transfer_context_t){ .repo = repo, .output = output };
 
     return xfer;
 }
@@ -108,14 +106,12 @@ transfer_context_t *transfer_context_create(output_t *output) {
 void transfer_context_free(transfer_context_t *xfer) {
     if (!xfer) return;
 
-    /* Each pair let go, its secrets wiped: its verdict, where an op reached one,
-     * was told there (transfer_op_end) */
-    for (transfer_pair_t *pair = xfer->pairs, *next; pair; pair = next) {
-        next = pair->next;
-        secure_free_string(pair->username);
-        secure_free_string(pair->password);
-        credential_url_deinit(&pair->url);
-        free(pair);
+    /* Each credential let go, its secrets wiped: its verdict, where an op reached
+     * one, was told there (transfer_op_end) */
+    for (transfer_credential_t *kept = xfer->credentials, *next; kept; kept = next) {
+        next = kept->next;
+        credential_deinit(&kept->credential);
+        free(kept);
     }
     buffer_deinit(&xfer->op.sideband);
     free(xfer);
@@ -190,8 +186,8 @@ void transfer_op_begin(transfer_context_t *xfer) {
 
 /**
  * End an op — draw again the line its connection put aside, take its frame down,
- * say the remote's words, judge the pair it offered and tell the helper, and
- * answer what it moved.
+ * say the remote's words, judge the credential it offered and tell its helpers,
+ * and answer what it moved.
  */
 transfer_wire_t transfer_op_end(transfer_context_t *xfer, int rc) {
     CHECK_NULL(xfer);
@@ -232,40 +228,31 @@ transfer_wire_t transfer_op_end(transfer_context_t *xfer, int rc) {
         transfer_print_sideband(xfer, OUTPUT_NORMAL);
     }
 
-    /* The helper's pair this op offered, judged by it — where no verdict was
-     * reached yet — and the helper told the verdict here, against the key the
-     * pair was filled for, as git tells its helpers at the request that reaches
-     * one (lib/git/http.c handle_curl_result): a run that ends past the op has
-     * stored what served it. An op that offered none (the anonymous pair, no
-     * ask at all) judges nothing, and the terminal states (VALIDATED, REJECTED)
-     * absorb any outcome without transitioning, so each is told once. An op that
-     * succeeded validates it: approve. GIT_EAUTH, libgit2's auth-failure code,
-     * rejects it definitively: reject. The credential callback returns it when
-     * it gives up (transfer_credentials_callback), and libgit2 where a remote
-     * asks for credentials no callback could give (transports/http.c handle_auth).
-     * Any other failure leaves the pair pending and untold, for a later op to
-     * validate or reject: a network hiccup, a run that exhausts libgit2's own
+    /* The credential this op offered, judged by it — where no verdict was reached
+     * yet — and its helpers told the verdict here, as git tells its helpers at
+     * the request that reaches one (lib/git/http.c handle_curl_result): a run
+     * that ends past the op has stored what served it. An op that offered none
+     * judges nothing, and the two verdicts absorb any later outcome, so each is
+     * told once. An op that succeeded approves it: every helper "store". GIT_EAUTH,
+     * libgit2's auth-failure code, rejects it: every helper "erase". The credential
+     * callback returns it where the remote refused what the op offered
+     * (transfer_credentials_callback), and libgit2 where a remote asks for
+     * credentials no callback could give (transports/http.c handle_auth). Any
+     * other failure leaves the credential pending and untold, for a later op to
+     * approve or reject: a network hiccup, a run that exhausts libgit2's own
      * replay budget — GIT_ERROR, "the exact cause is unclear" in its words
      * (transports/http.c http_stream_read) — and the auth failures some TLS paths
-     * surface as other errors. A helper that could not be told is warned of, in
-     * the refusal's own words, which name it ('git credential approve', or reject);
-     * one that has nothing to say — a read-only helper's non-zero exit — is not. */
-    transfer_pair_t *pair = xfer->op.offered;
-    if (pair && pair->state == CRED_STATE_ACQUIRED) {
-        error_t err = NULL;
+     * surface as other errors. What a helper could not do is said there, as a
+     * warning (sys/credentials.h). */
+    transfer_credential_t *offered = xfer->op.offered;
+    if (offered && offered->verdict == TRANSFER_VERDICT_PENDING) {
         if (rc == 0) {
-            pair->state = CRED_STATE_VALIDATED;
-            err = credential_helper_approve(
-                &pair->url, pair->username, pair->password
-            );
+            offered->verdict = TRANSFER_VERDICT_APPROVED;
+            credential_approve(&offered->credential, xfer->output);
         } else if (rc == GIT_EAUTH) {
-            pair->state = CRED_STATE_REJECTED;
-            err = credential_helper_reject(
-                &pair->url, pair->username, pair->password
-            );
+            offered->verdict = TRANSFER_VERDICT_REJECTED;
+            credential_reject(&offered->credential, xfer->output);
         }
-
-        if (err) output_warning(xfer->output, OUTPUT_NORMAL, "%s", error_line(err));
     }
 
     /* What the op moved, where it succeeded: one that failed moved nothing a
@@ -459,20 +446,16 @@ int transfer_transport_callback(git_transport **out, git_remote *owner, void *pa
 }
 
 /**
- * The pair the helper filled for an ask's key, or NULL: the same protocol and
- * host, and where the asking URL names a user, that user's — the first so filled,
- * as git matches a request against the pairs it holds, a field the request leaves
- * unset matching any (lib/git/credential.c credential_match)
+ * The credential the session keeps for a request, or NULL: the first one filled
+ * that answers it, as git matches a request against a credential, a part the
+ * request leaves unset matching any (sys/credentials.h credential_match)
  */
-static transfer_pair_t *transfer_pair_find(
-    const transfer_context_t *xfer, const credential_url_t *u, const char *username_from_url
+static transfer_credential_t *transfer_credential_find(
+    const transfer_context_t *xfer, const credential_t *want
 ) {
-    for (transfer_pair_t *pair = xfer->pairs; pair; pair = pair->next) {
-        if (strcmp(pair->url.protocol, u->protocol) == 0 &&
-            strcmp(pair->url.host, u->host) == 0 &&
-            (!username_from_url || !*username_from_url ||
-            strcmp(pair->username, username_from_url) == 0)) {
-            return pair;
+    for (transfer_credential_t *kept = xfer->credentials; kept; kept = kept->next) {
+        if (credential_match(want, &kept->credential)) {
+            return kept;
         }
     }
 
@@ -480,26 +463,8 @@ static transfer_pair_t *transfer_pair_find(
 }
 
 /**
- * libgit2 credential callback.
- *
- * Composes the credential primitives directly so all session policy — anti-loop,
- * a pair a key, its replay and its refusal, fill-then-keep, anonymous fallback
- * — lives next to the state it touches.
- *
- *   1. Anti-loop — libgit2 re-invokes this callback when the server rejects creds
- *      within a single negotiation. transfer_op_begin resets the per-op counter,
- *      so across-op retries are allowed.
- *
- *      Every refusal is worded here, in libgit2's own slot: the sentence a failed
- *      op ends on is the one this callback leaves.
- *
- *   2. HTTPS userpass path: parse the asking URL into its key, and offer the
- *      pair the helper filled for it — refused at once where the remote rejected
- *      it, which saves a wasted round-trip per op in a multi-profile sync after
- *      an auth failure, and replayed otherwise; with none, fill the helper, install
- *      the cred, and keep it as the key's pair for the session's later ops. Helper
- *      / parse failures fall through to anonymous (public-repo path) and finally
- *      libgit2's default.
+ * libgit2 credential callback: the credential an HTTP remote's call is answered
+ * with — the one the session keeps for its request, or a fill
  */
 int transfer_credentials_callback(
     git_credential **out, const char *url, const char *username_from_url,
@@ -507,119 +472,66 @@ int transfer_credentials_callback(
 ) {
     transfer_context_t *xfer = (transfer_context_t *) payload;
 
-    /* Asked again within one op: what this op offered was refused. A refusal is
-     * worded where it is decided: libgit2 hands a callback's code up with no
-     * sentence of its own (transports/http.c handle_auth), and the sentence it
-     * last set may be a lookup that succeeded (remote.c lookup_redirect_config's
-     * value "not found"). The offer was the helper's pair, or with none the
-     * anonymous one, which the remote answered by asking again. */
+    /* Called again within one op: the remote refused what this op offered, and
+     * git asks nobody twice in one request (lib/git/http.c handle_curl_result).
+     * A refusal is worded where it is decided: libgit2 hands a callback's code
+     * up with no sentence of its own (transports/http.c handle_auth), and the
+     * sentence it last set may be a lookup that succeeded (remote.c
+     * lookup_redirect_config's value "not found"). GIT_EAUTH is the code the
+     * op's end reads to reject, and any other would have libgit2 call fourteen
+     * times more (transports/http.c GIT_HTTP_REPLAY_MAX), each a question. */
     if (xfer->op.attempts++ > 0) {
-        (void) git_error_set_str(
-            GIT_ERROR_CALLBACK, xfer->op.offered
-                ? "the remote refused the credentials the git credential helper gave"
-                : "the remote requires credentials, and no git credential helper gave any"
-        );
+        (void) git_error_set_str(GIT_ERROR_CALLBACK, "Authentication failed");
         return GIT_EAUTH;
     }
-    if (!url) return GIT_PASSTHROUGH;
 
-    /* HTTPS userpass path. */
-    if (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) {
-        /* The asking URL's key, and the pair the helper filled for it. A parse
-         * that fails names no key, and is printed and dropped, as a fill that
-         * fails is — at most one per operation, which the anti-loop above asks
-         * once. */
-        credential_url_t u = { 0 };
-        error_t err = credential_url_parse(url, &u);
-        if (err) {
-            output_print(
-                xfer->output, OUTPUT_VERBOSE,
-                "credential URL parse: %s\n", error_line(err)
-            );
-        }
-        transfer_pair_t *pair = err ? NULL : transfer_pair_find(xfer, &u, username_from_url);
-
-        /* The key's pair: refused at once where the remote rejected it — a pair
-         * is rejected only where an op it offered failed authenticating, and no
-         * other key's verdict reaches it — and replayed otherwise. If construction
-         * fails (memory pressure is the only realistic cause), fall through to
-         * the libgit2 default rather than re-prompting the helper — the user
-         * already authed once, surprising them with a fresh prompt mid-session
-         * is worse than a passthrough. */
-        if (pair) {
-            credential_url_deinit(&u);
-            if (pair->state == CRED_STATE_REJECTED) {
-                (void) git_error_set_str(
-                    GIT_ERROR_CALLBACK,
-                    "the remote refused the credentials the git credential helper gave"
-                );
-                return GIT_EAUTH;
-            }
-            if (credential_make_userpass(out, pair->username, pair->password) == 0) {
-                xfer->op.offered = pair;
-                return 0;
-            }
-            return credential_make_default(out) == 0 ? 0 : GIT_PASSTHROUGH;
-        }
-
-        /* None yet: a fresh fill from the helper. The fill may ask at the terminal
-         * itself — git prompts there where no helper answers (lib/git/prompt.c
-         * git_prompt) — past the output layer, which sees none of it: the progress
-         * line that stands, a caller's around the op, steps aside for it, so
-         * the prompt stands on a row of its own, and is drawn again once the
-         * fill returns, the op still running — on its row where git asked nothing,
-         * beneath git's questions where it asked (base/output.h
-         * output_suspend_line) */
-        char *fresh_user = NULL;
-        char *fresh_pass = NULL;
-        if (!err) {
-            output_suspend_line(xfer->output);
-            err = credential_helper_fill(
-                &u, username_from_url, &fresh_user, &fresh_pass
-            );
-
-            if (err) {
-                /* Exec failure / timeout / malformed response — surface to the
-                 * user so they can diagnose helper issues, in the refusal's own
-                 * words: they name the helper ('git credential fill'). */
-                output_warning(xfer->output, OUTPUT_NORMAL, "%s", error_line(err));
-            }
-            output_resume_line(xfer->output);
-        }
-
-        if (fresh_user && fresh_pass) {
-            if (credential_make_userpass(out, fresh_user, fresh_pass) == 0) {
-                /* The key's pair from here: ownership of the parsed URL and of
-                 * fresh_user/fresh_pass moves into it, last in the order filled */
-                pair = heap_calloc(1, sizeof(*pair));
-                pair->url = u;
-                pair->username = fresh_user;
-                pair->password = fresh_pass;
-                pair->state = CRED_STATE_ACQUIRED;
-
-                transfer_pair_t **last = &xfer->pairs;
-                while (*last) last = &(*last)->next;
-                *last = pair;
-
-                xfer->op.offered = pair;
-                return 0;
-            }
-
-            /* The fill's credential that libgit2 could not make (its allocation
-             * failed): both strings let go, wiped */
-            secure_free_string(fresh_user);
-            secure_free_string(fresh_pass);
-        }
-        credential_url_deinit(&u);
-
-        /* Anonymous fallback for public repos (no pair kept). */
-        if (credential_make_anonymous(out) == 0) {
-            return 0;
-        }
+    /* A remote that takes no username and password is offered what the machine
+     * holds for it where it takes that — libgit2's default, a Negotiate ticket
+     * — and nothing where it does not */
+    if (!(allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT)) {
+        return allowed_types & GIT_CREDENTIAL_DEFAULT
+            ? git_credential_default_new(out) : GIT_PASSTHROUGH;
     }
 
-    /* Last resort — libgit2's platform-integrated default. */
-    return credential_make_default(out) == 0 ? 0 : GIT_PASSTHROUGH;
+    /* The request git would make for the URL that asked, the configuration applied
+     * (sys/credentials.h credential_init): its refusal is the op's cause */
+    credential_t want;
+    error_t err = credential_init(xfer->repo, url, username_from_url, &want);
+    if (err) return error_to_git(err);
+
+    /* The credential kept for it: refused at once where the remote rejected it
+     * — a credential is rejected only where an op it offered failed authenticating,
+     * and no other request's verdict reaches it — and replayed otherwise. None
+     * yet: filled as git fills one, the request's credential from here, last in
+     * the order filled; a fill nobody answered is the op's cause, in git's words,
+     * and nothing is offered. */
+    transfer_credential_t *kept = transfer_credential_find(xfer, &want);
+    if (kept) {
+        credential_deinit(&want);
+        if (kept->verdict == TRANSFER_VERDICT_REJECTED) {
+            (void) git_error_set_str(GIT_ERROR_CALLBACK, "Authentication failed");
+            return GIT_EAUTH;
+        }
+    } else {
+        err = credential_fill(&want, xfer->repo, xfer->output);
+        if (err) {
+            credential_deinit(&want);
+            return error_to_git(err);
+        }
+
+        kept = heap_alloc(sizeof(*kept));
+        *kept = (transfer_credential_t){ .credential = want };
+
+        transfer_credential_t **last = &xfer->credentials;
+        while (*last) last = &(*last)->next;
+        *last = kept;
+    }
+
+    /* The op's offer, judged at its end (transfer_op_end) */
+    xfer->op.offered = kept;
+    return git_credential_userpass_plaintext_new(
+        out, kept->credential.username, kept->credential.password
+    );
 }
 
 /**

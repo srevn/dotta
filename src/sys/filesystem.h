@@ -47,7 +47,7 @@
  * directory created, the directory a store goes in, a failed clone taken away —
  * and carries the reach with it; on the invoker's own paths it never fires.
  *
- * Two more read raw, and on purpose. A source repository's layout — its `.git`,
+ * Three more read raw, and on purpose. A source repository's layout — its `.git`,
  * a gitdir's HEAD, commondir, objects and refs — which sys/source discovers as
  * the invoker, because the repository's configuration is libgit2's to read as
  * the invoker, and a repository found through the reach would be one dotta could
@@ -55,7 +55,10 @@
  * (ERR_GIT), as git's is; the rule files beneath it are this module's, and so
  * is their refusal's reach. And a hook's name (utils/hooks.c hook_find), looked
  * up as the invoker its exec runs as: a hook found through the reach would be
- * one the exec could not run.
+ * one the exec could not run. And git's file of credentials (sys/credentials.c
+ * credential_file), read and written as the invoker its helpers run as: one the
+ * invoker may not read is no file, as git reads it, and a lock created through
+ * the reach would be root's in the invoker's home.
  */
 
 #ifndef DOTTA_FILESYSTEM_H

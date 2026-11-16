@@ -3,19 +3,20 @@
  *
  * libgit2 hands every callback of an op one pointer (git_remote_callbacks'
  * payload), so what they share is one context, one a session: which transport a
- * connection takes, read off its handle's URL as git reads one; the credentials
- * the helper fills, each pair kept under the key git keeps it by — the protocol
- * and host of the URL that asked, and the user where that URL names one
- * (lib/git/credential.c credential_match) — replayed where its key asks again
- * and nowhere else, refused at the second ask within one op, judged by the ops
- * it served and its verdict told the helper where an op reaches it, so a push
- * URL on another host is asked of the helper once, never handed the fetch host's
- * pair, and stored by the helper once the remote takes it — at the push's connect,
- * before a hook may refuse the push; the op's progress — its counts drawn as
- * base/output's progress line while objects move, a push that sends nothing drawing
- * none, the frame taken down at the op's end; what the op moved, answered there;
- * the remote's words a push's side band carries, said by the hooks' rule; and a
- * ref the remote refused, the push's failure in the remote's words.
+ * connection takes, read off its handle's URL as git reads one; the credentials,
+ * each filled as git fills one (sys/credentials.h) and kept whole under the request
+ * git would make for the URL that asked — its protocol and host, its path where
+ * the configuration keeps one, its user where it names one (lib/git/credential.c
+ * credential_match) — replayed where its request asks again and nowhere else,
+ * refused at the second call within one op, judged by the ops it served and its
+ * helpers told where an op reaches a verdict, so a push URL on another host is
+ * filled once there, never handed the fetch host's credential, and stored once
+ * the remote takes it — at the push's connect, before a hook may refuse the push;
+ * the op's progress — its counts drawn as base/output's progress line while objects
+ * move, a push that sends nothing drawing none, the frame taken down at the op's
+ * end; what the op moved, answered there; the remote's words a push's side band
+ * carries, said by the hooks' rule; and a ref the remote refused, the push's
+ * failure in the remote's words.
  *
  * Created by the session alone (sys/remote.h remote_open), which wraps each libgit2
  * network call it makes in transfer_op_begin and transfer_op_end, and freed by
@@ -46,24 +47,26 @@ typedef struct {
 /**
  * Create a transfer context.
  *
+ * @param repo The store, borrowed for the session: its configuration is what a
+ *             credential's fill reads (must not be NULL)
  * @param output The run's output, borrowed for the session (must not be NULL)
  * @return The context (caller frees via transfer_context_free)
  */
-transfer_context_t *transfer_context_create(output_t *output);
+transfer_context_t *transfer_context_create(git_repository *repo, output_t *output);
 
 /**
  * Free a transfer context.
  *
- * Every pair let go, its secrets wiped, and nothing told: each verdict was told
- * where an op reached it (transfer_op_end). NULL-safe.
+ * Every credential let go, its secrets wiped, and nothing told: each verdict
+ * was told where an op reached it (transfer_op_end). NULL-safe.
  */
 void transfer_context_free(transfer_context_t *xfer);
 
 /**
  * Begin an op on this transfer session.
  *
- * Resets per-op scratch (anti-loop attempts, the pair it offered, the op's wire,
- * the remote's words).
+ * Resets per-op scratch (the credential callback's calls, the credential it
+ * offered, the op's wire, the remote's words).
  *
  * Pair with transfer_op_end() around each libgit2 network call (the open's
  * git_remote_connect_ext, a push's git_remote_connect, git_remote_download,
@@ -94,17 +97,17 @@ void transfer_op_begin(transfer_context_t *xfer);
  * left open, the others said as they arrived; otherwise, where the op failed,
  * every line, a block of its own at OUTPUT_NORMAL — and where it succeeded, none.
  *
- * Judges the pair the op offered on `rc` — none where it offered the anonymous
- * pair, or was asked for no credentials — and tells the helper a verdict reached
- * here, against the key the pair was filled for, as git tells its helpers at
- * the request that reaches one: a pair that served is stored though the run ends
- * before its session does.
+ * Judges the credential the op offered on `rc` — none where its remote asked
+ * for none, or took libgit2's default — and tells its helpers a verdict reached
+ * here, as git tells its helpers at the request that reaches one: a credential
+ * that served is stored though the run ends before its session does
+ * (sys/credentials.h credential_approve, credential_reject).
  *
- *   ACQUIRED      + 0            → VALIDATED      (terminal; the helper told approve)
- *   ACQUIRED      + GIT_EAUTH    → REJECTED       (terminal; the helper told reject)
- *   ACQUIRED      + any other    → ACQUIRED       (network hiccup, etc.; nothing told)
- *   VALIDATED     + anything     → VALIDATED      (terminal-absorbing)
- *   REJECTED      + anything     → REJECTED       (terminal-absorbing)
+ *   pending   + 0            → approved   (every helper told "store")
+ *   pending   + GIT_EAUTH    → rejected   (every helper told "erase")
+ *   pending   + any other    → pending    (a network hiccup; nothing told)
+ *   approved  + anything     → approved   (absorbing)
+ *   rejected  + anything     → rejected   (absorbing)
  *
  * The op's wire is fed by the progress callbacks whatever the medium, so a pipe
  * and a log count what a terminal draws.
@@ -201,20 +204,35 @@ int transfer_transport_callback(git_transport **out, git_remote *owner, void *pa
 /**
  * libgit2 credential callback (payload = transfer_context_t *).
  *
- * An HTTPS ask is answered with the pair its key holds, or the helper's fill,
- * kept as the key's pair. libgit2 asks once a connection, keeping the answer
+ * An HTTP remote's call is answered with the credential the session keeps for
+ * its request, or with a fill (sys/credentials.h credential_init, credential_fill),
+ * kept as the request's. libgit2 calls it once a connection, keeping the answer
  * until the connection closes (lib/libgit2/src/libgit2/transports/http.c
  * handle_auth, http_close), so a sync pushing three profiles to a push URL on
  * another host fills once there and replays twice.
  *
- * A helper's fill runs on a row of its own: git asks at the terminal where no
- * helper answers (lib/git/prompt.c git_prompt), past the output layer, so the
- * progress line that stands, a caller's around the op among it, steps aside for
- * the fill and is drawn again once it returns — on its row where git asked nothing,
- * beneath git's questions where it asked; a warning the fill's failure says stands
- * above it (base/output.h output_suspend_line).
+ * Refused, GIT_EAUTH, in git's words for a credential a remote refuses,
+ * "Authentication failed" (lib/git/remote-curl.c): a second call within one op,
+ * which is the remote refusing what the op offered, and a call for a credential
+ * the remote rejected earlier in the session. git names the remote's URL beside
+ * them; the one libgit2 calls with leaves a password's end unmarked where it
+ * carries one, so none is shown, and the op's caller names the remote. A request
+ * that cannot be made and a fill nobody answered are each the op's cause in their
+ * own words (base/error.h error_to_git): nothing is offered a remote that nobody
+ * answered for.
+ *
+ * A remote that takes no username and password — Negotiate alone, where the linked
+ * libgit2 speaks it — is offered libgit2's default credential.
+ *
+ * Whoever answers a fill past the output layer — a helper's words, an askpass,
+ * the terminal's questions — has the progress line step aside inside the fill
+ * (sys/credentials.h credential_fill); a credential replayed moves no line.
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
+ *
+ * @return 0, a credential offered; GIT_EAUTH for a credential the remote refused;
+ *         GIT_PASSTHROUGH where the remote takes none dotta has; GIT_ERROR for
+ *         any other refusal, its sentence in libgit2's slot
  */
 int transfer_credentials_callback(
     git_credential **out,

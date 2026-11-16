@@ -181,7 +181,9 @@ __attribute__((format(printf, 2, 3)));
  * it stands, as error_wrap wraps nothing for none: a call into dotta ends on
  * this whichever way it went.
  *
- * Readers: sys/ssh.c ssh_start and ssh_finish, a connection's start and its end.
+ * Readers: sys/ssh.c ssh_start and ssh_finish, a connection's start and its end;
+ * sys/transfer.c transfer_credentials_callback, a credential's request and its
+ * fill.
  *
  * @param err The outcome (NULL: none)
  * @return 0 for none; GIT_ERROR for a failure, its line in libgit2's slot

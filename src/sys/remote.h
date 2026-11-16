@@ -65,12 +65,12 @@
  * client writing the proxy's form of each request to the remote itself
  * (transports/httpclient.c http_client_connect); ssh, git:// and a path read
  * none. A proxy that asks for credentials is answered with those its URL carries
- * alone: the helper answers for the remote, and its answer never reaches a proxy.
+ * alone: a credential answers for the remote, and never reaches a proxy.
  *
  * The callbacks libgit2 calls during each op are sys/transfer's, made at the
- * open and freed at the free; each credential's verdict is told the helper at
- * the op that reaches it, against the URL that asked for it (sys/transfer.h
- * transfer_op_end). Which remote: "origin", or the one configured (remote_default).
+ * open and freed at the free; each credential's verdict is told its helpers at
+ * the op that reaches it (sys/transfer.h transfer_op_end). Which remote: "origin",
+ * or the one configured (remote_default).
  *
  * A branch against its remote (remote_relation_t): three heads — the branch here
  * (L) and its tracking ref (T), read now, and the remote's (R) as the open listed

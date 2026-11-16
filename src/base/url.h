@@ -67,8 +67,9 @@ const char *url_protocol(const char *url);
  * it, never in an arena — which has room for `len` + 1 bytes and may be `from`
  * itself, no byte being written past the one it was read from; and terminated.
  *
- * Reader: url_ssh, over a whole URL, as git's connect decodes one (connect.c
- * parse_connect_url).
+ * Readers: url_ssh, over a whole URL, as git's connect decodes one (connect.c
+ * parse_connect_url); sys/credentials.c credential_decode, a part at a time, as
+ * git reads a credential's off a URL (credential.c credential_from_url_1).
  *
  * @param to Where the decoded bytes go (must not be NULL; room for `len` + 1)
  * @param from The span (must not be NULL)

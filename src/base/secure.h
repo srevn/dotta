@@ -29,8 +29,9 @@
  * Stack copies (a master between resolve and subkey derivation, a subkey pair,
  * a candidate plaintext) stay where they are and are wiped, not locked; the
  * plaintext the content cache holds is about to be a file on disk and is wiped,
- * not locked; and a credential a helper answered is a heap string libgit2 copies
- * into memory of its own, and is wiped, not locked (`secure_free_string`).
+ * not locked; and a credential a helper or a person answered is a heap string
+ * libgit2 copies into memory of its own, and is wiped, not locked
+ * (`secure_free_string`).
  *
  * The lock is best-effort, and the run has already asked for as much of it as
  * it may: sys/identity raises RLIMIT_MEMLOCK's soft limit to the hard one at
@@ -112,10 +113,10 @@ void secure_free(void *ptr, size_t len);
  * End a heap string that held a secret: wipe, free.
  *
  * A string the heap made — `heap_strdup`'s exact copy, as a credential a helper
- * answered is held (sys/credentials.h) — and never a `secure_alloc` mapping,
- * which ends with `secure_free`. The wipe covers the string and its terminator,
- * the whole of such a copy. Nothing on the heap is locked, so nothing is unlocked.
- * NULL-safe.
+ * or a person answered is held (sys/credentials.h) — and never a `secure_alloc`
+ * mapping, which ends with `secure_free`. The wipe covers the string and its
+ * terminator, the whole of such a copy. Nothing on the heap is locked, so nothing
+ * is unlocked. NULL-safe.
  *
  * @param str The string (may be NULL)
  */

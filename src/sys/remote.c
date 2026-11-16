@@ -183,8 +183,9 @@ error_t remote_open(
 
     /* The handle in an arena of its own, made here and freed with it, beside
      * the listing it copies and the names it lends: from here every failure frees
-     * through remote_free. The transfer is told no URL: each credential the helper
-     * fills is kept under the URL that asked for it, the fetch URL's or the push
+     * through remote_free. The transfer is told the store, whose configuration
+     * a credential's fill reads, and no URL: each credential is kept under the
+     * request made of the URL that asked for it, the fetch URL's or the push
      * URL's (lib/libgit2/src/libgit2/remote.c git_remote__urlfordirection), and
      * judged there (sys/transfer.h). */
     arena_t *arena = arena_create(0);
@@ -194,7 +195,7 @@ error_t remote_open(
         .repo = repo,
         .git = git,
         .action = action,
-        .xfer = transfer_context_create(output),
+        .xfer = transfer_context_create(repo, output),
     };
 
     /* The open's one op: the connect for upload-pack, which reads the remote's

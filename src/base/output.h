@@ -644,15 +644,17 @@ void output_clear_line(output_t *ctx);
  * Take down the progress line that stands, for a writer the layer cannot see,
  * to be drawn again once it is done (output_resume_line)
  *
- * A program the act starts may write on the terminal itself — git asks for a
- * credential on /dev/tty where no helper answers (lib/git/prompt.c git_prompt),
- * ssh for a passphrase or a host's key — and a line it writes beside the progress
- * line joins its row. Taken down as output_clear_line takes it down, the line
- * is kept as it was last drawn, and stands nowhere until its resume: a line that
- * lands in between takes nothing down, and a take-down writes nothing. Where
- * none stands nothing is written, and the resume draws nothing.
+ * What the act starts may write on the terminal itself — a credential's question
+ * is asked on /dev/tty, as git asks one (base/terminal.h terminal_ask), a helper
+ * speaks on its stderr, ssh asks for a passphrase or a host's key — and a line
+ * so written beside the progress line joins its row. Taken down as
+ * output_clear_line takes it down, the line is kept as it was last drawn, and
+ * stands nowhere until its resume: a line that lands in between takes nothing
+ * down, and a take-down writes nothing. Where none stands nothing is written,
+ * and the resume draws nothing.
  *
- * Readers: sys/transfer.c transfer_credentials_callback, before a helper's fill;
+ * Readers: sys/credentials.c credential_helper, around a helper's run, and
+ * credential_ask, around the person's questions; sys/transfer.c
  * transfer_transport_callback, before ssh starts.
  *
  * @param ctx Output context (NULL: nothing)
@@ -670,8 +672,9 @@ void output_suspend_line(output_t *ctx);
  * suspended, or the line ran past what the layer keeps (OUTPUT_PROGRESS_MAX),
  * nothing is drawn.
  *
- * Readers: sys/transfer.c transfer_credentials_callback, once a helper's fill
- * returns; transfer_op_end, at the op's end.
+ * Readers: sys/credentials.c credential_helper, once a helper has ended, and
+ * credential_ask, once the person has answered; sys/transfer.c transfer_op_end,
+ * at the op's end.
  *
  * @param ctx Output context (NULL: nothing)
  */

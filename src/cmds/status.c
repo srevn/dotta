@@ -1525,9 +1525,10 @@ static status_remote_t status_remote(
      * of the report, on the row the section's title then takes: the section's
      * boundary asked first, the line stands past its blank (base/output.h
      * output_progress) — drawn over by transfer's frames while objects move
-     * (sys/transfer.h transfer_op_end), and stepping aside for a credential's
-     * fill (transfer_credentials_callback) — and is taken down once the fetch
-     * is done, whichever way it went, its title landing where it stood */
+     * (sys/transfer.h transfer_op_end), and stepping aside for whoever answers
+     * a credential's fill (sys/credentials.h credential_fill) — and is taken
+     * down once the fetch is done, whichever way it went, its title landing where
+     * it stood */
     if (!opts->no_fetch) {
         output_gap(out, OUTPUT_NORMAL);
         output_progress(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);

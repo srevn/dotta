@@ -14,7 +14,7 @@
  *
  * Three ways to wait for it, each reporting into one result:
  *   process_run         to its end, by a time limit, its output where the caller
- *                       says: a hook, a bootstrap script, a credential helper
+ *                       says: a hook, a bootstrap script
  *   process_foreground  in the foreground, the terminal its own while dotta
  *                       waits: the editor, `dotta git`
  *   process_start       in conversation, its caller writing what it reads and
@@ -26,11 +26,11 @@
  *                       where there is one, then its answer read to its end where
  *                       one is wanted, as git runs a credential helper and an
  *                       askpass (lib/git/credential.c run_credential_helper,
- *                       prompt.c do_askpass)
+ *                       prompt.c do_askpass): each of them (sys/credentials)
  *
- * A command line a person configured — an editor, an ssh command — becomes an
- * argv by git's rule, which its caller applies (process_shell): never a wait,
- * so never to a path a caller made.
+ * A command line a person configured — an editor, an ssh command, a credential
+ * helper — becomes an argv by git's rule, which its caller applies (process_shell):
+ * never a wait, so never to a path a caller made.
  *
  * Design principles:
  * - The time limit is one deadline on the monotonic clock, counted in the time
@@ -135,10 +135,9 @@
  *           never leaves the child dotta's stdin.
  * BUFFER  — child's STDIN_FILENO reads from a pipe the primitive
  *           fills with spec->stdin_content (stdin_content_len bytes) and closes.
- *           Use for subprocesses that consume a small fixed payload on stdin
- *           (e.g., `git credential fill` reading a protocol request). Payload
- *           is capped at PROCESS_STDIN_BUFFER_MAX so the single synchronous write
- *           performed before the output is read never blocks on a pipe-buffer
+ *           Use for subprocesses that consume a small fixed payload on stdin.
+ *           Payload is capped at PROCESS_STDIN_BUFFER_MAX so the single synchronous
+ *           write performed before the output is read never blocks on a pipe-buffer
  *           shortage.
  */
 typedef enum {
@@ -160,10 +159,9 @@ typedef enum {
  * a future extension that interleaves the payload's writes with the output's reads.
  *
  * The caller's contract, checked at entry: a payload a user's data sizes is bounded
- * where it is built, in the words of what it carries — sys/credentials.c
- * credential_helper_run, whose request holds the credential, so a credential
- * past the bound is never handed to a helper (approve and reject warn, a fill
- * finds nothing).
+ * where it is built, in the words of what it carries. No caller hands one: a
+ * credential's helper is written its request by an exchange, which bounds none
+ * (process_exchange).
  */
 #define PROCESS_STDIN_BUFFER_MAX 4096
 
@@ -180,13 +178,13 @@ typedef enum {
  *           dotta's own lines, as the child writes it — a hook under -v
  *           (utils/hooks) — nothing of it kept. A reader that goes away ends
  *           the child at its next write (SIGPIPE).
- * DEVNULL — /dev/null: output nobody reads, a credential helper's to approve or
- *           reject (sys/credentials). Opened before the fork: one that cannot
- *           be opened refuses the run, never leaves the child dotta's output.
+ * DEVNULL — /dev/null: output nobody reads. Opened before the fork: one that
+ *           cannot be opened refuses the run, never leaves the child dotta's
+ *           output.
  * CAPTURE — onto a pipe read into memory as the child writes, kept to the bound
- *           and counted past it (PROCESS_CAPTURE_MAX): a response the caller
- *           parses (sys/credentials). Nothing of it touches a disk — the policy
- *           for an output that holds a secret.
+ *           and counted past it (PROCESS_CAPTURE_MAX): an answer the caller parses.
+ *           Nothing of it touches a disk — the policy for an output that holds
+ *           a secret.
  * STREAM  — onto a pipe copied to dotta's stdout as it comes, and drained to the
  *           child's end whatever the reader does: a reader that went away costs
  *           the copy, never the child — a bootstrap script (utils/bootstrap).
@@ -218,9 +216,9 @@ typedef enum {
  * What a child writes is the child's to size, never the memory dotta holds for
  * it: past the bound the capture keeps nothing more and counts the rest
  * (result.output_dropped), and the child runs to its own end, never killed for
- * its volume. What a short capture means is the caller's to say — a credential
- * response read in part is refused (sys/credentials), a failed hook's output is
- * shown as far as it was kept (utils/hooks).
+ * its volume. What a short capture means is the caller's to say — a helper's
+ * answer read in part is none (sys/credentials), a failed hook's output is shown
+ * as far as it was kept (utils/hooks).
  */
 #define PROCESS_CAPTURE_MAX ((size_t) 1024 * 1024)
 
@@ -492,6 +490,10 @@ error_t process_finish(process_t *child, process_result_t *result);
  * zeroed on a refusal. The pipe, /dev/null, the fork, the read or the wait it
  * could not make is a refusal naming argv[0], as process_run's are.
  *
+ * Readers: sys/credentials.c credential_helper, each of a helper's operations —
+ * a "get" with its answer, a "store" and an "erase" with none — and
+ * credential_ask_one, an askpass, with no request.
+ *
  * @param argv NULL-terminated; argv[0] a name or a path (must not be NULL)
  * @param request What the child reads on its stdin, or NULL for none
  * @param size The request's bytes (0 where there is none)
@@ -514,7 +516,8 @@ error_t process_exchange(
  * run as named with no shell between: argv's own vector. Never applied to a path
  * a caller made, where a directory holding a space would read as a line.
  *
- * Readers: sys/editor.c editor_launch; sys/ssh.c ssh_start.
+ * Readers: sys/editor.c editor_launch; sys/ssh.c ssh_start; sys/credentials.c
+ * credential_helper.
  *
  * @param argv The line, then its arguments, NULL-terminated (must not be NULL,
  *             nor argv[0])

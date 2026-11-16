@@ -1,151 +1,183 @@
 /**
- * credentials.h - Stateless credential primitives.
+ * credentials.h - A credential, filled as git fills one
  *
- * Leaf-level building blocks for git credential resolution:
- *   - URL parsing (credential_url_t)
- *   - HTTPS credential helper IPC (fill / approve / reject)
- *   - Thin libgit2 cred constructors
+ * One credential: what a remote asks for — the protocol and the host that asked,
+ * the path where the configuration keeps one, the user the URL or the configuration
+ * names — and what answered it, kept whole: the username, the password, and what
+ * a helper sent beside them (password_expiry_utc, oauth_refresh_token), handed
+ * back as they came.
  *
- * Holds no session state. The pairs a session keeps, one a key, their replay,
- * anti-loop counters, and each pair's approve/reject decision belong to the session
- * owner (sys/transfer.c) — a credential session has a lifetime that this module
- * deliberately does not model.
+ * Made for one call of libgit2's (credential_init): the request read off the
+ * URL libgit2 called with, as libgit2 writes one, and the configuration's
+ * credential.* applied — every section whose URL matches, in the configuration's
+ * order (lib/git/credential.c credential_apply_config; base/url.h url_match).
+ * The configuration is the store's as libgit2 composes it, so a helper named in
+ * a file that is a git build's own — its system file, Homebrew's and Apple's on
+ * a Mac — or carried in the environment (GIT_CONFIG_COUNT, GIT_CONFIG_GLOBAL)
+ * is unread: `git config --global credential.helper <name>` names it where libgit2
+ * reads.
+ *
+ * Filled as git fills one (credential_fill; credential.c credential_fill): each
+ * helper asked in turn, "get", until the credential holds a username and a
+ * password, a helper that says to quit ending the fill only where its answer
+ * left one out; then the person — an askpass program (GIT_ASKPASS, core.askPass,
+ * SSH_ASKPASS), else the terminal in git's words (base/terminal.h terminal_ask),
+ * unless GIT_TERMINAL_PROMPT or credential.interactive forbids it (prompt.c
+ * git_prompt).
+ *
+ * A helper is run as git runs one (credential.c credential_do,
+ * run_credential_helper): `!line` by the shell, an absolute path as given, any
+ * other name as `git credential-<name>`, the operation its last word — save git's
+ * own file of credentials, the helper named `store`, exactly, which dotta reads
+ * and writes itself, as the invoker (builtin/credential-store.c), so it answers
+ * on a machine that holds no git. A helper is written the credential; its answer
+ * is read back for "get" alone (sys/process.h process_exchange); its words are
+ * the terminal's; nothing limits it, as nothing limits it under git. What libgit2
+ * cannot carry is not passed: the capabilities git announces (authtype, state)
+ * and a 401's own header (wwwauth[]), so a credential that is no username and
+ * password does not arrive. credential.sanitizePrompt, credential.protectProtocol
+ * and credentialStore.lockTimeoutMS are each read as git's default.
+ *
+ * Approved, every helper is told "store"; rejected, "erase". Holds no session
+ * state: which credential a session keeps, and its verdict, are sys/transfer's.
+ *
+ * Readers: sys/transfer.c transfer_credentials_callback (the request, the fill)
+ * and transfer_op_end (the verdicts).
  */
 
 #ifndef DOTTA_CREDENTIALS_H
 #define DOTTA_CREDENTIALS_H
 
 #include <git2.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <types.h>
 
+#include "base/output.h"
+
 /**
- * Parsed remote URL (protocol + host).
- *
- * The key a git credential helper stores a pair under, and the one a session
- * keeps the helper's pairs by (sys/transfer.c), beside the user a URL names.
- *
- * Both fields are validated at parse time:
- *   - protocol is free of \r/\n (required for the line-based git credential
- *     protocol)
- *   - host matches one of the accepted host grammars (plain hostname[:port] or
- *     bracketed IPv6 [addr][:port]) and is therefore also free of \r/\n by
- *     construction.
- *
- * Brackets on IPv6 hosts are preserved so callers can forward the value verbatim
- * into a `host=` line — disambiguating address bytes from a trailing port without
- * further parsing downstream.
+ * A credential: its request, its answer, and the helpers the configuration names
+ * for it — a value its holder ends with credential_deinit
  */
 typedef struct {
-    char *protocol;   /* e.g. "https", "ssh" */
-    char *host;       /* hostname[:port] or "[ipv6][:port]" */
-} credential_url_t;
+    char *protocol;                 /* What the remote asked by: "https", "http" */
+    char *host;                     /* The host that asked and its port, as libgit2 names them */
+    char *path;                     /* The repository's, where the configuration keeps one */
+    char *username;                 /* The URL's, the configuration's or the answer's */
+    char *password;                 /* The answer; NULL until one is given */
+    char *oauth_refresh_token;      /* A helper's, handed back as it came */
+    uint64_t password_expiry_utc;   /* When the password ends, a helper's word; 0: it names none */
+    arena_t *arena;                 /* The helpers' lines, the credential's own */
+    string_array_t helpers;         /* Each helper's line, in the configuration's order */
+} credential_t;
 
 /**
- * Parse a remote URL into protocol + host components.
+ * The credential a call of libgit2's is for: its request, the configuration applied
  *
- * Accepts:
- *   - <scheme>://[user[:pass]@]host[:port][/path]
- *   - <scheme>://[user[:pass]@][ipv6-addr][:port][/path]
- *   - user@host:path  (SCP-style → protocol "ssh")
+ * `url` is the URL libgit2 called with (git_credential_acquire_cb), which libgit2
+ * formats itself (lib/libgit2/src/util/net.c git_net_url_fmt) — the remote that
+ * answered 401, a redirect's target where one led there; its userinfo decoded
+ * and written raw, a port that is its scheme's own left out, an IPv6 address's
+ * brackets too — so it is read as libgit2 writes one, never as a URL a person
+ * spelled: the username is `username`, libgit2's own reading, stepped over in
+ * the URL by its length, an '@' it holds among it; the host runs from past it
+ * to the path's '/'; and the path is read as git reads one (credential.c
+ * credential_from_url_1), and kept only where credential.useHttpPath says so.
+ * What libgit2's formatting loses is lost: a credential for a remote at an IPv6
+ * address or at a spelled default port is kept and found under libgit2's spelling,
+ * never git's.
  *
- * Strips userinfo and path; only protocol and host[:port] survive. A URL whose
- * protocol or host fails validation produces an error; downstream consumers
- * therefore do not need to re-validate parsed components.
+ * Refused, each in words that name no URL, since the one libgit2 called with
+ * may carry a password: a URL that carries one — libgit2 offered it before it
+ * called, the remote refused it, and git, which asks nobody past a credential
+ * its URL carries, stops there, "Authentication failed"; a part holding a newline;
+ * a credential.* key given no value, or a credential.useHttpPath that is no
+ * boolean, as git refuses each; a configuration that cannot be read; and a URL
+ * that is not as libgit2 writes one.
  *
- * @param url Remote URL (must be non-NULL and non-empty)
- * @param out Output struct (zero-initialize before calling; populated on success).
- *            Caller releases it with credential_url_deinit.
- * @return Error or NULL on success. On failure, *out is left zero-initialized.
+ * @param repo The store, whose configuration applies (must not be NULL)
+ * @param url The URL libgit2 called with (must not be NULL)
+ * @param username The user libgit2 read off it, or NULL
+ * @param out The credential (must not be NULL); zeroed on a refusal
+ * @return Error or NULL on success
  */
-error_t credential_url_parse(const char *url, credential_url_t *out);
-
-/**
- * Release resources owned by a parsed URL.
- *
- * Idempotent; safe to call on a zero-initialized struct or twice in a row. Resets
- * the struct to its zero-initialized form.
- */
-void credential_url_deinit(credential_url_t *u);
-
-/**
- * Construct a libgit2 userpass plaintext credential.
- *
- * Thin wrapper over git_credential_userpass_plaintext_new — kept to confine
- * libgit2's credential constructors to one module.
- *
- * @return 0 on success, libgit2 error code otherwise.
- */
-int credential_make_userpass(
-    git_credential **out, const char *user, const char *pass
+error_t credential_init(
+    git_repository *repo, const char *url, const char *username, credential_t *out
 );
 
 /**
- * Construct an anonymous (empty userpass) credential — used as the "public repo"
- * fallback over HTTPS.
+ * Whether a credential answers a request: each of the protocol, the host, the
+ * path and the username the request names is the credential's own, a part it
+ * leaves unset matching any (lib/git/credential.c credential_match)
  *
- * @return 0 on success, libgit2 error code otherwise.
+ * Readers: sys/transfer.c transfer_credential_find, the credential a session
+ * keeps for a call; this module's own, over a line of git's file and a
+ * configuration section that is no URL.
+ *
+ * @param want The request (must not be NULL)
+ * @param have The credential (must not be NULL)
+ * @return Whether it answers
  */
-int credential_make_anonymous(git_credential **out);
+bool credential_match(const credential_t *want, const credential_t *have);
 
 /**
- * Construct libgit2's default credential (platform-integrated paths, e.g.
- * NTLM/Negotiate). Last-resort fallback.
+ * Fill a credential as git fills one: each helper asked, then the person
  *
- * @return 0 on success, libgit2 error code otherwise.
+ * On success the credential holds a username and a password. What a helper or
+ * an askpass could not do is said as a warning and passed over, as git passes
+ * over it. A helper's words, an askpass and the terminal's questions are written
+ * past the output layer: the progress line that stands steps aside around each
+ * helper that is a program and around the person's questions, and is drawn again
+ * beneath what was said (base/output.h output_suspend_line); a fill git's file
+ * answers moves no line.
+ *
+ * The failure is the fill's own, in git's words: a helper that said to quit; a
+ * value a helper cannot be written, one holding a line break; nobody to ask —
+ * "could not read Username for '<url>': " and the terminal's refusal, or "terminal
+ * prompts disabled"; a configuration that forbids asking.
+ *
+ * @param c The credential (must not be NULL; credential_init's)
+ * @param repo The store, whose configuration says who asks the person (must not
+ *             be NULL)
+ * @param out The run's output, for a warning (must not be NULL)
+ * @return Error or NULL on success
  */
-int credential_make_default(git_credential **out);
+error_t credential_fill(credential_t *c, git_repository *repo, output_t *out);
 
 /**
- * Query the git credential helper for a username + password.
+ * Tell every helper the credential served: "store". One with no password, or
+ * one already expired, is told to none (lib/git/credential.c credential_approve).
+ * What a helper could not do is said as a warning.
  *
- * Atomic: on success, both `*out_user` and `*out_pass` are non-NULL,
- * heap-allocated, and free of \r/\n. On any other outcome both are left NULL
- * and the caller falls through to its anonymous / default path. Error_t is returned
- * only for unusual conditions worth surfacing to the user — exec failure, timeout,
- * malformed helper response, a response past the capture's bound (never read in
- * part: PROCESS_CAPTURE_MAX), a request past the bound a helper is handed
- * (PROCESS_STDIN_BUFFER_MAX: a username from the URL past it). The common "helper
- * has no creds for this URL" outcome is signalled by NULL out-params and a NULL
- * return value.
+ * git's file is written only where its bytes or its mode would move: git's own
+ * helper rewrites it at every store — the same bytes under a new inode — which
+ * a copy dotta manages would read as moved after every contact. A kill between
+ * the lock's creation and its rename leaves `<file>.lock` standing, where git
+ * takes its own away: every later store then says so until it is removed.
  *
- * Caller ends `*out_user` / `*out_pass` with secure_free_string (base/secure.h).
- *
- * @param u                 Parsed remote URL
- * @param username_from_url Username encoded in URL (may be NULL); forwarded so
- *                          multi-account configs disambiguate per URL.
- * @param out_user          Output (initialized to NULL)
- * @param out_pass          Output (initialized to NULL)
- * @return Error or NULL.
+ * @param c The credential (must not be NULL)
+ * @param out The run's output, for a warning (must not be NULL)
  */
-error_t credential_helper_fill(
-    const credential_url_t *u,
-    const char *username_from_url,
-    char **out_user,
-    char **out_pass
-);
+void credential_approve(credential_t *c, output_t *out);
 
 /**
- * Commit accepted credentials to the helper (`git credential approve`).
+ * Tell every helper the remote refused the credential: "erase". Its password
+ * and what came beside it are wiped; its request and its username stand, for
+ * its holder to refuse the same user's later calls — where git lets the username
+ * go too, readying the credential for another fill (lib/git/credential.c
+ * credential_reject).
  *
- * No-op if `user` or `pass` is NULL or empty. A non-zero exit from a read-only
- * helper that doesn't implement approve is NOT an error — many helpers are
- * query-only by design. Returns an error only for a field that would break the
- * protocol, a request past the bound a helper is handed (sys/process.h
- * PROCESS_STDIN_BUFFER_MAX: the credential is not stored), exec failure or timeout.
- * What the helper writes goes nowhere (sys/process.h PROCESS_OUTPUT_DEVNULL):
- * nothing reads it, and the wait is on the helper alone.
+ * @param c The credential (must not be NULL)
+ * @param out The run's output, for a warning (must not be NULL)
  */
-error_t credential_helper_approve(
-    const credential_url_t *u, const char *user, const char *pass
-);
+void credential_reject(credential_t *c, output_t *out);
 
 /**
- * Revoke credentials at the helper (`git credential reject`).
+ * End a credential: every string wiped as a secret is, the helpers' lines let
+ * go. Idempotent; safe on a zeroed one.
  *
- * Same semantics as credential_helper_approve.
+ * @param c The credential (must not be NULL)
  */
-error_t credential_helper_reject(
-    const credential_url_t *u, const char *user, const char *pass
-);
+void credential_deinit(credential_t *c);
 
 #endif /* DOTTA_CREDENTIALS_H */

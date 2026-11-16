@@ -213,6 +213,9 @@ void terminal_echo_on(int fd, const struct termios *saved);
  * not take; the terminal's end of input before any byte, "End of input"; an answer
  * past the bound.
  *
+ * Reader: sys/credentials.c credential_ask_one, a credential's username and its
+ * password.
+ *
  * @param question The question, written as it stands (must not be NULL)
  * @param echo Whether the answer shows as it is typed
  * @param out The answer, the heap's (must not be NULL); NULL on a refusal

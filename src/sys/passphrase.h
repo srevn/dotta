@@ -20,8 +20,8 @@
  *
  * Terminal safety (passphrase_prompt only):
  *   The echo-disabled window is base/terminal's: the settings it found are armed
- *   before the echo goes off (terminal_echo_off). A terminating signal — the ones whose
- *   default action would leave the terminal with echo off (sys/process.h
+ *   before the echo goes off (terminal_echo_off). A terminating signal — the
+ *   ones whose default action would leave the terminal with echo off (sys/process.h
  *   PROCESS_TERMINATING_SIGNALS) — meets main.c's handler, which puts the armed
  *   settings back and re-raises with the default disposition, so the process
  *   terminates normally and the user's shell sees the standard 128+N exit status.
@@ -95,9 +95,9 @@ error_t passphrase_prompt(
  * — are handed an environment with every DOTTA_* variable the process holds
  * stripped, read or unread, each one they see being the run's own (utils/config.h
  * config_child_env), and the rest (`dotta git`, the editor, a credential helper,
- * ssh) inherit exactly what the invoker's own shell already held. The trade-off
- * the variable makes (it is visible to ps(1) until the read) is the user's to
- * accept, and this function prints nothing about it.
+ * an askpass, ssh) inherit exactly what the invoker's own shell already held.
+ * The trade-off the variable makes (it is visible to ps(1) until the read) is
+ * the user's to accept, and this function prints nothing about it.
  *
  * @param out_passphrase  The passphrase's own mapping. Caller owns; release
  *                        with secure_free(p, *out_len + 1).

@@ -89,6 +89,8 @@ typedef struct {
  * (CHECK_ARG): the shape of a string, checked as a contract where C cannot declare
  * it, as infra/label.h's projections check a storage name's.
  *
+ * Reader: sys/ssh.c ssh_start, the line ssh is started with.
+ *
  * @param url The URL (must not be NULL; one url_protocol reads as "ssh")
  * @param arena Arena the parts live in (must not be NULL)
  * @param out The parts (must not be NULL)

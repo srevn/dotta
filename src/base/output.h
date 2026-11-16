@@ -645,14 +645,15 @@ void output_clear_line(output_t *ctx);
  * to be drawn again once it is done (output_resume_line)
  *
  * A program the act starts may write on the terminal itself — git asks for a
- * credential on /dev/tty where no helper answers (lib/git/prompt.c git_prompt)
- * — and a line it writes beside the progress line joins its row. Taken down as
- * output_clear_line takes it down, the line is kept as it was last drawn, and
- * stands nowhere until its resume: a line that lands in between takes nothing
- * down, and a take-down writes nothing. Where none stands nothing is written,
- * and the resume draws nothing.
+ * credential on /dev/tty where no helper answers (lib/git/prompt.c git_prompt),
+ * ssh for a passphrase or a host's key — and a line it writes beside the progress
+ * line joins its row. Taken down as output_clear_line takes it down, the line
+ * is kept as it was last drawn, and stands nowhere until its resume: a line that
+ * lands in between takes nothing down, and a take-down writes nothing. Where
+ * none stands nothing is written, and the resume draws nothing.
  *
- * Reader: sys/transfer.c transfer_credentials_callback, before a helper's fill.
+ * Readers: sys/transfer.c transfer_credentials_callback, before a helper's fill;
+ * transfer_transport_callback, before ssh starts.
  *
  * @param ctx Output context (NULL: nothing)
  */
@@ -669,8 +670,8 @@ void output_suspend_line(output_t *ctx);
  * suspended, or the line ran past what the layer keeps (OUTPUT_PROGRESS_MAX),
  * nothing is drawn.
  *
- * Reader: sys/transfer.c transfer_credentials_callback, once a helper's fill
- * returns.
+ * Readers: sys/transfer.c transfer_credentials_callback, once a helper's fill
+ * returns; transfer_op_end, at the op's end.
  *
  * @param ctx Output context (NULL: nothing)
  */

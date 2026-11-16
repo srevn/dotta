@@ -22,6 +22,7 @@
 #include "base/string.h"
 #include "base/url.h"
 #include "sys/credentials.h"
+#include "sys/ssh.h"
 
 /**
  * A pair's states (file-local).
@@ -216,11 +217,21 @@ void transfer_op_begin(transfer_context_t *xfer) {
 }
 
 /**
- * End an op — take its frame down, say the remote's words, advance the credential
- * state machine, and answer what it moved.
+ * End an op — draw again the line its connection put aside, take its frame down,
+ * say the remote's words, advance the credential state machine, and answer what
+ * it moved.
  */
 transfer_wire_t transfer_op_end(transfer_context_t *xfer, int rc) {
     CHECK_NULL(xfer);
+
+    /* The line the op's connection put aside for ssh, drawn again now ssh is
+     * done asking — the remote answered, or the contact failed — on the row it
+     * held where ssh wrote nothing, beneath ssh's words where it wrote
+     * (transfer_transport_callback; base/output.h output_resume_line); nothing
+     * where none was put aside. First, and never over a frame: a frame drawn in
+     * the op ends the line's suspension (output_progress), and an op that puts
+     * it aside, a connect, moves no object */
+    output_resume_line(xfer->output);
 
     /* The frame the op drew is taken down here, once, whichever way it went. A
      * callback cannot tell its last call from one libgit2 makes after it — the
@@ -408,7 +419,7 @@ static int transfer_allow_protocol(git_repository *repo, const char *protocol) {
  * libgit2 transport callback: which transport a connection takes
  */
 int transfer_transport_callback(git_transport **out, git_remote *owner, void *payload) {
-    (void) payload;
+    transfer_context_t *xfer = (transfer_context_t *) payload;
 
     /* The protocol git reads off the handle's URL, which is its connection's:
      * libgit2 resolves the connect's URL and hands the callback the handle alone
@@ -439,14 +450,25 @@ int transfer_transport_callback(git_transport **out, git_remote *owner, void *pa
     int rc = transfer_allow_protocol(git_remote_owner(owner), protocol);
     if (rc < 0) return rc;
 
+    /* ssh, dotta's own (sys/ssh.h ssh_transport), which may ask on the terminal
+     * before the remote's first byte — a passphrase, a host's key — past the
+     * output layer, and nothing tells its asking from its waiting: the progress
+     * line that stands steps aside here, before any child starts, and is drawn
+     * again at the op's end, once the remote has answered (transfer_op_end;
+     * base/output.h output_suspend_line) */
+    if (str_equal(protocol, "ssh")) {
+        output_suspend_line(xfer->output);
+        return ssh_transport(out, owner);
+    }
+
     /* A path or file://, named: libgit2's routing reads a path only where a
      * directory stands — and, built with an SSH, only where no ':' stands — and
      * otherwise names no transport, where the local transport names the path it
      * cannot open (transports/local.c local_connect) */
     if (str_equal(protocol, "file")) return git_transport_local(out, owner, NULL);
 
-    /* ssh, git, http and https: libgit2's own routing, which reaches the protocol
-     * git's reading names — a scheme by its prefix, the scp form by its ':' */
+    /* git, http and https: libgit2's own routing, which reaches the protocol
+     * git's reading names, each by its prefix */
     return 0;
 }
 

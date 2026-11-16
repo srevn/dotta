@@ -20,12 +20,12 @@
  *   process_start       in conversation, its caller writing what it reads and
  *                       reading what it writes, then waiting at process_finish
  *                       with no limit, as git waits for its ssh
- *                       (lib/git/run-command.c finish_command): a program that
- *                       carries a protocol on its stdin and stdout
+ *                       (lib/git/run-command.c finish_command): ssh, carrying
+ *                       libgit2's protocol on its stdin and stdout (sys/ssh)
  *
- * A command line a person configured — an editor — becomes an argv by git's rule,
- * which its caller applies (process_shell): never a wait, so never to a path a
- * caller made.
+ * A command line a person configured — an editor, an ssh command — becomes an
+ * argv by git's rule, which its caller applies (process_shell): never a wait,
+ * so never to a path a caller made.
  *
  * Design principles:
  * - The time limit is one deadline on the monotonic clock, counted in the time
@@ -458,7 +458,7 @@ error_t process_finish(process_t *child, process_result_t *result);
  * run as named with no shell between: argv's own vector. Never applied to a path
  * a caller made, where a directory holding a space would read as a line.
  *
- * Readers: sys/editor.c editor_launch.
+ * Readers: sys/editor.c editor_launch; sys/ssh.c ssh_start.
  *
  * @param argv The line, then its arguments, NULL-terminated (must not be NULL,
  *             nor argv[0])

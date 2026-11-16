@@ -76,6 +76,11 @@ void transfer_op_begin(transfer_context_t *xfer);
 /**
  * End an op on this transfer session, and answer what it moved.
  *
+ * Draws again the line the op's connection put aside for ssh
+ * (transfer_transport_callback), on the row it held where ssh wrote nothing and
+ * beneath ssh's words where it wrote (base/output.h output_resume_line); where
+ * none was put aside, nothing.
+ *
  * Takes down the frame the op drew (base/output.h output_clear_line), whichever
  * way the op went — libgit2 reports past an op's last count, so its end alone
  * knows the frame is done. A remote's line said while the op runs takes the row
@@ -169,11 +174,19 @@ void transfer_configure_callbacks(
  * '<name>'", naming the bytes before its first ':'; and so is a protocol git's
  * policy forbids, "transport '<name>' not allowed", read as git reads it for
  * each transport (lib/git/transport.c is_transport_allowed: GIT_ALLOW_PROTOCOL,
- * protocol.<name>.allow, protocol.allow, GIT_PROTOCOL_FROM_USER). A path or file://
- * is libgit2's local transport, named: a path is a path in every build, whatever
- * ':' it holds, and one where no repository stands is that transport's to say,
- * naming it. ssh, git, http and https are left to libgit2's own routing, which
- * reaches the protocol git's reading names.
+ * protocol.<name>.allow, protocol.allow, GIT_PROTOCOL_FROM_USER). ssh is dotta's
+ * own, the machine's ssh started as git starts it (sys/ssh.h ssh_transport). A
+ * path or file:// is libgit2's local transport, named: a path is a path in every
+ * build, whatever ':' it holds, and one where no repository stands is that
+ * transport's to say, naming it. git, http and https are left to libgit2's own
+ * routing, which reaches the protocol git's reading names.
+ *
+ * ssh may ask on the terminal before the remote's first byte, past the output
+ * layer, so the progress line that stands steps aside where a connection is handed
+ * to ssh, and is drawn again at the op's end (transfer_op_end): while ssh connects,
+ * no line stands. That rests on this being asked once a handle, and on a handle
+ * connecting once (sys/remote.c remote_open, remote_push) — a handle connected
+ * again would start its second ssh beside a line drawn again.
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  *

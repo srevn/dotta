@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <git2/errors.h>
 #include <git2/sys/errors.h>
@@ -323,6 +324,87 @@ void transfer_configure_callbacks(
 }
 
 /**
+ * git's protocol policy over a protocol, by git's name for it: 0 where it allows
+ * it, else GIT_ERROR and the refusal in libgit2's slot — asked as git's connect
+ * asks it of each transport, with no word of whose URL it is (lib/git/transport.c
+ * transport_check_allowed, is_transport_allowed)
+ */
+static int transfer_allow_protocol(git_repository *repo, const char *protocol) {
+    /* GIT_ALLOW_PROTOCOL, where set, decides alone: the protocol allowed where
+     * its ':'-separated list names it, each entry compared whole and in its case,
+     * an empty one naming none (protocol_allow_list; string-list.c split_string) */
+    const char *listed = getenv("GIT_ALLOW_PROTOCOL");
+    if (listed) {
+        size_t len = strlen(protocol);
+        for (const char *entry = listed, *end;; entry = end + 1) {
+            end = entry + strcspn(entry, ":");
+            if ((size_t) (end - entry) == len && memcmp(entry, protocol, len) == 0) {
+                return 0;
+            }
+
+            if (*end == '\0') break;
+        }
+
+        git_error_set(GIT_ERROR_NET, "transport '%s' not allowed", protocol);
+        return GIT_ERROR;
+    }
+
+    /* Else the protocol's own setting, else every protocol's, else git's own:
+     * always for http, https, git and ssh, never for ext — which no URL here
+     * reads as — and user for any other, file among them (get_protocol_config).
+     * Read off a snapshot of the store's configuration, its every level, which
+     * holds the value until it is judged; a key given no value reads as ""
+     * (config.c git_config_get_string), a value none of git's, where git dies
+     * on it */
+    git_config *config = NULL;
+    int rc = git_repository_config_snapshot(&config, repo);
+    if (rc < 0) return rc;
+
+    char key[32];
+    snprintf(key, sizeof(key), "protocol.%s.allow", protocol);
+    const char *allow = NULL;
+    rc = git_config_get_string(&allow, config, key);
+    if (rc == GIT_ENOTFOUND) {
+        snprintf(key, sizeof(key), "protocol.allow");
+        rc = git_config_get_string(&allow, config, key);
+    }
+    if (rc == GIT_ENOTFOUND) {
+        allow = str_equal(protocol, "file") ? "user" : "always";
+        rc = 0;
+    }
+
+    /* user is the person's word: GIT_PROTOCOL_FROM_USER, a boolean true where
+     * unset — every URL dotta reads is the person's own — so always or never,
+     * and refused where it is no boolean (is_transport_allowed, git_env_bool) */
+    if (rc == 0 && strcasecmp(allow, "user") == 0) {
+        const char *user = getenv("GIT_PROTOCOL_FROM_USER");
+        int from_user = 1;
+        if (user && git_config_parse_bool(&from_user, user) < 0) {
+            git_error_set(
+                GIT_ERROR_CONFIG, "GIT_PROTOCOL_FROM_USER is not a boolean: '%s'", user
+            );
+            rc = GIT_ERROR;
+        }
+        allow = from_user ? "always" : "never";
+    }
+
+    /* always or never, in any case, and any other value refused, naming the key
+     * it stands at (parse_protocol_config) */
+    if (rc == 0 && strcasecmp(allow, "never") == 0) {
+        git_error_set(GIT_ERROR_NET, "transport '%s' not allowed", protocol);
+        rc = GIT_ERROR;
+    } else if (rc == 0 && strcasecmp(allow, "always") != 0) {
+        git_error_set(
+            GIT_ERROR_CONFIG, "unknown value for config '%s': '%s'", key, allow
+        );
+        rc = GIT_ERROR;
+    }
+
+    git_config_free(config);
+    return rc;
+}
+
+/**
  * libgit2 transport callback: which transport a connection takes
  */
 int transfer_transport_callback(git_transport **out, git_remote *owner, void *payload) {
@@ -351,6 +433,11 @@ int transfer_transport_callback(git_transport **out, git_remote *owner, void *pa
         );
         return GIT_ERROR;
     }
+
+    /* Then git's policy over it, before any transport is named: a protocol the
+     * person forbade git is refused here, for every transport alike */
+    int rc = transfer_allow_protocol(git_remote_owner(owner), protocol);
+    if (rc < 0) return rc;
 
     /* A path or file://, named: libgit2's routing reads a path only where a
      * directory stands — and, built with an SSH, only where no ':' stands — and

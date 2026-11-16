@@ -166,11 +166,14 @@ void transfer_configure_callbacks(
  * its url and a push's the push URL its own handle was given (sys/remote.h). A
  * URL git reads no protocol of — a remote helper's, rsync:, a "://" no scheme
  * stands before — is refused before any contact, "unsupported URL protocol
- * '<name>'", naming the bytes before its first ':'. A path or file:// is libgit2's
- * local transport, named: a path is a path in every build, whatever ':' it holds,
- * and one where no repository stands is that transport's to say, naming it. ssh,
- * git, http and https are left to libgit2's own routing, which reaches the protocol
- * git's reading names.
+ * '<name>'", naming the bytes before its first ':'; and so is a protocol git's
+ * policy forbids, "transport '<name>' not allowed", read as git reads it for
+ * each transport (lib/git/transport.c is_transport_allowed: GIT_ALLOW_PROTOCOL,
+ * protocol.<name>.allow, protocol.allow, GIT_PROTOCOL_FROM_USER). A path or file://
+ * is libgit2's local transport, named: a path is a path in every build, whatever
+ * ':' it holds, and one where no repository stands is that transport's to say,
+ * naming it. ssh, git, http and https are left to libgit2's own routing, which
+ * reaches the protocol git's reading names.
  *
  * Installed by transfer_configure_callbacks. Not intended for direct use.
  *

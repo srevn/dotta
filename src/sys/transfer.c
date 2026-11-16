@@ -261,18 +261,17 @@ transfer_wire_t transfer_op_end(transfer_context_t *xfer, int rc) {
     }
 
     /* The helper's pair this op offered, judged by it — where no verdict was
-     * reached yet: an op that offered none (an SSH key, the anonymous pair, no
-     * ask at all) judges nothing, and the terminal states (VALIDATED, REJECTED)
-     * absorb any outcome without transitioning. An op that succeeded validates
-     * it. GIT_EAUTH, libgit2's auth-failure code, rejects it definitively: the
-     * credential callback returns it when it gives up
-     * (transfer_credentials_callback), and libgit2 where a remote asks for
-     * credentials no callback could give (transports/http.c handle_auth,
-     * transports/ssh_libssh2.c request_creds). Any other failure leaves the pair
-     * pending, for a later op to validate or reject: a network hiccup, a run
-     * that exhausts libgit2's own replay budget — GIT_ERROR, "the exact cause
-     * is unclear" in its words (transports/http.c http_stream_read) — and the
-     * auth failures some TLS and SSH paths surface as other errors. */
+     * reached yet: an op that offered none (the anonymous pair, no ask at all)
+     * judges nothing, and the terminal states (VALIDATED, REJECTED) absorb any
+     * outcome without transitioning. An op that succeeded validates it. GIT_EAUTH,
+     * libgit2's auth-failure code, rejects it definitively: the credential callback
+     * returns it when it gives up (transfer_credentials_callback), and libgit2
+     * where a remote asks for credentials no callback could give (transports/http.c
+     * handle_auth). Any other failure leaves the pair pending, for a later op
+     * to validate or reject: a network hiccup, a run that exhausts libgit2's
+     * own replay budget — GIT_ERROR, "the exact cause is unclear" in its words
+     * (transports/http.c http_stream_read) — and the auth failures some TLS paths
+     * surface as other errors. */
     transfer_pair_t *pair = xfer->op.offered;
     if (pair && pair->state == CRED_STATE_ACQUIRED) {
         if (rc == 0) {
@@ -507,9 +506,7 @@ static transfer_pair_t *transfer_pair_find(
  *      Every refusal is worded here, in libgit2's own slot: the sentence a failed
  *      op ends on is the one this callback leaves.
  *
- *   2. SSH path takes precedence when allowed; SSH never fills a pair.
- *
- *   3. HTTPS userpass path: parse the asking URL into its key, and offer the
+ *   2. HTTPS userpass path: parse the asking URL into its key, and offer the
  *      pair the helper filled for it — refused at once where the remote rejected
  *      it, which saves a wasted round-trip per op in a multi-profile sync after
  *      an auth failure, and replayed otherwise; with none, fill the helper, install
@@ -525,31 +522,19 @@ int transfer_credentials_callback(
 
     /* Asked again within one op: what this op offered was refused. A refusal is
      * worded where it is decided: libgit2 hands a callback's code up with no
-     * sentence of its own (transports/http.c handle_auth, transports/ssh_libssh2.c
-     * request_creds), and the sentence it last set may be a lookup that succeeded
-     * (remote.c lookup_redirect_config's value "not found"). Where an SSH key
-     * is allowed the offer was the agent's, refused in libssh2's words, set before
-     * this call (transports/ssh_libssh2.c ssh_agent_auth), and those stand; else
-     * it was the helper's pair the op offered, or with none the anonymous one,
-     * which the remote answered by asking again. */
+     * sentence of its own (transports/http.c handle_auth), and the sentence it
+     * last set may be a lookup that succeeded (remote.c lookup_redirect_config's
+     * value "not found"). The offer was the helper's pair, or with none the
+     * anonymous one, which the remote answered by asking again. */
     if (xfer->op.attempts++ > 0) {
-        if (!(allowed_types & GIT_CREDENTIAL_SSH_KEY)) {
-            (void) git_error_set_str(
-                GIT_ERROR_CALLBACK, xfer->op.offered
-                    ? "the remote refused the credentials the git credential helper gave"
-                    : "the remote requires credentials, and no git credential helper gave any"
-            );
-        }
+        (void) git_error_set_str(
+            GIT_ERROR_CALLBACK, xfer->op.offered
+                ? "the remote refused the credentials the git credential helper gave"
+                : "the remote requires credentials, and no git credential helper gave any"
+        );
         return GIT_EAUTH;
     }
     if (!url) return GIT_PASSTHROUGH;
-
-    /* SSH path — agent then on-disk key. */
-    if (allowed_types & GIT_CREDENTIAL_SSH_KEY) {
-        if (credential_try_ssh(out, url, username_from_url) == 0) {
-            return 0;
-        }
-    }
 
     /* HTTPS userpass path. */
     if (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) {

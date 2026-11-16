@@ -3,7 +3,6 @@
  *
  * Leaf-level building blocks for git credential resolution:
  *   - URL parsing (credential_url_t)
- *   - SSH credential acquisition (agent + on-disk key files)
  *   - HTTPS credential helper IPC (fill / approve / reject)
  *   - Thin libgit2 cred constructors
  *
@@ -69,31 +68,10 @@ error_t credential_url_parse(const char *url, credential_url_t *out);
 void credential_url_deinit(credential_url_t *u);
 
 /**
- * Try SSH-based credential acquisition (agent first, then on-disk key).
- *
- * Stateless: each call attempts the SSH agent once and falls back to a file-system
- * key search. Encrypted on-disk keys without an agent are not supported: the
- * key is offered with no passphrase, so the user loads it with ssh-add or the
- * helper path answers instead (sys/credentials.c).
- *
- * @param out               libgit2 credential output (required)
- * @param url               Remote URL — used to default the SSH user to
- *                          "git" for common URL shapes
- * @param username_from_url Username encoded in URL (may be NULL)
- * @return 0 on success (cred installed), -1 if no SSH path succeeded
- */
-int credential_try_ssh(
-    git_credential **out,
-    const char *url,
-    const char *username_from_url
-);
-
-/**
  * Construct a libgit2 userpass plaintext credential.
  *
- * Thin wrapper over git_credential_userpass_plaintext_new — kept for symmetry
- * with credential_try_ssh and to confine libgit2 cred-API details to a single
- * module.
+ * Thin wrapper over git_credential_userpass_plaintext_new — kept to confine
+ * libgit2's credential constructors to one module.
  *
  * @return 0 on success, libgit2 error code otherwise.
  */

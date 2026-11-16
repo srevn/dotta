@@ -4,18 +4,14 @@
 
 #include "sys/credentials.h"
 
-#include <fcntl.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/secure.h"
-#include "base/string.h"
-#include "sys/identity.h"
 #include "sys/process.h"
 
 /* Credential helper subprocess timeout. Accommodates TouchID/Keychain prompts
@@ -550,89 +546,6 @@ error_t credential_helper_fill(
     *out_user = user_buf;
     *out_pass = pass_buf;
     return NULL;
-}
-
-/**
- * Check if a file exists and is readable.
- *
- * The running user's own question — the key is read by the user the run is, so
- * the effective user's answer is the one that matters (AT_EACCESS); never a managed
- * path's, so the raw call and not sys/filesystem's funnel.
- */
-static bool file_exists(const char *path) {
-    return faccessat(AT_FDCWD, path, R_OK, AT_EACCESS) == 0;
-}
-
-/**
- * Find an SSH private key in standard locations.
- *
- * Under the invoker's home (sys/identity) whatever the run's identity: under
- * `sudo dotta sync`, the user's keys, not /root/.ssh/.
- */
-static char *find_ssh_key(void) {
-    const char *home = identity()->home;
-
-    /* List of common SSH key filenames (in order of preference) */
-    const char *key_names[] = {
-        ".ssh/id_ed25519",
-        ".ssh/id_ecdsa",
-        ".ssh/id_rsa",
-        NULL
-    };
-
-    for (int i = 0; key_names[i] != NULL; i++) {
-        char *key_path = heap_str_format("%s/%s", home, key_names[i]);
-
-        if (file_exists(key_path)) return key_path;
-
-        free(key_path);
-    }
-
-    return NULL;
-}
-
-int credential_try_ssh(
-    git_credential **out,
-    const char *url,
-    const char *username_from_url
-) {
-    const char *username = username_from_url;
-    if (!username && url) {
-        /* Default SSH username for the common URL shapes that don't already encode
-         * one. libgit2 itself extracts userinfo for standard ssh://user@host
-         * paths and SCP-style user@host:path, so the only case we still need to
-         * cover is the bare `git@` convention with no userinfo and the
-         * `ssh://host/path` form — both default to "git" in practice. */
-        if (str_starts_with(url, "git@") || strstr(url, "ssh://") != NULL) {
-            username = "git";
-        }
-    }
-
-    if (username) {
-        if (git_credential_ssh_key_from_agent(out, username) == 0) {
-            return 0;
-        }
-    }
-
-    char *ssh_key_path = find_ssh_key();
-    if (!ssh_key_path) {
-        return -1;
-    }
-
-    char *pub_key_path = heap_str_format("%s.pub", ssh_key_path);
-    int rc = git_credential_ssh_key_new(
-        out,
-        username ? username : "git",
-        pub_key_path,
-        ssh_key_path,
-        NULL  /* empty passphrase — encrypted keys without an agent
-               * are not supported; users hit ssh-add or fall back
-               * to the helper path. */
-    );
-    free(pub_key_path);
-    free(ssh_key_path);
-
-    return (rc == 0) ? 0 : -1;
 }
 
 int credential_make_userpass(

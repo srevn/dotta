@@ -94,8 +94,8 @@ void transfer_op_begin(transfer_context_t *xfer);
  * left open, the others said as they arrived; otherwise, where the op failed,
  * every line, a block of its own at OUTPUT_NORMAL — and where it succeeded, none.
  *
- * Judges the pair the op offered on `rc` — none where it offered an SSH key or
- * the anonymous pair, or was asked for no credentials:
+ * Judges the pair the op offered on `rc` — none where it offered the anonymous
+ * pair, or was asked for no credentials:
  *
  *   ACQUIRED      + 0            → VALIDATED      (terminal)
  *   ACQUIRED      + GIT_EAUTH    → REJECTED       (terminal)

@@ -7,6 +7,7 @@
 #include "base/terminal.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -19,6 +20,7 @@
 
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/secure.h"
 
 /* Terminal Initialization & Cleanup  */
 
@@ -191,6 +193,86 @@ void terminal_echo_on(int fd, const struct termios *saved) {
 
     (void) tcsetattr(fd, TCSAFLUSH, saved);
     terminal_disarm();
+}
+
+/* A Question */
+
+/* The longest line a question's answer is read as: no terminal hands a longer
+ * one whole, a canonical line ending at 1,024 bytes on macOS and at 4,096 on
+ * Linux, its newline among them */
+#define TERMINAL_LINE_MAX 4096
+
+error_t terminal_ask(const char *question, bool echo, char **out) {
+    CHECK_NULL(question);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    /* The controlling terminal, by its name, whatever the process's streams are.
+     * A process with none has nobody to ask: the errno's words alone, as git
+     * says them (lib/git/prompt.c git_prompt), for the caller to say what was
+     * asked. */
+    int tty = open("/dev/tty", O_RDWR | O_CLOEXEC);
+    if (tty < 0) {
+        int refused = errno;
+        return error_create(error_errno_code(refused), "%s", strerror(refused));
+    }
+
+    /* Unseen: the echo off before the question is written, as git orders them
+     * (lib/git/compat/terminal.c git_terminal_prompt) */
+    struct termios saved;
+    error_t err = echo ? NULL : terminal_echo_off(tty, &saved);
+    if (err) {
+        close(tty);
+        return err;
+    }
+
+    /* The question as it stands. One the terminal would not take is its own
+     * refusal, never the read's. */
+    if (dprintf(tty, "%s", question) < 0) {
+        err = error_errno(errno, "Cannot write to the terminal");
+    }
+
+    /* The answer, a read at a time off the descriptor until its newline: a stdio
+     * buffer would hold what was typed in memory freed unwiped. A read that failed
+     * is said in its errno's words alone, as the open's is. */
+    char line[TERMINAL_LINE_MAX];
+    size_t len = 0;
+    const char *newline = NULL;
+    while (!err && !newline && len < sizeof(line)) {
+        ssize_t n = read(tty, line + len, sizeof(line) - len);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) {
+            int refused = errno;
+            err = error_create(error_errno_code(refused), "%s", strerror(refused));
+        }
+        if (n <= 0) break;
+
+        newline = memchr(line + len, '\n', (size_t) n);
+        len += (size_t) n;
+    }
+
+    /* The newline the terminal did not echo, then the settings back, in git's
+     * order, whichever way the read went */
+    if (!echo) {
+        (void) dprintf(tty, "\n");
+        terminal_echo_on(tty, &saved);
+    }
+    close(tty);
+
+    /* The answer ends at its newline, or where the terminal's input ended a line
+     * that was begun, as git reads one. No byte before that end is no answer,
+     * and a line the bound cut is refused, never taken in part. */
+    if (!err && !newline && len == sizeof(line)) {
+        err = error_create(
+            ERR_INVALID_ARG, "Answer too long (maximum %zu bytes)", sizeof(line) - 1
+        );
+    }
+    if (!err && !newline && len == 0) err = error_create(ERR_FS, "End of input");
+    if (!err) *out = heap_strndup(line, newline ? (size_t) (newline - line) : len);
+
+    secure_wipe(line, sizeof(line));
+    return err;
 }
 
 /* Terminal Capabilities */

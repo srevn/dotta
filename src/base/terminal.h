@@ -164,7 +164,8 @@ void terminal_restore_armed(void);
  * input dropped (TCSAFLUSH): what was typed before the question, echoed while
  * the echo was still on, is never read as its answer.
  *
- * Reader: sys/passphrase.c passphrase_prompt.
+ * Readers: sys/passphrase.c passphrase_prompt; terminal_ask, where the answer
+ * is unseen.
  *
  * @param fd The terminal's descriptor, open until terminal_echo_on
  * @param saved The settings as they stood, for terminal_echo_on (must not be NULL)
@@ -184,6 +185,40 @@ error_t terminal_echo_off(int fd, struct termios *saved);
  * @param saved The settings it saved (must not be NULL)
  */
 void terminal_echo_on(int fd, const struct termios *saved);
+
+/**
+ * Ask a question on the controlling terminal, as git asks one
+ * (lib/git/compat/terminal.c git_terminal_prompt)
+ *
+ * The terminal is /dev/tty, opened for the question and closed after it, whatever
+ * the process's own streams are: a run whose stdin and stdout are led away still
+ * asks the person, and one with no terminal has nobody to ask. The question is
+ * written as it stands, and the answer is the line typed after it, to its newline
+ * — an empty line is an answer — or to the terminal's end of input where a line
+ * was begun. With `echo` false the answer is unseen: the echo off before the
+ * question is written (terminal_echo_off), and once the answer is read, the newline
+ * the terminal did not echo, then the settings back.
+ *
+ * What is typed may be a secret: it is read off the descriptor, never through a
+ * stdio buffer, into memory wiped before the call returns, and handed over as a
+ * heap string its caller ends with secure_free_string (base/secure.h). No terminal
+ * hands a longer line whole than the one read here — a canonical line ends at
+ * 1,024 bytes on macOS and at 4,096 on Linux — so a longer answer cannot be typed,
+ * at git's own question either; one a terminal with no line discipline hands
+ * past that is refused, never taken in part.
+ *
+ * Refused: no terminal, and a read that failed, each in its errno's words alone,
+ * as git says them (lib/git/prompt.c git_prompt) — the caller says what was asked;
+ * the terminal's settings (terminal_echo_off); a question the terminal would
+ * not take; the terminal's end of input before any byte, "End of input"; an answer
+ * past the bound.
+ *
+ * @param question The question, written as it stands (must not be NULL)
+ * @param echo Whether the answer shows as it is typed
+ * @param out The answer, the heap's (must not be NULL); NULL on a refusal
+ * @return Error or NULL on success
+ */
+error_t terminal_ask(const char *question, bool echo, char **out);
 
 /**
  * Get terminal size

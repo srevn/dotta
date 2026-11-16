@@ -81,7 +81,7 @@ error_t terminal_init(terminal_t **out) {
 
     /* Armed before raw mode goes on: a terminating signal from here puts the
      * original settings back (terminal_arm, which keeps a copy). */
-    terminal_arm(&orig);
+    terminal_arm(STDIN_FILENO, &orig);
 
     /* Apply raw mode settings. A refusal disarms, which moves no errno. */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
@@ -115,15 +115,17 @@ void terminal_restore(terminal_t *term) {
 
 /* The Armed Settings */
 
-/* What a terminating signal puts back: the settings armed, and whether the cursor
- * is hidden. Written by the code that changes the terminal and read by a signal
- * handler, so every flag is a volatile sig_atomic_t and the settings are whole
- * before the flag that says so (terminal_arm). */
+/* What a terminating signal puts back: the settings armed and the descriptor
+ * they go back through, and whether the cursor is hidden. Written by the code
+ * that changes the terminal and read by a signal handler, so every flag is a
+ * volatile sig_atomic_t, and the settings and their descriptor are whole before
+ * the flag that says so (terminal_arm). */
 static struct termios armed_settings;
+static int armed_fd;
 static volatile sig_atomic_t armed = 0;
 static volatile sig_atomic_t cursor_hidden = 0;
 
-void terminal_arm(const struct termios *settings) {
+void terminal_arm(int fd, const struct termios *settings) {
     CHECK_ARG(!armed, "the terminal is armed already");
 
     /* The flag down while the copy is made, and up only once it is whole: a signal
@@ -132,6 +134,7 @@ void terminal_arm(const struct termios *settings) {
     armed = 0;
     atomic_signal_fence(memory_order_seq_cst);
     armed_settings = *settings;
+    armed_fd = fd;
     atomic_signal_fence(memory_order_seq_cst);
     armed = 1;
 }
@@ -144,7 +147,7 @@ void terminal_restore_armed(void) {
     /* TCSANOW, never a drain: a handler must not wait on output a stopped terminal
      * may never take. */
     if (armed) {
-        (void) tcsetattr(STDIN_FILENO, TCSANOW, &armed_settings);
+        (void) tcsetattr(armed_fd, TCSANOW, &armed_settings);
         armed = 0;
     }
 
@@ -157,6 +160,37 @@ void terminal_restore_armed(void) {
         (void) write(STDOUT_FILENO, back, sizeof(back) - 1);
         cursor_hidden = 0;
     }
+}
+
+/* The Echo */
+
+error_t terminal_echo_off(int fd, struct termios *saved) {
+    CHECK_NULL(saved);
+
+    if (tcgetattr(fd, saved) != 0) {
+        return error_errno(errno, "Failed to get terminal attributes");
+    }
+
+    /* Armed before the echo goes off, disarmed once it is back (terminal_echo_on):
+     * a terminating signal in either window puts back settings that are already
+     * back. A refusal disarms, which moves no errno. */
+    terminal_arm(fd, saved);
+
+    struct termios hidden = *saved;
+    hidden.c_lflag &= ~ECHO;
+    if (tcsetattr(fd, TCSAFLUSH, &hidden) != 0) {
+        terminal_disarm();
+        return error_errno(errno, "Failed to disable echo");
+    }
+
+    return NULL;
+}
+
+void terminal_echo_on(int fd, const struct termios *saved) {
+    CHECK_NULL(saved);
+
+    (void) tcsetattr(fd, TCSAFLUSH, saved);
+    terminal_disarm();
 }
 
 /* Terminal Capabilities */

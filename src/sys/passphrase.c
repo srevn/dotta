@@ -24,9 +24,9 @@
 /**
  * Read a passphrase from the user with terminal echo disabled.
  *
- * The contract is the header's. Setup order — save termios → arm them → disable
- * echo — and teardown order — restore echo → disarm — keep a terminating signal
- * in either window harmless: armed, it puts back settings that are already back.
+ * The contract is the header's. The echo's window is base/terminal's pair
+ * (terminal_echo_off, terminal_echo_on), whose order keeps a terminating signal
+ * in either end of it harmless.
  */
 error_t passphrase_prompt(
     const char *prompt,
@@ -38,27 +38,14 @@ error_t passphrase_prompt(
     CHECK_NULL(out_len);
 
     const bool is_tty = isatty(STDIN_FILENO);
-    struct termios old_term, new_term;
-    bool echo_disabled = false;
+    struct termios saved;
 
-    /* The settings armed BEFORE echo goes off: a terminating signal from here
-     * puts them back (base/terminal.h terminal_arm, main.c's handler). */
+    /* The echo off for the read, the settings armed first: a terminating signal
+     * from here puts them back (base/terminal.h terminal_echo_off, main.c's
+     * handler) */
     if (is_tty) {
-        if (tcgetattr(STDIN_FILENO, &old_term) != 0) {
-            return error_create(ERR_FS, "Failed to get terminal attributes");
-        }
-
-        terminal_arm(&old_term);
-
-        new_term = old_term;
-        new_term.c_lflag &= ~ECHO;
-
-        if (tcsetattr(STDIN_FILENO, TCSANOW, &new_term) != 0) {
-            terminal_disarm();   /* echo was never disabled */
-            return error_create(ERR_FS, "Failed to disable echo");
-        }
-
-        echo_disabled = true;
+        error_t err = terminal_echo_off(STDIN_FILENO, &saved);
+        if (err) return err;
     }
 
     /* Display the prompt — at a terminal, where somebody reads it; a pipe has
@@ -75,10 +62,7 @@ error_t passphrase_prompt(
      * locked best-effort, wiped and unmapped when it goes. */
     char *passphrase = secure_alloc(MAX_PASSPHRASE_LENGTH + 1);
     if (!passphrase) {
-        if (echo_disabled) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
-            terminal_disarm();
-        }
+        if (is_tty) terminal_echo_on(STDIN_FILENO, &saved);
         return error_create(ERR_MEMORY, "Failed to map passphrase buffer");
     }
 
@@ -97,11 +81,11 @@ error_t passphrase_prompt(
     const bool read_failed = ferror(stdin);
     const int read_errno = errno;  /* before the teardown's own calls move it */
 
-    /* Teardown order: restore echo → disarm. */
-    if (echo_disabled) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
-        fprintf(stderr, "\n");  /* the Enter keypress echo was suppressed */
-        terminal_disarm();
+    /* The settings back, then the newline the terminal did not echo: the Enter
+     * keypress's */
+    if (is_tty) {
+        terminal_echo_on(STDIN_FILENO, &saved);
+        fprintf(stderr, "\n");
     }
 
     /* Nothing read: end of input (a closed stdin, a pipe that ran out of lines)

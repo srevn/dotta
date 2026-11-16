@@ -98,8 +98,8 @@ typedef enum {
  * - Disable signals (Ctrl+C, Ctrl+Z)
  * - Read input byte-by-byte
  *
- * The saved settings are armed before raw mode goes on (terminal_arm), so a
- * terminating signal puts them back.
+ * The saved settings are armed with stdin before raw mode goes on (terminal_arm),
+ * so a terminating signal puts them back.
  *
  * Always call terminal_restore() when done, even on errors.
  *
@@ -122,17 +122,19 @@ void terminal_restore(terminal_t *term);
 /**
  * Arm the settings a terminating signal puts back
  *
- * Whoever changes the terminal's settings arms the ones to restore, before the
- * change — the editor's raw mode (terminal_init) and the passphrase prompt's
- * hidden echo (sys/passphrase.c passphrase_prompt) — and disarms once they are
- * back. One slot: dotta changes one terminal at a time, and an arm while one is
- * armed is a caller's bug (CHECK_ARG). Read by main.c's handler,
- * terminating_signal, and by the death, base/error.c error_die, through
- * terminal_restore_armed.
+ * Whoever changes a terminal's settings arms the ones to restore, before the
+ * change, with the descriptor the change is made through — the editor's raw mode
+ * (terminal_init) and a hidden echo's (terminal_echo_off) — and disarms once
+ * they are back. They go back through that descriptor, which stays open until
+ * the disarm: the terminal changed is the one it names, whatever stdin is. One
+ * slot: dotta changes one terminal at a time, and an arm while one is armed is
+ * a caller's bug (CHECK_ARG). Read by main.c's handler, terminating_signal, and
+ * by the death, base/error.c error_die, through terminal_restore_armed.
  *
+ * @param fd The terminal's descriptor, open until the disarm
  * @param settings The settings to put back (must not be NULL; copied)
  */
-void terminal_arm(const struct termios *settings);
+void terminal_arm(int fd, const struct termios *settings);
 
 /**
  * Disarm the settings terminal_arm armed: they are back, and a terminating signal
@@ -153,9 +155,43 @@ void terminal_disarm(void);
 void terminal_restore_armed(void);
 
 /**
+ * Hide what is typed at a terminal: its settings read into *saved and armed
+ * (terminal_arm), then its echo turned off
+ *
+ * Armed before the echo goes off, so a terminating signal inside the window puts
+ * the settings back through `fd`. The change is git's (lib/git/compat/terminal.c
+ * disable_bits), made once the terminal's output has drained and with its unread
+ * input dropped (TCSAFLUSH): what was typed before the question, echoed while
+ * the echo was still on, is never read as its answer.
+ *
+ * Reader: sys/passphrase.c passphrase_prompt.
+ *
+ * @param fd The terminal's descriptor, open until terminal_echo_on
+ * @param saved The settings as they stood, for terminal_echo_on (must not be NULL)
+ * @return Error or NULL on success; refused, nothing is armed and nothing changed
+ */
+error_t terminal_echo_off(int fd, struct termios *saved);
+
+/**
+ * Show what is typed again: the settings terminal_echo_off saved put back, then
+ * disarmed
+ *
+ * Put back as git puts them back (lib/git/compat/terminal.c restore_term), with
+ * the terminal's unread input dropped (TCSAFLUSH): what was typed past the answer
+ * read is never read as the next.
+ *
+ * @param fd The descriptor terminal_echo_off was handed
+ * @param saved The settings it saved (must not be NULL)
+ */
+void terminal_echo_on(int fd, const struct termios *saved);
+
+/**
  * Get terminal size
  *
- * Queries current terminal dimensions via ioctl.
+ * Queries current terminal dimensions via ioctl, of stdout's terminal, where a
+ * screen is drawn — never stdin's, where its keys are read (terminal_is_tty,
+ * terminal_init): a screen led away from the terminal has no size, and is refused
+ * here, ENOTTY, whatever stdin is.
  *
  * @param out Size (must not be NULL)
  * @return Error or NULL on success

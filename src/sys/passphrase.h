@@ -19,13 +19,13 @@
  * by secure_free — and is not the allocator's: callers MUST NOT free it.
  *
  * Terminal safety (passphrase_prompt only):
- *   During the echo-disabled window the saved settings are armed (base/terminal.h
- *   terminal_arm). A terminating signal — the ones whose default action would
- *   leave the terminal with echo off (sys/process.h PROCESS_TERMINATING_SIGNALS)
- *   — meets main.c's handler, which puts the armed settings back and re-raises
- *   with the default disposition, so the process terminates normally and the
- *   user's shell sees the standard 128+N exit status. A signal the parent process
- *   set to SIG_IGN stays ignored.
+ *   The echo-disabled window is base/terminal's: the settings it found are armed
+ *   before the echo goes off (terminal_echo_off). A terminating signal — the ones whose
+ *   default action would leave the terminal with echo off (sys/process.h
+ *   PROCESS_TERMINATING_SIGNALS) — meets main.c's handler, which puts the armed
+ *   settings back and re-raises with the default disposition, so the process
+ *   terminates normally and the user's shell sees the standard 128+N exit status.
+ *   A signal the parent process set to SIG_IGN stays ignored.
  *
  * Non-reentrant: the armed settings are one slot (base/terminal), so a single
  * process must not call passphrase_prompt concurrently (from multiple threads
@@ -45,7 +45,9 @@
  *
  * Modes:
  *   - TTY input: the prompt is written to stderr, echo is disabled for the read
- *     window and restored on every return path, including signal-induced exits.
+ *     window and restored on every return path, including signal-induced exits;
+ *     what was typed before the prompt, or past the line read, is dropped, as
+ *     at git's own question (base/terminal.h terminal_echo_off).
  *   - Non-TTY input: nothing is written and echo handling is skipped. The read
  *     works normally — a script or a suite pipes the answer — and the prompt
  *     text is not in its transcript, since nobody was there to read it.
@@ -69,11 +71,12 @@
  * @param out_passphrase  The passphrase's own mapping. Caller owns; release
  *                        with secure_free(p, *out_len + 1).
  * @param out_len         Passphrase length, excluding the NUL terminator.
- * @return NULL on success. ERR_FS on tty manipulation or end of input; the errno's
- *         code on a read failure. ERR_MEMORY when the mapping fails, read by
- *         crypto/keymgr.c nothing_read, which passes it through as itself.
- *         ERR_INVALID_ARG on empty or truncated input, read by crypto/keymgr.c
- *         prompt_and_verify and prompt_and_confirm as a miss a terminal asks again.
+ * @return NULL on success. The errno's code where the terminal refuses its echo's
+ *         change or the read fails; ERR_FS at end of input. ERR_MEMORY when the
+ *         mapping fails, read by crypto/keymgr.c nothing_read, which passes it
+ *         through as itself. ERR_INVALID_ARG on empty or truncated input, read
+ *         by crypto/keymgr.c prompt_and_verify and prompt_and_confirm as a miss
+ *         a terminal asks again.
  */
 error_t passphrase_prompt(
     const char *prompt,

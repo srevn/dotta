@@ -8,7 +8,8 @@
  * which protocol reaches it, asked at every contact and costing nothing
  * (url_protocol); and what ssh is handed for one SSH reaches — the host, the
  * port and the path, split and decoded as git splits and decodes them (url_ssh;
- * connect.c host_end, get_host_and_port, get_port; url.c url_decode_mem).
+ * connect.c host_end, get_host_and_port, get_port). Every reading decodes a URL's
+ * escapes one way, git's (url_decode; url.c url_decode_mem).
  *
  * The protocol is git's name for it: the key of git's policy
  * (protocol.<name>.allow, transport.c is_transport_allowed) and the word its
@@ -50,6 +51,30 @@
 const char *url_protocol(const char *url);
 
 /**
+ * Decode a span of a URL as git decodes one (lib/git/url.c url_decode_mem)
+ *
+ * The `len` bytes at `from`, ended early by a NUL among them. What stands before
+ * their first ':' is copied as written — git steps over a URL's scheme so, and
+ * asks it of every span it decodes, a part of a URL among them, where it keeps
+ * a host's escapes before its port as written — then each '%' and the two hex
+ * digits after it inside the span is the byte they spell, but %00, which spells
+ * none and stays as written; every other byte as written.
+ *
+ * Written at `to`, the caller's — a secret decoded lands where its caller wipes
+ * it, never in an arena — which has room for `len` + 1 bytes and may be `from`
+ * itself, no byte being written past the one it was read from; and terminated.
+ *
+ * Reader: url_ssh, over a whole URL, as git's connect decodes one (connect.c
+ * parse_connect_url).
+ *
+ * @param to Where the decoded bytes go (must not be NULL; room for `len` + 1)
+ * @param from The span (must not be NULL)
+ * @param len Its length
+ * @return The length written at `to`, its NUL not counted
+ */
+size_t url_decode(char *to, const char *from, size_t len);
+
+/**
  * What ssh is handed for a URL SSH reaches, as git splits it; every part the
  * arena's
  */
@@ -62,17 +87,16 @@ typedef struct {
 /**
  * Split a URL SSH reaches, as git splits it
  *
- * The URL form — ssh://, git+ssh://, ssh+git:// — is percent-decoded past its
- * scheme first, each '%' and two hex digits the byte they spell but %00, which
- * spells none and stays as written (url.c url_decode_mem); the scp form, host:path,
- * never is. The host runs from past the "://", or from the start, to the path:
- * the URL form's first '/', or the scp form's first ':', past a bracketed host
- * — "[::1]", "u@[::1]", "[host:22]": the '[' of the first "@[" past the host's
- * start, or else one opening the host, closed by the first ']' past it (connect.c
- * host_end). That "@[" may stand in the path, which then starts past its ']':
- * "ssh://h/a@[b]/c" is the host "h/a@b" and the path "/c", git's own reading. A
- * path whose second byte is '~' begins there — "/~u/r" is "~u/r", and "a~b/r"
- * is "~b/r", git's too (parse_connect_url).
+ * The URL form — ssh://, git+ssh://, ssh+git:// — is decoded whole first, its
+ * scheme stepped over, as git's connect decodes it (url_decode): "ssh://h%41:22/r"
+ * is the host "hA"; the scp form, host:path, never is. The host runs from past
+ * the "://", or from the start, to the path: the URL form's first '/', or the
+ * scp form's first ':', past a bracketed host — "[::1]", "u@[::1]", "[host:22]":
+ * the '[' of the first "@[" past the host's start, or else one opening the host,
+ * closed by the first ']' past it (connect.c host_end). That "@[" may stand in
+ * the path, which then starts past its ']': "ssh://h/a@[b]/c" is the host "h/a@b"
+ * and the path "/c", git's own reading. A path whose second byte is '~' begins
+ * there — "/~u/r" is "~u/r", and "a~b/r" is "~b/r", git's too (parse_connect_url).
  *
  * The host's brackets are asked again of the host alone, cut at its path, and
  * taken off it. A port after a ':' past them — strtol's whole reading, 0 to 65535,

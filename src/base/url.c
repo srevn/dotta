@@ -86,27 +86,44 @@ static int url_hex(char c) {
     return -1;
 }
 
-/* The byte an escape at `at` spells, a '%' and two hex digits; 0 where none stands
- * there, %00 among them, which spells no byte (url.c url_decode_internal over
- * hex-ll.h hex2chr) */
-static int url_escaped(const char *at) {
-    if (at[0] != '%') return 0;
+/* The byte the escape at `at` spells — a '%' and the two hex digits after it,
+ * within the `left` bytes that stand from it — %00's 0 among them; -1 where none
+ * stands (lib/git/hex-ll.h hex2chr) */
+static int url_escaped(const char *at, size_t left) {
+    if (left < 3 || at[0] != '%') return -1;
 
     int high = url_hex(at[1]);
     int low = high < 0 ? -1 : url_hex(at[2]);
-    return low < 0 ? 0 : high << 4 | low;
+    return low < 0 ? -1 : high << 4 | low;
 }
 
-/* Percent-decoded in place, as git decodes a URL past its scheme (url.c
- * url_decode_mem): each escape the byte it spells, every other byte as written */
-static void url_decode(char *text) {
-    char *to = text;
-    for (const char *from = text; *from != '\0'; to++) {
-        int byte = url_escaped(from);
-        *to = byte ? (char) byte : *from;
-        from += byte ? 3 : 1;
+size_t url_decode(char *to, const char *from, size_t len) {
+    CHECK_NULL(to);
+    CHECK_NULL(from);
+
+    /* The span, to a NUL standing inside it (url.c url_decode_internal) */
+    const char *end = from + strnlen(from, len);
+    const char *start = to;
+
+    /* What stands before its first ':' is copied as written: git steps over a
+     * URL's scheme so, and asks it of every span it decodes (url_decode_mem) */
+    const char *colon = memchr(from, ':', (size_t) (end - from));
+    if (colon) {
+        memmove(to, from, (size_t) (colon - from));
+        to += colon - from;
+        from = colon;
+    }
+
+    /* Then each escape is the byte it spells, but %00, which spells none and
+     * stays as written; every other byte as written */
+    while (from < end) {
+        int byte = url_escaped(from, (size_t) (end - from));
+        *to++ = byte > 0 ? (char) byte : *from;
+        from += byte > 0 ? 3 : 1;
     }
     *to = '\0';
+
+    return (size_t) (to - start);
 }
 
 /* The '[' of a host's brackets, as git finds them (connect.c host_end): the one
@@ -152,15 +169,17 @@ error_t url_ssh(const char *url, arena_t *arena, url_ssh_t *out) {
     CHECK_ARG(str_equal(url_protocol(url), "ssh"), "url is no SSH URL");
 
     /* One copy, cut in place (connect.c parse_connect_url). A URL SSH reaches
-     * opens with its scheme or holds no "://": the URL form is decoded past the
-     * scheme, its host from past the "://" and its path at the first '/'; the
-     * scp form is never decoded, its path past the first ':'. */
+     * opens with its scheme or holds no "://": the URL form is decoded whole,
+     * as git decodes it, the decoder stepping over the scheme before its ':' —
+     * never past the "://", where it would step over a host's escapes before
+     * its port — then its host is read from past the "://" and its path at the
+     * first '/'; the scp form is never decoded, its path past the first ':'. */
     char *host = arena_strdup(arena, url);
     char separator = ':';
     size_t span = url_scheme_span(host);
     if (str_starts_with(host + span, "://")) {
+        url_decode(host, host, strlen(host));
         host += span + 3;
-        url_decode(host);
         separator = '/';
     }
 

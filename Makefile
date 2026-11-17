@@ -51,17 +51,7 @@ BUILD_CFLAGS += -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -f
 else ifeq ($(BUILD_TYPE),coverage)
 BUILD_CFLAGS += -g -O0 -fprofile-instr-generate -fcoverage-mapping
 else
-BUILD_CFLAGS += -O2 -flto
-endif
-
-# The archiver behind the unit binaries' library. A release object is LLVM
-# bitcode (-flto) and an archive's symbol table is read off its members: the
-# compiler's own llvm-ar reads bitcode, a system ar need not (Apple's does,
-# GNU ar only through a plugin). Ask the compiler, and fall back to the system
-# ar when it names none — the answer is a bare name rather than a path.
-AR := $(shell $(CC) -print-prog-name=llvm-ar 2>/dev/null)
-ifeq ($(filter /%,$(AR)),)
-AR := ar
+BUILD_CFLAGS += -O2
 endif
 
 # Version information (captured at build time). git is asked of this directory

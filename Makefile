@@ -31,11 +31,17 @@ ifeq ($(filter $(BUILD_TYPE),release debug coverage),)
 $(error BUILD_TYPE must be 'release', 'debug' or 'coverage' (got '$(BUILD_TYPE)'))
 endif
 
-# Dependencies: system | bundled
-DEPS ?= system
+# Dependencies: system | bundled. 'bundled' as a goal sets the whole invocation,
+# as 'debug' sets the build type
+DEPS ?= $(firstword $(filter bundled,$(MAKECMDGOALS)) system)
 ifeq ($(filter $(DEPS),system bundled),)
 $(error DEPS must be 'system' or 'bundled' (got '$(DEPS)'))
 endif
+
+# install-all, coverage and compile-commands run make again for part of their
+# work, and that inner make sees only the goal it is handed: both choices reach
+# it from here, so it builds as the outer one does
+export BUILD_TYPE DEPS
 
 # The build's own flags, by build type. The user's CPPFLAGS, CFLAGS and LDFLAGS
 # come after them and win: CFLAGS=-Wno-error keeps a warning a warning
@@ -436,14 +442,14 @@ export INSTALL_HINT
 # Fail at the point of misconfiguration
 ifneq ($(filter-out $(BUILDLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
 ifeq ($(HAVE_PKG_CONFIG),)
-$(error pkg-config not found — install it, then run 'make check-deps DEPS=bundled')
+$(error pkg-config not found — install it, then run 'make bundled check-deps')
 endif
 endif
 
 # Check dependencies
 .PHONY: check-deps
 check-deps:
-	@echo "Checking dependencies (DEPS=bundled)..."
+	@echo "Checking dependencies (bundled)..."
 	@fail=0; \
 	 if [ -n "$(HAVE_PKG_CONFIG)" ]; then \
 	   printf '  %-12s %s\n' "pkg-config" "$(HAVE_PKG_CONFIG)"; \
@@ -510,9 +516,17 @@ $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) $(LIBGIT2_ARCHIVE) $(SQLITE3_ARCHIVE) | $(BIN_
 	@$(CC) $(BUILD_CFLAGS) $(CFLAGS) $(LDFLAGS) $(LIB_OBJ) $(MAIN_OBJ) \
 	    $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
 
-# Debug build
+# Debug build. Beside check-deps it builds nothing, and its empty recipe keeps
+# make from saying so
 .PHONY: debug
-debug: all
+debug: $(if $(filter check-deps,$(MAKECMDGOALS)),,all)
+	@:
+
+# Bundled build. Beside check-deps it builds nothing, and the check is then the
+# bundled build's
+.PHONY: bundled
+bundled: $(if $(filter check-deps,$(MAKECMDGOALS)),,all)
+	@:
 
 # The library — every object but main's — archived for the unit binaries
 LIBDOTTA := $(BUILD_DIR)/libdotta.a
@@ -783,6 +797,7 @@ help:
 	@echo "dotta Makefile targets:"
 	@echo "  all                   - Build main executable (default): bin/dotta"
 	@echo "  debug                 - Build with debug symbols and sanitizers: bin/dotta-debug"
+	@echo "  bundled               - Build with libgit2's and SQLite's latest releases built in"
 	@echo "  test                  - Build and run unit tests"
 	@echo "  test-cli              - Run CLI suites (SUITE=\"ghosts export\" to filter, JOBS=1 for start order)"
 	@echo "  test-all              - Run unit tests and CLI suites"
@@ -811,10 +826,11 @@ help:
 	@echo "so 'make debug test-all' runs the suites under ASan/UBSan; 'coverage' likewise."
 	@echo "Each type has its own tree (build/<type>/) and binary, so the three coexist."
 	@echo ""
-	@echo "Dependencies: DEPS=bundled builds libgit2's and SQLite's latest releases in"
-	@echo "build/deps and links them in, where the system's are missing or too old. It"
-	@echo "needs cmake, git, curl or fetch, and the network; 'make check-deps DEPS=bundled'"
-	@echo "says which are missing, and 'make clean' takes the libraries with the rest."
+	@echo "Dependencies: 'bundled' as a goal sets the whole invocation, building libgit2's"
+	@echo "and SQLite's latest releases in build/deps and linking them in, where the"
+	@echo "system's are missing or too old: 'make bundled test-all'. It needs cmake, git,"
+	@echo "curl or fetch, and the network; 'make bundled check-deps' says which are"
+	@echo "missing, and 'make clean' takes the libraries with the rest."
 	@echo ""
 	@echo "Installation paths:"
 	@echo "  Binary:       $(DESTDIR)$(BINDIR)/dotta"

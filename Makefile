@@ -156,10 +156,11 @@ $(BUILD_DIR) $(BIN_DIR) $(BUILD_SUBDIRS):
 	@mkdir -p $@
 
 # Build configuration sentinel: every flag a compile or a link reads, and the
-# compiler by version, since $(CC) is a word PATH resolves. Expanded when it
-# runs, once the bundled libraries it waits for stand.
+# compiler by version and by target, since $(CC) is a word PATH resolves and
+# may carry a target of its own. Expanded when it runs, once the bundled
+# libraries it waits for stand.
 BUILD_CONFIG := $(BUILD_DIR)/.build-config
-BUILD_STAMP = $(CC_VERSION) $(BUILD_CFLAGS) $(INCLUDES) $(CPPFLAGS) \
+BUILD_STAMP = $(CC_VERSION) $(CC_MACHINE) $(BUILD_CFLAGS) $(INCLUDES) $(CPPFLAGS) \
               $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(CFLAGS) \
               $(LDFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
 
@@ -349,9 +350,19 @@ $(LIBGIT2_DIR)/release.tar.gz: $(LIBGIT2_DIR)/release
 	@touch $@.part
 	@mv $@.part $@
 
+# What shapes a library beside its release — its options and the compiler's
+# target — stamped as the build's own flags are, so the library follows them
+LIBGIT2_CONFIG := $(LIBGIT2_DIR)/.build-config
+
+$(LIBGIT2_CONFIG): FORCE
+	@mkdir -p $(@D)
+	@NEW='$(subst ','\'',$(CC_MACHINE) $(LIBGIT2_OPTIONS))'; \
+	 OLD=$$(cat $@ 2>/dev/null || true); \
+	 [ "$$NEW" = "$$OLD" ] || printf '%s\n' "$$NEW" > $@
+
 # The libraries serve every build type, so the user's flags and DESTDIR, which
 # make exports and CMake reads, are cleared; make -C shares make's job slots
-$(LIBGIT2_ARCHIVE): $(LIBGIT2_DIR)/release.tar.gz
+$(LIBGIT2_ARCHIVE): $(LIBGIT2_DIR)/release.tar.gz $(LIBGIT2_CONFIG)
 	@echo "CMAKE libgit2 $$(cat $(LIBGIT2_DIR)/release) ($(LIBGIT2_DIR)/build.log)"
 	@rm -rf $(LIBGIT2_DIR)/src $(LIBGIT2_DIR)/build
 	@mkdir -p $(LIBGIT2_DIR)/src
@@ -385,7 +396,15 @@ $(SQLITE3_DIR)/release.tar.gz: $(SQLITE3_DIR)/release
 	@touch $@.part
 	@mv $@.part $@
 
-$(SQLITE3_ARCHIVE): $(SQLITE3_DIR)/release.tar.gz
+SQLITE3_CONFIG := $(SQLITE3_DIR)/.build-config
+
+$(SQLITE3_CONFIG): FORCE
+	@mkdir -p $(@D)
+	@NEW='$(subst ','\'',$(CC_MACHINE) $(SQLITE3_OPTIONS))'; \
+	 OLD=$$(cat $@ 2>/dev/null || true); \
+	 [ "$$NEW" = "$$OLD" ] || printf '%s\n' "$$NEW" > $@
+
+$(SQLITE3_ARCHIVE): $(SQLITE3_DIR)/release.tar.gz $(SQLITE3_CONFIG)
 	@rm -rf $(SQLITE3_DIR)/src
 	@mkdir -p $(SQLITE3_DIR)/src $(SQLITE3_DIR)/include $(@D)
 	@tar -xzf $< -C $(SQLITE3_DIR)/src --strip-components=1
@@ -484,10 +503,12 @@ $(BUILD_DIR)/lib/monocypher.o: $(MONOCYPHER_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/
 	@echo "CC $<"
 	@$(CC) $(BUILD_CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-# Link main executable
-$(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
+# Link main executable, after its objects and the libraries the bundled mode
+# builds (none in the system mode)
+$(TARGET): $(LIB_OBJ) $(MAIN_OBJ) $(LIBGIT2_ARCHIVE) $(SQLITE3_ARCHIVE) | $(BIN_DIR)
 	@echo "LD $@ ($(BUILD_TYPE))"
-	@$(CC) $(BUILD_CFLAGS) $(CFLAGS) $(LDFLAGS) $^ $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
+	@$(CC) $(BUILD_CFLAGS) $(CFLAGS) $(LDFLAGS) $(LIB_OBJ) $(MAIN_OBJ) \
+	    $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
 
 # Debug build
 .PHONY: debug
@@ -507,7 +528,8 @@ $(LIBDOTTA): $(LIB_OBJ)
 # -pthread, as the binary does, which the key derivation's threads need
 # (crypto/kdf.c), as does a suite that runs an ask on a stack of its own
 # (tests/test-source.c stack_used), and a platform with its threads outside libc
-# (FreeBSD's libthr) needs said.
+# (FreeBSD's libthr) needs said. Each follows the libraries the bundled mode
+# builds, as the binary does.
 TESTS_DIR := tests
 TESTS_BIN_DIR := $(BUILD_DIR)/tests
 TESTS_SRC := $(wildcard $(TESTS_DIR)/test-*.c)
@@ -516,7 +538,7 @@ TESTS_BIN := $(patsubst $(TESTS_DIR)/%.c,$(TESTS_BIN_DIR)/%,$(TESTS_SRC))
 $(TESTS_BIN_DIR):
 	@mkdir -p $@
 
-$(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(LIBDOTTA) | $(TESTS_BIN_DIR)
+$(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(LIBDOTTA) $(LIBGIT2_ARCHIVE) $(SQLITE3_ARCHIVE) | $(TESTS_BIN_DIR)
 	@echo "CC TEST $<"
 	@$(CC) $(BUILD_CFLAGS) $(DEPFLAGS) $(INCLUDES) $(CPPFLAGS) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) \
 	    $(CFLAGS) $(LDFLAGS) $< $(LIBDOTTA) $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@

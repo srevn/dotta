@@ -227,16 +227,16 @@ ifeq ($(HAVE_PKG_CONFIG),)
 $(error pkg-config not found — install it, then run 'make check-deps')
 endif
 ifeq ($(LIBGIT2_VERSION),)
-$(error libgit2 not found by pkg-config — run 'make check-deps')
+$(error libgit2 not found by pkg-config — run 'make check-deps', or build it in with 'make bundled')
 endif
 ifeq ($(LIBGIT2_OK),)
-$(error libgit2 $(LIBGIT2_MIN)+ required, found $(LIBGIT2_VERSION) — run 'make check-deps')
+$(error libgit2 $(LIBGIT2_MIN)+ required, found $(LIBGIT2_VERSION) — run 'make check-deps', or build it in with 'make bundled')
 endif
 ifeq ($(SQLITE3_VERSION),)
-$(error sqlite3 not found by pkg-config — run 'make check-deps')
+$(error sqlite3 not found by pkg-config — run 'make check-deps', or build it in with 'make bundled')
 endif
 ifeq ($(SQLITE3_OK),)
-$(error sqlite3 $(SQLITE3_MIN)+ required, found $(SQLITE3_VERSION) — run 'make check-deps')
+$(error sqlite3 $(SQLITE3_MIN)+ required, found $(SQLITE3_VERSION) — run 'make check-deps', or build it in with 'make bundled')
 endif
 endif
 
@@ -279,6 +279,7 @@ check-deps:
 	 if [ $$fail -ne 0 ]; then \
 	   echo "Missing or outdated dependencies. Install with:"; \
 	   printf '%s\n' "$$INSTALL_HINT"; \
+	   echo "Or build libgit2 and SQLite in: 'make bundled check-deps' says what that needs."; \
 	   exit 1; \
 	 fi; \
 	 echo "All dependencies satisfied."
@@ -819,9 +820,10 @@ help:
 	@echo ""
 	@echo "Dependencies: 'bundled' as a goal sets the whole invocation, building libgit2's"
 	@echo "and SQLite's latest releases in build/deps and linking them in, where the"
-	@echo "system's are missing or too old: 'make bundled test-all'. It needs cmake, git,"
-	@echo "curl or fetch, and the network; 'make bundled check-deps' says which are"
-	@echo "missing, and 'make clean' takes the libraries with the rest."
+	@echo "system's are missing or too old. Each command names it: 'make bundled', then"
+	@echo "'sudo make bundled install'. It needs cmake, git, curl or fetch, and the"
+	@echo "network; 'make bundled check-deps' says which are missing, and 'make clean'"
+	@echo "takes the libraries with the rest."
 	@echo ""
 	@echo "Installation paths:"
 	@echo "  Binary:       $(DESTDIR)$(BINDIR)/dotta"

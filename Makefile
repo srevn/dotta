@@ -120,7 +120,6 @@ endif
 
 # Source files by layer
 BASE_SRC := $(wildcard $(SRC_DIR)/base/*.c)
-BASE_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(BASE_SRC))
 SYS_SRC := $(wildcard $(SRC_DIR)/sys/*.c)
 INFRA_SRC := $(wildcard $(SRC_DIR)/infra/*.c)
 CRYPTO_SRC := $(wildcard $(SRC_DIR)/crypto/*.c)
@@ -757,7 +756,6 @@ TIDY ?= clang-tidy
 RUN_TIDY ?= run-clang-tidy
 TIDY_JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 TIDY_FILTER ?= ^$(CURDIR)/src/.*\.c$$
-TIDY_FILES ?= $(LIB_SRC) $(MAIN_SRC)
 
 .PHONY: tidy
 tidy:

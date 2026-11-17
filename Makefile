@@ -289,7 +289,10 @@ SQLITE3_DIR := $(DEPS_DIR)/sqlite3
 
 # Each archive by its path, so no -L of the user's reaches a system copy. What
 # libgit2's .pc names besides is still searched along it first: on macOS, a
-# prefix holding GNU libiconv fails the link
+# prefix holding GNU libiconv fails the link. It names no libdl for the run-time
+# OpenSSL: dlopen is libc's from glibc 2.34, and an older glibc links with
+# LDFLAGS='-Wl,--no-as-needed -ldl' — LDFLAGS stand before the archives, where a
+# linker that drops a library nothing yet needs would drop a bare -ldl
 LIBGIT2_ARCHIVE := $(LIBGIT2_DIR)/lib/libgit2.a
 LIBGIT2_CFLAGS := -I$(LIBGIT2_DIR)/include
 LIBGIT2_LIBS = $(patsubst -lgit2,$(LIBGIT2_ARCHIVE),$(shell $(PKG_CONFIG) --static --libs $(LIBGIT2_DIR)/lib/pkgconfig/libgit2.pc))

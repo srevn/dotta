@@ -54,14 +54,7 @@ else
 BUILD_CFLAGS += -O2
 endif
 
-# Version information (captured at build time). git is asked of this directory
-# alone, as git's own build asks: a tree inside another repository, an unpacked
-# archive among them, names no commit. The commit as `git log --oneline`
-# abbreviates it; -dirty where a tracked file's bytes differ (git diff reads a
-# file whose stat alone moved, which diff-index calls changed, and refreshes the
-# index as git status does); no branch where HEAD is detached. The compiler names
-# itself, and the target it compiles for under the user's CFLAGS (-arch among
-# them): what the binary is built for, never the machine building it
+# Version information (captured at build time)
 GIT := GIT_CEILING_DIRECTORIES="$(CURDIR)/.." git
 GIT_COMMIT := $(shell $(GIT) rev-parse -q --verify --short HEAD 2>/dev/null)
 GIT_DIRTY := $(if $(GIT_COMMIT),$(shell $(GIT) diff --quiet HEAD -- 2>/dev/null || echo -dirty))
@@ -124,8 +117,7 @@ MONOCYPHER_OBJ := $(BUILD_DIR)/lib/monocypher.o
 
 # All source files (excluding main.c for library)
 LIB_SRC := $(BASE_SRC) $(SYS_SRC) $(INFRA_SRC) $(CRYPTO_SRC) $(CORE_SRC) $(CMDS_SRC) $(UTILS_SRC)
-LIB_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC)) \
-           $(CJSON_OBJ) $(TOML_OBJ) $(MONOCYPHER_OBJ)
+LIB_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC)) $(CJSON_OBJ) $(TOML_OBJ) $(MONOCYPHER_OBJ)
 
 # Main executable — the type's own name, so both can stand in bin/
 MAIN_SRC := $(SRC_DIR)/main.c
@@ -156,8 +148,7 @@ $(BUILD_DIR) $(BIN_DIR) $(BUILD_SUBDIRS):
 # libraries it waits for stand.
 BUILD_CONFIG := $(BUILD_DIR)/.build-config
 BUILD_STAMP = $(CC_VERSION) $(CC_MACHINE) $(BUILD_CFLAGS) $(INCLUDES) $(CPPFLAGS) \
-              $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(CFLAGS) \
-              $(LDFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
+              $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(CFLAGS) $(LDFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
 
 .PHONY: FORCE
 FORCE:
@@ -304,14 +295,6 @@ SQLITE3_LIBS := $(SQLITE3_ARCHIVE)
 # Nothing compiles before both stand
 $(BUILD_CONFIG): | $(LIBGIT2_ARCHIVE) $(SQLITE3_ARCHIVE)
 
-# An archive is fetched under a temporary name and dated now: fetch keeps the
-# server's date, older than the release file it follows
-ifeq ($(BUILD_OS),freebsd)
-DOWNLOAD := fetch -q -o
-else
-DOWNLOAD := curl -fsSL -o
-endif
-
 # The newest release of the major dotta is written against
 LIBGIT2_MAJOR := 1
 LIBGIT2_URL := https://github.com/libgit2/libgit2
@@ -330,24 +313,19 @@ LIBGIT2_SHA256 := HTTPS
 endif
 
 # Every option that could link a library the machine may lack is named
-LIBGIT2_OPTIONS := -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_LIBDIR=lib \
-                   -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_CLI=OFF \
-                   -DUSE_HTTPS=$(LIBGIT2_HTTPS) -DUSE_SHA1=CollisionDetection -DUSE_SHA256=$(LIBGIT2_SHA256) \
-                   -DUSE_SSH=OFF -DUSE_BUNDLED_ZLIB=ON -DREGEX_BACKEND=builtin \
-                   -DUSE_HTTP_PARSER=builtin -DUSE_NTLMCLIENT=OFF -DUSE_GSSAPI=OFF
+LIBGIT2_OPTIONS := -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=OFF \
+                   -DBUILD_TESTS=OFF -DBUILD_CLI=OFF -DUSE_HTTPS=$(LIBGIT2_HTTPS) -DUSE_SSH=OFF \
+                   -DUSE_SHA1=CollisionDetection -DUSE_SHA256=$(LIBGIT2_SHA256) -DUSE_BUNDLED_ZLIB=ON \
+                   -DREGEX_BACKEND=builtin -DUSE_HTTP_PARSER=builtin -DUSE_NTLMCLIENT=OFF -DUSE_GSSAPI=OFF
 
 $(LIBGIT2_DIR)/release:
-	@mkdir -p $(@D)
 	@tag=$$(git ls-remote --sort=v:refname --tags --refs $(LIBGIT2_URL) 'v$(LIBGIT2_MAJOR).*' | \
 	        sed -n 's|.*refs/tags/\(v$(LIBGIT2_MAJOR)\.[0-9][0-9]*\.[0-9][0-9]*\)$$|\1|p' | tail -n 1); \
 	 [ -n "$$tag" ] || { echo "No libgit2 $(LIBGIT2_MAJOR).x release read from $(LIBGIT2_URL)" >&2; exit 1; }; \
+	 echo "CLONE $(LIBGIT2_URL) $$tag"; \
+	 rm -rf $(LIBGIT2_DIR)/src && \
+	 git -c advice.detachedHead=false clone -q --depth 1 --branch "$$tag" $(LIBGIT2_URL) $(LIBGIT2_DIR)/src && \
 	 echo "$$tag" > $@
-
-$(LIBGIT2_DIR)/release.tar.gz: $(LIBGIT2_DIR)/release
-	@echo "FETCH $(LIBGIT2_URL)/archive/refs/tags/$$(cat $<).tar.gz"
-	@$(DOWNLOAD) $@.part $(LIBGIT2_URL)/archive/refs/tags/$$(cat $<).tar.gz
-	@touch $@.part
-	@mv $@.part $@
 
 # What shapes a library beside its release — its options and the compiler's
 # target — stamped as the build's own flags are, so the library follows them
@@ -361,11 +339,9 @@ $(LIBGIT2_CONFIG): FORCE
 
 # The libraries serve every build type, so the user's flags and DESTDIR, which
 # make exports and CMake reads, are cleared; make -C shares make's job slots
-$(LIBGIT2_ARCHIVE): $(LIBGIT2_DIR)/release.tar.gz $(LIBGIT2_CONFIG)
+$(LIBGIT2_ARCHIVE): $(LIBGIT2_DIR)/release $(LIBGIT2_CONFIG)
 	@echo "CMAKE libgit2 $$(cat $(LIBGIT2_DIR)/release) ($(LIBGIT2_DIR)/build.log)"
-	@rm -rf $(LIBGIT2_DIR)/src $(LIBGIT2_DIR)/build
-	@mkdir -p $(LIBGIT2_DIR)/src
-	@tar -xzf $< -C $(LIBGIT2_DIR)/src --strip-components=1
+	@rm -rf $(LIBGIT2_DIR)/build
 	@CC='$(CC)' CFLAGS= CPPFLAGS= LDFLAGS= cmake -S $(LIBGIT2_DIR)/src -B $(LIBGIT2_DIR)/build -G 'Unix Makefiles' \
 	    -DCMAKE_INSTALL_PREFIX=$(CURDIR)/$(LIBGIT2_DIR) $(LIBGIT2_OPTIONS) > $(LIBGIT2_DIR)/build.log 2>&1 \
 	    || { tail -n 30 $(LIBGIT2_DIR)/build.log; exit 1; }
@@ -374,26 +350,22 @@ $(LIBGIT2_ARCHIVE): $(LIBGIT2_DIR)/release.tar.gz $(LIBGIT2_CONFIG)
 	@DESTDIR= cmake --install $(LIBGIT2_DIR)/build >> $(LIBGIT2_DIR)/build.log 2>&1 \
 	    || { tail -n 30 $(LIBGIT2_DIR)/build.log; exit 1; }
 
+# The newest release, from SQLite's Git mirror of its Fossil repository
+SQLITE3_URL := https://github.com/sqlite/sqlite
+
 # SQLite's recommended options for one thread and no extension
-# (sqlite.org/compile.html)
-SQLITE3_URL := https://sqlite.org
-SQLITE3_OPTIONS := -DSQLITE_DQS=0 -DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 \
+SQLITE3_OPTIONS := -DSQLITE_DQS=0 -DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_USE_ALLOCA \
                    -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_OMIT_DECLTYPE -DSQLITE_OMIT_DEPRECATED \
-                   -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_OMIT_SHARED_CACHE \
-                   -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_USE_ALLOCA
+                   -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_OMIT_SHARED_CACHE -DSQLITE_OMIT_LOAD_EXTENSION
 
 $(SQLITE3_DIR)/release:
-	@mkdir -p $(@D)
-	@path=$$($(DOWNLOAD) - $(SQLITE3_URL)/download.html | \
-	         sed -n 's|^PRODUCT,[^,]*,\([^,]*/sqlite-autoconf-[0-9]*\.tar\.gz\),.*|\1|p' | head -n 1); \
-	 [ -n "$$path" ] || { echo "No SQLite release read from $(SQLITE3_URL)/download.html" >&2; exit 1; }; \
-	 echo "$$path" > $@
-
-$(SQLITE3_DIR)/release.tar.gz: $(SQLITE3_DIR)/release
-	@echo "FETCH $(SQLITE3_URL)/$$(cat $<)"
-	@$(DOWNLOAD) $@.part $(SQLITE3_URL)/$$(cat $<)
-	@touch $@.part
-	@mv $@.part $@
+	@tag=$$(git ls-remote --sort=v:refname --tags --refs $(SQLITE3_URL) 'version-3.*' | \
+	        sed -n 's|.*refs/tags/\(version-3\.[0-9][0-9]*\.[0-9][0-9]*\)$$|\1|p' | tail -n 1); \
+	 [ -n "$$tag" ] || { echo "No SQLite 3.x release read from $(SQLITE3_URL)" >&2; exit 1; }; \
+	 echo "CLONE $(SQLITE3_URL) $$tag"; \
+	 rm -rf $(SQLITE3_DIR)/src && \
+	 git -c advice.detachedHead=false clone -q --depth 1 --branch "$$tag" $(SQLITE3_URL) $(SQLITE3_DIR)/src && \
+	 echo "$$tag" > $@
 
 SQLITE3_CONFIG := $(SQLITE3_DIR)/.build-config
 
@@ -403,16 +375,22 @@ $(SQLITE3_CONFIG): FORCE
 	 OLD=$$(cat $@ 2>/dev/null || true); \
 	 [ "$$NEW" = "$$OLD" ] || printf '%s\n' "$$NEW" > $@
 
-$(SQLITE3_ARCHIVE): $(SQLITE3_DIR)/release.tar.gz $(SQLITE3_CONFIG)
-	@rm -rf $(SQLITE3_DIR)/src
-	@mkdir -p $(SQLITE3_DIR)/src $(SQLITE3_DIR)/include $(@D)
-	@tar -xzf $< -C $(SQLITE3_DIR)/src --strip-components=1
-	@echo "CC $(SQLITE3_DIR)/src/sqlite3.c"
-	@$(CC) -O2 $(SQLITE3_OPTIONS) -c $(SQLITE3_DIR)/src/sqlite3.c -o $(SQLITE3_DIR)/sqlite3.o
-	@cp $(SQLITE3_DIR)/src/sqlite3.h $(SQLITE3_DIR)/include/
+# SQLite's own build makes the amalgamation its releases carry
+$(SQLITE3_ARCHIVE): $(SQLITE3_DIR)/release $(SQLITE3_CONFIG)
+	@echo "MAKE sqlite3.c $$(cat $(SQLITE3_DIR)/release) ($(SQLITE3_DIR)/build.log)"
+	@rm -rf $(SQLITE3_DIR)/build
+	@mkdir -p $(SQLITE3_DIR)/build $(SQLITE3_DIR)/include $(@D)
+	@(cd $(SQLITE3_DIR)/build && CC='$(CC)' CC_FOR_BUILD='$(CC)' CFLAGS= CPPFLAGS= LDFLAGS= \
+	    $(CURDIR)/$(SQLITE3_DIR)/src/configure --disable-tcl) > $(SQLITE3_DIR)/build.log 2>&1 \
+	    || { tail -n 30 $(SQLITE3_DIR)/build.log; exit 1; }
+	@$(MAKE) -C $(SQLITE3_DIR)/build sqlite3.c >> $(SQLITE3_DIR)/build.log 2>&1 \
+	    || { tail -n 30 $(SQLITE3_DIR)/build.log; exit 1; }
+	@echo "CC $(SQLITE3_DIR)/build/sqlite3.c"
+	@$(CC) -O2 $(SQLITE3_OPTIONS) -c $(SQLITE3_DIR)/build/sqlite3.c -o $(SQLITE3_DIR)/build/sqlite3.o
+	@cp $(SQLITE3_DIR)/build/sqlite3.h $(SQLITE3_DIR)/include/
 	@echo "AR $@"
 	@rm -f $@
-	@$(AR) rcs $@ $(SQLITE3_DIR)/sqlite3.o
+	@$(AR) rcs $@ $(SQLITE3_DIR)/build/sqlite3.o
 
 # Package-manager hint
 ifeq ($(BUILD_OS),darwin)
@@ -425,9 +403,9 @@ define INSTALL_HINT
 endef
 else
 define INSTALL_HINT
-  Debian:    sudo apt install pkg-config cmake git curl
-  Fedora:    sudo dnf install pkgconf-pkg-config cmake git curl
-  Arch:      sudo pacman -S pkgconf cmake git curl
+  Debian:    sudo apt install pkg-config cmake git
+  Fedora:    sudo dnf install pkgconf-pkg-config cmake git
+  Arch:      sudo pacman -S pkgconf cmake git
 endef
 endif
 export INSTALL_HINT
@@ -456,7 +434,7 @@ check-deps:
 	   printf '  %-12s %s\n' "$(CC)" "NOT FOUND"; \
 	   fail=1; \
 	 fi; \
-	 for program in cmake git tar $(firstword $(DOWNLOAD)); do \
+	 for program in cmake git; do \
 	   if found=$$(command -v $$program); then \
 	     printf '  %-12s %s\n' "$$program" "$$found"; \
 	   else \
@@ -718,7 +696,7 @@ format-check:
 	@echo "All files formatted correctly."
 
 # Reflow block comments (requires python3). Runs after uncrustify
-REFLOW := scripts/reflow_comments.py
+REFLOW := tools/reflow_comments.py
 REFLOW_WIDTH ?= 80
 REFLOW_SLACK ?= 4
 
@@ -821,9 +799,9 @@ help:
 	@echo "Dependencies: 'bundled' as a goal sets the whole invocation, building libgit2's"
 	@echo "and SQLite's latest releases in build/deps and linking them in, where the"
 	@echo "system's are missing or too old. Each command names it: 'make bundled', then"
-	@echo "'sudo make bundled install'. It needs cmake, git, curl or fetch, and the"
-	@echo "network; 'make bundled check-deps' says which are missing, and 'make clean'"
-	@echo "takes the libraries with the rest."
+	@echo "'sudo make bundled install'. It needs cmake, git and the network:"
+	@echo "'make bundled check-deps' says which are missing, and 'make clean' takes the"
+	@echo "libraries with the rest."
 	@echo ""
 	@echo "Installation paths:"
 	@echo "  Binary:       $(DESTDIR)$(BINDIR)/dotta"

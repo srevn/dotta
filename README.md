@@ -129,3 +129,9 @@ Detailed guides are available in [`docs/`](docs/):
 ## Acknowledgments
 
 Built with libgit2 for robust Git operations. Inspired by YADM's simplicity and Chezmoi's declarative approach, but designed from the ground up for the orphan branch model.
+
+## License
+
+Copyright (C) 2025-2026 srevn
+
+dotta is free software, licensed under the GNU General Public License, version 2 only: see [LICENSE](LICENSE).

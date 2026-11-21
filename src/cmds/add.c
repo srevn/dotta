@@ -2816,7 +2816,8 @@ static error_t add_post_parse(
  * What can stand at the cursor, read off the buckets add_post_parse routes: a
  * local profile in the profile slot — the first positional, unless -p took it —
  * then filesystem paths, listed under the binding the command reads them under
- * when --target re-roots them. A new profile's name is typed, not offered.
+ * when --target re-roots them. At --target, the target the profile's row holds,
+ * then directories. A new profile's name is typed, not offered.
  */
 static args_want_t add_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -2824,22 +2825,32 @@ static args_want_t add_complete(
     const dotta_ctx_t *ctx = ctx_v;
     const cmd_add_options_t *o = opts_v;
 
+    /* The profile the line names so far, as add_post_parse routes it: -p's, else
+     * the first positional, else none yet */
+    const char *profile = o->profile;
+    if (profile == NULL && o->positional_count > 0) profile = o->positional_args[0];
+
     if (ARGS_VALUE_IS(at, cmd_add_options_t, profile)) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
         return ARGS_WANT_NONE;
     }
     if (ARGS_VALUE_IS(at, cmd_add_options_t, target)) {
+        /* The flag is held to the target the profile's row holds (cmd_add) and
+         * typed again for the spellings it reads inside it, so that target is
+         * the likeliest value: offered first, as the row spells it — absolute,
+         * since a candidate is a word the shell inserts as it stands */
+        const char *bound = profile ? state_target(ctx->run.state, profile) : NULL;
+        if (bound) fprintf(out, "%s\tSaved target\n", bound);
         return ARGS_WANT_DIRS;
     }
     if (at->value_of != NULL) {
         return ARGS_WANT_NONE;   /* -m, -e: free text */
     }
 
-    if (o->profile == NULL && o->positional_count == 0) {
+    if (profile == NULL) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
         return ARGS_WANT_NONE;
     }
-    const char *profile = o->profile ? o->profile : o->positional_args[0];
     return completion_paths_under(ctx, out, profile, o->target, at->current)
         ? ARGS_WANT_NONE : ARGS_WANT_FILES;
 }

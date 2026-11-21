@@ -883,9 +883,10 @@ state_profiles_t state_profiles(const state_t *state);
  * cmds/status.c status_print_profiles, which prints a binding beside its profile;
  * cmds/list.c list_profiles, which marks a row that has none where its profile
  * holds what one places; cmds/interactive.c read_targets, the editor's seed;
- * and add's path completion, which asks outside a repository too (cmds/completion.c
- * completion_paths_under). A reader walking the rows reads each one's target
- * where it stands (cmds/profile.c profile_list).
+ * and add's completion, which asks outside a repository too — at a path, the
+ * root it lists under (cmds/completion.c completion_paths_under), and at the
+ * flag's value, the target it offers (cmds/add.c add_complete). A reader walking
+ * the rows reads each one's target where it stands (cmds/profile.c profile_list).
  *
  * @param state State (NULL answers NULL: a run with no database holds no row)
  * @param profile Profile name to look up (must not be NULL)

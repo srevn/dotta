@@ -860,9 +860,9 @@ typedef struct {
  *
  * A caller that must outlive one of those copies what it needs, and says so:
  * cmds/profile.c profile_disable the names it disables and the targets they forget,
- * and cmds/add.c cmd_add the binding its receipt names after the record phase.
- * Every other reader reads the rows between two boundaries and keeps nothing
- * past them.
+ * profile_retarget the target its move forgets, and cmds/add.c cmd_add the binding
+ * its receipt names after the record phase. Every other reader reads the rows
+ * between two boundaries and keeps nothing past them.
  *
  * @param state State (NULL returns an empty slice)
  * @return Borrowed slice over the rows
@@ -879,14 +879,15 @@ state_profiles_t state_profiles(const state_t *state);
  * Readers, each asking of one profile by its name: the binders that hold a --target
  * to the row's binding — cmds/add.c cmd_add, whose receipt names it after the
  * record phase, and cmds/profile.c profile_enable, where another directory is a
- * move; cmds/profile.c profile_disable, whose receipt names the one it forgets;
- * cmds/status.c status_print_profiles, which prints a binding beside its profile;
- * cmds/list.c list_profiles, which marks a row that has none where its profile
- * holds what one places; cmds/interactive.c read_targets, the editor's seed;
- * and add's completion, which asks outside a repository too — at a path, the
- * root it lists under (cmds/completion.c completion_paths_under), and at the
- * flag's value, the target it offers (cmds/add.c add_complete). A reader walking
- * the rows reads each one's target where it stands (cmds/profile.c profile_list).
+ * move; cmds/profile.c profile_retarget and profile_disable, whose receipts name
+ * the one each forgets; cmds/status.c status_print_profiles, which prints a binding
+ * beside its profile; cmds/list.c list_profiles, which marks a row that has none
+ * where its profile holds what one places; cmds/interactive.c read_targets, the
+ * editor's seed; and add's completion, which asks outside a repository too — at
+ * a path, the root it lists under (cmds/completion.c completion_paths_under),
+ * and at the flag's value, the target it offers (cmds/add.c add_complete). A
+ * reader walking the rows reads each one's target where it stands (cmds/profile.c
+ * profile_list).
  *
  * @param state State (NULL answers NULL: a run with no database holds no row)
  * @param profile Profile name to look up (must not be NULL)

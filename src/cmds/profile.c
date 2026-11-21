@@ -446,6 +446,79 @@ cleanup:
 }
 
 /**
+ * Move an enabled profile's target: profile enable's whole run where the line's
+ * --target names a directory the profile's row does not hold
+ *
+ * A target binds the one profile the line names (profile_enable_post_parse), so
+ * the move is the run's one act and ends it: its dry run, or its write, the save
+ * and the line that says it. The write is state_enable_profile's UPSERT arm —
+ * the target moves in place and the position stays — so the profile's claims
+ * then stand at the new target, and what its records hold at the old one is apply's
+ * to relocate.
+ *
+ * @param ctx The run (must not be NULL)
+ * @param opts The options: the dry run (must not be NULL)
+ * @param profile The enabled profile (must not be NULL)
+ * @param target The line's --target, read: what the row stores (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t profile_retarget(
+    const dotta_ctx_t *ctx, const cmd_profile_options_t *opts, const char *profile,
+    const char *target
+) {
+    state_t *state = ctx->run.state;
+    output_t *out = ctx->out;
+
+    /* The target the move forgets, spelled as the screens print it — an arena
+     * copy, because the write replaces the row cache state_target lends from,
+     * as disable copies the ones its deletes forget (profile_disable). NULL where
+     * the row had none. */
+    const char *forgotten = NULL;
+    const char *bound = state_target(state, profile);
+    if (bound) {
+        char shown[PATH_MAX];
+        output_format_path(bound, identity()->home, shown, sizeof(shown));
+        forgotten = arena_strdup(ctx->arena, shown);
+    }
+
+    /* Dry-run: preview the move, skip the write, and end on the act it did not
+     * do, in the live line's words */
+    if (opts->dry_run) {
+        output_gap(out, OUTPUT_NORMAL);
+        if (forgotten) {
+            output_info(
+                out, OUTPUT_NORMAL, "Would update target for %s (was %s)",
+                profile, forgotten
+            );
+        } else {
+            output_info(out, OUTPUT_NORMAL, "Would update target for %s", profile);
+        }
+        output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was enabled");
+        return NULL;
+    }
+
+    error_t err = state_enable_profile(state, profile, target);
+    if (err) return err;
+
+    /* The save, then the line that says what it made true, as profile_enable's
+     * do: the verb, and the target the write forgot as a clause of the act it
+     * went with — the value the write destroyed, which the dry run names alike
+     * and nothing remembers after */
+    err = state_save(state);
+    if (err) return err;
+
+    if (forgotten) {
+        output_success(
+            out, OUTPUT_NORMAL, "Updated target for %s (was %s)", profile, forgotten
+        );
+    } else {
+        output_success(out, OUTPUT_NORMAL, "Updated target for %s", profile);
+    }
+
+    return NULL;
+}
+
+/**
  * Profile enable subcommand
  *
  * Three-phase flow over the view before — the dispatcher's, built over the enabled
@@ -462,21 +535,16 @@ cleanup:
  *      profile whose claims hold no target is said so too, and one whose branch
  *      is gone, whichever arm it takes: states the run does not move, whose ways
  *      out status names beside every such profile; produces to_enable_validated.
- *      An already-enabled profile named with a --target that differs from its
- *      row's is not a skip: it re-enters the validated set as a retarget, the
- *      run's one profile (a target binds the one profile the line names,
- *      profile_enable_post_parse), and `retarget` remembers it, `forgotten` the
- *      binding it moves from.
- *   2. Write scope to state — state_enable_profile per target. The one call serves
- *      both kinds: a fresh enable inserts the row, a retarget runs the UPSERT
- *      arm state.h documents (the target moves, the position stays), its claims
- *      then standing at the new target, and what its records hold at the old
- *      one apply's to relocate. enabled_profiles membership and order are now
- *      authoritative. Nothing else is written: the view is computed, never stored.
- *      `before` borrows nothing from the row cache the mutation replaces.
+ *      An already-enabled profile named with a --target its row does not hold
+ *      is not a skip: the run is the move of its target, and ends there
+ *      (profile_retarget).
+ *   2. Write scope to state — state_enable_profile per validated profile: a new
+ *      row each, at the end of the order, bound at the line's target where it
+ *      gives one. enabled_profiles membership and order are now authoritative.
+ *      Nothing else is written: the view is computed, never stored. `before`
+ *      borrows nothing from the row cache the mutation replaces.
  *   3. The save, then per-profile feedback — state_save, and only once it lands
- *      the lines that say what it made true: one per validated target, or the
- *      retarget's, which names the target it forgot.
+ *      the lines that say what it made true: one per validated profile.
  */
 static error_t profile_enable(
     const dotta_ctx_t *ctx,
@@ -493,11 +561,7 @@ static error_t profile_enable(
     const char *target = NULL; /* --target, absolute: what the row stores */
     error_t err = NULL;
 
-    /* Phase 1 observations — tallied during the validation loop. retarget names
-     * the already-enabled profile whose binding this run updates (borrowed from
-     * to_enable): the run's one profile, the line naming one with a target
-     * (profile_enable_post_parse). */
-    const char *retarget = NULL;
+    /* Phase 1 observations — tallied during the validation loop */
     size_t already_enabled = 0;
     size_t refused = 0;    /* Not here, or needing a target the line did not give */
 
@@ -554,9 +618,9 @@ static error_t profile_enable(
     }
 
     /* Filter: already-enabled, not-here and needs-a-target are per-profile skips
-     * — unless the already-enabled profile came with a differing --target, which
-     * is a retarget and stays in the run's work. The surviving set lands in
-     * to_enable_validated. */
+     * — unless the already-enabled profile came with a --target its row does
+     * not hold, whose move is the run (profile_retarget). The surviving set lands
+     * in to_enable_validated. */
     string_array_t to_enable_validated;
     string_array_init(&to_enable_validated, ctx->arena, 0);
 
@@ -587,17 +651,15 @@ static error_t profile_enable(
             }
 
             /* --target on an enabled profile is a retarget: the binding is the
-             * verb's subject, and state_enable_profile's UPSERT arm updates it
-             * in place, forgetting the one the row held, which the screens name.
-             * Only another directory is work — the row's own, under its spelling
-             * or another (mount_same_target), is an idempotent re-run and stays
-             * the skip below, the row's spelling kept. */
+             * verb's subject, and its move is the run's one act, which ends the
+             * run here (profile_retarget). Only another directory is work — the
+             * row's own, under its spelling or another (mount_same_target), is
+             * an idempotent re-run and stays the skip below, the row's spelling
+             * kept. */
             if (target) {
                 const char *current = state_target(state, name);
                 if (!current || !mount_same_target(current, target)) {
-                    retarget = name;
-                    string_array_push(&to_enable_validated, name);
-                    continue;
+                    return profile_retarget(ctx, opts, name, target);
                 }
                 /* The row's own directory, spelled another way: the binding stands
                  * and keeps the spelling its binder typed, because that spelling
@@ -698,18 +760,6 @@ static error_t profile_enable(
         string_array_push(&to_enable_validated, name);
     }
 
-    /* The binding the retarget forgets, spelled as the screens print it — an
-     * arena copy, because Phase 2's write replaces the row cache state_target
-     * lends from, as disable copies the ones its deletes forget (profile_disable).
-     * NULL where the row had none. */
-    const char *forgotten = NULL;
-    const char *bound = retarget ? state_target(state, retarget) : NULL;
-    if (bound) {
-        char shown[PATH_MAX];
-        output_format_path(bound, identity()->home, shown, sizeof(shown));
-        forgotten = arena_strdup(ctx->arena, shown);
-    }
-
     /* Each skip said once: a refused profile by its warning above, an enabled
      * one by this count, its own line being verbose's */
     if (already_enabled > 0) {
@@ -729,26 +779,16 @@ static error_t profile_enable(
     }
 
     /* Dry-run: preview what a live run would do, skip every state mutation, and
-     * end on the act it did not do — the retarget's move, the run's one profile,
-     * in the live line's words, or the profiles it would enable */
+     * end on the act it did not do */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
-        if (retarget && forgotten) {
-            output_info(
-                out, OUTPUT_NORMAL, "Would update target for %s (was %s)",
-                retarget, forgotten
-            );
-        } else if (retarget) {
-            output_info(out, OUTPUT_NORMAL, "Would update target for %s", retarget);
-        } else {
-            output_info(
-                out, OUTPUT_NORMAL, "Would enable %zu profile%s:",
-                to_enable_validated.count, to_enable_validated.count == 1 ? "" : "s"
-            );
-            for (size_t i = 0; i < to_enable_validated.count; i++) {
-                const char *name = to_enable_validated.entries[i];
-                output_print(out, OUTPUT_NORMAL, "  - %s\n", name);
-            }
+        output_info(
+            out, OUTPUT_NORMAL, "Would enable %zu profile%s:",
+            to_enable_validated.count, to_enable_validated.count == 1 ? "" : "s"
+        );
+        for (size_t i = 0; i < to_enable_validated.count; i++) {
+            const char *name = to_enable_validated.entries[i];
+            output_print(out, OUTPUT_NORMAL, "  - %s\n", name);
         }
         output_summary(out, OUTPUT_NORMAL, "Dry run: nothing was enabled");
         return NULL;
@@ -762,27 +802,16 @@ static error_t profile_enable(
         if (err) return err;
     }
 
-    /* Phase 3: The save, then per-profile feedback — the retarget's line names
-     * its verb, and the target it forgot as a clause of the act it went with:
-     * the value the write destroyed, which the dry run names alike and nothing
-     * remembers after. Each line says what the save made true, so none is said
-     * before it: the COMMIT is a write the store can refuse on its own, where a
-     * full disk meets the transaction (core/state.h state_commit), and a line
-     * above it would stand over the refusal. */
+    /* Phase 3: The save, then per-profile feedback. Each line says what the save
+     * made true, so none is said before it: the COMMIT is a write the store can
+     * refuse on its own, where a full disk meets the transaction (core/state.h
+     * state_commit), and a line above it would stand over the refusal. */
     err = state_save(state);
     if (err) return err;
 
-    if (retarget && forgotten) {
-        output_success(
-            out, OUTPUT_NORMAL, "Updated target for %s (was %s)", retarget, forgotten
-        );
-    } else if (retarget) {
-        output_success(out, OUTPUT_NORMAL, "Updated target for %s", retarget);
-    } else {
-        for (size_t i = 0; i < to_enable_validated.count; i++) {
-            const char *name = to_enable_validated.entries[i];
-            output_success(out, OUTPUT_NORMAL, "Enabled %s", name);
-        }
+    for (size_t i = 0; i < to_enable_validated.count; i++) {
+        const char *name = to_enable_validated.entries[i];
+        output_success(out, OUTPUT_NORMAL, "Enabled %s", name);
     }
 
     return NULL;
@@ -796,17 +825,17 @@ static error_t profile_enable(
  *      emit not-enabled diagnostics up front. Read the bindings the deletes will
  *      forget: the one fact disable destroys that the user cannot recompute,
  *      copied before the deletes replace the row cache they borrow from.
- *   2. Write scope to state — state_disable_profile per validated target;
- *      enabled_profiles is now authoritative for the target set, the line gone
- *      whole, target included. Nothing else is written: what the next apply does
- *      at each path the profile leaves is derivable — the view after holds none
- *      of its claims, and the orphan analysis decides each record left with no
- *      row (core/workspace.c workspace_analyze_orphans). Nor is any view built:
- *      the write needs none, and must land whatever the enabled set looks like
- *      — it is the way out of a set the loads cannot build, and what it leaves
- *      can hold another such profile still.
+ *   2. Write scope to state — state_disable_profile per validated profile;
+ *      enabled_profiles membership is now authoritative, the line gone whole,
+ *      target included. Nothing else is written: what the next apply does at
+ *      each path the profile leaves is derivable — the view after holds none of
+ *      its claims, and the orphan analysis decides each record left with no row
+ *      (core/workspace.c workspace_analyze_orphans). Nor is any view built: the
+ *      write needs none, and must land whatever the enabled set looks like — it
+ *      is the way out of a set the loads cannot build, and what it leaves can
+ *      hold another such profile still.
  *   3. The save, then per-profile feedback — state_save, and only once it lands
- *      the lines that say what it made true: one per validated target, a forgotten
+ *      the lines that say what it made true: one per validated profile, a forgotten
  *      target named on its profile's line, as the dry run names it.
  */
 static error_t profile_disable(

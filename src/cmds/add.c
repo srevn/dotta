@@ -2685,8 +2685,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * settled them (add_receipt_t) — not on the fate, and the line follows the
      * phase. An existing profile's binding is a row's too: an enabled row the
      * pre-flight found unbound, bound by the run's flag where the phase landed.
-     * That is enable's retarget, said in its words (cmds/profile.c profile_enable),
-     * and it places the profile's other custom/ claims as well as these. */
+     * That is enable's retarget, said in its words (cmds/profile.c
+     * profile_retarget), and it places the profile's other custom/ claims as
+     * well as these. */
     if (!profile_exists) {
         output_success(
             out, OUTPUT_NORMAL,

@@ -67,7 +67,7 @@ That is also why an enabled profile can hold files and still read `empty` under 
 
 ## Targets
 
-A **target** is the directory where a profile's `custom/` files belong on this machine — a jail, a container tree, a second home, or `/` itself inside a container, with the same profile bound at a jail on the host. Each machine can choose a different directory:
+A **target** is the directory where a profile's `custom/` files belong on this machine — a jail, a container tree, a second home, or `/` itself inside a container, with the same profile bound at a jail on the host. It is set with the profile's first capture or when the profile is enabled, and each machine can choose its own:
 
 ```bash
 # Set the target and capture a file from inside it, in one command
@@ -77,9 +77,13 @@ dotta add web --target /mnt/jails/web /mnt/jails/web/etc/nginx.conf
 dotta profile enable web --target /srv/web
 ```
 
-A profile has at most one target per machine. `dotta profile list` shows it. Disabling the profile forgets its target, as moving it forgets the old one, and each command names the target it forgot.
+`enable` with another directory moves the target: the next `apply` deploys the files there and cleans up the old copies under the [usual cleanup rules](concepts.md#the-view-and-the-record).
 
-The target is saved, so later adds beneath it can use `custom/` without repeating the flag. Existing entries and directories you've added keep their [naming rules](concepts.md#where-a-file-goes).
+A profile has at most one target per machine, which `dotta profile list` shows, and a profile with `custom/` paths is enabled only with a target. Disabling the profile forgets its target, as moving it forgets the old one. `clone` and `profile enable --all` leave such a profile disabled and say so. The whole profile waits for its target: files wanted on a machine that has no place for the tree belong in a profile of their own.
+
+If a sync or a revert brings `custom/` paths into a profile already enabled without a target, `status` says so until it has one.
+
+While the profile is enabled its target is saved, so later adds beneath it can use `custom/` without repeating the flag. Adding to an available profile saves none, so each add there needs `--target`. Existing entries and added directories keep their [naming rules](concepts.md#where-a-file-goes).
 
 **On `add`, the flag also makes `etc/x` and `/etc/x` shortcuts into the target:**
 
@@ -88,9 +92,9 @@ dotta add web --target ~/jail /etc/nginx.conf  # reads ~/jail/etc/nginx.conf
 dotta add web /etc/nginx.conf                 # reads /etc/nginx.conf
 ```
 
-Use `./` or `../` for a path relative to your working directory; with the flag, it must stay inside the target. A quoted `'~/path'` refers to your home.
+A path spelled with `./` or `../` is relative to the working directory, and with the flag it must stay inside the target. A quoted `'~/path'` refers to the home directory.
 
-Keep using the target spelling shown by `profile list`. If you supply another spelling of the same directory, dotta keeps and reports the saved spelling. Under `add --target`, a path typed under either spelling is read, and stored under the saved one.
+The target keeps the spelling it was saved with, the one `profile list` shows: another spelling of the same directory is reported, and the saved one kept. Under `add --target`, a path typed under either spelling is read, and stored under the saved one.
 
 **The target itself can be tracked**, by its own path or by the name `custom`:
 
@@ -99,11 +103,7 @@ dotta add web --target ~/jail ~/jail   # tracks the jail as custom
 dotta add web custom/                  # the same thing
 ```
 
-It then behaves like any [added directory](concepts.md#directories): `apply` creates it and restores its permissions, `update --include-new` scans it, and once the profile is disabled, `apply` prunes it when nothing but dotta's own copies is left inside. A target that is a symlink is stored as the link instead — name what is inside it to track the directory it points at.
-
-**To move the `custom/` files**, run `dotta profile enable <name> --target <new>`. The next `apply` deploys them at the new target and cleans up the old copies under the [usual cleanup rules](concepts.md#the-view-and-the-record).
-
-Profiles with `custom/` paths need a target to be enabled. `clone` and `profile enable --all` leave them disabled and say so. If sync brings `custom/` paths into an enabled profile, `status` asks you to choose a target.
+It then behaves like any [added directory](concepts.md#directories): `apply` creates it and restores its permissions, `update --include-new` scans it, and once the profile is disabled, `apply` prunes it when nothing but dotta's own copies is left inside. A target that is a symlink is stored as the link instead — naming what is inside it tracks the directory it points at.
 
 Targets are not exclusive. Another profile can manage paths there through its own `home/` or `root/` names; normal layering applies wherever the destination pathnames match or nest.
 

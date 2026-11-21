@@ -531,7 +531,8 @@ static error_t profile_retarget(
  *      enabled only with one, so it is skipped, whatever the request shape. Each
  *      skip is said once — a refused profile by its warning, in the words the
  *      tree refuses it with elsewhere, the already-enabled by one count — and a
- *      run that enabled nothing is an error where one was refused. An enabled
+ *      run that enabled nothing is an error where one was refused, which names
+ *      each refused profile again: the line a quiet run reads them by. An enabled
  *      profile whose claims hold no target is said so too, and one whose branch
  *      is gone, whichever arm it takes: states the run does not move, whose ways
  *      out status names beside every such profile; produces to_enable_validated.
@@ -563,7 +564,8 @@ static error_t profile_enable(
 
     /* Phase 1 observations — tallied during the validation loop */
     size_t already_enabled = 0;
-    size_t refused = 0;    /* Not here, or needing a target the line did not give */
+    string_array_t refused;    /* Not here, or needing a target the line did not give */
+    string_array_init(&refused, ctx->arena, 0);
 
     /* Phase 1: Gather & validate
      *
@@ -717,7 +719,7 @@ static error_t profile_enable(
                 out, OUTPUT_NORMAL, "Profile '%s' doesn't exist locally; 'dotta "
                 "profile fetch %s' brings it from a remote that holds it", name, name
             );
-            refused++;
+            string_array_push(&refused, name);
             continue;
         }
 
@@ -753,7 +755,7 @@ static error_t profile_enable(
                 "Profile '%s' holds custom/ paths and needs a target here; not enabled",
                 name
             );
-            refused++;
+            string_array_push(&refused, name);
             continue;
         }
 
@@ -770,12 +772,17 @@ static error_t profile_enable(
     }
 
     /* Nothing to enable, live or dry: a refusal where a profile the line named
-     * was refused, each said above; a success where every one was enabled already.
+     * was refused, each said above and named in it again — the one line a quiet
+     * run prints, the warnings being the report's (base/output.h
+     * output_verbosity_t) — and a success where every one was enabled already.
      * Either exit leaves the state untouched: the transaction state_open began
      * rolls back at state_free. */
     if (to_enable_validated.count == 0) {
-        if (refused == 0) return NULL;
-        return error_create(ERR_INVALID_ARG, "No profiles were enabled");
+        if (refused.count == 0) return NULL;
+        return error_create(
+            ERR_INVALID_ARG, "No profiles were enabled (%s)",
+            string_array_join(ctx->arena, &refused, ", ")
+        );
     }
 
     /* Dry-run: preview what a live run would do, skip every state mutation, and

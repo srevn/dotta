@@ -40,9 +40,11 @@
  * them, so every row it counts prints at OUTPUT_QUIET and names its own subject,
  * since the line above it is the report's and does not print. A row whose cause
  * runs on past its line — a merge's conflicts beneath it, the remote's words a
- * push brings above it — would say half of it at quiet, so there the refusal
- * names each failure's subject itself, and the rows stay the report's (cmds/sync.c
- * sync_failure).
+ * push brings above it — would say half of it at quiet, and a row said before
+ * the run knows whether it fails — enable's refusal of a profile, beside one it
+ * enables, leaves the run a success — would say at quiet what no exit counts;
+ * so there the refusal names each failure's subject itself, and the rows stay
+ * the report's (cmds/sync.c sync_failure, cmds/profile.c profile_enable).
  */
 typedef enum {
     OUTPUT_QUIET   = 0,   /* Errors alone: the refusal, and each failure it counts */

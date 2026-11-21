@@ -125,19 +125,16 @@ static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current
 /* --- View lifecycle --- */
 
 /* The rows: every enabled profile in its saved order, then the rest of what Git
- * lists, disabled. A save writes the enabled set as the rows show it (view_save),
- * so every name the store enables is a row, one Git holds no branch for among
- * them: a name the screen left out is one the save would disable unasked. */
+ * lists, disabled, and no session where neither names a profile. A save writes
+ * the enabled set as the rows show it (view_save), so every name the store enables
+ * is a row, one Git holds no branch for among them: a name the screen left out
+ * is one the save would disable unasked. */
 static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *view) {
     arena_t *arena = view->arena;
 
     string_array_t all_profiles;
     error_t err = gitops_list_branches(repo, arena, &all_profiles);
     if (err) return err;
-
-    if (all_profiles.count == 0) {
-        return error_create(ERR_NOT_FOUND, "No profiles found in repository");
-    }
 
     /* First-run case: a handle whose underlying DB doesn't exist holds a load
      * of zero rows, which is the correct empty enabled set rather than a failure
@@ -189,6 +186,14 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
     for (size_t i = 0; i < all_profiles.count; i++) {
         if (used[i]) continue;
         view->items[view->item_count++] = (item_t){ .name = all_profiles.entries[i] };
+    }
+
+    /* Asked of the rows, never of the listing alone: an enabled profile whose
+     * branch is gone is a row with no other beside it too — a sync that deletes
+     * the last branch leaves one — and its toggle-off, saved, is the disable
+     * status names. */
+    if (view->item_count == 0) {
+        return error_create(ERR_NOT_FOUND, "No profiles found in repository");
     }
 
     return NULL;

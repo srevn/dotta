@@ -233,7 +233,7 @@ dotta key clear                  # with the earlier version: its cached key is t
 mv ~/.local/share/dotta/repo ~/.local/share/dotta/repo.before-move
 dotta clone <url>                # with this version
 dotta profile fetch <profile>    # each profile the clone did not enable,
-dotta profile enable <profile> --target <dir>    # a custom/ one with its target
+dotta profile enable <profile> --target <path>    # a custom/ one with its target
 dotta apply
 ```
 

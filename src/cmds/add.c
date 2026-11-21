@@ -298,12 +298,12 @@ static bool add_inside(
 /**
  * The argument as add reads it: absolute, and the target's when one stands
  *
- * `--target <dir>` makes that directory a virtual root — an argument is read as
- * if the user stood inside it, the way a chroot reads a path — which is how a
- * jail, a container overlay, a fakeroot tree or a staging area is populated from
- * outside. Two spellings are the shell's and are never re-rooted: a tilde path
- * (`~/x` is HOME's, its own namespace, as a shell resolves '~' before any cd
- * context applies — even when the jail lies beneath HOME) and a path spelled
+ * `--target <path>` makes that directory a virtual root — an argument is read
+ * as if the user stood inside it, the way a chroot reads a path — which is how
+ * a jail, a container overlay, a fakeroot tree or a staging area is populated
+ * from outside. Two spellings are the shell's and are never re-rooted: a tilde
+ * path (`~/x` is HOME's, its own namespace, as a shell resolves '~' before any
+ * cd context applies — even when the jail lies beneath HOME) and a path spelled
  * from here (`./x`, `../x`, a dotfile's `.x` — the file in front of the user,
  * wherever they stand, the way the resolver reads a leading '.'). A bare relative
  * path is the jail's. `<target>` is the row's spelling of the directory, and
@@ -1865,19 +1865,24 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * has one custom/ namespace, so a profile holds one relocatable tree,
          * and a second tree is a second profile — the fact's one target says
          * so. Enable is the verb that moves the tree, in place, which no fact
-         * implies: the clause names it, at the directory the flag resolved to.
-         * Binding a row that has no target is fine, and so is naming the row's
-         * own directory, under its spelling or another (mount_same_target): the
-         * row's is the binding — the table below, the UPSERT after the commit
-         * and the record's join through the view all spell it the row's way —
-         * so the binding takes the row's spelling here, and the arguments re-root
-         * under it. The flag's own spelling stays the line's: an argument typed
-         * under it is read there, and keyed beneath the row's (add_spell). */
+         * implies: the clause names it, quoted, at the directory the flag resolved
+         * to, absolute so the command pastes from anywhere; the row's place is
+         * spelled as every screen that prints a bound target spells it
+         * (base/output.h output_format_path), the line below among them. Binding
+         * a row that has no target is fine, and so is naming the row's own
+         * directory, under its spelling or another (mount_same_target): the row's
+         * is the binding — the table below, the UPSERT after the commit and the
+         * record's join through the view all spell it the row's way — so the
+         * binding takes the row's spelling here, and the arguments re-root under
+         * it. The flag's own spelling stays the line's: an argument typed under
+         * it is read there, and keyed beneath the row's (add_spell). */
         if (bound && !mount_same_target(bound, flag)) {
+            char shown[PATH_MAX];
+            output_format_path(bound, identity()->home, shown, sizeof(shown));
             err = error_create(
                 ERR_INVALID_ARG, "Profile '%s' is bound at %s, and a profile has one "
-                "target; dotta profile enable %s --target %s moves it", opts->profile,
-                bound, opts->profile, flag
+                "target; 'dotta profile enable %s --target %s' moves it", opts->profile,
+                shown, opts->profile, flag
             );
             goto cleanup;
         }
@@ -2941,7 +2946,7 @@ const args_command_t spec_add = {
         "Under --target, root/etc/foo still means /etc/foo. A second name for\n"
         "a path the profile already has is refused.\n"
         "\n"
-        "--target <dir> binds the profile's custom/ tree at that directory.\n"
+        "--target <path> binds the profile's custom/ tree at that directory.\n"
         "A profile has one target; 'dotta profile enable --target' moves it.\n"
         "Filesystem paths are then read as the jail reads them: etc/foo and\n"
         "/etc/foo both mean <target>/etc/foo. A path spelled from here (./x,\n"

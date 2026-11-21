@@ -739,7 +739,7 @@ const args_command_t spec_clone = {
         "Profile Behavior:\n"
         "  Only the selected profiles are fetched. Each is enabled, except\n"
         "  one holding custom/ paths, which needs a target first:\n"
-        "  '%s profile enable <name> --target <dir>'.\n"
+        "  '%s profile enable <name> --target <path>'.\n"
         "\n"
         "  The remote's other profiles stay on the remote. List them with\n"
         "  '%s profile list --all', and bring one later with\n"

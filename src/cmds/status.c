@@ -317,7 +317,7 @@ static void status_print_profiles(
              * way out (dotta remove), never this annotation's */
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "  no target     - run 'dotta profile enable <profile> --target /path' "
+                "  no target     - run 'dotta profile enable <profile> --target <path>' "
                 "to place them"
             );
             break;

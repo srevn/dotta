@@ -701,7 +701,7 @@ error_t manifest_mount_table(
  * the commit's beneath a name the argument places nowhere, each under its own
  * (revert_restore_path); and an enable that names an enabled profile holding
  * them says so (cmds/profile.c profile_enable). The repair is one command (`profile
- * enable <p> --target /path`), the untracking another (`remove`). The screen
+ * enable <p> --target <path>`), the untracking another (`remove`). The screen
  * says **no target** or **needs a target**, never "unbound": the header's word
  * is what the build could not do, the screen's is what the user must give. Strings
  * are the build arena's, same lifetime as the rows.

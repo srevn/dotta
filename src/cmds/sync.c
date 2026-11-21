@@ -1209,7 +1209,7 @@ static void sync_print_health(
         );
         output_info(
             out, OUTPUT_NORMAL,
-            "  Set one with 'dotta profile enable <profile> --target /path'"
+            "  Set one with 'dotta profile enable <profile> --target <path>'"
         );
     }
 

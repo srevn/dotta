@@ -181,7 +181,7 @@ static void apply_print_health(output_t *out, const scope_t *scope, const manife
         );
         output_info(
             out, OUTPUT_NORMAL,
-            "  Set one with 'dotta profile enable <profile> --target /path'"
+            "  Set one with 'dotta profile enable <profile> --target <path>'"
         );
     }
 

@@ -459,14 +459,6 @@ static error_t view_save(git_repository *repo, state_t *deploy_state, view_t *vi
     plan_t plan = { 0 };
     plan_collect(view, &plan);
 
-    /* Refuse a save that would empty enabled_profiles. Checked here — after collect
-     * — instead of via a cached counter on view: the items array is the single
-     * source of truth for "is this enabled?". A sibling counter would be a cache
-     * of a cache. */
-    if (plan.new_order.count == 0) {
-        return error_create(ERR_INVALID_ARG, "No profiles enabled");
-    }
-
     error_t err = state_begin(deploy_state);
     if (err) return err;
 

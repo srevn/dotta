@@ -334,9 +334,9 @@ typedef enum dotta_verbosity {
  * block, a failure of either warned and the block skipped, and a dry run builds
  * none) builds its own where it needs it, with the failure handling that path
  * wants. A command that moves Git or the enabled set and reads the view it leaves
- * (add, update, remove, sync, clone, interactive) builds that view itself — the
- * builder called again over the rows as they now stand: `run.manifest` is the
- * view at dispatch and is never rebuilt — see "Members not welcome" #1 on the run.
+ * (add, update, remove, sync, interactive) builds that view itself — the builder
+ * called again over the rows as they now stand: `run.manifest` is the view at
+ * dispatch and is never rebuilt — see "Members not welcome" #1 on the run.
  *
  * tolerant
  * --------

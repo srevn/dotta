@@ -30,7 +30,6 @@
 #include "base/output.h"
 #include "base/path.h"
 #include "core/ignore.h"
-#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/commit.h"
@@ -215,19 +214,15 @@ static string_array_t land_profiles(
  * Initialize state with the profiles clone enables
  *
  * Creates the database whatever `profiles` holds and enables exactly the names
- * given — the caller decided which landed profiles this machine can place, and
- * names them in its receipt.
+ * given — the caller read each as strictly as the build reads one, decided which
+ * landed profiles this machine can place, and names them in its receipt.
  *
  * @param repo Repository
- * @param arena Arena the view is built in
  * @param profiles Profile names to set as enabled (must not be NULL; may be empty)
  * @return Error or NULL on success
  */
-static error_t initialize_state(
-    git_repository *repo, arena_t *arena, const string_array_t *profiles
-) {
+static error_t initialize_state(git_repository *repo, const string_array_t *profiles) {
     CHECK_NULL(repo);
-    CHECK_NULL(arena);
     CHECK_NULL(profiles);
 
     /* Create state database (with or without profiles) */
@@ -235,25 +230,14 @@ static error_t initialize_state(
     error_t err = state_open(repo, &state);
     if (err) return err;
 
-    /* Enable each profile individually, then build the view over the new set once.
-     *
-     * state_enable_profile is the membership primitive — clone calls it once
-     * per profile, always with target=NULL: the caller hands it only profiles
-     * that need no target here, so there is nothing to bind, and a per-machine
-     * target is enable's to give later.
-     *
-     * The view is computed, never stored: the build writes nothing and its result
-     * is discarded. It is the tripwire that keeps clone from landing an enabled
-     * set the next load cannot build — a branch that exists but will not load
-     * fails here, before state_save, and the repository is left with nothing
-     * enabled. Every step meets the handle's one release: a refusal names its
-     * profile or its store itself. */
+    /* Enable each profile individually. state_enable_profile is the membership
+     * primitive — clone calls it once per profile, always with target=NULL: the
+     * caller hands it only profiles that need no target here, so there is nothing
+     * to bind, and a per-machine target is enable's to give later. Every step
+     * meets the handle's one release: a refusal names its profile or its store
+     * itself. */
     for (size_t i = 0; !err && i < profiles->count; i++) {
         err = state_enable_profile(state, profiles->entries[i], NULL);
-    }
-    if (!err && profiles->count > 0) {
-        manifest_t *view = NULL;
-        err = manifest_build(repo, state, NULL, arena, &view);
     }
 
     /* Commit transaction */
@@ -476,10 +460,11 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * fetched and disabled, said in the sentence profile enable refuses it with
      * (cmds/profile.c profile_enable), the command that places it the help's.
      * The answer is the profile's own — what its counts hold under custom/
-     * (core/profiles.h profile_counts_t) — and its failures are the clone's: a
-     * tree Git cannot read, or a sheet this build cannot, fails the clone whole
-     * and rolls the store back, as the build in initialize_state did for a portable
-     * profile and now does for every one. */
+     * (core/profiles.h profile_counts_t) — read as strictly as the build reads
+     * one, so no clone enables a set the build refuses: its failures are the
+     * clone's, for every landed profile, enabled or not — a tree Git cannot read,
+     * or a sheet this build cannot, fails the clone whole and rolls the store
+     * back. */
     string_array_t to_enable;
     string_array_init(&to_enable, ctx->arena, 0);
     for (size_t i = 0; i < landed.count; i++) {
@@ -502,7 +487,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         string_array_push(&to_enable, name);
     }
 
-    err = initialize_state(repo, ctx->arena, &to_enable);
+    err = initialize_state(repo, &to_enable);
     if (err) goto cleanup;
 
     /* Seed the baseline .dottaignore at its own ref with the default patterns.

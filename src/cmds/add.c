@@ -335,9 +335,11 @@ static bool add_inside(
  * two spellings the line knows: the row's, the key of every path beneath it
  * (infra/mount.h), and the flag's own, which cmd_add held to the row's directory.
  * "Inside" is a prefix of the argument being either (add_inside), and a path
- * that lands beneath the flag's is keyed beneath the row's. A path typed through
- * a third spelling of the target's directory is outside by this rule and re-rooted,
- * which the not-found arm says in words (cmd_add).
+ * the jail's grammar lands beneath the flag's is keyed beneath the row's. A tilde
+ * path is HOME's wherever it lands: typed beneath the flag's spelling, it is
+ * keyed as the table keys it, the link a component (infra/mount.h). A path typed
+ * through a third spelling of the target's directory is outside by this rule
+ * and re-rooted, which the not-found arm says in words (cmd_add).
  *
  * @param input  The argument as typed (must not be NULL)
  * @param target --target as the row spells it, absolute and folded, "/" included

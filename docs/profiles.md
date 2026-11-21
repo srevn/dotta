@@ -90,7 +90,7 @@ dotta add web /etc/nginx.conf                 # reads /etc/nginx.conf
 
 Use `./` or `../` for a path relative to your working directory; with the flag, it must stay inside the target. A quoted `'~/path'` refers to your home.
 
-Keep using the target spelling shown by `profile list`. If you supply another spelling of the same directory, dotta keeps and reports the saved spelling. `add --target` reads its arguments under that spelling.
+Keep using the target spelling shown by `profile list`. If you supply another spelling of the same directory, dotta keeps and reports the saved spelling. Under `add --target`, a path typed under either spelling is read, and stored under the saved one.
 
 **The target itself can be tracked**, by its own path or by the name `custom`:
 

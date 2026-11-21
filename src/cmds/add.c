@@ -208,11 +208,14 @@ typedef struct {
  * Is this argument the target, or beneath it?
  *
  * Asked one folded prefix at a time — "/", "/a", "/a/b", … — until a prefix is
- * the target's spelling. The last prefix asked is the whole argument, so the
- * target is inside itself and `add web --target ~/jail ~/jail` is the jail, walked.
- * A string's test, because a key is a string of the rows' own: the target is
- * the row's spelling, and the argument keys under it exactly when a prefix of
- * it is that spelling (infra/mount.h).
+ * a spelling of the target: the row's, or the flag's own, the same directory
+ * under the string the line typed (cmd_add). The last prefix asked is the whole
+ * argument, so the target is inside itself and `add web --target ~/jail ~/jail`
+ * is the jail, walked. A string's test, because a key is a string of the rows'
+ * own (infra/mount.h): an argument typed under a spelling the line knows is read
+ * where it was typed, and keyed under the row's once folded (add_spell); one
+ * typed through a third spelling, a link to the target that neither names, is
+ * outside like any host path.
  *
  * The prefix is folded and the tail is not: the decision is about where the
  * argument was *spelled from*, and folding the tail first destroys it —
@@ -221,15 +224,16 @@ typedef struct {
  * the tail is read as typed: a link inside the jail that reaches outside is typed
  * inside and named for where it lands.
  *
- * Every prefix is folded before it is asked, because the target is folded — its
- * binder spelled it by the target's reading (infra/input.h input_target), and a
- * row holds no other shape (core/state.c), so `bound` is folded too — and `/a/..`
- * is a spelling of nowhere. The boundary is not always found before the first
- * `..`, and does not need to be: `/a/../<target>/x` meets one first, and the
- * fold is per prefix, not per argument. The root the walk starts from is asked
- * like every other prefix, which is what makes a target at "/" a prefix of every
- * absolute argument; a `.` leaves the prefix as it was and a `..` returns it to
- * one the walk already stood on, so neither can be the first answer.
+ * Every prefix is folded before it is asked, because the target is folded in
+ * both spellings — each binder spells one by the target's reading (infra/input.h
+ * input_target), and a row holds no other shape (core/state.c), so `bound` is
+ * folded too — and `/a/..` is a spelling of nowhere. The boundary is not always
+ * found before the first `..`, and does not need to be: `/a/../<target>/x` meets
+ * one first, and the fold is per prefix, not per argument. The root the walk
+ * starts from is asked like every other prefix, which is what makes a target at
+ * "/" a prefix of every absolute argument; a `.` leaves the prefix as it was
+ * and a `..` returns it to one the walk already stood on, so neither can be the
+ * first answer.
  *
  * `input` is absolute: the caller's grammar decides who is asked at all, and a
  * bare relative path is the jail's without a question (add_spell). The scratch
@@ -243,10 +247,14 @@ typedef struct {
  *
  * @param input      The argument as typed, absolute (must not be NULL)
  * @param target     The target as the row spells it (must not be NULL)
+ * @param flag       The target as the line's flag spells it: the same directory,
+ *                   the row's string where the line typed that (must not be NULL)
  * @param arena      Arena for the scratch
- * @return True iff a prefix of `input` is the target
+ * @return True iff a prefix of `input` is the target, in either spelling
  */
-static bool add_inside(const char *input, const char *target, arena_t *arena) {
+static bool add_inside(
+    const char *input, const char *target, const char *flag, arena_t *arena
+) {
     /* The folded prefix, grown one component at a time, with "." dropped and
      * ".." popping — the fold path_fold performs over a whole argument, applied
      * per prefix so the prefixes exist to be asked about. Folding never grows a
@@ -257,11 +265,11 @@ static bool add_inside(const char *input, const char *target, arena_t *arena) {
     folded[1] = '\0';
     size_t len = 1;
 
-    /* Grown until it is the target, or the argument runs out: the loop's own
-     * condition is the question, asked of every prefix the walk stands on, the
-     * root it starts from first. */
+    /* Grown until it is the target in either spelling, or the argument runs out:
+     * the loop's own condition is the question, asked of every prefix the walk
+     * stands on, the root it starts from first. */
     const char *cursor = input;
-    while (strcmp(folded, target) != 0) {
+    while (strcmp(folded, target) != 0 && strcmp(folded, flag) != 0) {
         while (*cursor == '/') cursor++;
         if (!*cursor) return false;
 
@@ -298,16 +306,21 @@ static bool add_inside(const char *input, const char *target, arena_t *arena) {
  * context applies — even when the jail lies beneath HOME) and a path spelled
  * from here (`./x`, `../x`, a dotfile's `.x` — the file in front of the user,
  * wherever they stand, the way the resolver reads a leading '.'). A bare relative
- * path is the jail's.
+ * path is the jail's. `<target>` is the row's spelling of the directory, and
+ * `<flag>` another the line typed for it — through a link to it, say:
  *
  *   cd anywhere;     ~/file                  -> $HOME/file        (HOME's)
  *                    ~/x     (jail under ~)  -> $HOME/x           (HOME's still)
  *                    etc/foo                 -> <target>/etc/foo  (the jail's)
  *                    /etc/foo                -> <target>/etc/foo  (re-rooted)
  *                    <target>/etc/foo        -> as typed          (inside)
+ *                    <flag>/etc/foo          -> <target>/etc/foo  (inside, keyed
+ *                                                                  the row's way)
  *   cd <target>/etc; ./x                     -> <target>/etc/x    (from here)
  *                    ../x                    -> <target>/x        (from here,
  *                                                                  still inside)
+ *   cd <flag>/etc;   ./x                     -> <target>/etc/x    (from here, keyed
+ *                                                                  the row's way)
  *   cd ~;            ./x                     -> ERROR             (from here,
  *                                                                  outside)
  *                    <target>/../etc/secret  -> ERROR             (walked out)
@@ -318,22 +331,28 @@ static bool add_inside(const char *input, const char *target, arena_t *arena) {
  *
  * The refusal is lexical, on the spelling: what a path reaches through a link
  * is not this rule's business — a link inside the target that reaches outside
- * is typed inside and admitted, named for where it lands. The target is one
- * spelling, the row's, and "inside" is a prefix of the argument being that spelling
- * (add_inside): a path typed through another spelling of the target's directory
- * is outside by this rule and re-rooted, which the not-found arm says in words
- * (cmd_add).
+ * is typed inside and admitted, named for where it lands. The target has the
+ * two spellings the line knows: the row's, the key of every path beneath it
+ * (infra/mount.h), and the flag's own, which cmd_add held to the row's directory.
+ * "Inside" is a prefix of the argument being either (add_inside), and a path
+ * that lands beneath the flag's is keyed beneath the row's. A path typed through
+ * a third spelling of the target's directory is outside by this rule and re-rooted,
+ * which the not-found arm says in words (cmd_add).
  *
  * @param input  The argument as typed (must not be NULL)
  * @param target --target as the row spells it, absolute and folded, "/" included
  *               — nothing re-roots under it and nothing escapes it — or NULL:
  *               nothing re-roots at all
+ * @param flag   --target as the line spells it: the same directory, absolute and
+ *               folded, the row's string where the line typed that; read where
+ *               `target` is, and only there
  * @param arena  Arena the boundary reads through and the answer lives in
  * @param out    Normalized absolute path, the arena's; NULL after an error
  * @return Error or NULL on success
  */
 static error_t add_spell(
-    const char *input, const char *target, arena_t *arena, const char **out
+    const char *input, const char *target, const char *flag, arena_t *arena,
+    const char **out
 ) {
     *out = NULL;
 
@@ -342,16 +361,16 @@ static error_t add_spell(
      * path, a path spelled from here, and an empty argument, which is no path
      * in any grammar and which the argument's reading is the one place to say
      * so of: the join takes no empty name. A host-absolute path is the jail's
-     * unless a prefix of it is the target — something only an absolute spelling
-     * can be, since folding a bare relative path onto the root to ask would read
-     * `etc/foo` under `--target /etc` as the target itself — and a bare relative
-     * path is the jail's outright. The join reads a host-absolute input's leading
-     * '/' as its own separator, so `/etc/foo` and `etc/foo` both land at
-     * <target>/etc/foo, and it composes under the target as the row spells it,
-     * which is the spelling the refusal below prints. */
+     * unless a prefix of it is the target, in either spelling — something only
+     * an absolute spelling can be, since folding a bare relative path onto the
+     * root to ask would read `etc/foo` under `--target /etc` as the target itself
+     * — and a bare relative path is the jail's outright. The join reads a
+     * host-absolute input's leading '/' as its own separator, so `/etc/foo` and
+     * `etc/foo` both land at <target>/etc/foo, and it composes under the target
+     * as the row spells it, which is the spelling the refusal below prints. */
     const char *composed = input;
     if (target && input[0] != '~' && input[0] != '.' && input[0] != '\0') {
-        bool inside = input[0] == '/' && add_inside(input, target, arena);
+        bool inside = input[0] == '/' && add_inside(input, target, flag, arena);
         if (!inside) composed = path_join(arena, target, input);
     }
 
@@ -367,13 +386,28 @@ static error_t add_spell(
      * is a string's, where the boundary above had to be asked per prefix on the
      * bytes as typed. A tilde path is HOME's and is read against no target, even
      * one beneath HOME. Every absolute path lies under a target of "/" (base/path.h
-     * path_under). */
+     * path_under).
+     *
+     * A path outside the row's spelling and at or beneath the flag's has escaped
+     * nothing: it stands in the target's directory as the line spells it — typed
+     * beneath the flag's spelling, or from a working directory the shell reached
+     * through it — and is keyed beneath the row's, as every path beneath a binding
+     * is (infra/mount.h). The row's is asked first, so a path beneath both, one
+     * spelling a lexical ancestor of the other through a link the target holds
+     * to itself, keeps the row's reading, that link a component of its key. */
     if (target && input[0] != '~' && !path_under(spelled, target, strlen(target))) {
-        return error_create(
-            ERR_INVALID_ARG, "Path '%s' resolves outside target root '%s', and a path "
-            "spelled from here or walking out with '..' cannot escape the target",
-            spelled, target
-        );
+        const char *tail = path_under(spelled, flag, strlen(flag));
+        if (!tail) {
+            return error_create(
+                ERR_INVALID_ARG, "Path '%s' resolves outside target root '%s', and a path "
+                "spelled from here or walking out with '..' cannot escape the target",
+                spelled, target
+            );
+        }
+
+        /* The flag's spelling itself is the target, and the join takes no empty
+         * name */
+        spelled = *tail ? path_join(arena, target, tail) : target;
     }
 
     *out = spelled;
@@ -1775,7 +1809,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     add_enabled_t enabled = { 0 };    /* The enabled set's view, at the first link met */
     bool profile_exists = false;      /* The pre-flight's: no branch until this add brings it */
     mount_table_t *mounts = NULL;     /* The command's table: see below */
-    const char *target = NULL;        /* --target, absolute: what the row stores */
+    const char *flag = NULL;          /* --target as the line spells it, absolute */
+    const char *target = NULL;        /* The binding it gives, as the row spells it */
 
     /* The branch this add will write to: its draft is opened below when it is
      * there, an orphan's when it is not. Both answers are needed here, before
@@ -1811,17 +1846,17 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * the borrow: the record phase's enable and its rollback each replace the
      * row cache state_target lends from (core/state.h, state_profiles), and the
      * receipt asks after both whether the row had a binding before this run,
-     * its binding line's question. `target` is the flag's alone, NULL without
-     * it: re-rooting an argument is the flag's grammar (add_spell), never a
-     * row's. */
+     * its binding line's question. `target` and `flag` are the flag's alone,
+     * NULL without it: re-rooting an argument is the flag's grammar (add_spell),
+     * never a row's. */
     const char *bound = arena_strdup(ctx->arena, state_target(state, opts->profile));
 
     /* The target, when the run brought one: a filesystem-shaped argument —
      * absolute, tilde, or relative to the working directory — spelled by the
-     * target's reading (infra/input.h input_target): the absolute path the row
+     * target's reading (infra/input.h input_target): the absolute path a row
      * stores, held to the target's rules. */
     if (opts->target) {
-        err = input_target(opts->target, ctx->arena, &target);
+        err = input_target(opts->target, ctx->arena, &flag);
         if (err) goto cleanup;
 
         /* Refuse a silent move, before the commit it would have shaped. A branch
@@ -1833,13 +1868,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * own directory, under its spelling or another (mount_same_target): the
          * row's is the binding — the table below, the UPSERT after the commit
          * and the record's join through the view all spell it the row's way —
-         * so the flag takes the row's spelling here, and the arguments re-root
-         * under it. */
-        if (bound && !mount_same_target(bound, target)) {
+         * so the binding takes the row's spelling here, and the arguments re-root
+         * under it. The flag's own spelling stays the line's: an argument typed
+         * under it is read there, and keyed beneath the row's (add_spell). */
+        if (bound && !mount_same_target(bound, flag)) {
             err = error_create(
                 ERR_INVALID_ARG, "Profile '%s' is bound at %s, and a profile has one "
                 "target; dotta profile enable %s --target %s moves it", opts->profile,
-                bound, opts->profile, target
+                bound, opts->profile, flag
             );
             goto cleanup;
         }
@@ -1850,7 +1886,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * spelled as every screen that prints a bound target spells it
          * (base/output.h output_format_path): the flag's value was not written,
          * and the row's spelling is the one every argument below is read under. */
-        if (bound && strcmp(bound, target) != 0) {
+        if (bound && strcmp(bound, flag) != 0) {
             char shown[PATH_MAX];
             output_format_path(bound, identity()->home, shown, sizeof(shown));
             output_info(
@@ -1859,7 +1895,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 "the arguments are read under that spelling", opts->profile, shown
             );
         }
-        if (bound) target = bound;
+        target = bound ? bound : flag;
     }
 
     /* The topology this command reads: this machine's rows, with the binding
@@ -1871,10 +1907,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * holding this binding alone would answer the same, and what the one derivation
      * buys is the sentence below.
      *
-     * The flag's own target is the row's whenever a row exists (the pre-flight
-     * above took the row's spelling), and where none does the binding is simply
-     * added — so the rows this table is built from are the rows STEP 1 of the
-     * record phase leaves for the view, and the two key alike. */
+     * The binding is the row's whenever a row exists (the pre-flight above took
+     * the row's spelling), and where none does the flag's is simply added — so
+     * the rows this table is built from are the rows STEP 1 of the record phase
+     * leaves for the view, and the two key alike. */
     const mount_t binding = { .profile = opts->profile, .target = target };
     err = manifest_mount_table(state, target ? &binding : NULL, ctx->arena, &mounts);
     if (err) goto cleanup;
@@ -2004,7 +2040,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * names what it folded; the argument, as typed, is said over it —
              * the one key the user wrote, and the one every refusal of this
              * argument's steps is said under (base/error.h "Messages"). */
-            err = add_spell(path, target, ctx->arena, &filesystem_path);
+            err = add_spell(path, target, flag, ctx->arena, &filesystem_path);
             if (err) {
                 err = error_wrap(err, "Cannot add '%s'", path);
                 goto cleanup;
@@ -2043,10 +2079,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * none. Only here, where the path ends the command. Nothing is
                  * re-rooted under a target that is not there. The argument stands
                  * beside the target it was re-rooted beneath, which is the way
-                 * out: one spelled as the target is spelled, or relative to it,
-                 * is read inside it as typed. */
+                 * out: one spelled as the target is spelled — the row's way or
+                 * the flag's — or relative to it, is read inside it as typed. */
                 if (target && path[0] == '/') {
-                    if (!add_inside(path, target, ctx->arena)) {
+                    if (!add_inside(path, target, flag, ctx->arena)) {
                         err = error_create(
                             ERR_NOT_FOUND, "Path not found: %s ('%s' re-rooted beneath "
                             "the target at %s)", filesystem_path, path, target

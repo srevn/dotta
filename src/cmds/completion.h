@@ -216,7 +216,9 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out);
  * where `profile` is bound at the flag's directory, the row's own spelling, which
  * cmd_add takes before it reads an argument and says so in a line
  * (mount_same_target, infra/mount.h). Bound elsewhere the command refuses the
- * add and the root is the flag's; bound nowhere, the flag is the binding.
+ * add and the root is the flag's; bound nowhere, the flag is the binding. A token
+ * typed under the flag's own spelling of the row's directory is read as typed
+ * too, and keyed under the row's (`add_inside`, cmds/add.c), so it is the shell's.
  *
  * @param profile The profile the paths would be added to, whose row is asked
  *                for the binding — as the line spells it, -p's or the first
@@ -226,8 +228,9 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out);
  * @return true when the root applies and the candidates were printed; false when
  *         the path is what the shell sees — no root, a tilde token (HOME's
  *         namespace, never re-rooted), a token spelled from here (`./x`, `../x`,
- *         `.x`: the working directory's), a token at or beneath the root by string
- *         — and native completion is the answer.
+ *         `.x`: the working directory's), a token at or beneath the root or the
+ *         flag's own spelling of it, by string — and native completion is the
+ *         answer.
  */
 bool completion_paths_under(
     const dotta_ctx_t *ctx, FILE *out, const char *profile, const char *target,

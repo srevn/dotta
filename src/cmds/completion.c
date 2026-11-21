@@ -621,39 +621,38 @@ bool completion_paths_under(
 
     /* The flag as the command reads it — absolute, or relative to the working
      * directory the shell completes in (infra/input.h) — so the token is compared
-     * against an absolute root, and the row's spelling against the flag's as
+     * against absolute spellings, and the row's spelling against the flag's as
      * the binders compare them. The arena's, as every reader of a filesystem
-     * key is, so the two spellings the root may take are one borrowed pointer
-     * with nothing to free between them. A flag that will not read leaves the
-     * completion with no root of its own to offer beneath, so the shell's own
-     * files stand. */
-    const char *root = NULL;
-    error_t err = input_filesystem_path(target, ctx->arena, &root);
+     * key is, so the flag's spelling and the row's are borrowed alike, with nothing
+     * to free between them. A flag that will not read leaves the completion with
+     * no root of its own to offer beneath, so the shell's own files stand. */
+    const char *flag = NULL;
+    error_t err = input_filesystem_path(target, ctx->arena, &flag);
     if (err) {
         return false;
     }
 
-    /* The row's spelling wherever the profile is bound at the flag's directory:
-     * cmd_add takes it before it reads an argument and says so in a line, so a
-     * token the command reads is one spelled under the row's, and the flag's
-     * spelling of that same directory is outside by string and re-rooted
-     * (add_inside). Bound elsewhere the command refuses the add and the offer
-     * is the flag's — what the user is looking at; bound nowhere, the flag is
-     * the binding. The compare is the binders' own (mount_same_target): two stats
-     * beside the process start, the repository open and the state load a keystroke
-     * already pays, and none at all where the row is spelled as the flag is.
-     * Only the test below reads the spelling — one directory lists alike — so
-     * the substitution shows on an absolute token alone. Borrowed from the row
-     * cache, which nothing here moves (core/state.h); NULL outside a repository,
-     * where there is no row to ask. */
+    /* The root the command reads under: the row's spelling wherever the profile
+     * is bound at the flag's directory, which cmd_add takes before it reads an
+     * argument and says so in a line, so a token re-rooted lists under the row's.
+     * Bound elsewhere the command refuses the add and the root is the flag's —
+     * what the user is looking at; bound nowhere, the flag is the binding. The
+     * compare is the binders' own (mount_same_target): two stats beside the process
+     * start, the repository open and the state load a keystroke already pays,
+     * and none at all where the row is spelled as the flag is. Only the test
+     * below reads the spelling — one directory lists alike — so the substitution
+     * shows on an absolute token alone. Borrowed from the row cache, which nothing
+     * here moves (core/state.h); NULL outside a repository, where there is no
+     * row to ask. */
     const char *bound = state_target(ctx->run.state, profile);
-    if (bound && mount_same_target(bound, root)) root = bound;
+    const char *root = bound && mount_same_target(bound, flag) ? bound : flag;
 
-    /* At the root or beneath it the command reads the token as typed, so the
-     * path is the shell's: add_spell's escape test over the same two strings,
-     * positive (base/path.h path_under). Every absolute token lies under a root
-     * of "/", and a relative one lists beneath it. */
-    if (path_under(current, root, strlen(root))) {
+    /* At or beneath the root the command reads the token as typed, and at or
+     * beneath the flag's own spelling of it too (add_inside), so the path is
+     * the shell's: add_spell's boundary over the same strings, positive
+     * (base/path.h path_under). Every absolute token lies under a root of "/",
+     * and a relative one lists beneath it. */
+    if (path_under(current, root, strlen(root)) || path_under(current, flag, strlen(flag))) {
         return false;
     }
 

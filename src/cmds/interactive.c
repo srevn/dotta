@@ -936,6 +936,8 @@ const args_command_t spec_interactive = {
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
         "  - Toggling on a profile marked (no target) opens an inline target prompt\n"
+        "  - A target typed on a profile that is off is used once you toggle it on;\n"
+        "    a save forgets it otherwise\n"
         "  - A profile marked (no branch) stays enabled until toggled off and saved\n"
         "  - A relative target is resolved from this directory, like a shell's\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",

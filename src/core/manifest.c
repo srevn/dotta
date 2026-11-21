@@ -855,9 +855,10 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
     /* Convert storage path to filesystem path against the mount table.
      *
      * No path when storage_path is custom/... and the profile has no target binding
-     * on this machine — a normal lifecycle stage in a shared repository (a clone
-     * before the target is chosen, a sync that pulled another machine's custom/
-     * claims, a revert that recommitted one), not corruption: no local precondition
+     * on this machine — a normal lifecycle stage in a shared repository (a profile
+     * not enabled here, its view read alone; one a sync or a revert brought the
+     * claim into after it was enabled, the sync pulling another machine's custom/
+     * claims, the revert recommitting one), not corruption: no local precondition
      * can bind what another machine adds to the branch. The claim contributes
      * no row — nothing on this machine can place it — and is recorded on the
      * view, never dropped in silence: an explicit one where the health consumers

@@ -41,9 +41,9 @@
  * own rule (infra/mount.h mount_validate_target) in the store's language — so a
  * hand edit is refused at the hand edit, and every reader of the row cache reads
  * a key or none. A profile with custom/ paths is enabled only with a target;
- * the one row without one that can exist is the profile a sync brought custom/
- * paths into after it was enabled here, and the build holds that tree's claims
- * until it is bound (manifest_unbound).
+ * the one row without one that can exist is the profile a sync or a revert brought
+ * custom/ paths into after it was enabled here, and the build holds that tree's
+ * claims until it is bound (manifest_unbound).
  *
  * Database location: the store's dotta.db, beside its refs (utils/repo.h)
  *

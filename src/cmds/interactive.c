@@ -442,7 +442,8 @@ static error_t plan_apply(state_t *deploy_state, const plan_t *plan) {
  * load cannot build: a branch that exists but will not load. Not a target gate
  * — the build is total over a custom/ claim whose profile has no binding, which
  * contributes no row and is recorded for the view's health to say (core/manifest.h
- * manifest_unbound) — so an unbound row saves here as a clone's and a sync's do.
+ * manifest_unbound) — so a row a sync or a revert left with no target saves here
+ * as it stands.
  *
  * Built only to learn that it can be, in a frame of the check's own, freed before
  * the answer: a session of N saves holds no view, where the view's arena would

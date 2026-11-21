@@ -738,10 +738,10 @@ static error_t profile_enable(
          * in the error below.
          *
          * The rule is the enablers' — this one, clone's and the editor's gate —
-         * and no invariant of the rows: the editor lets a row be saved unbound
-         * (cmds/interactive.c plan_classify says why), and a sync or a re-bind
-         * can leave an enabled row needing one, a lifecycle stage the view's
-         * health names, not an inconsistency. */
+         * and no invariant of the rows: a sync or a revert can leave an enabled
+         * row needing one, which the editor saves as it stands (cmds/interactive.c
+         * plan_classify), a lifecycle stage the view's health names, not an
+         * inconsistency. */
         profile_t *profile = NULL;
         profile_counts_t count = { 0 };
         err = profile_load(repo, name, &profile);

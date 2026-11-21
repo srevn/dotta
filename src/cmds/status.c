@@ -161,9 +161,12 @@ static void status_print_profiles(
             );
         }
 
-        /* Dim, as the deployment's time and the target's arrow are: a fact of
-         * the profile, no target being a state the user may choose, where the
-         * yellow annotations beside it say something is broken */
+        /* Dim, as the deployment's time and the target's arrow are, and as the
+         * mark the listings and the editor give the same fact on every row
+         * (cmds/profile.c profile_list, cmds/list.c list_profiles,
+         * cmds/interactive.c row_render): a fact of the profile, where the yellow
+         * annotations beside it say something is broken. The legend beneath names
+         * the command that places them. */
         if (unplaced_files + unplaced_dirs > 0) {
             char counts[64];
             output_format_kinds(unplaced_files, unplaced_dirs, counts, sizeof(counts));

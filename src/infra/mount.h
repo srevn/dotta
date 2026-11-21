@@ -408,17 +408,18 @@ const mount_root_t *mount_root_of(
  * Absence is the find's own, handed on unchanged: mount_root_of answers no root
  * of the name's label for this asker, so the two have one producer and one reading
  * between them. The answer is then NULL — the claim is `custom/` and the profile
- * has no target on this machine, a clone before the target is chosen, a sync
- * that pulled another machine's claims — which is how every lookup in the tree
- * answers an absence (manifest_lookup, state_target, hashmap_get), and the callers
- * read it as the fact it is: the manifest's claim routine skips the claim and
- * records it on the view's health (manifest_unbound, a derived one apart:
- * manifest_derived); a revert reaches such a claim only by name, under an argument
- * this machine places nowhere too, its search in each profile as its restore
- * (cmds/revert.c revert_select_profile, revert_restore_path); user-facing contexts
- * fall back to a display spelling (remove.c, and revert.c, whose hooks and record
- * phase it places) or let a hint stand in (ignore.c). HOME and ROOT lookups always
- * answer — those entries are unconditional in every well-formed mount table.
+ * has no target on this machine, a profile not enabled here or one a sync or a
+ * revert brought the claim into after it was enabled — which is how every lookup
+ * in the tree answers an absence (manifest_lookup, state_target, hashmap_get),
+ * and the callers read it as the fact it is: the manifest's claim routine skips
+ * the claim and records it on the view's health (manifest_unbound, a derived
+ * one apart: manifest_derived); a revert reaches such a claim only by name, under
+ * an argument this machine places nowhere too, its search in each profile as
+ * its restore (cmds/revert.c revert_select_profile, revert_restore_path);
+ * user-facing contexts fall back to a display spelling (remove.c, and revert.c,
+ * whose hooks and record phase it places) or let a hint stand in (ignore.c).
+ * HOME and ROOT lookups always answer — those entries are unconditional in every
+ * well-formed mount table.
  *
  * Nothing else can happen, so nothing here fails. A storage path is validated
  * where it is read, not only where it was written (infra/label.h
